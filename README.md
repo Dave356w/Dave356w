@@ -1,11 +1,9 @@
- Hi, I’m @Dave356w
+ Hi, I'm @Dave356w
 
- I’m interested in Python, web scraping, and sports prediction models. I like the idea of extracting and analyzing data to predict sports outcomes.
+I'm interested in Python, web scraping, and sports prediction models — particularly extracting and analysing data to predict sports outcomes and surface new statistics.
 
- I’m currently learning more about advanced Python for web scraping like Scrapy and Beautiful Soup, as well as diving deeper into machine learning techniques for sports prediction.
+Currently deepening my Python skills with tools like Scrapy and Beautiful Soup, and exploring machine learning techniques for sports prediction.
 
- I’m looking to collaborate on open-source projects that involve web scraping and sports prediction models. I'm particularly interested in projects that aim create new statistic calculations.
+I'm also into hardware projects — I built an e-paper NL West standings display that auto-updates every 6 hours using the MLB Stats API.
 
- How to reach me: You can reach me via email at dave356w@gmail.com
-
-
+I'm looking to collaborate on open-source projects involving web scraping, sports data, or new statistic calculations.
