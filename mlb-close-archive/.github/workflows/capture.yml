@@ -1,0 +1,35 @@
+name: close-capture
+on:
+  schedule:
+    # Every 15 min across MLB first-pitch hours (UTC).
+    # 16:00Z earliest matinees -> ~03:30Z west-coast night games.
+    - cron: "*/15 14-23 * * *"
+    - cron: "*/15 0-7 * * *"
+  workflow_dispatch: {}        # manual trigger for testing
+concurrency:
+  group: close-capture         # never two runs appending at once
+  cancel-in-progress: false    # queue, don't kill (append-only safety)
+permissions:
+  contents: write
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install requests
+      - name: capture
+        env:
+          THE_ODDS_API_KEY: ${{ secrets.THE_ODDS_API_KEY }}
+        run: python capture.py
+      - name: commit
+        run: |
+          git config user.name  "close-archive-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add close_log/ status_log/
+          git diff --cached --quiet && echo "no new rows" && exit 0
+          git commit -m "capture $(date -u +%Y-%m-%dT%H:%MZ) [skip ci]"
+          git pull --rebase origin main
+          git push
