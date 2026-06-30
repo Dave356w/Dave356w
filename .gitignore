@@ -1,0 +1,12 @@
+# build output (regenerated each run / deployed to Pages)
+public/
+
+# Savant CSV leaderboard cache (restored from actions/cache in CI)
+.savant_cache/
+savant_cache_*.csv
+
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
