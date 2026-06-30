@@ -1,6 +1,10 @@
 name: Build & deploy matchup site
 
 on:
+  # Build + deploy when the workflow lands on the default branch (e.g. on
+  # merge), so the site goes live without waiting for the first cron.
+  push:
+    branches: [main]
   # Manual trigger (lets you rebuild on demand from the Actions tab).
   workflow_dispatch:
   # Scheduled passes (UTC). MLB lineups post a few hours before first pitch,
@@ -10,12 +14,13 @@ on:
   # are occasionally skipped -- fine for a leans page. The build resolves the
   # slate date itself in America/New_York (with a ~3am rollover), so the UTC
   # cron times only decide *when* to refresh, not *which* day is shown.
+  # Times are labelled for EDT; in EST every run lands one hour earlier.
   schedule:
-    - cron: '0 11 * * *'   # ~07:00 ET  morning projected pass
-    - cron: '0 16 * * *'   # ~12:00 ET
-    - cron: '0 19 * * *'   # ~15:00 ET  early posted lineups
-    - cron: '0 21 * * *'   # ~17:00 ET
-    - cron: '0 23 * * *'   # ~19:00 ET  evening slate posted
+    - cron: '0 11 * * *'   # ~07:00 EDT  morning projected pass
+    - cron: '0 16 * * *'   # ~12:00 EDT
+    - cron: '0 19 * * *'   # ~15:00 EDT  early posted lineups
+    - cron: '0 21 * * *'   # ~17:00 EDT
+    - cron: '0 23 * * *'   # ~19:00 EDT  evening slate posted
 
 # Allow exactly one deploy at a time; don't cancel an in-flight deploy.
 concurrency:
@@ -30,12 +35,22 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 15        # fail fast if an upstream API hangs
     steps:
       - uses: actions/checkout@v4
+
+      # Enables Pages on first run (using the pages:write permission above) and
+      # exposes the publish settings, so no manual Settings -> Pages toggle is
+      # needed. No-op once Pages is already enabled.
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
 
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+          cache: pip
 
       - name: Resolve slate date (America/New_York, ~3am rollover)
         id: slate
