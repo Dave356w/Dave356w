@@ -1,0 +1,93 @@
+name: Build & deploy matchup site
+
+on:
+  # Manual trigger (lets you rebuild on demand from the Actions tab).
+  workflow_dispatch:
+  # Scheduled passes (UTC). MLB lineups post a few hours before first pitch,
+  # so a single daily run would miss posted lineups. We run a morning
+  # "projected" pass plus a window through the afternoon/evening to catch
+  # posted `gf` lineups. Scheduled workflows can lag 5-15 min under load and
+  # are occasionally skipped -- fine for a leans page. The build resolves the
+  # slate date itself in America/New_York (with a ~3am rollover), so the UTC
+  # cron times only decide *when* to refresh, not *which* day is shown.
+  schedule:
+    - cron: '0 11 * * *'   # ~07:00 ET  morning projected pass
+    - cron: '0 16 * * *'   # ~12:00 ET
+    - cron: '0 19 * * *'   # ~15:00 ET  early posted lineups
+    - cron: '0 21 * * *'   # ~17:00 ET
+    - cron: '0 23 * * *'   # ~19:00 ET  evening slate posted
+
+# Allow exactly one deploy at a time; don't cancel an in-flight deploy.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Resolve slate date (America/New_York, ~3am rollover)
+        id: slate
+        run: |
+          DATE=$(python - <<'PY'
+          from datetime import datetime, timedelta
+          from zoneinfo import ZoneInfo
+          n = datetime.now(ZoneInfo("America/New_York"))
+          d = n.date() if n.hour >= 3 else (n - timedelta(days=1)).date()
+          print(d.isoformat())
+          PY
+          )
+          echo "date=$DATE" >> "$GITHUB_OUTPUT"
+          echo "Slate date: $DATE"
+
+      # Reproduce the notebook's once/day Savant leaderboard cache. The cache is
+      # keyed to the ET slate date so a given day's CSVs are pulled once and
+      # reused across that day's runs; a new day misses and re-pulls.
+      - name: Restore Savant leaderboard cache
+        uses: actions/cache@v4
+        with:
+          path: .savant_cache
+          key: savant-${{ steps.slate.outputs.date }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # Build into ./public. On a hard fetch failure the script exits non-zero
+      # WITHOUT writing index.html, so the steps below don't run, the artifact
+      # is never uploaded, the deploy job is skipped, and the last good page
+      # stays live. A legitimately empty slate writes a friendly page instead.
+      - name: Build static site
+        env:
+          SLATE_DATE: ${{ steps.slate.outputs.date }}
+          CACHE_DIR: .savant_cache
+          OUT_DIR: public
+        run: python build_site.py
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
