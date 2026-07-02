@@ -101,7 +101,13 @@ def load_ledger():
         led = pd.read_csv(LEDGER_PATH)
         for c in LEDGER_COLS:
             if c not in led.columns: led[c] = np.nan
-        return led[LEDGER_COLS]
+        led = led[LEDGER_COLS]
+        # W/L/T grade columns still all-NaN read back from CSV as float64;
+        # pandas >=3 refuses string assignment into float columns, so force
+        # object dtype before grading writes W/L/T into them.
+        for c in ("xw_full", "xw_f5", "ops_full", "ops_f5"):
+            led[c] = led[c].astype(object)
+        return led
     return pd.DataFrame(columns=LEDGER_COLS)
 
 # ---- INGEST ------------------------------------------------------------
