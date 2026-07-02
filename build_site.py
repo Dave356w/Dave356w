@@ -60,6 +60,14 @@ MODEL_TAG = os.environ.get("MODEL_TAG", "xw+plat_consol_v1")  # keep in sync wit
 STATCAST_SELECTIONS = ["pa", "k_percent", "bb_percent", "xwoba", "xba", "xslg",
                        "exit_velocity_avg", "launch_angle_avg", "hard_hit_percent"]
 
+# Batted-ball direction/tendency rates with true league-wide anchors.
+BATTED_RATE_COLS_FOR_BASELINE = ["GB%", "FB%", "LD%", "PU%", "Pull%", "Straight%", "Oppo%"]
+
+# Use all Savant-listed hitters for platoon priors instead of today's loaded lineups.
+# Costs ~10-15 batched StatsAPI calls (~+5s) but removes slate-dependent shrinkage baselines.
+FULL_LEAGUE_PLATOON_BASELINES = True
+MIN_LEAGUE_BASELINE_PA = 1
+
 
 def slate_date_now():
     """Slate date in ET with a ~3am rollover. Env override wins."""
@@ -243,20 +251,28 @@ def load_splits(ids, group):
     return out
 
 
+_gf_cache = {}
+
+
 def gf_lineups(game_pk):
+    """Raw Savant posted lineup ids. Cached per game_pk."""
+    if game_pk in _gf_cache:
+        return _gf_cache[game_pk]
     try:
         gf = _get_json(f"https://baseballsavant.mlb.com/gf?game_pk={game_pk}", tries=2)
-        return ([int(x) for x in gf.get("away_lineup", []) or []],
-                [int(x) for x in gf.get("home_lineup", []) or []])
+        out = ([int(x) for x in gf.get("away_lineup", []) or []],
+               [int(x) for x in gf.get("home_lineup", []) or []])
     except Exception:
-        return [], []
+        out = ([], [])
+    _gf_cache[game_pk] = out
+    return out
 
 
 _roster_cache = {}
 
 
 def roster_lineup(team_id, batter_stat):
-    """Projected lineup = active-roster position players, top LINEUP_SIZE by PA."""
+    """Projected lineup pool = active-roster position players, ranked by season PA."""
     if team_id in _roster_cache:
         ids = _roster_cache[team_id]
     else:
@@ -265,18 +281,51 @@ def roster_lineup(team_id, batter_stat):
         ids = [r["person"]["id"] for r in data.get("roster", [])
                if (r.get("position", {}) or {}).get("abbreviation") != "P"]
         _roster_cache[team_id] = ids
-    ranked = sorted([i for i in ids if i in batter_stat],
-                    key=lambda i: (batter_stat[i].get("PA") or 0), reverse=True)
-    return ranked[:LINEUP_SIZE]
+    return sorted([int(i) for i in ids if int(i) in batter_stat],
+                  key=lambda i: (batter_stat[i].get("PA") or 0), reverse=True)
 
 
-def resolve_lineup(game_pk, side, team_id, batter_stat):
+def fill_lineup_from_roster(team_id, posted_ids, batter_stat, target_size=LINEUP_SIZE):
+    """Keep valid posted hitters in order; fill only missing slots by roster PA."""
+    resolved, seen = [], set()
+    for pid in posted_ids or []:
+        try:
+            pid = int(pid)
+        except Exception:
+            continue
+        if pid in batter_stat and pid not in seen:
+            resolved.append(pid); seen.add(pid)
+        if len(resolved) >= target_size:
+            return resolved[:target_size]
+    for pid in roster_lineup(team_id, batter_stat):
+        if pid not in seen:
+            resolved.append(pid); seen.add(pid)
+        if len(resolved) >= target_size:
+            break
+    return resolved[:target_size]
+
+
+def resolve_lineup(game_pk, side, team_id, batter_stat, return_meta=False):
+    """posted (>=9 valid) / partial_filled (1-8 kept, rest filled) / projected (0)."""
     away_ids, home_ids = gf_lineups(game_pk)
     raw = away_ids if side == "away" else home_ids
-    valid = [i for i in raw if i in batter_stat][:LINEUP_SIZE]
-    if len(valid) >= LINEUP_SIZE:
-        return valid, False
-    return roster_lineup(team_id, batter_stat), True
+    valid_posted, seen = [], set()
+    for pid in raw:
+        try:
+            pid = int(pid)
+        except Exception:
+            continue
+        if pid in batter_stat and pid not in seen:
+            valid_posted.append(pid); seen.add(pid)
+    resolved = fill_lineup_from_roster(team_id, valid_posted, batter_stat, LINEUP_SIZE)
+    posted_count = min(len(valid_posted), LINEUP_SIZE)
+    filled_count = max(0, len(resolved) - posted_count)
+    status = ("posted" if posted_count >= LINEUP_SIZE
+              else "partial_filled" if posted_count > 0 else "projected")
+    meta = {"status": status, "projected": status != "posted",
+            "posted_count": int(posted_count), "filled_count": int(filled_count),
+            "resolved_count": int(len(resolved))}
+    return (resolved, meta) if return_meta else (resolved, meta["projected"])
 
 
 STAT_COLS = ["BBE", "LA°", "EV", "Hard Hit%", "xwOBA", "xBA", "xSLG", "K%", "BB%"]
@@ -310,8 +359,11 @@ def build_tables(slate, lineups, batter_stat, pitcher_stat, batter_bb, pitcher_b
                                  "player_id": pid, "bats": bio.get("bats"),
                                  "throws": bio.get("throws")})
             else:
-                bb_rows.append({**base, "table_type": "batted_ball_profile",
-                                **{c: src.get(c) for c in BB_COLS}})
+                bbe = (pitcher_stat.get(pid, {}) or {}).get("BBE")
+                bb_rows.append({**base, "table_type": "batted_ball_profile", "Pos.": "P",
+                                **{c: src.get(c) for c in BB_COLS}, "BBE": bbe,
+                                "player_id": pid, "bats": bio.get("bats"),
+                                "throws": bio.get("throws")})
 
         def hitter_rows(lu, tidx, table):
             for pid in lu:
@@ -329,8 +381,11 @@ def build_tables(slate, lineups, batter_stat, pitcher_stat, batter_bb, pitcher_b
                                      "player_id": pid, "bats": bio.get("bats"),
                                      "throws": bio.get("throws")})
                 else:
-                    bb_rows.append({**base, "table_type": "batted_ball_profile",
-                                    **{c: src.get(c) for c in BB_COLS}})
+                    bbe = (batter_stat.get(pid, {}) or {}).get("BBE")
+                    bb_rows.append({**base, "table_type": "batted_ball_profile", "Pos.": pos,
+                                    **{c: src.get(c) for c in BB_COLS}, "BBE": bbe,
+                                    "player_id": pid, "bats": bio.get("bats"),
+                                    "throws": bio.get("throws")})
 
         pitcher_row(asp, 1, "stat"); hitter_rows(home_lu, 1, "stat")
         pitcher_row(hsp, 2, "stat"); hitter_rows(away_lu, 2, "stat")
@@ -345,7 +400,7 @@ def build_tables(slate, lineups, batter_stat, pitcher_stat, batter_bb, pitcher_b
         pdf = pdf[META + ["Pos."] + STAT_COLS + ["player_id", "bats", "throws"]]
     bdf = pd.DataFrame(bb_rows)
     if not bdf.empty:
-        bdf = bdf[META + BB_COLS]
+        bdf = bdf[META + ["Pos."] + BB_COLS + ["BBE", "player_id", "bats", "throws"]]
     return pdf, bdf
 
 
@@ -376,25 +431,59 @@ def fetch_all(slate_date):
     log(f"  batters: {len(batter_stat)} | pitchers: {len(pitcher_stat)}")
 
     league_baseline = compute_league_baseline(batter_cust)
-    log("  league baselines:", {k: league_baseline.get(k) for k in ["xwOBA", "Hard Hit%", "K%", "EV"]})
+    # Full-population batted-ball anchors so GB/FB/LD/PU/Pull/Straight/Oppo matchup
+    # edges are not NaN or slate-dependent. Rates are already stored as percentages.
+    for c in BATTED_RATE_COLS_FOR_BASELINE:
+        vals, wts = [], []
+        for pid, prof in batter_bb.items():
+            v = prof.get(c)
+            w = (batter_stat.get(pid, {}) or {}).get("BBE")
+            if pd.notna(v) and pd.notna(w) and float(w) > 0:
+                vals.append(float(v)); wts.append(float(w))
+        league_baseline[c] = round(float(np.average(vals, weights=wts)), 3) if vals else np.nan
+    log("  league baselines:", {k: league_baseline.get(k) for k in
+        ["xwOBA", "Hard Hit%", "K%", "EV", "GB%", "FB%", "Pull%"]})
 
-    log("Resolving lineups (gf -> roster fallback) ...")
+    log("Resolving lineups (gf -> posted/partial-fill/projected) ...")
     lineups, proj_flags, lineup_ids, prob_ids = {}, [], set(), set()
     for _, g in slate_df.iterrows():
-        al, ap = resolve_lineup(g["game_pk"], "away", g["away_team_id"], batter_stat)
-        hl, hp = resolve_lineup(g["game_pk"], "home", g["home_team_id"], batter_stat)
+        al, ai = resolve_lineup(g["game_pk"], "away", g["away_team_id"], batter_stat, return_meta=True)
+        hl, hi = resolve_lineup(g["game_pk"], "home", g["home_team_id"], batter_stat, return_meta=True)
         lineups[g["game_pk"]] = (al, hl)
-        proj_flags.append({"game_pk": g["game_pk"], "away_lineup_projected": ap,
-                           "home_lineup_projected": hp})
+        proj_flags.append({
+            "game_pk": g["game_pk"],
+            "away_lineup_projected": ai["projected"],
+            "home_lineup_projected": hi["projected"],
+            "away_lineup_status": ai["status"],
+            "home_lineup_status": hi["status"],
+            "away_posted_count": ai["posted_count"],
+            "home_posted_count": hi["posted_count"],
+            "away_filled_count": ai["filled_count"],
+            "home_filled_count": hi["filled_count"],
+            "away_resolved_count": ai["resolved_count"],
+            "home_resolved_count": hi["resolved_count"],
+        })
         lineup_ids.update(al); lineup_ids.update(hl)
         for c in ("away_probable_pitcher_id", "home_probable_pitcher_id"):
             if pd.notna(g[c]):
                 prob_ids.add(int(g[c]))
         time.sleep(REQUEST_DELAY)
     lineup_projection_df = pd.DataFrame(proj_flags)
+    os.makedirs(DATA_DIR, exist_ok=True)
+    lineup_projection_df.to_csv(os.path.join(DATA_DIR, "lineup_resolution_audit.csv"), index=False)
 
     log("Loading player bio + vL/vR platoon splits ...")
-    people = load_people(lineup_ids | prob_ids)
+    league_hitter_ids = {int(pid) for pid, st in batter_stat.items()
+                         if pd.notna((st or {}).get("PA"))
+                         and float((st or {}).get("PA") or 0) >= MIN_LEAGUE_BASELINE_PA}
+    if FULL_LEAGUE_PLATOON_BASELINES:
+        log(f"  league hitter split population: {len(league_hitter_ids)}")
+        people_league_hitters = load_people(league_hitter_ids)
+        player_splits_hit_league = load_splits(league_hitter_ids, "hitting")
+    else:
+        people_league_hitters, player_splits_hit_league = {}, {}
+    people = dict(people_league_hitters)
+    people.update(load_people(lineup_ids | prob_ids))
     player_splits_hit = load_splits(lineup_ids, "hitting")
     player_splits_pit = load_splits(prob_ids, "pitching")
 
@@ -402,8 +491,12 @@ def fetch_all(slate_date):
     pitchers_df, batted_ball_profile_df = build_tables(
         slate_df, lineups, batter_stat, pitcher_stat, batter_bb, pitcher_bb, people)
 
+    side_status = pd.concat([lineup_projection_df["away_lineup_status"].rename("status"),
+                             lineup_projection_df["home_lineup_status"].rename("status")],
+                            ignore_index=True) if not lineup_projection_df.empty else pd.Series(dtype=str)
     n_proj = int(lineup_projection_df[["away_lineup_projected", "home_lineup_projected"]].sum().sum())
-    log(f"projected (un-posted) lineups: {n_proj} of {2 * len(slate_df)} sides")
+    log(f"lineup sources: {side_status.value_counts().to_dict()} of {2 * len(slate_df)} sides; "
+        f"projected_or_partial={n_proj}")
 
     return {
         "empty": False,
@@ -414,6 +507,8 @@ def fetch_all(slate_date):
         "people": people,
         "player_splits_hit": player_splits_hit,
         "player_splits_pit": player_splits_pit,
+        "player_splits_hit_league": player_splits_hit_league,
+        "people_league_hitters": people_league_hitters,
         "lineup_projection_df": lineup_projection_df,
     }
 
@@ -574,7 +669,12 @@ OPP = {"L": "R", "R": "L"}
 
 
 def build_platoon_matchup(pitcher_rows_df, opp_hitters_df, people,
-                          player_splits_hit, player_splits_pit):
+                          player_splits_hit, player_splits_pit,
+                          league_splits=None, league_people=None):
+    # League OPS cells prefer the full hitter split population (fetch_all with
+    # FULL_LEAGUE_PLATOON_BASELINES); fall back to today's lineups if absent.
+    _league_split_source = league_splits if league_splits else player_splits_hit
+    _league_people_source = league_people if league_people else people
     _pmeta = pitcher_rows_df.set_index(["game_pk", "Name"])
 
     def _pitcher_attr(gpk, name, attr):
@@ -607,12 +707,12 @@ def build_platoon_matchup(pitcher_rows_df, opp_hitters_df, people,
         return (n * obs + K * prior) / (n + K) if (n + K) > 0 else prior
 
     def _bats_of(pid):
-        return (people.get(int(pid), {}) or {}).get("bats") if pd.notna(pid) else None
+        return (_league_people_source.get(int(pid), {}) or {}).get("bats") if pd.notna(pid) else None
 
     def _compute_league_ops_cells():
         buckets = {("L", "L"): [], ("L", "R"): [], ("R", "L"): [], ("R", "R"): []}
         allv = []
-        for pid, sp in player_splits_hit.items():
+        for pid, sp in _league_split_source.items():
             b = (_bats_of(pid) or "")[:1].upper()
             for T in ("L", "R"):
                 s = sp.get(T, {}) or {}
@@ -678,13 +778,14 @@ def build_platoon_matchup(pitcher_rows_df, opp_hitters_df, people,
     plat_rows = []
     for (gpk, fp), g in opp_platoon_detail_df.groupby(["game_pk", "faced_pitcher"], sort=False):
         T = g["pitcher_throws"].iloc[0]
-        opp_ops_raw = _wmean(g["ops_vs_hand_raw"], g["split_pa"])
-        opp_ops = _wmean(g["ops_vs_hand"], g["split_pa"])
-        pit_ops_raw = float(np.nanmean(pd.to_numeric(g["pit_ops_allowed_raw"], errors="coerce"))) \
-            if g["pit_ops_allowed_raw"].notna().any() else np.nan
-        pit_ops = float(np.nanmean(pd.to_numeric(g["pit_ops_allowed"], errors="coerce"))) \
-            if g["pit_ops_allowed"].notna().any() else np.nan
-        mx_ops = _wmean(g["mx_ops"], g["split_pa"])
+        # All aggregates are lineup-composition weighted (clip 0-PA splits to 1 so
+        # prior-driven bats still count as lineup exposure, incl. SP OPS display).
+        lineup_w = pd.to_numeric(g["split_pa"], errors="coerce").fillna(0).clip(lower=1)
+        opp_ops_raw = _wmean(g["ops_vs_hand_raw"], lineup_w)
+        opp_ops = _wmean(g["ops_vs_hand"], lineup_w)
+        pit_ops_raw = _wmean(g["pit_ops_allowed_raw"], lineup_w)
+        pit_ops = _wmean(g["pit_ops_allowed"], lineup_w)
+        mx_ops = _wmean(g["mx_ops"], lineup_w)
         edge = mx_ops - league_ops_overall if pd.notna(mx_ops) else np.nan
         bf_present = [v for v in g.loc[g["pit_split_bf"] > 0, "pit_split_bf"].unique()]
         pit_min_bf = int(min(bf_present)) if bf_present else 0
@@ -1439,7 +1540,9 @@ def main():
     try:
         matchup_platoon_df, _detail, _lg = build_platoon_matchup(
             pitcher_rows_df, opp_hitters_df, data["people"],
-            data["player_splits_hit"], data["player_splits_pit"])
+            data["player_splits_hit"], data["player_splits_pit"],
+            league_splits=data.get("player_splits_hit_league"),
+            league_people=data.get("people_league_hitters"))
     except Exception as e:  # noqa: BLE001
         # Platoon lens is optional; degrade to xwOBA-only rather than fail.
         log(f"Platoon lens skipped: {e!r}")

@@ -11,11 +11,26 @@ It pulls everything through keyless APIs (no browser, no secrets):
 - **Baseball Savant `gf?game_pk=`** — posted lineups (JSON)
 - **Baseball Savant CSV leaderboards** — custom (xwOBA/xBA/xSLG/EV/LA/HardHit/K/BB) + batted-ball, cached once per day
 
-The model is unchanged from the notebook: log5 / odds-ratio matchup anchored on
+The model matches the updated notebook: log5 / odds-ratio matchup anchored on
 league average (`M = B·P/L`, additive for EV/LA), with `edge = M − L` as the
 signal. The platoon lens regresses each side's vs-hand OPS toward an
 overall×league-platoon prior and is reliability-gated. Lean is xwOBA-driven;
 platoon edge shows alongside with an AGREE / DIVERGE consensus tag.
+
+Model version `xw+plat_consol_v2` (set via `MODEL_TAG` in the workflow) adds:
+
+- **Lineup partial fill** — valid posted Savant hitters are kept in order and
+  only missing slots are filled from the active-roster top-PA pool
+  (`posted` / `partial_filled` / `projected`); a per-side resolution audit is
+  written to `data/lineup_resolution_audit.csv` each run.
+- **Full-league platoon baselines** — league OPS cells come from the entire
+  Savant hitter split population (~10–15 extra batched StatsAPI calls, ~+5 s)
+  instead of the day's lineups, removing slate-dependent shrinkage priors.
+- **Batted-ball league anchors** — BBE-weighted full-population baselines for
+  GB/FB/LD/PU/Pull/Straight/Oppo.
+- **Composition-weighted SP platoon OPS** — displayed SP OPS-allowed (and all
+  platoon aggregates) are lineup-composition weighted rather than simple means
+  over exposed handedness cells.
 
 ## Files
 

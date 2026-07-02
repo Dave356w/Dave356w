@@ -37,6 +37,12 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 15        # fail fast if an upstream API hangs
+    env:
+      # Model version for the grading ledger. Bump on ANY lean-affecting model
+      # change (new tag, same ledger) so pre/post games never mix in records
+      # or the weight fit. Job-level so grade_leans.py AND build_site.py's
+      # records rendering see the same tag.
+      MODEL_TAG: xw+plat_consol_v2
     steps:
       - uses: actions/checkout@v4
 
