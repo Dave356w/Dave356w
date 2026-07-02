@@ -16,6 +16,7 @@ on:
   # cron times only decide *when* to refresh, not *which* day is shown.
   # Times are labelled for EDT; in EST every run lands one hour earlier.
   schedule:
+    - cron: '15 8 * * *'   # ~04:15 EDT  after night games end; grades yesterday
     - cron: '0 11 * * *'   # ~07:00 EDT  morning projected pass
     - cron: '0 16 * * *'   # ~12:00 EDT
     - cron: '0 19 * * *'   # ~15:00 EDT  early posted lineups
@@ -28,7 +29,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: read
+  contents: write          # commit the grading ledger (data/) back to the repo
   pages: write
   id-token: write
 
@@ -90,6 +91,24 @@ jobs:
           CACHE_DIR: .savant_cache
           OUT_DIR: public
         run: python build_site.py
+
+      # Ingest the lean dumps build_site.py just wrote into the ledger and
+      # grade any pending games via StatsAPI linescores. Today's games stay
+      # pending (not final yet); the ~4:15am ET run grades yesterday's slate.
+      - name: Grade leans
+        run: python grade_leans.py
+
+      # The ledger persists by being committed. Pushes made with the default
+      # GITHUB_TOKEN don't retrigger this workflow, so no recursion. The
+      # rebase absorbs any commit that landed on main mid-run.
+      - name: Commit ledger
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git pull --rebase --autostash origin main
+          git add data/
+          git diff --cached --quiet || git commit -m "ledger $(date -u +%FT%H:%MZ)"
+          git push
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3

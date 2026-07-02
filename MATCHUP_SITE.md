@@ -21,9 +21,11 @@ platoon edge shows alongside with an AGREE / DIVERGE consensus tag.
 
 | Path | Purpose |
 |------|---------|
-| `build_site.py` | One-shot generator: fetch → matchup dataframes → writes `public/index.html` (fully self-contained: inline CSS, dark-mode via `prefers-color-scheme`, no external assets). |
-| `.github/workflows/build.yml` | Scheduled + manual workflow that builds and deploys to Pages. |
+| `build_site.py` | One-shot generator: fetch → matchup dataframes → writes `public/index.html` (fully self-contained: inline CSS, dark-mode via `prefers-color-scheme`, no external assets). Also dumps the day's leans to `data/leans_<date>_{xw,pl}.csv` for the grading ledger. |
+| `grade_leans.py` | Grading ledger: ingests the lean dumps as pending rows, grades them against StatsAPI linescores (full-game + F5), writes `data/mlb_lean_ledger.csv` + `data/ledger_report.txt`. |
+| `.github/workflows/build.yml` | Scheduled + manual workflow: build → grade → commit ledger → deploy Pages. |
 | `requirements.txt` | `requests`, `numpy`, `pandas`. |
+| `data/` | Committed state: daily lean dumps, the ledger, and the latest report. |
 
 The notebook's clean/validate cells (2–3) are intentionally not ported: they
 produced `*_clean` / `*_strict` frames the matchup/render cells never consume
@@ -71,9 +73,24 @@ Enable Pages with **Settings → Pages → Build and deployment → Source: GitH
 Actions**. After that the workflow deploys on each scheduled run (and on manual
 `workflow_dispatch`). The site is served at `https://dave356w.github.io/dave356w/`.
 
-## Possible follow-ups
+## Grading ledger
 
-- Commit the dated leaderboard CSVs to a `data` branch on each run for a free
-  historical archive of projected slates (model-grading / CLV snapshots). The
-  generator currently doesn't emit CSVs — they'd need re-adding plus a commit
-  step.
+Every CI run, after the build, `grade_leans.py`:
+
+- **Ingests** any `data/leans_*_xw.csv` not yet in the ledger as `pending`
+  rows. Re-runs on the same date refresh still-pending rows (SP scratches /
+  lineup swaps up to first pitch); graded rows are immutable.
+- **Grades** all pending rows via `schedule?hydrate=linescore` (one call per
+  date): full-game and first-5-innings W/L/T per lean. Live games stay
+  pending; postponed/cancelled go `void`.
+- **Reports** records to the Actions log and `data/ledger_report.txt`
+  (overall, reliable-only platoon subset, |Δ| terciles, DIVERGE head-to-head,
+  and — once 120 graded F5 decisions accumulate under the current
+  `MODEL_TAG` — an SP-vs-lineup logit weight fit).
+
+The ledger persists by being committed: the workflow's `Commit ledger` step
+pushes `data/` back to `main` on each run (the `contents: write` permission).
+The ~4:15am ET cron is the grading pass — it runs after night games end and
+grades the previous slate. Any model change must bump `MODEL_TAG` (env var on
+the `Grade leans` step) so pre/post-change games never mix in the records or
+the weight fit.
