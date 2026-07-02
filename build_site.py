@@ -1244,6 +1244,13 @@ def main():
         log(f"Platoon lens skipped: {e!r}")
         matchup_platoon_df = pd.DataFrame()
 
+    # Dump the day's model outputs for the grading ledger (grade_leans.py
+    # ingests these on the next CI step; data/ is committed back to the repo).
+    os.makedirs("data", exist_ok=True)
+    matchup_df.to_csv(f"data/leans_{SLATE_DATE}_xw.csv", index=False)
+    if matchup_platoon_df is not None and not matchup_platoon_df.empty:
+        matchup_platoon_df.to_csv(f"data/leans_{SLATE_DATE}_pl.csv", index=False)
+
     log("Rendering index.html ...")
     html = render_combined_html(matchup_df, matchup_platoon_df, pitcher_rows_df, built_txt)
     with open(out_path, "w") as f:
