@@ -53,6 +53,9 @@ LINEUP_SIZE = 9
 REQUEST_DELAY = 0.25
 CACHE_DIR = os.environ.get("CACHE_DIR", ".")
 OUT_DIR = os.environ.get("OUT_DIR", "public")
+DATA_DIR = os.environ.get("DATA_DIR", "data")            # grading ledger home
+LEDGER_PATH = os.path.join(DATA_DIR, "mlb_lean_ledger.csv")
+MODEL_TAG = os.environ.get("MODEL_TAG", "xw+plat_consol_v1")  # keep in sync with grade_leans.py
 
 STATCAST_SELECTIONS = ["pa", "k_percent", "bb_percent", "xwoba", "xba", "xslg",
                        "exit_velocity_avg", "launch_angle_avg", "hard_hit_percent"]
@@ -1141,6 +1144,42 @@ CSS_COMBINED = r"""
 }
 """
 
+CSS_GRADES = r"""
+.gradestrip{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 14px;margin:0 2px 16px;
+  padding:10px 14px;background:var(--surface);border:1px solid var(--line);border-radius:11px;
+  font:600 12px/1.4 var(--mono);color:var(--ink);font-variant-numeric:tabular-nums}
+.gradestrip .lab{font:600 9.5px/1 var(--sans);text-transform:uppercase;letter-spacing:.09em;color:var(--muted)}
+.gradestrip .muted{color:var(--muted);font-weight:500}
+.gradestrip a{color:rgba(var(--lean),1);text-decoration:none;margin-left:auto;font:600 12px/1 var(--sans);white-space:nowrap}
+.gradestrip a:hover{text-decoration:underline}
+
+.backlink{font:600 12px/1 var(--sans);margin:0 2px 12px}
+.backlink a{color:rgba(var(--lean),1);text-decoration:none}
+.backlink a:hover{text-decoration:underline}
+.gr-summary{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 12px}
+.gr-summary .chip{flex:1 1 110px;background:var(--surface);border-color:var(--line)}
+.gr-note{font:500 11.5px/1.5 var(--mono);color:var(--muted);margin:0 2px 14px}
+.gr-tablewrap{overflow-x:auto;background:var(--surface);border:1px solid var(--line);
+  border-radius:var(--r);box-shadow:var(--shadow)}
+table.gr{border-collapse:collapse;width:100%;min-width:760px;
+  font:500 12px/1.35 var(--mono);font-variant-numeric:tabular-nums}
+table.gr th{font:600 9.5px/1 var(--sans);text-transform:uppercase;letter-spacing:.08em;color:var(--muted);
+  text-align:left;padding:10px;border-bottom:1px solid var(--line);white-space:nowrap;
+  position:sticky;top:0;background:var(--surface)}
+table.gr td{padding:8px 10px;border-bottom:1px solid var(--line-2);white-space:nowrap;vertical-align:top}
+table.gr tr:last-child td{border-bottom:none}
+table.gr tr.void{opacity:.5}
+table.gr .sp{font:400 11px/1.3 var(--mono);color:var(--muted)}
+.wlt{display:inline-block;min-width:16px;text-align:center;font:700 11px/1 var(--mono);
+  padding:3px 6px;border-radius:6px}
+.wlt.W{color:rgba(var(--cool),1);background:rgba(var(--cool),.12);border:1px solid rgba(var(--cool),.3)}
+.wlt.L{color:rgba(var(--warm),1);background:rgba(var(--warm),.12);border:1px solid rgba(var(--warm),.3)}
+.wlt.T{color:var(--muted);background:var(--surface-2);border:1px solid var(--line)}
+.wlt.none{color:var(--faint);background:transparent;border:1px dashed var(--line)}
+.st{font:600 9.5px/1 var(--sans);letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.st.void{color:rgba(var(--warm),.9)}
+"""
+
 THEME_JS = r"""
 (function(){
   var KEY='mlb-mx-theme';
@@ -1160,20 +1199,172 @@ THEME_JS = r"""
 """
 
 
-def html_document(body, built_txt):
-    title = f"MLB matchup leans — {SLATE_DATE}"
+def html_document(body, built_txt, title=None):
+    title = title or f"MLB matchup leans — {SLATE_DATE}"
     return (
         "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
         f"<title>{title}</title>"
         "<meta name='robots' content='noindex'>"
-        f"<style>{CSS}{CSS_COMBINED}</style></head><body>"
+        f"<style>{CSS}{CSS_COMBINED}{CSS_GRADES}</style></head><body>"
         f"<div class='mx-wrap'>"
         "<div class='topbar'><div class='brand'>MLB matchup leans</div>"
         "<button id='themeBtn' class='theme' type='button'>Theme: auto</button></div>"
         f"{body}</div>"
         f"<script>{THEME_JS}</script>"
         "</body></html>")
+
+
+# ============================================================
+# GRADES -- records strip (index) + full ledger page (grades.html)
+# Renders purely from data/mlb_lean_ledger.csv, which grade_leans.py
+# maintains and CI commits back to the repo; the grading pass runs
+# before this build so records are current as of the run.
+# ============================================================
+def load_ledger_df():
+    if not os.path.exists(LEDGER_PATH):
+        return None
+    try:
+        led = pd.read_csv(LEDGER_PATH)
+    except Exception as e:  # noqa: BLE001
+        log(f"Ledger unreadable, grades render degraded: {e!r}")
+        return None
+    return None if led.empty else led
+
+
+def _esc(x):
+    return (str(x).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+
+
+def _rec_parts(s):
+    """W/L/T series -> ('W-L' or 'W-L-T', 'pct' or None)."""
+    s = s.dropna()
+    w, l, t = int((s == "W").sum()), int((s == "L").sum()), int((s == "T").sum())
+    base = f"{w}-{l}" + (f"-{t}" if t else "")
+    return base, (f"{w / (w + l):.3f}" if (w + l) else None)
+
+
+def _rec_txt(s):
+    base, pct = _rec_parts(s)
+    return f"{base} ({pct})" if pct else base
+
+
+def records_strip_html():
+    led = load_ledger_df()
+    if led is None:
+        return ""
+    g = led[(led["status"] == "graded") & (led["model_tag"] == MODEL_TAG)]
+    if g.empty:
+        inner = "<span class='muted'>no graded games yet</span>"
+    else:
+        bits = [f"xwOBA full {_rec_txt(g['xw_full'])}",
+                f"F5 {_rec_txt(g['xw_f5'])}"]
+        ov = g[g["ops_valid"] == True]                                # noqa: E712
+        if len(ov):
+            bits.append(f"platoon full {_rec_txt(ov['ops_full'])}")
+            bits.append(f"F5 {_rec_txt(ov['ops_f5'])}")
+        inner = " <span class='muted'>·</span> ".join(bits)
+    return ("<div class='gradestrip'><span class='lab'>Record</span>"
+            f"<span>{inner}</span><a href='grades.html'>full ledger →</a></div>")
+
+
+def _wlt_badge(v):
+    if isinstance(v, str) and v in ("W", "L", "T"):
+        return f"<span class='wlt {v}'>{v}</span>"
+    return "<span class='wlt none'>–</span>"
+
+
+def _lean_cell(lean, delta, muted=False):
+    if not isinstance(lean, str) or not lean:
+        return "<span class='muted'>—</span>"
+    d = pd.to_numeric(delta, errors="coerce")
+    txt = _esc(lean) + (f" <span class='muted'>Δ{d:.3f}</span>" if pd.notna(d) else "")
+    return f"<span class='muted'>{txt}</span>" if muted else txt
+
+
+def _grades_row(r, show_tag):
+    status = str(r["status"])
+    fa, fh = pd.to_numeric(r["full_away"], errors="coerce"), pd.to_numeric(r["full_home"], errors="coerce")
+    f5a, f5h = pd.to_numeric(r["f5_away"], errors="coerce"), pd.to_numeric(r["f5_home"], errors="coerce")
+    if status != "graded":
+        final = f"<span class='st {status}'>{_esc(status)}</span>"
+        f5 = "<span class='muted'>—</span>"
+    else:
+        final = f"{int(fa)}–{int(fh)}" if pd.notna(fa) and pd.notna(fh) else "<span class='muted'>—</span>"
+        f5 = f"{int(f5a)}–{int(f5h)}" if pd.notna(f5a) and pd.notna(f5h) else "<span class='muted'>—</span>"
+    ops_valid = bool(r["ops_valid"]) if pd.notna(r["ops_valid"]) else False
+    cells = [
+        _esc(r["game_date"]),
+        (f"{_esc(r['away'])} <span class='muted'>@</span> {_esc(r['home'])}"
+         f"<br><span class='sp'>{_esc(r.get('away_sp') or '—')} v {_esc(r.get('home_sp') or '—')}</span>"),
+        _lean_cell(r["xw_lean"], r["xw_delta"]),
+        _lean_cell(r["ops_lean"] if ops_valid else None, r["ops_delta"]) if ops_valid
+        else _lean_cell(r["ops_lean"], r["ops_delta"], muted=True),
+        final, f5,
+        _wlt_badge(r["xw_full"]), _wlt_badge(r["xw_f5"]),
+        _wlt_badge(r["ops_full"]), _wlt_badge(r["ops_f5"]),
+    ]
+    if show_tag:
+        cells.append(f"<span class='muted'>{_esc(r['model_tag'])}</span>")
+    cls = " class='void'" if status == "void" else ""
+    return f"<tr{cls}>" + "".join(f"<td>{c}</td>" for c in cells) + "</tr>"
+
+
+def render_grades_html(built_txt):
+    back = "<div class='backlink'><a href='index.html'>← today's leans</a></div>"
+    led = load_ledger_df()
+    if led is None:
+        body = back + ("<div class='legend'><div class='lg-title'>Grading ledger · "
+                       "no graded data yet — the ledger appears after the first CI run."
+                       "</div></div>")
+        return html_document(body, built_txt, title="MLB lean grades")
+
+    n_graded = int((led["status"] == "graded").sum())
+    n_pend = int((led["status"] == "pending").sum())
+    n_void = int((led["status"] == "void").sum())
+    head = ("<div class='legend'><div class='lg-title'>"
+            f"Grading ledger · {n_graded} graded · {n_pend} pending"
+            + (f" · {n_void} void" if n_void else "")
+            + f" · built {built_txt}<br>"
+            f"<em>records below are for model {_esc(MODEL_TAG)} · graded rows are immutable · "
+            "platoon records count reliable-split games only</em></div></div>")
+
+    g = led[(led["status"] == "graded") & (led["model_tag"] == MODEL_TAG)]
+    chips, notes = [], []
+
+    def chip(lab, val, sub=None):
+        s = f"<div class='sub'>{sub}</div>" if sub else ""
+        chips.append(f"<div class='chip'><div class='lab'>{lab}</div>"
+                     f"<div class='val'>{val}</div>{s}</div>")
+
+    if g.empty:
+        summary = "<div class='gr-note'>No graded games under this model tag yet.</div>"
+    else:
+        chip("Graded", str(len(g)), f"{n_pend} pending")
+        b, p = _rec_parts(g["xw_full"]); chip("xwOBA · full", b, p)
+        b, p = _rec_parts(g["xw_f5"]);   chip("xwOBA · F5", b, p)
+        ov = g[g["ops_valid"] == True]                                # noqa: E712
+        if len(ov):
+            b, p = _rec_parts(ov["ops_full"]); chip("Platoon · full", b, p)
+            b, p = _rec_parts(ov["ops_f5"]);   chip("Platoon · F5", b, p)
+            notes.append(f"reliable-platoon subset n={len(ov)}: xwOBA on those games "
+                         f"full {_rec_txt(ov['xw_full'])}, F5 {_rec_txt(ov['xw_f5'])}")
+        dv = g[g["consensus"] == "DIVERGE"]
+        if len(dv):
+            notes.append(f"DIVERGE head-to-head (F5): xwOBA {int((dv['xw_f5'] == 'W').sum())} — "
+                         f"platoon {int((dv['ops_f5'] == 'W').sum())}  (n={len(dv)})")
+        summary = ("<div class='gr-summary'>" + "".join(chips) + "</div>"
+                   + (f"<div class='gr-note'>{' · '.join(notes)}</div>" if notes else ""))
+
+    show_tag = led["model_tag"].nunique() > 1
+    heads = ["Date", "Game", "xwOBA lean", "Platoon lean", "Final", "F5",
+             "xw F", "xw F5", "pl F", "pl F5"] + (["Model"] if show_tag else [])
+    led = led.sort_values(["game_date", "game_pk"], ascending=[False, True])
+    rows = "".join(_grades_row(r, show_tag) for _, r in led.iterrows())
+    table = ("<div class='gr-tablewrap'><table class='gr'><thead><tr>"
+             + "".join(f"<th>{h}</th>" for h in heads)
+             + f"</tr></thead><tbody>{rows}</tbody></table></div>")
+    return html_document(back + head + summary + table, built_txt, title="MLB lean grades")
 
 
 def render_combined_html(xw_df, pl_df, pitcher_rows_df, built_txt):
@@ -1183,11 +1374,12 @@ def render_combined_html(xw_df, pl_df, pitcher_rows_df, built_txt):
             throws[(pr["game_pk"], pr["Name"])] = pr.get("throws")
     games = _df_to_combined_games(xw_df, pl_df, throws)
     legend = _legend("MLB matchup leans — xwOBA + platoon OPS", built_txt)
+    strip = records_strip_html()
     if not games:
-        inner = legend + "<div class='legend'><div class='lg-title'>No paired probables yet — " \
-                         "probables/lineups not posted. Check back closer to first pitch.</div></div>"
+        inner = legend + strip + "<div class='legend'><div class='lg-title'>No paired probables yet — " \
+                                 "probables/lineups not posted. Check back closer to first pitch.</div></div>"
         return html_document(inner, built_txt)
-    body = legend + build_combined(games)
+    body = legend + strip + build_combined(games)
     return html_document(body, built_txt)
 
 
@@ -1196,7 +1388,7 @@ def empty_slate_html(built_txt):
         "<div class='legend'>"
         f"<div class='lg-title'>MLB matchup leans · {SLATE_DATE} · built {built_txt}</div>"
         "<div class='lg-keys'><span class='k'>No MLB games scheduled for this date.</span></div>"
-        "</div>")
+        "</div>") + records_strip_html()
     return html_document(body, built_txt)
 
 
@@ -1207,6 +1399,15 @@ def main():
     built_txt = datetime.now(ET).strftime("%H:%M ET · %Y-%m-%d")
     os.makedirs(OUT_DIR, exist_ok=True)
     out_path = os.path.join(OUT_DIR, "index.html")
+
+    # Grades page renders purely from the committed ledger, so it's written
+    # up front and ships on every path that deploys (full, empty-slate,
+    # check-back). If the build aborts on a fetch failure nothing deploys,
+    # same as before.
+    grades_path = os.path.join(OUT_DIR, "grades.html")
+    with open(grades_path, "w") as f:
+        f.write(render_grades_html(built_txt))
+    log(f"Wrote {grades_path}")
 
     # Top-level guard: a failed core fetch must NOT write index.html, so CI
     # skips the deploy and the last good page stays live.

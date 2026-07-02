@@ -21,7 +21,7 @@ platoon edge shows alongside with an AGREE / DIVERGE consensus tag.
 
 | Path | Purpose |
 |------|---------|
-| `build_site.py` | One-shot generator: fetch → matchup dataframes → writes `public/index.html` (fully self-contained: inline CSS, dark-mode via `prefers-color-scheme`, no external assets). Also dumps the day's leans to `data/leans_<date>_{xw,pl}.csv` for the grading ledger. |
+| `build_site.py` | One-shot generator: fetch → matchup dataframes → writes `public/index.html` and `public/grades.html` (fully self-contained: inline CSS, dark-mode via `prefers-color-scheme`, no external assets). Also dumps the day's leans to `data/leans_<date>_{xw,pl}.csv` for the grading ledger. |
 | `grade_leans.py` | Grading ledger: ingests the lean dumps as pending rows, grades them against StatsAPI linescores (full-game + F5), writes `data/mlb_lean_ledger.csv` + `data/ledger_report.txt`. |
 | `.github/workflows/build.yml` | Scheduled + manual workflow: build → grade → commit ledger → deploy Pages. |
 | `requirements.txt` | `requests`, `numpy`, `pandas`. |
@@ -75,7 +75,16 @@ Actions**. After that the workflow deploys on each scheduled run (and on manual
 
 ## Grading ledger
 
-Every CI run, after the build, `grade_leans.py`:
+Grades are also rendered into the site: the main page shows a **records
+strip** (headline xwOBA + platoon records for the current `MODEL_TAG`,
+linking to the ledger), and **`grades.html`** shows summary chips plus the
+full ledger table — every game's leans, final/F5 scores, and W/L/T grades,
+pending and void rows included. Both render purely from
+`data/mlb_lean_ledger.csv`; grading runs before the build in CI (with a
+second pass after it to ingest the day's fresh dumps), so the page reflects
+last night's results in the same run.
+
+Every CI run, `grade_leans.py`:
 
 - **Ingests** any `data/leans_*_xw.csv` not yet in the ledger as `pending`
   rows. Re-runs on the same date refresh still-pending rows (SP scratches /
