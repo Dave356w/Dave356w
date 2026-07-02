@@ -81,6 +81,13 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      # Grade BEFORE the build: ingest any committed lean dumps and grade
+      # pending games via StatsAPI linescores, so the records strip and
+      # grades.html the build renders reflect last night's results in the
+      # same run. The ~4:15am ET run is the one that grades yesterday.
+      - name: Grade leans (pre-build)
+        run: python grade_leans.py
+
       # Build into ./public. On a hard fetch failure the script exits non-zero
       # WITHOUT writing index.html, so the steps below don't run, the artifact
       # is never uploaded, the deploy job is skipped, and the last good page
@@ -92,10 +99,10 @@ jobs:
           OUT_DIR: public
         run: python build_site.py
 
-      # Ingest the lean dumps build_site.py just wrote into the ledger and
-      # grade any pending games via StatsAPI linescores. Today's games stay
-      # pending (not final yet); the ~4:15am ET run grades yesterday's slate.
-      - name: Grade leans
+      # Second grading pass ingests the dumps the build just wrote (new
+      # games + pending-row refresh for SP scratches). Idempotent; graded
+      # rows are never touched.
+      - name: Grade leans (post-build)
         run: python grade_leans.py
 
       # The ledger persists by being committed. Pushes made with the default
