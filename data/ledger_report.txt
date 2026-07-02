@@ -1,3 +1,1 @@
-LEAN LEDGER — 1 graded games  [xw+plat_consol_v1]
-xwOBA lean   full: 0-1  (0.000)   F5: 0-0-1
-weight fit: 0 usable F5 decisions (gate 120)
+no graded games yet.
