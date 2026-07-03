@@ -7,7 +7,7 @@ game_pk,game_date,matchup,side,pitcher,throws,opp_team,n_opp,n_LHB,n_RHB,n_SW,n_
 823527,2026-07-03,Minnesota Twins @ New York Yankees,home,Gerrit Cole,R,Minnesota Twins,9,2,4,3,5,0,53,False,True,0.771,0.764,0.749,0.739,0.776,0.055
 823933,2026-07-03,San Diego Padres @ Los Angeles Dodgers,away,Michael King,R,Los Angeles Dodgers,9,5,3,1,6,0,161,False,True,0.834,0.821,0.641,0.66,0.738,0.017
 823933,2026-07-03,San Diego Padres @ Los Angeles Dodgers,home,Shohei Ohtani,R,San Diego Padres,9,3,6,0,3,0,134,False,True,0.668,0.678,0.468,0.531,0.506,-0.215
-824013,2026-07-03,Boston Red Sox @ Los Angeles Angels,away,Jake Bennett,L,Los Angeles Angels,9,3,6,0,6,2,32,True,False,0.717,0.72,0.628,0.666,0.671,-0.05
+824013,2026-07-03,Boston Red Sox @ Los Angeles Angels,away,Jake Bennett,L,Los Angeles Angels,9,3,6,0,6,2,32,True,False,0.717,0.72,0.628,0.666,0.67,-0.051
 824013,2026-07-03,Boston Red Sox @ Los Angeles Angels,home,Reid Detmers,L,Boston Red Sox,9,3,6,0,6,2,105,False,True,0.801,0.754,0.586,0.605,0.645,-0.076
 824173,2026-07-03,Tampa Bay Rays @ Houston Astros,away,Nick Martinez,R,Houston Astros,9,1,8,0,1,0,155,False,True,0.758,0.751,0.692,0.684,0.73,0.009
 824173,2026-07-03,Tampa Bay Rays @ Houston Astros,home,Spencer Arrighetti,R,Tampa Bay Rays,9,4,4,1,5,0,132,False,True,0.785,0.777,0.682,0.695,0.74,0.019
