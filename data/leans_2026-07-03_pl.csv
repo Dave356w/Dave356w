@@ -10,17 +10,18 @@ game_pk,game_date,matchup,side,pitcher,throws,opp_team,n_opp,n_LHB,n_RHB,n_SW,n_
 824013,2026-07-03,Boston Red Sox @ Los Angeles Angels,away,Jake Bennett,L,Los Angeles Angels,9,3,6,0,6,2,32,True,False,0.717,0.72,0.628,0.666,0.67,-0.051
 824013,2026-07-03,Boston Red Sox @ Los Angeles Angels,home,Reid Detmers,L,Boston Red Sox,9,3,6,0,6,2,105,False,True,0.801,0.754,0.586,0.605,0.645,-0.076
 824173,2026-07-03,Tampa Bay Rays @ Houston Astros,away,Nick Martinez,R,Houston Astros,9,2,7,0,2,0,155,False,True,0.78,0.772,0.691,0.686,0.749,0.028
-824173,2026-07-03,Tampa Bay Rays @ Houston Astros,home,Spencer Arrighetti,R,Tampa Bay Rays,9,4,4,1,5,0,132,False,True,0.785,0.777,0.682,0.695,0.74,0.019
-824336,2026-07-03,San Francisco Giants @ Colorado Rockies,home,Ryan Feltner,R,San Francisco Giants,9,5,4,0,5,0,104,False,True,0.799,0.786,0.722,0.733,0.789,0.068
+824173,2026-07-03,Tampa Bay Rays @ Houston Astros,home,Spencer Arrighetti,R,Tampa Bay Rays,9,3,5,1,4,0,132,False,True,0.796,0.785,0.67,0.688,0.745,0.024
+824336,2026-07-03,San Francisco Giants @ Colorado Rockies,away,Logan Webb,R,Colorado Rockies,9,4,4,1,5,0,133,False,True,0.792,0.779,0.59,0.619,0.665,-0.056
+824336,2026-07-03,San Francisco Giants @ Colorado Rockies,home,Ryan Feltner,R,San Francisco Giants,9,5,4,0,5,2,104,False,True,0.809,0.792,0.725,0.733,0.798,0.077
 824417,2026-07-03,Chicago White Sox @ Cleveland Guardians,away,Anthony Kay,L,Cleveland Guardians,9,4,4,1,5,1,95,False,True,0.636,0.668,0.732,0.752,0.715,-0.006
 824417,2026-07-03,Chicago White Sox @ Cleveland Guardians,home,Gavin Williams,R,Chicago White Sox,9,6,2,1,7,1,157,False,True,0.776,0.773,0.695,0.703,0.741,0.02
 824498,2026-07-03,Baltimore Orioles @ Cincinnati Reds,away,Trevor Rogers,L,Cincinnati Reds,9,1,6,2,8,2,88,False,True,0.842,0.783,0.766,0.752,0.819,0.098
 824498,2026-07-03,Baltimore Orioles @ Cincinnati Reds,home,Brady Singer,R,Baltimore Orioles,9,5,3,1,6,0,134,False,True,0.771,0.762,0.881,0.856,0.895,0.174
-824659,2026-07-03,St. Louis Cardinals @ Chicago Cubs,away,Andre Pallante,R,Chicago Cubs,9,3,5,1,4,0,173,False,True,0.76,0.757,0.679,0.688,0.723,0.002
-824659,2026-07-03,St. Louis Cardinals @ Chicago Cubs,home,David Peterson,L,St. Louis Cardinals,9,3,6,0,6,1,108,False,True,0.74,0.733,0.787,0.764,0.793,0.072
+824659,2026-07-03,St. Louis Cardinals @ Chicago Cubs,away,Andre Pallante,R,Chicago Cubs,9,3,5,1,4,0,173,False,True,0.759,0.755,0.679,0.685,0.718,-0.003
+824659,2026-07-03,St. Louis Cardinals @ Chicago Cubs,home,David Peterson,L,St. Louis Cardinals,9,3,6,0,6,1,108,False,True,0.74,0.735,0.787,0.764,0.796,0.075
 824904,2026-07-03,New York Mets @ Atlanta Braves,away,Christian Scott,R,Atlanta Braves,9,5,3,1,6,0,73,False,True,0.747,0.748,0.692,0.709,0.721,-0.0
 824904,2026-07-03,New York Mets @ Atlanta Braves,home,Grant Holmes,R,New York Mets,9,5,3,1,6,0,142,False,True,0.725,0.726,0.735,0.737,0.731,0.01
-824982,2026-07-03,Miami Marlins @ Athletics,away,Tyler Phillips,R,Athletics,9,4,4,1,5,0,129,False,True,0.735,0.743,0.694,0.702,0.714,-0.007
+824982,2026-07-03,Miami Marlins @ Athletics,away,Tyler Phillips,R,Athletics,9,4,5,0,4,2,129,False,True,0.757,0.759,0.701,0.706,0.73,0.009
 824982,2026-07-03,Miami Marlins @ Athletics,home,Jack Perkins,R,Miami Marlins,9,5,3,1,6,0,113,False,True,0.752,0.754,0.699,0.726,0.744,0.023
-825062,2026-07-03,Milwaukee Brewers @ Arizona Diamondbacks,away,Kyle Harrison,L,Arizona Diamondbacks,9,2,3,4,7,1,92,False,True,0.793,0.771,0.626,0.641,0.692,-0.029
+825062,2026-07-03,Milwaukee Brewers @ Arizona Diamondbacks,away,Kyle Harrison,L,Arizona Diamondbacks,9,1,5,3,8,2,92,False,True,0.829,0.783,0.628,0.642,0.703,-0.018
 825062,2026-07-03,Milwaukee Brewers @ Arizona Diamondbacks,home,Jose Cabrera,R,Milwaukee Brewers,9,6,3,0,6,0,18,True,False,0.789,0.78,0.794,0.751,0.798,0.077
