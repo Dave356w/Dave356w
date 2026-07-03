@@ -1,0 +1,26 @@
+game_pk,game_date,matchup,side,pitcher,throws,opp_team,n_opp,n_LHB,n_RHB,n_SW,n_platoon_adv,n_low_sample,pit_min_split_bf,pit_low_sample,reliable,opp_OPS_raw,opp_OPS_vs_hand,pit_OPS_raw,pit_OPS_allowed,mx_OPS,edge_OPS
+822714,2026-07-03,Pittsburgh Pirates @ Washington Nationals,away,Mitch Keller,R,Washington Nationals,9,5,2,2,7,0,157,False,True,0.78,0.78,0.75,0.745,0.783,0.062
+822714,2026-07-03,Pittsburgh Pirates @ Washington Nationals,home,Foster Griffin,L,Pittsburgh Pirates,9,2,5,2,7,0,116,False,True,0.687,0.715,0.648,0.658,0.662,-0.059
+823120,2026-07-03,Toronto Blue Jays @ Seattle Mariners,away,Dylan Cease,R,Seattle Mariners,9,6,2,1,7,0,155,False,True,0.754,0.751,0.603,0.628,0.641,-0.08
+823120,2026-07-03,Toronto Blue Jays @ Seattle Mariners,home,Luis Castillo,R,Toronto Blue Jays,9,4,4,1,5,0,143,False,True,0.744,0.739,0.732,0.735,0.751,0.03
+823527,2026-07-03,Minnesota Twins @ New York Yankees,away,Mike Paredes,R,New York Yankees,9,4,4,1,5,0,42,True,False,0.752,0.755,0.736,0.736,0.758,0.037
+823527,2026-07-03,Minnesota Twins @ New York Yankees,home,Gerrit Cole,R,Minnesota Twins,9,2,4,3,5,0,53,False,True,0.771,0.764,0.749,0.739,0.776,0.055
+823933,2026-07-03,San Diego Padres @ Los Angeles Dodgers,away,Michael King,R,Los Angeles Dodgers,9,5,3,1,6,0,161,False,True,0.834,0.821,0.641,0.66,0.738,0.017
+823933,2026-07-03,San Diego Padres @ Los Angeles Dodgers,home,Shohei Ohtani,R,San Diego Padres,9,3,6,0,3,0,134,False,True,0.668,0.678,0.468,0.531,0.506,-0.215
+824013,2026-07-03,Boston Red Sox @ Los Angeles Angels,away,Jake Bennett,L,Los Angeles Angels,9,3,6,0,6,2,32,True,False,0.717,0.72,0.628,0.666,0.671,-0.05
+824013,2026-07-03,Boston Red Sox @ Los Angeles Angels,home,Reid Detmers,L,Boston Red Sox,9,3,6,0,6,2,105,False,True,0.801,0.754,0.586,0.605,0.645,-0.076
+824173,2026-07-03,Tampa Bay Rays @ Houston Astros,away,Nick Martinez,R,Houston Astros,9,1,8,0,1,0,155,False,True,0.758,0.751,0.692,0.684,0.73,0.009
+824173,2026-07-03,Tampa Bay Rays @ Houston Astros,home,Spencer Arrighetti,R,Tampa Bay Rays,9,4,4,1,5,0,132,False,True,0.785,0.777,0.682,0.695,0.74,0.019
+824336,2026-07-03,San Francisco Giants @ Colorado Rockies,home,Ryan Feltner,R,San Francisco Giants,9,5,4,0,5,0,104,False,True,0.799,0.786,0.722,0.733,0.789,0.068
+824417,2026-07-03,Chicago White Sox @ Cleveland Guardians,away,Anthony Kay,L,Cleveland Guardians,9,5,2,2,4,0,95,False,True,0.639,0.661,0.708,0.739,0.7,-0.021
+824417,2026-07-03,Chicago White Sox @ Cleveland Guardians,home,Gavin Williams,R,Chicago White Sox,9,4,4,1,5,0,157,False,True,0.748,0.753,0.696,0.702,0.723,0.002
+824498,2026-07-03,Baltimore Orioles @ Cincinnati Reds,away,Trevor Rogers,L,Cincinnati Reds,9,3,5,1,6,2,88,False,True,0.805,0.772,0.744,0.741,0.803,0.082
+824498,2026-07-03,Baltimore Orioles @ Cincinnati Reds,home,Brady Singer,R,Baltimore Orioles,9,3,4,2,5,0,134,False,True,0.75,0.745,0.877,0.851,0.875,0.154
+824659,2026-07-03,St. Louis Cardinals @ Chicago Cubs,away,Andre Pallante,R,Chicago Cubs,9,2,6,1,3,0,173,False,True,0.756,0.751,0.676,0.684,0.719,-0.002
+824659,2026-07-03,St. Louis Cardinals @ Chicago Cubs,home,David Peterson,L,St. Louis Cardinals,9,4,5,0,5,1,108,False,True,0.706,0.718,0.787,0.763,0.778,0.057
+824904,2026-07-03,New York Mets @ Atlanta Braves,away,Christian Scott,R,Atlanta Braves,9,5,3,1,6,0,73,False,True,0.747,0.748,0.692,0.709,0.721,-0.0
+824904,2026-07-03,New York Mets @ Atlanta Braves,home,Grant Holmes,R,New York Mets,9,4,4,1,5,0,142,False,True,0.702,0.708,0.734,0.734,0.714,-0.007
+824982,2026-07-03,Miami Marlins @ Athletics,away,Tyler Phillips,R,Athletics,9,4,4,1,5,0,129,False,True,0.735,0.743,0.694,0.702,0.714,-0.007
+824982,2026-07-03,Miami Marlins @ Athletics,home,Jack Perkins,R,Miami Marlins,9,5,3,1,6,0,113,False,True,0.752,0.754,0.699,0.726,0.744,0.023
+825062,2026-07-03,Milwaukee Brewers @ Arizona Diamondbacks,away,Kyle Harrison,L,Arizona Diamondbacks,9,2,3,4,7,1,92,False,True,0.793,0.771,0.626,0.641,0.692,-0.029
+825062,2026-07-03,Milwaukee Brewers @ Arizona Diamondbacks,home,Jose Cabrera,R,Milwaukee Brewers,9,6,3,0,6,0,18,True,False,0.789,0.78,0.794,0.751,0.798,0.077
