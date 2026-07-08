@@ -8,7 +8,7 @@ game_pk,game_date,matchup,side,pitcher,throws,opp_team,n_opp,n_LHB,n_RHB,n_SW,n_
 823032,2026-07-08,Milwaukee Brewers @ St. Louis Cardinals,away,Kyle Harrison,L,St. Louis Cardinals,9,4,5,0,5,1,94,False,True,0.716,0.725,0.625,0.64,0.657,-0.064
 823032,2026-07-08,Milwaukee Brewers @ St. Louis Cardinals,home,Michael McGreevy,R,Milwaukee Brewers,9,5,4,0,5,0,135,False,True,0.79,0.782,0.674,0.688,0.736,0.015
 823202,2026-07-08,Toronto Blue Jays @ San Francisco Giants,away,Dylan Cease,R,San Francisco Giants,9,5,4,0,5,0,160,False,True,0.801,0.789,0.574,0.603,0.653,-0.068
-823202,2026-07-08,Toronto Blue Jays @ San Francisco Giants,home,Logan Webb,R,Toronto Blue Jays,9,3,5,1,4,0,142,False,True,0.707,0.709,0.636,0.656,0.648,-0.073
+823202,2026-07-08,Toronto Blue Jays @ San Francisco Giants,home,Logan Webb,R,Toronto Blue Jays,9,3,5,1,4,1,142,False,True,0.704,0.705,0.633,0.653,0.644,-0.077
 823279,2026-07-08,Arizona Diamondbacks @ San Diego Padres,away,Jose Cabrera,R,San Diego Padres,9,3,6,0,3,0,24,True,False,0.686,0.689,0.839,0.758,0.733,0.012
 823279,2026-07-08,Arizona Diamondbacks @ San Diego Padres,home,Michael King,R,Arizona Diamondbacks,9,1,4,4,5,0,169,False,True,0.7,0.718,0.631,0.646,0.635,-0.086
 823360,2026-07-08,Atlanta Braves @ Pittsburgh Pirates,away,Grant Holmes,R,Pittsburgh Pirates,9,2,4,3,5,0,149,False,True,0.796,0.784,0.733,0.734,0.788,0.067
