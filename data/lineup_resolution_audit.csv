@@ -1,5 +1,5 @@
 game_pk,away_lineup_projected,home_lineup_projected,away_lineup_status,home_lineup_status,away_posted_count,home_posted_count,away_filled_count,home_filled_count,away_resolved_count,home_resolved_count
-823359,True,True,projected,projected,0,0,9,9,9,9
+823359,False,True,posted,projected,9,0,0,9,9,9
 823606,True,True,projected,projected,0,0,9,9,9,9
 822954,True,True,projected,projected,0,0,9,9,9,9
 824816,True,True,projected,projected,0,0,9,9,9,9
