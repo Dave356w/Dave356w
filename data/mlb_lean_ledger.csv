@@ -89,9 +89,9 @@ game_pk,game_date,away,home,away_sp,home_sp,model_tag,B_home,B_away,P_awaySP,P_h
 824578,2026-07-08,BOS,CWS,Jake Bennett,Davis Martin,xw+plat_consol_v2,0.34,0.312,0.263,0.314,0.028,-0.0509999999999999,-0.037,-0.01,-0.027,BOS,0.027,0.007,CWS,0.007,False,,graded,5.0,0.0,5.0,0.0,W,W,,
 824815,2026-07-08,CHC,BAL,Colin Rea,Dean Kremer,xw+plat_consol_v2,0.337,0.328,0.357,0.308,0.009,0.0489999999999999,0.06,-0.0,0.06,BAL,0.06,0.042,BAL,0.042,False,,graded,9.0,7.0,4.0,3.0,L,L,,
 824496,2026-07-08,PHI,CIN,Alan Rangel,Chase Burns,xw+plat_consol_v2,0.323,0.33,0.291,0.272,-0.007,0.0189999999999999,-0.022,-0.036,0.014,CIN,0.014,-0.01,PHI,0.01,False,,graded,5.0,11.0,3.0,7.0,W,W,,
-822877,2026-07-09,LAA,TEX,Reid Detmers,Nathan Eovaldi,xw+plat_consol_v2,0.329,0.319,0.279,0.311,0.010000000000000009,-0.03199999999999997,-0.029,-0.006,-0.023,LAA,0.023,-0.034,LAA,0.034,True,AGREE,pending,,,,,,,,
+822877,2026-07-09,LAA,TEX,Reid Detmers,Nathan Eovaldi,xw+plat_consol_v2,0.329,0.322,0.279,0.311,0.007000000000000006,-0.03199999999999997,-0.029,-0.003,-0.026,LAA,0.026,-0.062,LAA,0.062,True,AGREE,pending,,,,,,,,
 823034,2026-07-09,MIL,STL,Logan Henderson,Andre Pallante,xw+plat_consol_v2,0.34,0.334,0.27,0.299,0.006000000000000005,-0.02899999999999997,-0.029,-0.004,-0.025,MIL,0.025,-0.019,MIL,0.019,False,NA,pending,,,,,,,,
-823277,2026-07-09,ARI,SD,Merrill Kelly,Griffin Canning,xw+plat_consol_v2,0.316,0.326,0.412,0.337,-0.010000000000000009,0.07499999999999996,0.091,0.027,0.064,SD,0.064,0.025,SD,0.025,True,AGREE,pending,,,,,,,,
+823277,2026-07-09,ARI,SD,Merrill Kelly,Griffin Canning,xw+plat_consol_v2,0.318,0.332,0.412,0.337,-0.014000000000000012,0.07499999999999996,0.094,0.034,0.06,SD,0.06,0.032,SD,0.032,True,AGREE,pending,,,,,,,,
 823359,2026-07-09,ATL,PIT,Bryce Elder,Mitch Keller,xw+plat_consol_v2,0.328,0.326,0.296,0.354,0.002,-0.0579999999999999,-0.013,0.045,-0.058,ATL,0.058,-0.047,ATL,0.047,True,AGREE,graded,10.0,5.0,6.0,4.0,W,W,W,W
 823606,2026-07-09,KC,NYM,Michael Wacha,Sean Manaea,xw+plat_consol_v2,0.341,0.334,0.313,0.315,0.007,-0.002,0.018,0.013,0.005,NYM,0.005,-0.107,KC,0.107,True,DIVERGE,graded,3.0,7.0,2.0,6.0,W,W,L,L
 823683,2026-07-09,CLE,MIN,Gavin Williams,Bailey Ober,xw+plat_consol_v2,0.309,0.304,0.329,0.323,0.005,0.006,0.002,-0.009,0.011,MIN,0.011,-0.001,CLE,0.001,True,DIVERGE,graded,5.0,2.0,1.0,1.0,L,T,W,T
@@ -100,4 +100,4 @@ game_pk,game_date,away,home,away_sp,home_sp,model_tag,B_home,B_away,P_awaySP,P_h
 824494,2026-07-09,PHI,CIN,Jesús Luzardo,Brady Singer,xw+plat_consol_v2,0.325,0.322,0.273,0.359,0.0030000000000000027,-0.08599999999999997,-0.039,0.046,-0.085,PHI,0.085,-0.12,PHI,0.12,True,AGREE,pending,,,,,,,,
 824816,2026-07-09,CHC,BAL,David Peterson,Trevor Rogers,xw+plat_consol_v2,0.33,0.327,0.347,0.315,0.003,0.0319999999999999,0.042,0.006,0.036,BAL,0.036,0.032,BAL,0.032,True,AGREE,graded,2.0,3.0,0.0,1.0,W,W,W,W
 822954,2026-07-09,NYY,TB,Paul Blackburn,Drew Rasmussen,xw+plat_consol_v2,0.318,0.321,0.292,0.278,-0.003,0.0139999999999999,-0.026,-0.037,0.011,TB,0.011,0.062,TB,0.062,True,AGREE,graded,12.0,4.0,7.0,3.0,L,L,L,L
-823201,2026-07-09,COL,SF,Ryan Feltner,Carson Whisenhunt,xw+plat_consol_v2,0.321,0.318,0.34,0.327,0.0030000000000000027,0.013000000000000012,0.025,0.009,0.016,SF,0.016,0.06,SF,0.06,False,NA,pending,,,,,,,,
+823201,2026-07-09,COL,SF,Ryan Feltner,Carson Whisenhunt,xw+plat_consol_v2,0.322,0.313,0.34,0.327,0.009000000000000008,0.013000000000000012,0.026,0.004,0.022,SF,0.022,0.05,SF,0.05,False,NA,pending,,,,,,,,

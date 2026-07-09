@@ -1,14 +1,14 @@
 game_pk,game_date,matchup,side,pitcher,throws,opp_team,n_opp,n_LHB,n_RHB,n_SW,n_platoon_adv,n_low_sample,pit_min_split_bf,pit_low_sample,reliable,opp_OPS_raw,opp_OPS_vs_hand,pit_OPS_raw,pit_OPS_allowed,mx_OPS,edge_OPS
 822877,2026-07-09,Los Angeles Angels @ Texas Rangers,away,Reid Detmers,L,Texas Rangers,9,2,7,0,7,1,111,False,True,0.81,0.764,0.617,0.631,0.672,-0.049
-822877,2026-07-09,Los Angeles Angels @ Texas Rangers,home,Nathan Eovaldi,R,Los Angeles Angels,9,2,7,0,2,0,191,False,True,0.705,0.706,0.699,0.705,0.706,-0.015
+822877,2026-07-09,Los Angeles Angels @ Texas Rangers,home,Nathan Eovaldi,R,Los Angeles Angels,9,3,6,0,3,0,191,False,True,0.74,0.734,0.707,0.712,0.734,0.013
 822954,2026-07-09,New York Yankees @ Tampa Bay Rays,away,Paul Blackburn,R,Tampa Bay Rays,9,4,5,0,4,0,91,False,True,0.795,0.788,0.604,0.646,0.705,-0.016
 822954,2026-07-09,New York Yankees @ Tampa Bay Rays,home,Drew Rasmussen,R,New York Yankees,9,6,2,1,7,0,153,False,True,0.755,0.756,0.644,0.652,0.663,-0.058
 823034,2026-07-09,Milwaukee Brewers @ St. Louis Cardinals,away,Logan Henderson,R,St. Louis Cardinals,9,5,4,0,5,0,26,True,False,0.782,0.774,0.673,0.675,0.724,0.003
 823034,2026-07-09,Milwaukee Brewers @ St. Louis Cardinals,home,Andre Pallante,R,Milwaukee Brewers,9,4,5,0,4,0,186,False,True,0.795,0.785,0.678,0.688,0.743,0.022
-823201,2026-07-09,Colorado Rockies @ San Francisco Giants,away,Ryan Feltner,R,San Francisco Giants,9,5,4,0,5,0,117,False,True,0.79,0.781,0.724,0.73,0.783,0.062
-823201,2026-07-09,Colorado Rockies @ San Francisco Giants,home,Carson Whisenhunt,L,Colorado Rockies,9,4,4,1,5,1,8,True,False,0.725,0.734,0.629,0.7,0.723,0.002
-823277,2026-07-09,Arizona Diamondbacks @ San Diego Padres,away,Merrill Kelly,R,San Diego Padres,9,3,5,1,4,0,162,False,True,0.681,0.685,0.868,0.848,0.81,0.089
-823277,2026-07-09,Arizona Diamondbacks @ San Diego Padres,home,Griffin Canning,R,Arizona Diamondbacks,9,1,4,4,5,0,88,False,True,0.704,0.72,0.811,0.796,0.785,0.064
+823201,2026-07-09,Colorado Rockies @ San Francisco Giants,away,Ryan Feltner,R,San Francisco Giants,9,5,4,0,5,2,117,False,True,0.794,0.784,0.726,0.73,0.787,0.066
+823201,2026-07-09,Colorado Rockies @ San Francisco Giants,home,Carson Whisenhunt,L,Colorado Rockies,9,2,5,2,7,0,8,True,False,0.747,0.747,0.674,0.708,0.737,0.016
+823277,2026-07-09,Arizona Diamondbacks @ San Diego Padres,away,Merrill Kelly,R,San Diego Padres,9,4,5,0,4,0,162,False,True,0.696,0.694,0.869,0.848,0.82,0.099
+823277,2026-07-09,Arizona Diamondbacks @ San Diego Padres,home,Griffin Canning,R,Arizona Diamondbacks,9,2,5,2,4,1,88,False,True,0.715,0.729,0.785,0.784,0.788,0.067
 823359,2026-07-09,Atlanta Braves @ Pittsburgh Pirates,away,Bryce Elder,R,Pittsburgh Pirates,9,3,4,2,5,1,156,False,True,0.819,0.807,0.69,0.696,0.765,0.044
 823359,2026-07-09,Atlanta Braves @ Pittsburgh Pirates,home,Mitch Keller,R,Atlanta Braves,9,6,2,1,7,1,163,False,True,0.767,0.764,0.772,0.77,0.799,0.078
 823606,2026-07-09,Kansas City Royals @ New York Mets,away,Michael Wacha,R,New York Mets,9,4,4,1,5,0,205,False,True,0.745,0.746,0.714,0.715,0.731,0.01
