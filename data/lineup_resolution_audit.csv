@@ -5,10 +5,10 @@ game_pk,away_lineup_projected,home_lineup_projected,away_lineup_status,home_line
 824816,False,False,posted,posted,9,9,0,0,9,9
 823683,False,False,posted,posted,9,9,0,0,9,9
 824577,False,False,posted,posted,9,9,0,0,9,9
-824251,True,True,projected,projected,0,0,9,9,9,9
-823846,True,True,projected,projected,0,0,9,9,9,9
-824494,True,True,projected,projected,0,0,9,9,9,9
-823034,True,True,projected,projected,0,0,9,9,9,9
-822877,True,True,projected,projected,0,0,9,9,9,9
+824251,False,False,posted,posted,9,9,0,0,9,9
+823846,False,False,posted,posted,9,9,0,0,9,9
+824494,False,False,posted,posted,9,9,0,0,9,9
+823034,False,False,posted,posted,9,9,0,0,9,9
+822877,True,False,projected,posted,0,9,9,0,9,9
 823277,True,True,projected,projected,0,0,9,9,9,9
 823201,True,True,projected,projected,0,0,9,9,9,9
