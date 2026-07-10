@@ -23,9 +23,9 @@ game_pk,game_date,matchup,side,pitcher,throws,opp_team,n_opp,n_LHB,n_RHB,n_SW,n_
 823927,2026-07-10,Arizona Diamondbacks @ Los Angeles Dodgers,home,Shohei Ohtani,R,Arizona Diamondbacks,9,1,4,4,5,0,149,False,True,0.703,0.719,0.527,0.568,0.56,-0.161
 824252,2026-07-10,Philadelphia Phillies @ Detroit Tigers,away,Aaron Nola,R,Detroit Tigers,9,5,4,0,5,0,168,False,True,0.753,0.753,0.843,0.827,0.854,0.133
 824252,2026-07-10,Philadelphia Phillies @ Detroit Tigers,home,Jack Flaherty,R,Philadelphia Phillies,9,5,4,0,5,0,157,False,True,0.768,0.763,0.757,0.754,0.788,0.067
-824493,2026-07-10,Chicago Cubs @ Cincinnati Reds,away,Shota Imanaga,L,Cincinnati Reds,9,3,5,1,6,1,121,False,True,0.807,0.776,0.719,0.716,0.773,0.052
+824493,2026-07-10,Chicago Cubs @ Cincinnati Reds,away,Shota Imanaga,L,Cincinnati Reds,9,3,5,1,6,1,121,False,True,0.811,0.783,0.719,0.715,0.78,0.059
 824493,2026-07-10,Chicago Cubs @ Cincinnati Reds,home,Hunter Greene,R,Chicago Cubs,9,3,5,1,4,0,6,True,False,0.752,0.75,1.157,0.793,0.829,0.108
-824575,2026-07-10,Athletics @ Chicago White Sox,away,Jacob Lopez,L,Chicago White Sox,9,4,4,1,5,1,76,False,True,0.76,0.754,0.879,0.841,0.893,0.172
+824575,2026-07-10,Athletics @ Chicago White Sox,away,Jacob Lopez,L,Chicago White Sox,9,5,4,0,4,0,76,False,True,0.771,0.762,0.866,0.832,0.899,0.178
 824575,2026-07-10,Athletics @ Chicago White Sox,home,Sean Burke,R,Athletics,9,5,4,0,5,0,152,False,True,0.76,0.758,0.711,0.714,0.742,0.021
 824817,2026-07-10,Kansas City Royals @ Baltimore Orioles,away,Luinder Avila,R,Baltimore Orioles,9,3,4,2,5,0,84,False,True,0.747,0.742,0.818,0.782,0.802,0.081
 824817,2026-07-10,Kansas City Royals @ Baltimore Orioles,home,Brandon Young,R,Kansas City Royals,9,3,5,1,4,0,134,False,True,0.721,0.723,0.695,0.698,0.697,-0.024
