@@ -7,10 +7,10 @@ game_pk,game_date,matchup,side,pitcher,throws,opp_team,n_opp,n_LHB,n_RHB,n_SW,n_
 822951,2026-07-12,Seattle Mariners @ Tampa Bay Rays,home,Ian Seymour,L,Seattle Mariners,9,4,4,1,5,1,109,False,True,0.646,0.666,0.72,0.696,0.659,-0.062
 823029,2026-07-12,Atlanta Braves @ St. Louis Cardinals,away,Danny Young,L,St. Louis Cardinals,9,5,4,0,4,3,8,True,False,0.722,0.73,0.851,0.722,0.746,0.025
 823029,2026-07-12,Atlanta Braves @ St. Louis Cardinals,home,Dustin May,R,Atlanta Braves,9,5,3,1,6,1,146,False,True,0.759,0.758,0.702,0.71,0.737,0.016
-823199,2026-07-12,Colorado Rockies @ San Francisco Giants,away,Michael Lorenzen,R,San Francisco Giants,9,6,3,0,6,0,205,False,True,0.8,0.791,0.931,0.895,0.972,0.251
-823199,2026-07-12,Colorado Rockies @ San Francisco Giants,home,Trevor McDonald,R,Colorado Rockies,9,4,4,1,5,0,117,False,True,0.828,0.808,0.721,0.722,0.81,0.089
-823274,2026-07-12,Toronto Blue Jays @ San Diego Padres,away,Kevin Gausman,R,San Diego Padres,9,4,5,0,4,0,179,False,True,0.678,0.684,0.729,0.713,0.683,-0.038
-823274,2026-07-12,Toronto Blue Jays @ San Diego Padres,home,Germán Márquez,R,Toronto Blue Jays,9,4,3,2,6,2,68,False,True,0.726,0.725,0.804,0.795,0.798,0.077
+823199,2026-07-12,Colorado Rockies @ San Francisco Giants,away,Michael Lorenzen,R,San Francisco Giants,9,6,3,0,6,1,213,False,True,0.801,0.791,0.913,0.886,0.962,0.241
+823199,2026-07-12,Colorado Rockies @ San Francisco Giants,home,Trevor McDonald,R,Colorado Rockies,9,4,4,1,5,0,127,False,True,0.823,0.804,0.698,0.713,0.796,0.075
+823274,2026-07-12,Toronto Blue Jays @ San Diego Padres,away,Kevin Gausman,R,San Diego Padres,9,3,6,0,3,1,193,False,True,0.673,0.682,0.717,0.706,0.675,-0.046
+823274,2026-07-12,Toronto Blue Jays @ San Diego Padres,home,Germán Márquez,R,Toronto Blue Jays,9,3,5,1,4,0,75,False,True,0.724,0.725,0.826,0.795,0.808,0.087
 823358,2026-07-12,Milwaukee Brewers @ Pittsburgh Pirates,away,Robert Gasser,L,Pittsburgh Pirates,9,4,3,2,5,3,63,False,True,0.764,0.76,0.805,0.77,0.824,0.103
 823358,2026-07-12,Milwaukee Brewers @ Pittsburgh Pirates,home,Paul Skenes,R,Milwaukee Brewers,9,5,3,1,6,1,176,False,True,0.797,0.789,0.627,0.645,0.692,-0.029
 823602,2026-07-12,Boston Red Sox @ New York Mets,away,Payton Tolle,L,New York Mets,9,4,3,2,5,2,107,False,True,0.706,0.725,0.622,0.628,0.649,-0.072
@@ -19,8 +19,8 @@ game_pk,game_date,matchup,side,pitcher,throws,opp_team,n_opp,n_LHB,n_RHB,n_SW,n_
 823681,2026-07-12,Los Angeles Angels @ Minnesota Twins,home,Taj Bradley,R,Los Angeles Angels,9,3,6,0,3,0,185,False,True,0.722,0.721,0.677,0.679,0.69,-0.031
 823842,2026-07-12,Cleveland Guardians @ Miami Marlins,away,Joey Cantillo,L,Miami Marlins,9,3,5,1,6,0,102,False,True,0.779,0.763,0.721,0.72,0.769,0.048
 823842,2026-07-12,Cleveland Guardians @ Miami Marlins,home,Tyler Phillips,R,Cleveland Guardians,9,6,1,2,8,0,145,False,True,0.702,0.71,0.79,0.764,0.724,0.003
-823925,2026-07-12,Arizona Diamondbacks @ Los Angeles Dodgers,away,Mitch Bratt,L,Los Angeles Dodgers,9,4,3,2,5,2,3,True,False,0.791,0.774,0.305,0.703,0.777,0.056
-823925,2026-07-12,Arizona Diamondbacks @ Los Angeles Dodgers,home,Emmet Sheehan,R,Arizona Diamondbacks,9,1,5,3,4,0,150,False,True,0.709,0.719,0.782,0.765,0.758,0.037
+823925,2026-07-12,Arizona Diamondbacks @ Los Angeles Dodgers,away,Mitch Bratt,L,Los Angeles Dodgers,9,4,3,2,5,2,10,True,False,0.795,0.775,0.851,0.714,0.792,0.071
+823925,2026-07-12,Arizona Diamondbacks @ Los Angeles Dodgers,home,Emmet Sheehan,R,Arizona Diamondbacks,9,1,4,4,5,0,160,False,True,0.706,0.718,0.765,0.76,0.748,0.027
 824250,2026-07-12,Philadelphia Phillies @ Detroit Tigers,away,Zack Wheeler,R,Detroit Tigers,9,5,4,0,5,1,141,False,True,0.755,0.754,0.552,0.587,0.606,-0.115
 824250,2026-07-12,Philadelphia Phillies @ Detroit Tigers,home,Tarik Skubal,L,Philadelphia Phillies,9,4,5,0,5,0,76,False,True,0.705,0.712,0.676,0.65,0.661,-0.06
 824491,2026-07-12,Chicago Cubs @ Cincinnati Reds,away,Matthew Boyd,L,Cincinnati Reds,9,1,6,2,8,0,46,True,False,0.843,0.794,0.749,0.74,0.811,0.09

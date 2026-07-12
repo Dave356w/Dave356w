@@ -135,13 +135,13 @@ game_pk,game_date,away,home,away_sp,home_sp,model_tag,B_home,B_away,P_awaySP,P_h
 822876,2026-07-12,HOU,TEX,Cristian Javier,MacKenzie Gore,xw+plat_consol_v2,0.326,0.336,0.395,0.309,-0.01,0.086,0.087,0.008,0.079,TEX,0.079,0.141,TEX,0.141,False,,graded,5.0,6.0,1.0,4.0,W,W,,
 822951,2026-07-12,SEA,TB,Emerson Hancock,Ian Seymour,xw+plat_consol_v2,0.32,0.319,0.322,0.28,0.001,0.0419999999999999,0.006,-0.037,0.043,TB,0.043,0.041,TB,0.041,True,AGREE,graded,8.0,2.0,7.0,0.0,L,L,L,L
 823029,2026-07-12,ATL,STL,Danny Young,Dustin May,xw+plat_consol_v2,0.339,0.326,0.291,0.302,0.013,-0.011,-0.008,-0.008,0.0,STL,0.0,0.0,STL,0.0,False,,graded,4.0,3.0,2.0,1.0,L,L,,
-823199,2026-07-12,COL,SF,Michael Lorenzen,Trevor McDonald,xw+plat_consol_v2,0.324,0.319,0.356,0.312,0.0050000000000000044,0.043999999999999984,0.045,-0.005,0.05,SF,0.05,0.162,SF,0.162,True,AGREE,pending,,,,,,,,
-823274,2026-07-12,TOR,SD,Kevin Gausman,Germán Márquez,xw+plat_consol_v2,0.315,0.301,0.306,0.361,0.014000000000000012,-0.05499999999999999,-0.015,0.024,-0.039,TOR,0.039,-0.115,TOR,0.115,True,AGREE,pending,,,,,,,,
+823199,2026-07-12,COL,SF,Michael Lorenzen,Trevor McDonald,xw+plat_consol_v2,0.324,0.319,0.356,0.312,0.005,0.0439999999999999,0.045,-0.005,0.05,SF,0.05,0.162,SF,0.162,True,AGREE,graded,1.0,3.0,1.0,1.0,W,T,W,T
+823274,2026-07-12,TOR,SD,Kevin Gausman,Germán Márquez,xw+plat_consol_v2,0.315,0.301,0.306,0.361,0.014,-0.0549999999999999,-0.015,0.024,-0.039,TOR,0.039,-0.115,TOR,0.115,True,AGREE,graded,4.0,5.0,3.0,3.0,L,T,L,T
 823358,2026-07-12,MIL,PIT,Robert Gasser,Paul Skenes,xw+plat_consol_v2,0.325,0.328,0.289,0.259,-0.003,0.0299999999999999,-0.023,-0.051,0.028,PIT,0.028,0.054,PIT,0.054,True,AGREE,graded,5.0,14.0,2.0,14.0,W,W,W,W
 823602,2026-07-12,BOS,NYM,Payton Tolle,Zach Thornton,xw+plat_consol_v2,0.343,0.303,0.274,0.356,0.04,-0.0819999999999999,-0.022,0.021,-0.043,BOS,0.043,-0.069,BOS,0.069,False,,graded,3.0,2.0,0.0,1.0,W,L,,
 823681,2026-07-12,LAA,MIN,José Soriano,Taj Bradley,xw+plat_consol_v2,0.318,0.317,0.32,0.302,0.001,0.018,0.002,-0.017,0.019,MIN,0.019,0.03,MIN,0.03,True,AGREE,graded,2.0,4.0,1.0,3.0,W,W,W,W
 823842,2026-07-12,CLE,MIA,Joey Cantillo,Tyler Phillips,xw+plat_consol_v2,0.323,0.304,0.313,0.337,0.019,-0.024,-0.0,0.004,-0.004,CLE,0.004,0.053,MIA,0.053,True,DIVERGE,graded,5.0,2.0,3.0,1.0,W,W,L,L
-823925,2026-07-12,ARI,LAD,Mitch Bratt,Emmet Sheehan,xw+plat_consol_v2,0.359,0.327,0.28,0.308,0.03199999999999997,-0.02799999999999997,-0.002,-0.001,-0.001,ARI,0.001,0.019,LAD,0.019,False,NA,pending,,,,,,,,
+823925,2026-07-12,ARI,LAD,Mitch Bratt,Emmet Sheehan,xw+plat_consol_v2,0.359,0.327,0.28,0.308,0.0319999999999999,-0.0279999999999999,-0.002,-0.001,-0.001,ARI,0.001,0.019,LAD,0.019,False,,graded,5.0,3.0,2.0,3.0,W,L,,
 824250,2026-07-12,PHI,DET,Zack Wheeler,Tarik Skubal,xw+plat_consol_v2,0.337,0.329,0.257,0.279,0.008,-0.022,-0.046,-0.029,-0.017,PHI,0.017,-0.047,PHI,0.047,True,AGREE,graded,5.0,0.0,1.0,0.0,W,W,W,W
 824491,2026-07-12,CHC,CIN,Matthew Boyd,Andrew Abbott,xw+plat_consol_v2,0.332,0.326,0.329,0.336,0.006,-0.007,0.025,0.026,-0.001,CHC,0.001,0.049,CIN,0.049,False,,graded,8.0,4.0,4.0,4.0,W,T,,
 824574,2026-07-12,ATH,CWS,J.T. Ginn,Noah Schultz,xw+plat_consol_v2,0.339,0.316,0.312,0.372,0.023,-0.06,0.015,0.052,-0.037,ATH,0.037,-0.068,ATH,0.068,False,,graded,1.0,9.0,1.0,9.0,L,L,,
