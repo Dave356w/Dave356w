@@ -37,7 +37,9 @@ Model version `xw+plat_consol_v2` (set via `MODEL_TAG` in the workflow) adds:
 | Path | Purpose |
 |------|---------|
 | `build_site.py` | One-shot generator: fetch → matchup dataframes → writes `public/index.html` and `public/grades.html` (fully self-contained: inline CSS, dark-mode via `prefers-color-scheme`, no external assets). Also dumps the day's leans to `data/leans_<date>_{xw,pl}.csv` for the grading ledger. |
-| `grade_leans.py` | Grading ledger: ingests the lean dumps as pending rows, grades them against StatsAPI linescores (full-game + F5), writes `data/mlb_lean_ledger.csv` + `data/ledger_report.txt`. |
+| `grade_leans.py` | Grading ledger: ingests the lean dumps as pending rows, grades them against StatsAPI linescores (full-game + F5), attaches closing DK moneylines (via `market_backfill`), writes `data/mlb_lean_ledger.csv` + `data/ledger_report.txt`. |
+| `market_backfill.py` | Odds join: attaches ESPN/DraftKings opening + closing moneylines and the devigged home close probability to settled ledger rows (score-verified join, idempotent, no silent defaults), and computes the vs-market scoreboard. |
+| `run_market_update.py` | Headless CLI for the odds join: `--dry-run` preview, one-off backfills, `--merge-backfill` for pre-enriched files. CI doesn't need it (grading calls `attach_market` directly); it's for local runs. |
 | `.github/workflows/build.yml` | Scheduled + manual workflow: build → grade → commit ledger → deploy Pages. |
 | `requirements.txt` | `requests`, `numpy`, `pandas`. |
 | `data/` | Committed state: daily lean dumps, the ledger, and the latest report. |
@@ -107,6 +109,14 @@ Every CI run, `grade_leans.py`:
 - **Grades** all pending rows via `schedule?hydrate=linescore` (one call per
   date): full-game and first-5-innings W/L/T per lean. Live games stay
   pending; postponed/cancelled go `void`.
+- **Attaches market odds** to settled rows still missing them:
+  ledger row → StatsAPI gamePk (date + teams, doubleheaders disambiguated by
+  probable-pitcher surname, join verified by final score) → ESPN event →
+  DraftKings (provider 100) opening/closing moneylines + devigged
+  `close_p_home`. Idempotent; a row that can't be verified keeps NaN market
+  columns and retries next run. A market outage never fails the grading run.
+  `grades.html` then shows each lean's closing ML and a vs-market scoreboard
+  (record vs market-expected wins → z, flat-stake ROI).
 - **Reports** records to the Actions log and `data/ledger_report.txt`
   (overall, reliable-only platoon subset, |Δ| terciles, DIVERGE head-to-head,
   and — once 120 graded F5 decisions accumulate under the current

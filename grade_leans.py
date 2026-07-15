@@ -48,6 +48,8 @@ import numpy as np
 import pandas as pd
 import requests
 
+from market_backfill import attach_market
+
 DATA_DIR    = os.environ.get("DATA_DIR", "data")
 LEDGER_PATH = os.path.join(DATA_DIR, "mlb_lean_ledger.csv")
 REPORT_PATH = os.path.join(DATA_DIR, "ledger_report.txt")
@@ -303,6 +305,10 @@ def main():
     led = load_ledger()
     led = ingest(led)
     led = grade(led)
+    try:
+        led = attach_market(led)      # idempotent; settled rows missing MLs only
+    except Exception as e:            # market outage must not lose the grading run
+        print(f"market backfill: FAILED ({type(e).__name__}: {e}); rows retry next run")
     led.to_csv(LEDGER_PATH, index=False)
     report(led)
 

@@ -1375,6 +1375,21 @@ def _wlt_badge(v):
     return "<span class='wlt none'>–</span>"
 
 
+def _fmt_ml(v):
+    v = pd.to_numeric(v, errors="coerce")
+    if pd.isna(v):
+        return "<span class='muted'>—</span>"
+    return f"+{int(v)}" if v > 0 else f"{int(v)}"
+
+
+def _lean_ml_cell(r, lean_col):
+    """Closing ML of the lean's side; '—' when no market data."""
+    lean = r.get(lean_col)
+    if not isinstance(lean, str) or not lean:
+        return "<span class='muted'>—</span>"
+    return _fmt_ml(r.get("close_home_ml") if lean == r.get("home") else r.get("close_away_ml"))
+
+
 def _lean_cell(lean, delta, muted=False):
     if not isinstance(lean, str) or not lean:
         return "<span class='muted'>—</span>"
@@ -1383,7 +1398,7 @@ def _lean_cell(lean, delta, muted=False):
     return f"<span class='muted'>{txt}</span>" if muted else txt
 
 
-def _grades_row(r, show_tag):
+def _grades_row(r, show_tag, show_ml=False):
     status = str(r["status"])
     fa, fh = pd.to_numeric(r["full_away"], errors="coerce"), pd.to_numeric(r["full_home"], errors="coerce")
     f5a, f5h = pd.to_numeric(r["f5_away"], errors="coerce"), pd.to_numeric(r["f5_home"], errors="coerce")
@@ -1401,6 +1416,10 @@ def _grades_row(r, show_tag):
         _lean_cell(r["xw_lean"], r["xw_delta"]),
         _lean_cell(r["ops_lean"] if ops_valid else None, r["ops_delta"]) if ops_valid
         else _lean_cell(r["ops_lean"], r["ops_delta"], muted=True),
+    ]
+    if show_ml:
+        cells += [_lean_ml_cell(r, "xw_lean"), _lean_ml_cell(r, "ops_lean")]
+    cells += [
         final, f5,
         _wlt_badge(r["xw_full"]), _wlt_badge(r["xw_f5"]),
         _wlt_badge(r["ops_full"]), _wlt_badge(r["ops_f5"]),
@@ -1454,14 +1473,34 @@ def render_grades_html(built_txt):
         if len(dv):
             notes.append(f"DIVERGE head-to-head (F5): xwOBA {int((dv['xw_f5'] == 'W').sum())} — "
                          f"platoon {int((dv['ops_f5'] == 'W').sum())}  (n={len(dv)})")
+        # vs-market scoreboard (closing DK MLs attached by grade_leans.py via
+        # market_backfill; columns absent until the first market run).
+        if "close_p_home" in g.columns and g["close_p_home"].notna().any():
+            try:
+                from market_backfill import vs_market_summary
+                mkt = vs_market_summary(g)
+            except Exception as e:  # noqa: BLE001
+                log(f"vs-market summary degraded: {e!r}")
+                mkt = {}
+            for lab, key in (("xwOBA · vs mkt", "xwOBA"), ("Platoon · vs mkt", "platoon")):
+                m = mkt.get(key)
+                if m:
+                    chip(lab, f"{m['w']}-{m['n'] - m['w']}",
+                         f"z {m['z']:+.2f} · {m['roi_units']:+.2f}u flat")
+            if mkt:
+                notes.append("market = closing DK moneylines via ESPN, devigged two-way; "
+                             "vs-market z and flat ROI are the primary metrics")
         summary = ("<div class='gr-summary'>" + "".join(chips) + "</div>"
                    + (f"<div class='gr-note'>{' · '.join(notes)}</div>" if notes else ""))
 
     show_tag = led["model_tag"].nunique() > 1
-    heads = ["Date", "Game", "xwOBA lean", "Platoon lean", "Final", "F5",
-             "xw F", "xw F5", "pl F", "pl F5"] + (["Model"] if show_tag else [])
+    show_ml = "close_home_ml" in led.columns and led["close_home_ml"].notna().any()
+    heads = (["Date", "Game", "xwOBA lean", "Platoon lean"]
+             + (["xw ML", "pl ML"] if show_ml else [])
+             + ["Final", "F5", "xw F", "xw F5", "pl F", "pl F5"]
+             + (["Model"] if show_tag else []))
     led = led.sort_values(["game_date", "game_pk"], ascending=[False, True])
-    rows = "".join(_grades_row(r, show_tag) for _, r in led.iterrows())
+    rows = "".join(_grades_row(r, show_tag, show_ml) for _, r in led.iterrows())
     table = ("<div class='gr-tablewrap'><table class='gr'><thead><tr>"
              + "".join(f"<th>{h}</th>" for h in heads)
              + f"</tr></thead><tbody>{rows}</tbody></table></div>")
