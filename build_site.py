@@ -1288,9 +1288,9 @@ def _legend(model_label, built_txt):
     return (
         "<div class='legend'>"
         f"<div class='lg-title'>{model_label}{dtxt}{btxt} · "
-        "<em>offense-vs-starter contact lean, not a win projection</em></div>"
+        #"<em>offense-vs-starter</em></div>"
         "<div class='lg-keys'>"
-        "<span class='k'><i class='sw warm'></i>offense-favorable</span>"
+        "<span class='k'><i class='sw warm'></i>hitter-favorable</span>"
         "<span class='k'><i class='sw cool'></i>pitcher-favorable</span>"
         "<span class='k'><i class='sw lean'></i>lean / net tilt (xwOBA)</span>"
         "<span class='k'>◆ platoon advantage vs this SP</span>"
