@@ -1056,18 +1056,17 @@ def _hitter_row_html(i, hr):
         else:
             src, low = "<span class='pa'>(prior)</span>", ""
         ops_cell = f"<td>{f3(hr['ops'])} {src}{low}</td>"
-    mx_cell = f"<td class='na'>—</td>" if hr["mx"] is None else f"<td>{f3(hr['mx'])}</td>"
     if hr["edge"] is None:
         bar = "<div class='eb'></div>"
     else:
         w = clamp(abs(hr["edge"]) / HITTER_EDGE_DOMAIN, 0, 1) * 50
         cls = "w" if hr["edge"] >= 0 else "c"
-        bar = (f"<div class='eb' title='mx OPS edge vs league {sgn3(hr['edge'])}'>"
+        bar = (f"<div class='eb' title='xOPS edge vs league {sgn3(hr['edge'])}'>"
                f"<i class='{cls}' style='width:{w:.0f}%'></i></div>")
     lowcls = " class='low'" if (hr["ops"] is not None and (hr["pa"] == 0 or hr["low"])) else ""
     return (f"<tr{lowcls}><td class='ord'>{i}</td>"
             f"<td class='n'>{nm}{b}{adv}</td><td class='pos'>{_esc(hr['pos'])}</td>"
-            f"<td>{f3(hr['xw'])}</td>{ops_cell}{mx_cell}"
+            f"<td>{f3(hr['xw'])}</td>{ops_cell}"
             f"<td class='bar'>{bar}</td></tr>")
 
 
@@ -1077,16 +1076,16 @@ def _lineup_details(side_d):
     st_cls = {"posted": "posted", "partial_filled": "partial", "projected": "projected"}.get(st, "projected")
     parts = []
     if side_d["opp_xw"] is not None:
-        parts.append(f"wt xwOBA {f3(side_d['opp_xw'])}")
+        parts.append(f"xwOBA {f3(side_d['opp_xw'])}")
     if side_d["pl_mx"] is not None:
-        parts.append(f"mx {f3(side_d['pl_mx'])}")
+        parts.append(f"xOPS {f3(side_d['pl_mx'])}")
     summ = " · ".join(parts) if parts else ""
     hand = side_d["t"] if side_d["t"] in ("L", "R") else "?"
     head = (f"<tr><th></th><th class='n'>Hitter</th><th></th><th>xwOBA</th>"
-            f"<th>vs-{hand} OPS</th><th>mx</th><th>edge</th></tr>")
+            f"<th>vs-{hand} OPS</th><th>edge</th></tr>")
     body = "".join(_hitter_row_html(i + 1, hr) for i, hr in enumerate(side_d["hitters"]))
     if not body:
-        body = "<tr><td class='na' colspan='7'>lineup unavailable</td></tr>"
+        body = "<tr><td class='na' colspan='6'>lineup unavailable</td></tr>"
     return (
         "<details class='lineup' open>"
         "<summary><span class='chev'>▶</span>"
@@ -1130,7 +1129,7 @@ def _side_html(label, d, league_baseline):
         f"<div class='agg'>"
         f"<div class='e' style='color:{edge_color(d['xw_edge'])}'>"
         f"<span>xw edge (drives lean)</span>{sgn3(d['xw_edge'])}</div>"
-        f"<div class='e' style='color:{pl_col}'><span>ops edge</span>{pl_bits}{pl_flag}</div>"
+        f"<div class='e' style='color:{pl_col}'><span>xOPS edge</span>{pl_bits}{pl_flag}</div>"
         f"</div>"
         f"{_lineup_details(d)}"
         f"</section>")
@@ -1295,9 +1294,17 @@ def _legend(model_label, built_txt):
         "<span class='k'><i class='sw cool'></i>pitcher-favorable</span>"
         "<span class='k'><i class='sw lean'></i>lean / net tilt (xwOBA)</span>"
         "<span class='k'>◆ platoon advantage vs this SP</span>"
-        "<span class='k note'>*OPS allowed = lineup-composition-weighted, shrunk (raw beneath) · "
-        "edge bars = per-hitter mx OPS vs league, shared ±.100 axis · "
-        "odds = DK via ESPN, as of build · cards sorted by xwOBA Δedge</span>"
+        "</div>"
+        "<div class='lg-notes'>"
+        "<span><b>xwOBA</b> Lineup season xwOBA, weighted by batted-ball events; "
+        "not adjusted for today's starter.</span>"
+        "<span><b>xOPS</b> Estimated lineup OPS vs this starter from regressed batter and "
+        "pitcher handedness splits; lineup average weighted by hitter vs-hand PA.</span>"
+        "<span><b>SP OPS alwd*</b> Starter's regressed OPS allowed against today's batter-side mix, "
+        "using the same lineup weights; <i>raw</i> below is the unregressed split.</span>"
+        "<span><b>Edge bars</b> Per-hitter xOPS minus overall league OPS; shared ±.100 scale.</span>"
+        "<span class='wide'>Odds are DraftKings via ESPN at build time. Cards are sorted by "
+        "the difference between the two offenses' xwOBA edges.</span>"
         "</div></div>")
 
 
@@ -1350,7 +1357,11 @@ body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 var(--sans);
 .lg-title em{font-style:normal;color:var(--muted);font-weight:500}
 .lg-keys{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:11.5px;color:var(--muted)}
 .lg-keys .k{display:inline-flex;align-items:center;gap:6px}
-.lg-keys .note{color:var(--faint)}
+.lg-notes{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px 18px;
+  margin-top:8px;font-size:11px;line-height:1.4;color:var(--faint)}
+.lg-notes b{color:var(--muted);font-weight:700}
+.lg-notes i{font-style:normal;color:var(--muted)}
+.lg-notes .wide{grid-column:1/-1}
 .sw{width:11px;height:11px;border-radius:2px;display:inline-block}
 .sw.warm{background:rgba(var(--warm),.85)} .sw.cool{background:rgba(var(--cool),.85)}
 .sw.lean{background:rgba(var(--amberbg),.6)} .sw.grey{background:var(--line);border:1px solid var(--faint)}
@@ -1470,6 +1481,8 @@ td.bar{width:86px;padding:4px 8px 4px 2px}
   .teams{font-size:19px}
   .lean{margin-left:0}
   .mcell{min-width:0;flex:1 1 45%}
+  .lg-notes{grid-template-columns:1fr}
+  .lg-notes .wide{grid-column:auto}
   td.n{max-width:110px}
 }
 """
