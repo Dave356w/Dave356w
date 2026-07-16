@@ -1,0 +1,452 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MLB matchup leans — design prototype (SAMPLE DATA)</title>
+<style>
+/* ============================================================
+   TOKENS — box-score / scout-sheet direction.
+   Names in sans, every numeral in tabular mono. Warm = offense-
+   favorable, cool = pitcher-favorable (same semantics as current
+   site). Accent amber is reserved for the lean pill only.
+   ============================================================ */
+:root{
+  --bg:#f3f5f7; --card:#ffffff; --ink:#161b20; --mut:#5d6a76; --faint:#98a4af;
+  --line:#dde3e8; --line2:#eceff2;
+  --warm:198,84,44;            /* ember — offense-favorable  */
+  --cool:52,116,168;           /* steel — pitcher-favorable  */
+  --amber:176,124,16;          /* lean pill text             */
+  --amberbg:246,196,86;        /* lean pill fill             */
+  --railw:26px;
+  --mono:ui-monospace,"SF Mono","Cascadia Mono",Menlo,Consolas,monospace;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#0f1418; --card:#171d24; --ink:#e7ecef; --mut:#96a2ad; --faint:#5f6c78;
+    --line:#242e38; --line2:#1c242c;
+    --warm:236,122,72; --cool:96,158,208;
+    --amber:244,196,96; --amberbg:244,196,96;
+  }
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 var(--sans)}
+.num{font-family:var(--mono);font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+
+/* ---------- page header ---------- */
+.site{max-width:1060px;margin:0 auto;padding:18px 16px 8px}
+.masthead{display:flex;flex-wrap:wrap;align-items:baseline;gap:10px 16px;border-bottom:2px solid var(--ink);padding-bottom:10px}
+.masthead h1{margin:0;font-size:17px;font-weight:800;letter-spacing:.14em;text-transform:uppercase}
+.masthead .date{font-family:var(--mono);font-size:13px;color:var(--mut)}
+.masthead .tag{font-family:var(--mono);font-size:11px;color:var(--faint);border:1px solid var(--line);border-radius:3px;padding:1px 6px}
+.masthead .records{margin-left:auto;font-family:var(--mono);font-size:12px;color:var(--mut)}
+.masthead .records a{color:inherit;text-decoration:none;border-bottom:1px dotted var(--faint)}
+.masthead .records b{color:var(--ink);font-weight:600}
+.subnote{font-size:12px;color:var(--faint);padding:8px 2px 0}
+.subnote em{font-style:normal;color:var(--mut)}
+
+/* ---------- card ---------- */
+.grid{max-width:1060px;margin:0 auto;padding:12px 16px 40px;display:flex;flex-direction:column;gap:18px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:6px;overflow:hidden}
+
+.gamehead{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;padding:12px 16px 10px;border-bottom:1px solid var(--line2)}
+.teams{font-size:22px;font-weight:800;letter-spacing:.02em}
+.teams .at{color:var(--faint);font-weight:400;font-size:16px;margin:0 4px}
+.when{font-size:12px;color:var(--mut)}
+.when .num{font-size:12px}
+.lean{margin-left:auto;display:flex;align-items:baseline;gap:7px;border:1px solid rgba(var(--amberbg),.55);
+      background:rgba(var(--amberbg),.14);border-radius:4px;padding:4px 10px}
+.lean .lk{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:rgba(var(--amber),1)}
+.lean .lt{font-weight:800;font-size:15px}
+.lean .ld{font-family:var(--mono);font-size:12px;color:var(--mut)}
+.consensus{width:100%;font-family:var(--mono);font-size:12px;color:var(--mut);display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center}
+.consensus b{color:var(--ink);font-weight:600}
+.ctag{font-family:var(--sans);font-size:10px;font-weight:700;letter-spacing:.12em;border-radius:3px;padding:2px 7px}
+.ctag.agree{color:rgba(var(--cool),1);border:1px solid rgba(var(--cool),.5)}
+.ctag.diverge{color:rgba(var(--warm),1);border:1px solid rgba(var(--warm),.5)}
+.ctag.na{color:var(--faint);border:1px solid var(--line)}
+
+/* ---------- market strip ---------- */
+.market{display:flex;flex-wrap:wrap;gap:0;border-bottom:1px solid var(--line2);background:color-mix(in srgb,var(--card) 60%, var(--bg))}
+.mcell{padding:7px 16px;border-right:1px solid var(--line2);min-width:110px}
+.mcell:last-child{border-right:0;margin-left:auto;min-width:0}
+.mcell .l{font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint)}
+.mcell .v{font-family:var(--mono);font-size:13px;font-variant-numeric:tabular-nums}
+.mcell .v .mv{color:var(--faint);font-size:11px}
+.mcell.note .v{color:var(--faint);font-size:11px;padding-top:3px}
+
+/* ---------- two sides ---------- */
+.sides{display:grid;grid-template-columns:1fr 1fr}
+.side{padding:12px 16px 14px;min-width:0}
+.side + .side{border-left:1px solid var(--line2)}
+@media (max-width:760px){
+  .sides{grid-template-columns:1fr}
+  .side + .side{border-left:0;border-top:1px solid var(--line2)}
+}
+
+/* SP block */
+.sp .who{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.sp .nm{font-size:16px;font-weight:700}
+.hand{font-family:var(--mono);font-size:10px;color:var(--mut);border:1px solid var(--line);border-radius:3px;padding:0 4px}
+.sp .role{font-size:11px;color:var(--faint);margin-top:1px}
+.spstats{display:flex;gap:0;margin-top:8px;border:1px solid var(--line2);border-radius:4px;overflow:hidden}
+.stat{flex:1;padding:6px 8px 5px;border-right:1px solid var(--line2);min-width:0}
+.stat:last-child{border-right:0}
+.stat .l{font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);white-space:nowrap}
+.stat .v{font-family:var(--mono);font-size:14px;font-variant-numeric:tabular-nums}
+.stat .s{font-family:var(--mono);font-size:10px;color:var(--faint)}
+.flag{font-family:var(--sans);font-size:9px;font-weight:600;letter-spacing:.06em;color:rgba(var(--warm),1);
+      border:1px solid rgba(var(--warm),.45);border-radius:3px;padding:0 4px;margin-left:5px;vertical-align:1px}
+.flag.mute{color:var(--faint);border-color:var(--line)}
+
+/* side aggregate edges */
+.agg{display:flex;gap:14px;margin-top:9px;align-items:baseline;flex-wrap:wrap}
+.agg .e{font-family:var(--mono);font-size:13px;font-variant-numeric:tabular-nums}
+.agg .e span{font-family:var(--sans);font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--faint);margin-right:6px}
+
+/* ---------- lineup (signature element: order rail + aligned edge bars) ---------- */
+details.lineup{margin-top:11px;border-top:1px solid var(--line2)}
+details.lineup summary{cursor:pointer;list-style:none;display:flex;align-items:baseline;gap:8px;padding:8px 0 6px;user-select:none}
+details.lineup summary::-webkit-details-marker{display:none}
+summary .tl{font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+summary .st{font-size:10px;font-weight:600;letter-spacing:.08em;border-radius:3px;padding:1px 6px}
+summary .st.posted{color:rgba(var(--cool),1);border:1px solid rgba(var(--cool),.45)}
+summary .st.partial{color:rgba(var(--amber),1);border:1px solid rgba(var(--amberbg),.5)}
+summary .st.projected{color:var(--faint);border:1px solid var(--line)}
+summary .lw{margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--mut)}
+summary .chev{font-size:10px;color:var(--faint);transition:transform .12s}
+details[open] summary .chev{transform:rotate(90deg)}
+
+table.lu{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+table.lu th{font-size:9px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);
+            text-align:right;padding:2px 6px 4px;border-bottom:1px solid var(--line2);white-space:nowrap}
+table.lu th.n, table.lu td.n{text-align:left}
+table.lu td{font-family:var(--mono);font-size:12px;text-align:right;padding:4px 6px;border-bottom:1px solid var(--line2);white-space:nowrap}
+table.lu tr:last-child td{border-bottom:0}
+td.ord{font-size:11px;color:var(--faint);width:var(--railw);text-align:center;border-right:1px solid var(--line2)}
+td.n{font-family:var(--sans);font-size:12.5px;max-width:150px;overflow:hidden;text-overflow:ellipsis}
+td.n .b{font-family:var(--mono);font-size:9px;color:var(--mut);margin-left:4px}
+td.n .adv{color:rgba(var(--warm),1);font-size:9px;margin-left:2px}  /* platoon-advantage marker */
+td.pos{color:var(--mut);font-size:10px}
+td .pa{color:var(--faint);font-size:10px}
+td.na{color:var(--faint)}
+tr.low td{color:var(--mut)}
+tr.low td.n{color:var(--mut)}
+
+/* per-hitter diverging edge bar, shared axis across rows */
+td.bar{width:86px;padding:4px 8px 4px 2px}
+.eb{position:relative;height:9px;background:linear-gradient(var(--line2),var(--line2)) no-repeat center/1px 100%}
+.eb i{position:absolute;top:1px;bottom:1px;border-radius:1px}
+.eb i.w{background:rgba(var(--warm),.85);left:50%}
+.eb i.c{background:rgba(var(--cool),.85);right:50%}
+
+/* legend */
+.legend{max-width:1060px;margin:0 auto;padding:0 16px 30px;font-size:11px;color:var(--faint);display:flex;flex-wrap:wrap;gap:6px 16px}
+.legend .k{display:inline-flex;align-items:center;gap:5px}
+.legend i.sw{width:10px;height:10px;border-radius:2px;display:inline-block}
+.legend i.warm{background:rgba(var(--warm),.85)} .legend i.cool{background:rgba(var(--cool),.85)}
+.legend i.lean{background:rgba(var(--amberbg),.5)}
+@media (prefers-reduced-motion: reduce){ details.lineup summary .chev{transition:none} }
+</style>
+</head>
+<body>
+
+<header class="site">
+  <div class="masthead">
+    <h1>MLB Matchup Leans</h1>
+    <span class="date num">2026-07-16 · built 7:42 AM PT</span>
+    <span class="tag">xw+plat_consol_v2</span>
+    <span class="records">xwOBA <b>34–22–3</b> · OPS <b>30–26–3</b> · <a href="grades.html">ledger →</a></span>
+  </div>
+  <div class="subnote"><em>Offense-vs-starter contact lean, not a win projection.</em>
+    SAMPLE DATA — layout prototype. Odds shown as-of-build, not streaming.</div>
+</header>
+
+<main class="grid">
+
+<!-- ================= GAME 1 · posted lineups · AGREE ================= -->
+<article class="card">
+  <div class="gamehead">
+    <span class="teams">PHI <span class="at">@</span> LAD</span>
+    <span class="when"><span class="num">7:10 PM ET</span> · Dodger Stadium</span>
+    <span class="lean"><span class="lk">lean</span><span class="lt">PHI</span><span class="ld">Δxw +.021</span></span>
+    <div class="consensus">
+      xwOBA → <b>PHI</b> Δ.021 · OPS → <b>PHI</b> Δ.034
+      <span class="ctag agree">AGREE</span>
+    </div>
+  </div>
+
+  <div class="market">
+    <div class="mcell"><div class="l">DK ML · PHI</div><div class="v">+118 <span class="mv">← +124 open</span></div></div>
+    <div class="mcell"><div class="l">DK ML · LAD</div><div class="v">−138 <span class="mv">← −146 open</span></div></div>
+    <div class="mcell"><div class="l">Total</div><div class="v">o/u 8.5</div></div>
+    <div class="mcell"><div class="l">Implied LAD (devig)</div><div class="v">56.4%</div></div>
+    <div class="mcell note"><div class="l">Market</div><div class="v">as of build 7:42 AM PT</div></div>
+  </div>
+
+  <div class="sides">
+
+    <!-- away side: PHI SP vs LAD lineup -->
+    <section class="side">
+      <div class="sp">
+        <div class="who"><span class="nm">Zack Wheeler</span><span class="hand">RHP</span></div>
+        <div class="role">PHI SP · faces LAD lineup · 6R/2L/1S · 3 plt-adv</div>
+        <div class="spstats">
+          <div class="stat"><div class="l">xwOBA agn</div><div class="v">.271</div><div class="s">lg .316</div></div>
+          <div class="stat"><div class="l">K%</div><div class="v">28.4</div><div class="s">lg 22.4</div></div>
+          <div class="stat"><div class="l">HardHit%</div><div class="v">34.1</div><div class="s">lg 39.1</div></div>
+          <div class="stat"><div class="l">OPS alwd*</div><div class="v">.648</div><div class="s">raw .631</div></div>
+        </div>
+      </div>
+      <div class="agg">
+        <div class="e"><span>xw edge (drives lean)</span>−.019</div>
+        <div class="e"><span>ops edge</span>−.028</div>
+      </div>
+
+      <details class="lineup" open>
+        <summary>
+          <span class="chev">▶</span><span class="tl">LAD lineup</span>
+          <span class="st posted">posted</span>
+          <span class="lw">wt xwOBA .327 · mx .281</span>
+        </summary>
+        <table class="lu">
+          <tr><th></th><th class="n">Hitter</th><th></th><th>xwOBA</th><th>vs-R OPS</th><th>mx</th><th>edge</th></tr>
+          <tr><td class="ord">1</td><td class="n">Mookie Betts<span class="b">R</span></td><td class="pos">SS</td>
+              <td>.352</td><td>.842 <span class="pa">(214)</span></td><td>.771</td>
+              <td class="bar"><div class="eb"><i class="w" style="width:34%"></i></div></td></tr>
+          <tr><td class="ord">2</td><td class="n">Shohei Ohtani<span class="b">L</span><span class="adv">◆</span></td><td class="pos">DH</td>
+              <td>.412</td><td>.964 <span class="pa">(238)</span></td><td>.884</td>
+              <td class="bar"><div class="eb"><i class="w" style="width:48%"></i></div></td></tr>
+          <tr><td class="ord">3</td><td class="n">Freddie Freeman<span class="b">L</span><span class="adv">◆</span></td><td class="pos">1B</td>
+              <td>.371</td><td>.878 <span class="pa">(226)</span></td><td>.806</td>
+              <td class="bar"><div class="eb"><i class="w" style="width:39%"></i></div></td></tr>
+          <tr><td class="ord">4</td><td class="n">Will Smith<span class="b">R</span></td><td class="pos">C</td>
+              <td>.334</td><td>.801 <span class="pa">(198)</span></td><td>.735</td>
+              <td class="bar"><div class="eb"><i class="w" style="width:22%"></i></div></td></tr>
+          <tr><td class="ord">5</td><td class="n">Teoscar Hernández<span class="b">R</span></td><td class="pos">RF</td>
+              <td>.318</td><td>.748 <span class="pa">(207)</span></td><td>.686</td>
+              <td class="bar"><div class="eb"><i class="c" style="width:8%"></i></div></td></tr>
+          <tr><td class="ord">6</td><td class="n">Tommy Edman<span class="b">S</span><span class="adv">◆</span></td><td class="pos">CF</td>
+              <td>.291</td><td>.702 <span class="pa">(171)</span></td><td>.644</td>
+              <td class="bar"><div class="eb"><i class="c" style="width:19%"></i></div></td></tr>
+          <tr><td class="ord">7</td><td class="n">Max Muncy<span class="b">L</span><span class="adv">◆</span></td><td class="pos">3B</td>
+              <td>.336</td><td>.789 <span class="pa">(164)</span></td><td>.724</td>
+              <td class="bar"><div class="eb"><i class="w" style="width:18%"></i></div></td></tr>
+          <tr class="low"><td class="ord">8</td><td class="n">Andy Pages<span class="b">R</span></td><td class="pos">LF</td>
+              <td>.302</td><td>.688 <span class="pa">(27)</span> <span class="flag mute">low PA</span></td><td>.631</td>
+              <td class="bar"><div class="eb"><i class="c" style="width:24%"></i></div></td></tr>
+          <tr><td class="ord">9</td><td class="n">Miguel Rojas<span class="b">R</span></td><td class="pos">2B</td>
+              <td>.264</td><td>.611 <span class="pa">(142)</span></td><td>.560</td>
+              <td class="bar"><div class="eb"><i class="c" style="width:44%"></i></div></td></tr>
+        </table>
+      </details>
+    </section>
+
+    <!-- home side: LAD SP vs PHI lineup -->
+    <section class="side">
+      <div class="sp">
+        <div class="who"><span class="nm">Yoshinobu Yamamoto</span><span class="hand">RHP</span></div>
+        <div class="role">LAD SP · faces PHI lineup · 5R/3L/1S · 4 plt-adv</div>
+        <div class="spstats">
+          <div class="stat"><div class="l">xwOBA agn</div><div class="v">.288</div><div class="s">lg .316</div></div>
+          <div class="stat"><div class="l">K%</div><div class="v">26.9</div><div class="s">lg 22.4</div></div>
+          <div class="stat"><div class="l">HardHit%</div><div class="v">37.8</div><div class="s">lg 39.1</div></div>
+          <div class="stat"><div class="l">OPS alwd*</div><div class="v">.694</div><div class="s">raw .671</div></div>
+        </div>
+      </div>
+      <div class="agg">
+        <div class="e"><span>xw edge (drives lean)</span>+.002</div>
+        <div class="e"><span>ops edge</span>+.006</div>
+      </div>
+
+      <details class="lineup" open>
+        <summary>
+          <span class="chev">▶</span><span class="tl">PHI lineup</span>
+          <span class="st posted">posted</span>
+          <span class="lw">wt xwOBA .335 · mx .318</span>
+        </summary>
+        <table class="lu">
+          <tr><th></th><th class="n">Hitter</th><th></th><th>xwOBA</th><th>vs-R OPS</th><th>mx</th><th>edge</th></tr>
+          <tr><td class="ord">1</td><td class="n">Kyle Schwarber<span class="b">L</span><span class="adv">◆</span></td><td class="pos">DH</td>
+              <td>.378</td><td>.889 <span class="pa">(231)</span></td><td>.851</td>
+              <td class="bar"><div class="eb"><i class="w" style="width:45%"></i></div></td></tr>
+          <tr><td class="ord">2</td><td class="n">Trea Turner<span class="b">R</span></td><td class="pos">SS</td>
+              <td>.341</td><td>.812 <span class="pa">(219)</span></td><td>.777</td>
+              <td class="bar"><div class="eb"><i class="w" style="width:31%"></i></div></td></tr>
+          <tr><td class="ord">3</td><td class="n">Bryce Harper<span class="b">L</span><span class="adv">◆</span></td><td class="pos">1B</td>
+              <td>.389</td><td>.921 <span class="pa">(202)</span></td><td>.882</td>
+              <td class="bar"><div class="eb"><i class="w" style="width:52%"></i></div></td></tr>
+          <tr><td class="ord">4</td><td class="n">Nick Castellanos<span class="b">R</span></td><td class="pos">RF</td>
+              <td>.309</td><td>.731 <span class="pa">(224)</span></td><td>.699</td>
+              <td class="bar"><div class="eb"><i class="c" style="width:6%"></i></div></td></tr>
+          <tr><td class="ord">5</td><td class="n">Alec Bohm<span class="b">R</span></td><td class="pos">3B</td>
+              <td>.322</td><td>.764 <span class="pa">(211)</span></td><td>.731</td>
+              <td class="bar"><div class="eb"><i class="w" style="width:12%"></i></div></td></tr>
+          <tr><td class="ord">6</td><td class="n">Bryson Stott<span class="b">L</span><span class="adv">◆</span></td><td class="pos">2B</td>
+              <td>.297</td><td>.716 <span class="pa">(188)</span></td><td>.685</td>
+              <td class="bar"><div class="eb"><i class="c" style="width:11%"></i></div></td></tr>
+          <tr><td class="ord">7</td><td class="n">Brandon Marsh<span class="b">L</span><span class="adv">◆</span></td><td class="pos">CF</td>
+              <td>.312</td><td>.727 <span class="pa">(146)</span></td><td>.696</td>
+              <td class="bar"><div class="eb"><i class="c" style="width:7%"></i></div></td></tr>
+          <tr><td class="ord">8</td><td class="n">J.T. Realmuto<span class="b">R</span></td><td class="pos">C</td>
+              <td>.301</td><td>.708 <span class="pa">(176)</span></td><td>.678</td>
+              <td class="bar"><div class="eb"><i class="c" style="width:14%"></i></div></td></tr>
+          <tr><td class="ord">9</td><td class="n">Johan Rojas<span class="b">R</span></td><td class="pos">LF</td>
+              <td>.256</td><td>.588 <span class="pa">(131)</span></td><td>.563</td>
+              <td class="bar"><div class="eb"><i class="c" style="width:47%"></i></div></td></tr>
+        </table>
+      </details>
+    </section>
+  </div>
+</article>
+
+<!-- ================= GAME 2 · projected lineup + thin SP split · DIVERGE ================= -->
+<article class="card">
+  <div class="gamehead">
+    <span class="teams">SEA <span class="at">@</span> HOU</span>
+    <span class="when"><span class="num">8:10 PM ET</span> · Daikin Park</span>
+    <span class="lean"><span class="lk">lean</span><span class="lt">HOU</span><span class="ld">Δxw +.009</span></span>
+    <div class="consensus">
+      xwOBA → <b>HOU</b> Δ.009 · OPS → <b>SEA</b> Δ.017
+      <span class="ctag diverge">DIVERGE</span>
+    </div>
+  </div>
+
+  <div class="market">
+    <div class="mcell"><div class="l">DK ML · SEA</div><div class="v">−104 <span class="mv">← +102 open</span></div></div>
+    <div class="mcell"><div class="l">DK ML · HOU</div><div class="v">−112 <span class="mv">← −118 open</span></div></div>
+    <div class="mcell"><div class="l">Total</div><div class="v">o/u 7.5</div></div>
+    <div class="mcell"><div class="l">Implied HOU (devig)</div><div class="v">51.8%</div></div>
+    <div class="mcell note"><div class="l">Market</div><div class="v">as of build 7:42 AM PT</div></div>
+  </div>
+
+  <div class="sides">
+    <section class="side">
+      <div class="sp">
+        <div class="who"><span class="nm">Logan Gilbert</span><span class="hand">RHP</span></div>
+        <div class="role">SEA SP · faces HOU lineup · 7R/2L · 2 plt-adv</div>
+        <div class="spstats">
+          <div class="stat"><div class="l">xwOBA agn</div><div class="v">.294</div><div class="s">lg .316</div></div>
+          <div class="stat"><div class="l">K%</div><div class="v">27.2</div><div class="s">lg 22.4</div></div>
+          <div class="stat"><div class="l">HardHit%</div><div class="v">39.5</div><div class="s">lg 39.1</div></div>
+          <div class="stat"><div class="l">OPS alwd*</div><div class="v">.702</div><div class="s">raw .688</div></div>
+        </div>
+      </div>
+      <div class="agg">
+        <div class="e"><span>xw edge (drives lean)</span>+.004</div>
+        <div class="e"><span>ops edge</span>−.011</div>
+      </div>
+
+      <details class="lineup">
+        <summary>
+          <span class="chev">▶</span><span class="tl">HOU lineup</span>
+          <span class="st posted">posted</span>
+          <span class="lw">wt xwOBA .321 · mx .320</span>
+        </summary>
+        <table class="lu">
+          <tr><th></th><th class="n">Hitter</th><th></th><th>xwOBA</th><th>vs-R OPS</th><th>mx</th><th>edge</th></tr>
+          <tr><td class="ord">1</td><td class="n">Jose Altuve<span class="b">R</span></td><td class="pos">2B</td>
+              <td>.331</td><td>.779 <span class="pa">(216)</span></td><td>.752</td>
+              <td class="bar"><div class="eb"><i class="w" style="width:19%"></i></div></td></tr>
+          <tr><td class="ord">2</td><td class="n">Yordan Alvarez<span class="b">L</span><span class="adv">◆</span></td><td class="pos">DH</td>
+              <td>.401</td><td>.947 <span class="pa">(208)</span></td><td>.914</td>
+              <td class="bar"><div class="eb"><i class="w" style="width:56%"></i></div></td></tr>
+          <tr><td class="ord">3</td><td class="n">Isaac Paredes<span class="b">R</span></td><td class="pos">3B</td>
+              <td>.324</td><td>.756 <span class="pa">(221)</span></td><td>.730</td>
+              <td class="bar"><div class="eb"><i class="w" style="width:9%"></i></div></td></tr>
+          <tr><td class="ord">4</td><td class="n">Christian Walker<span class="b">R</span></td><td class="pos">1B</td>
+              <td>.315</td><td>.741 <span class="pa">(203)</span></td><td>.715</td>
+              <td class="bar"><div class="eb"><i class="c" style="width:4%"></i></div></td></tr>
+          <tr><td class="ord">5</td><td class="n">Jeremy Peña<span class="b">R</span></td><td class="pos">SS</td>
+              <td>.308</td><td>.722 <span class="pa">(212)</span></td><td>.697</td>
+              <td class="bar"><div class="eb"><i class="c" style="width:10%"></i></div></td></tr>
+          <tr class="low"><td class="ord">6</td><td class="n">Jacob Melton<span class="b">L</span><span class="adv">◆</span></td><td class="pos">CF</td>
+              <td>.287</td><td class="na">— <span class="pa">no vs-R split</span></td><td class="na">—</td>
+              <td class="bar"><div class="eb"></div></td></tr>
+          <tr><td class="ord">7</td><td class="n">Yainer Diaz<span class="b">R</span></td><td class="pos">C</td>
+              <td>.312</td><td>.734 <span class="pa">(184)</span></td><td>.708</td>
+              <td class="bar"><div class="eb"><i class="c" style="width:6%"></i></div></td></tr>
+          <tr><td class="ord">8</td><td class="n">Jake Meyers<span class="b">R</span></td><td class="pos">RF</td>
+              <td>.283</td><td>.664 <span class="pa">(158)</span></td><td>.641</td>
+              <td class="bar"><div class="eb"><i class="c" style="width:27%"></i></div></td></tr>
+          <tr><td class="ord">9</td><td class="n">Mauricio Dubón<span class="b">R</span></td><td class="pos">LF</td>
+              <td>.271</td><td>.629 <span class="pa">(149)</span></td><td>.607</td>
+              <td class="bar"><div class="eb"><i class="c" style="width:38%"></i></div></td></tr>
+        </table>
+      </details>
+    </section>
+
+    <section class="side">
+      <div class="sp">
+        <div class="who"><span class="nm">Spencer Arrighetti</span><span class="hand">RHP</span>
+          <span class="flag">thin SP 38bf</span></div>
+        <div class="role">HOU SP · faces SEA lineup · 5R/4L · 5 plt-adv</div>
+        <div class="spstats">
+          <div class="stat"><div class="l">xwOBA agn</div><div class="v">.329</div><div class="s">lg .316</div></div>
+          <div class="stat"><div class="l">K%</div><div class="v">22.1</div><div class="s">lg 22.4</div></div>
+          <div class="stat"><div class="l">HardHit%</div><div class="v">42.3</div><div class="s">lg 39.1</div></div>
+          <div class="stat"><div class="l">OPS alwd*</div><div class="v">.748</div><div class="s">raw .802</div></div>
+        </div>
+      </div>
+      <div class="agg">
+        <div class="e"><span>xw edge (drives lean)</span>+.013</div>
+        <div class="e"><span>ops edge</span>+.006 <span class="flag mute">prior-driven</span></div>
+      </div>
+
+      <details class="lineup">
+        <summary>
+          <span class="chev">▶</span><span class="tl">SEA lineup</span>
+          <span class="st projected">projected</span>
+          <span class="lw">wt xwOBA .318 · mx .329</span>
+        </summary>
+        <table class="lu">
+          <tr><th></th><th class="n">Hitter</th><th></th><th>xwOBA</th><th>vs-R OPS</th><th>mx</th><th>edge</th></tr>
+          <tr><td class="ord">1</td><td class="n">J.P. Crawford<span class="b">L</span><span class="adv">◆</span></td><td class="pos">SS</td>
+              <td>.309</td><td>.729 <span class="pa">(194)</span></td><td>.744</td>
+              <td class="bar"><div class="eb"><i class="w" style="width:14%"></i></div></td></tr>
+          <tr><td class="ord">2</td><td class="n">Julio Rodríguez<span class="b">R</span></td><td class="pos">CF</td>
+              <td>.356</td><td>.821 <span class="pa">(229)</span></td><td>.838</td>
+              <td class="bar"><div class="eb"><i class="w" style="width:41%"></i></div></td></tr>
+          <tr><td class="ord">3</td><td class="n">Cal Raleigh<span class="b">S</span><span class="adv">◆</span></td><td class="pos">C</td>
+              <td>.372</td><td>.883 <span class="pa">(217)</span></td><td>.901</td>
+              <td class="bar"><div class="eb"><i class="w" style="width:50%"></i></div></td></tr>
+          <tr><td class="ord">4</td><td class="n">Randy Arozarena<span class="b">R</span></td><td class="pos">LF</td>
+              <td>.327</td><td>.762 <span class="pa">(206)</span></td><td>.778</td>
+              <td class="bar"><div class="eb"><i class="w" style="width:22%"></i></div></td></tr>
+          <tr class="low"><td class="ord">5</td><td class="n">Luke Raley<span class="b">L</span><span class="adv">◆</span></td><td class="pos">1B</td>
+              <td>.318</td><td>.744 <span class="pa">(29)</span> <span class="flag mute">low PA</span></td><td>.760</td>
+              <td class="bar"><div class="eb"><i class="w" style="width:16%"></i></div></td></tr>
+          <tr><td class="ord">6</td><td class="n">Jorge Polanco<span class="b">S</span><span class="adv">◆</span></td><td class="pos">2B</td>
+              <td>.298</td><td>.701 <span class="pa">(168)</span></td><td>.716</td>
+              <td class="bar"><div class="eb"><i class="c" style="width:5%"></i></div></td></tr>
+          <tr><td class="ord">7</td><td class="n">Dylan Moore<span class="b">R</span></td><td class="pos">3B</td>
+              <td>.284</td><td>.652 <span class="pa">(139)</span></td><td>.666</td>
+              <td class="bar"><div class="eb"><i class="c" style="width:23%"></i></div></td></tr>
+          <tr><td class="ord">8</td><td class="n">Victor Robles<span class="b">R</span></td><td class="pos">RF</td>
+              <td>.276</td><td>.638 <span class="pa">(151)</span></td><td>.652</td>
+              <td class="bar"><div class="eb"><i class="c" style="width:29%"></i></div></td></tr>
+          <tr class="low"><td class="ord">9</td><td class="n">Cole Young<span class="b">L</span><span class="adv">◆</span></td><td class="pos">DH</td>
+              <td>.262</td><td>.601 <span class="pa">(22)</span> <span class="flag mute">low PA</span></td><td>.614</td>
+              <td class="bar"><div class="eb"><i class="c" style="width:42%"></i></div></td></tr>
+        </table>
+      </details>
+    </section>
+  </div>
+</article>
+
+</main>
+
+<footer class="legend">
+  <span class="k"><i class="sw warm"></i>offense-favorable</span>
+  <span class="k"><i class="sw cool"></i>pitcher-favorable</span>
+  <span class="k"><i class="sw lean"></i>lean / net xwOBA tilt</span>
+  <span class="k">◆ platoon advantage vs this SP</span>
+  <span class="k">*OPS allowed = lineup-composition-weighted, shrunk; raw shown beneath</span>
+  <span class="k">edge bars: per-hitter mx OPS vs league, shared ±.100 axis</span>
+  <span class="k">cards sorted by xwOBA Δedge</span>
+</footer>
+
+</body>
+</html>

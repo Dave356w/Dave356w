@@ -36,7 +36,7 @@ import re
 import sys
 import time
 import unicodedata
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -47,6 +47,8 @@ import requests
 # CONFIG
 # ------------------------------------------------------------
 ET = ZoneInfo("America/New_York")
+PT = ZoneInfo("America/Los_Angeles")   # display timezone (build time, game times)
+UTC = timezone.utc
 ROLLOVER_HOUR = 3          # hold "today" until ~3am ET so night games don't roll early
 SPORT_ID = 1
 LINEUP_SIZE = 9
@@ -816,10 +818,114 @@ def build_platoon_matchup(pitcher_rows_df, opp_hitters_df, people,
 
 
 # ============================================================
-# CELL 6 -- CONSOLIDATED CARD RENDER (emits HTML string)
+# PREGAME MARKET (display-only) -- best-effort DK odds via ESPN
+# Same endpoints/join as market_backfill.py (scoreboard -> core
+# /odds, provider 100), but *pregame*: current + open moneylines
+# and the total, devigged home implied %. Strictly best-effort:
+# any failure logs and omits -- an odds outage never fails the
+# build, and missing values render as em-dashes, never defaults.
+# ============================================================
+_ESPN2SA = {"CHW": "CWS", "ARI": "AZ", "OAK": "ATH"}  # ESPN -> StatsAPI abbrev
+
+
+def _amer_ml(x):
+    if isinstance(x, dict):
+        x = x.get("american")
+    try:
+        return int(str(x).replace("+", ""))
+    except (TypeError, ValueError):
+        return None
+
+
+def _imp_ml(ml):
+    return 100.0 / (ml + 100.0) if ml > 0 else -ml / (-ml + 100.0)
+
+
+def _parse_espn_dt(s):
+    for fmt in ("%Y-%m-%dT%H:%MZ", "%Y-%m-%dT%H:%M:%SZ"):
+        try:
+            return datetime.strptime(s, fmt)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def fetch_pregame_odds(slate_df):
+    """game_pk -> {away_ml, home_ml, open_away_ml, open_home_ml, total, p_home}."""
+    out = {}
+    try:
+        ds = SLATE_DATE.replace("-", "")
+        sb = _get_json("https://site.api.espn.com/apis/site/v2/sports/baseball/"
+                       f"mlb/scoreboard?dates={ds}", tries=2)
+    except Exception as e:  # noqa: BLE001
+        log(f"pregame odds: scoreboard fetch failed ({e!r}) -> strip renders em-dashes")
+        return out
+    evs = {}
+    for ev in sb.get("events", []):
+        try:
+            comp = ev["competitions"][0]
+            t = {c["homeAway"]: _ESPN2SA.get(c["team"]["abbreviation"],
+                                             c["team"]["abbreviation"])
+                 for c in comp["competitors"]}
+            evs.setdefault((t["away"], t["home"]), []).append(
+                dict(eid=ev["id"], start=ev.get("date")))
+        except Exception:  # noqa: BLE001
+            continue
+
+    def _team_odds(dk, which):
+        td = dk.get(which) or {}
+        cur = _amer_ml(((td.get("current") or {}).get("moneyLine")))
+        if cur is None:
+            cur = _amer_ml(td.get("moneyLine"))
+        opn = _amer_ml(((td.get("open") or {}).get("moneyLine")))
+        return cur, opn
+
+    for _, g in slate_df.iterrows():
+        cands = evs.get((g.get("away_abbrev"), g.get("home_abbrev")), [])
+        if not cands:
+            continue
+        pick = cands[0]
+        if len(cands) > 1:  # doubleheader: nearest scheduled start
+            gt = _parse_espn_dt(str(g.get("game_datetime_utc") or ""))
+            if gt is not None:
+                def _gap(e):
+                    et_ = _parse_espn_dt(str(e.get("start") or ""))
+                    return abs((et_ - gt).total_seconds()) if et_ else 1e12
+                pick = min(cands, key=_gap)
+        try:
+            odds = _get_json("https://sports.core.api.espn.com/v2/sports/baseball/"
+                             f"leagues/mlb/events/{pick['eid']}/competitions/"
+                             f"{pick['eid']}/odds", tries=2)
+        except Exception as e:  # noqa: BLE001
+            log(f"pregame odds: game_pk={g['game_pk']} odds fetch failed ({e!r})")
+            continue
+        dk = next((i for i in odds.get("items", [])
+                   if str((i.get("provider") or {}).get("id")) == "100"), None)
+        if dk is None:
+            continue
+        h_cur, h_opn = _team_odds(dk, "homeTeamOdds")
+        a_cur, a_opn = _team_odds(dk, "awayTeamOdds")
+        try:
+            total = float(dk.get("overUnder")) if dk.get("overUnder") is not None else None
+        except (TypeError, ValueError):
+            total = None
+        p_home = None
+        if h_cur is not None and a_cur is not None:
+            ih, ia = _imp_ml(h_cur), _imp_ml(a_cur)
+            p_home = ih / (ih + ia) if (ih + ia) > 0 else None
+        out[g["game_pk"]] = dict(away_ml=a_cur, home_ml=h_cur,
+                                 open_away_ml=a_opn, open_home_ml=h_opn,
+                                 total=total, p_home=p_home)
+        time.sleep(0.15)
+    log(f"pregame odds attached: {len(out)}/{len(slate_df)} games")
+    return out
+
+
+# ============================================================
+# CELL 6 -- CARD RENDER (per-hitter lineup layout, emits HTML)
 # ============================================================
 ABBR = {
-    "Arizona Diamondbacks": "ARI", "Athletics": "ATH", "Atlanta Braves": "ATL", "Baltimore Orioles": "BAL",
+    "Arizona Diamondbacks": "AZ", "Athletics": "ATH", "Atlanta Braves": "ATL", "Baltimore Orioles": "BAL",
     "Boston Red Sox": "BOS", "Chicago Cubs": "CHC", "Chicago White Sox": "CWS", "Cincinnati Reds": "CIN",
     "Cleveland Guardians": "CLE", "Colorado Rockies": "COL", "Detroit Tigers": "DET", "Houston Astros": "HOU",
     "Kansas City Royals": "KC", "Los Angeles Angels": "LAA", "Los Angeles Dodgers": "LAD", "Miami Marlins": "MIA",
@@ -829,19 +935,11 @@ ABBR = {
     "Toronto Blue Jays": "TOR", "Washington Nationals": "WSH",
 }
 
+HITTER_EDGE_DOMAIN = 0.100  # shared per-hitter edge-bar axis (|mx_ops - lg|)
+
 
 def clamp(x, a, b):
     return a if x < a else b if x > b else x
-
-
-def tint(edge, domain, ksign=1):
-    if edge is None:
-        return "transparent"
-    s = edge * ksign
-    t = clamp(abs(s) / domain, 0, 1) ** 0.85
-    rgb = "var(--warm)" if s >= 0 else "var(--cool)"
-    a = round(0.08 + 0.60 * t, 3)
-    return f"rgba({rgb},{a})"
 
 
 def edge_color(edge, ksign=1):
@@ -859,164 +957,28 @@ def f1(v):
 
 
 def sgn3(v):
-    return "—" if v is None else f"{'+' if v >= 0 else '−'}{abs(v):.3f}".rstrip()
-
-
-def sgn1(v):
-    return "—" if v is None else f"{'+' if v >= 0 else '−'}{abs(v):.1f}"
+    return "—" if v is None else f"{'+' if v >= 0 else '−'}{abs(v):.3f}"
 
 
 def _abbr(name):
     return ABBR.get(name, str(name or "")[:3].upper())
 
 
-def meter(away_abbr, home_abbr, away_off, home_off, domain):
-    if away_off is None or home_off is None:
+def _fmt_ml(v):
+    if v is None:
+        return "—"
+    return f"+{v}" if v > 0 else str(v)
+
+
+def _fmt_pt_clock(dt):
+    return dt.strftime("%I:%M %p").lstrip("0") + " PT"
+
+
+def _game_time_pt(iso_utc):
+    dt = _parse_espn_dt(str(iso_utc or ""))
+    if dt is None:
         return ""
-    net = home_off - away_off
-    pos = 50 + clamp(net / domain, -1, 1) * 44
-    if pos >= 50:
-        fl, fw = 50, pos - 50
-    else:
-        fl, fw = pos, 50 - pos
-    fav_home = home_off >= away_off
-    lcl = "" if fav_home else " on"
-    rcl = " on" if fav_home else ""
-    return (
-        f"<div class='mx-meter'>"
-        f"<span class='pole left{lcl}'>{away_abbr}</span>"
-        f"<div class='track'>"
-        f"<div class='fill' style='left:{fl:.1f}%;width:{fw:.1f}%'></div>"
-        f"<div class='cen'></div>"
-        f"<div class='mark' style='left:{pos:.1f}%'></div>"
-        f"</div>"
-        f"<span class='pole right{rcl}'>{home_abbr}</span>"
-        f"</div>")
-
-
-XW_METRICS = [
-    ("xw", "xwOBA", f3, 0.060, 1),
-    ("hh", "HardHit", f1, 12.0, 1),
-    ("ev", "EV", f1, 3.0, 1),
-    ("xs", "xSLG", f3, 0.120, 1),
-    ("k", "K%", f1, 9.0, -1),
-]
-
-
-def _xw_strip(r):
-    chips = ""
-    for key, lab, fmt, dom, ks in XW_METRICS:
-        pit, opp, mx, edge = r[key]
-        bg = tint(edge, dom, ks)
-        title = f"{lab}  pit {fmt(pit)} / opp {fmt(opp)} -> mx {fmt(mx)}  (edge {sgn3(edge) if dom < 1 else sgn1(edge)})"
-        chips += (f"<div class='chip' style='background:{bg}' title='{title}'>"
-                  f"<div class='lab'>{lab}</div>"
-                  f"<div class='val'>{fmt(mx)}</div>"
-                  f"<div class='sub'>{fmt(pit)}<span>/</span>{fmt(opp)}</div></div>")
-    return chips
-
-
-def _pl_chip(r):
-    if not r.get("has_pl"):
-        return ("<div class='chip wide muted'><div class='lab'>OPS matchup</div>"
-                "<div class='val'>—</div><div class='sub'>no vs-hand split</div></div>", None, "var(--faint)")
-    rel = r["pl_reliable"]; edge = r["pl_edge"]
-    bg = tint(edge, 0.20, 1) if rel else "transparent"
-    ecol = edge_color(edge) if rel else "var(--faint)"
-    flags = ""
-    fl = r.get("pl_fl", {})
-    if "thin" in fl:
-        flags += f"<span class='flag warn'>thin SP {fl['thin']}bf</span>"
-    if "lowpa" in fl:
-        flags += f"<span class='flag'>{fl['lowpa']} low-PA</span>"
-    if not rel:
-        flags += "<span class='flag mute'>prior-driven</span>"
-    chip = (f"<div class='chip wide{'' if rel else ' unrel'}' style='background:{bg}'>"
-            f"<div class='lab'>OPS matchup{flags}</div>"
-            f"<div class='val'>{f3(r['pl_mx'])}</div>"
-            f"<div class='sub'>opp {f3(r['pl_opp_raw'])}<span>/</span>SP {f3(r['pl_sp_raw'])}</div></div>")
-    return chip, edge, ecol
-
-
-def cmb_row(side, r, opp_abbr):
-    badge = f" <em>{r['t']}</em>" if r.get('t') in ('L', 'R') else ""
-    comp = f"{r['R']}R/{r['L']}L" + (f"/{r['S']}S" if r['S'] else "") if r.get("has_pl") else "—"
-    padv = f" · {r['padv']} plt-adv" if r.get("has_pl") else ""
-    xw_oe = r["xw"][3]
-    pl_chip, pl_edge, pl_ecol = _pl_chip(r)
-    return (
-        f"<div class='prow'>"
-        f"<div class='pmeta'>"
-        f"<div class='pname'>{r['p']}{badge}</div>"
-        f"<div class='prole'>{side} SP · vs {opp_abbr} · {comp}{padv}</div>"
-        f"</div>"
-        f"<div class='lensline'>"
-        f"<div class='strip'>{_xw_strip(r)}</div>"
-        f"<div class='offedge' style='color:{edge_color(xw_oe)}' "
-        f"title='opponent-offense xwOBA edge vs league -- drives the lean'>"
-        f"<span>xw edge</span>{sgn3(xw_oe)}</div>"
-        f"</div>"
-        f"<div class='lensline pl'>"
-        f"{pl_chip}"
-        f"<div class='offedge' style='color:{pl_ecol}' title='opponent-offense platoon-OPS edge vs league'>"
-        f"<span>ops edge</span>{sgn3(pl_edge)}</div>"
-        f"</div>"
-        f"</div>")
-
-
-def _consensus(away_team, home_team, a, h):
-    xw_home, xw_away = a["xw"][3], h["xw"][3]
-    xw_fav = home_team if (xw_home is not None and xw_away is not None and xw_home >= xw_away) else away_team
-    xw_d = abs((xw_home or 0) - (xw_away or 0)) if (xw_home is not None and xw_away is not None) else None
-    pl_home = a["pl_edge"] if (a.get("has_pl") and a.get("pl_reliable")) else None
-    pl_away = h["pl_edge"] if (h.get("has_pl") and h.get("pl_reliable")) else None
-    if pl_home is not None and pl_away is not None:
-        pl_fav = home_team if pl_home >= pl_away else away_team
-        pl_d = abs(pl_home - pl_away)
-        if pl_fav == xw_fav:
-            tag, tcl = "AGREE", "agree"
-        else:
-            tag, tcl = "DIVERGE", "diverge"
-        pl_txt = f"OPS → <b>{pl_fav}</b> Δ{pl_d:.3f}"
-    else:
-        tag, tcl = "n/a", "na"
-        pl_txt = "OPS → <span class='muted'>unreliable / no split</span>"
-    xw_txt = (f"xwOBA → <b>{xw_fav}</b> Δ{xw_d:.3f}" if xw_d is not None
-              else "xwOBA → <span class='muted'>—</span>")
-    return (f"<div class='consensus'>{xw_txt}<span class='dot'>·</span>{pl_txt}"
-            f"<span class='ctag {tcl}'>{tag}</span></div>")
-
-
-def cmb_card(g):
-    a, h = g["away"], g["home"]
-    home_team = _abbr(a["opp"])
-    away_team = _abbr(h["opp"])
-    home_off, away_off = a["xw"][3], h["xw"][3]
-    ho = home_off if home_off is not None else 0.0
-    ao = away_off if away_off is not None else 0.0
-    delta = abs(ho - ao)
-    fav = home_team if ho >= ao else away_team
-    pill_a = round(clamp(delta / 0.06, 0, 1) * 0.16 + 0.04, 3)
-    return (
-        f"<article class='card'>"
-        f"<header class='head'>"
-        f"<div class='eyebrow'>{away_team} <span>@</span> {home_team}</div>"
-        f"<div class='lean' style='background:rgba(var(--lean),{pill_a})'>"
-        f"<span class='lk'>lean</span><span class='lt'>{fav}</span>"
-        f"<span class='ld'>Δxw {delta:.3f}</span></div>"
-        f"</header>"
-        f"{meter(away_team, home_team, away_off, home_off, 0.08)}"
-        f"{_consensus(away_team, home_team, a, h)}"
-        f"<div class='rows'>{cmb_row('AWAY', a, home_team)}{cmb_row('HOME', h, away_team)}</div>"
-        f"</article>")
-
-
-def build_combined(games):
-    cards = sorted(
-        games,
-        key=lambda g: abs((g['away']['xw'][3] or 0) - (g['home']['xw'][3] or 0)),
-        reverse=True)
-    return "<div class='grid'>" + "".join(cmb_card(g) for g in cards) + "</div>"
+    return _fmt_pt_clock(dt.replace(tzinfo=UTC).astimezone(PT))
 
 
 def _f(v):
@@ -1038,11 +1000,6 @@ def _rows_by_side(gg):
     return (a.iloc[0] if len(a) else None), (h.iloc[0] if len(h) else None)
 
 
-def _tup(r, col):
-    return (_f(r.get(f"pit_{col}")), _f(r.get(f"opp_{col}")),
-            _f(r.get(f"mx_{col}")), _f(r.get(f"edge_{col}")))
-
-
 def _pl_lookup(pl_df):
     out = {}
     if pl_df is None or getattr(pl_df, "empty", True):
@@ -1052,22 +1009,250 @@ def _pl_lookup(pl_df):
     return out
 
 
-def _df_to_combined_games(xw_df, pl_df, throws):
+def _hitters_for(opp_hitters_df, detail_df, gpk, fp, lg_ops):
+    """Batting-order rows for the lineup this SP faces. Row order in
+    opp_hitters_df IS lineup order -- never sort. Detail (platoon) join is by
+    (game_pk, faced_pitcher, batter name); a hitter with no vs-hand data keeps
+    the xwOBA cell and renders em-dashes for the platoon columns."""
+    rows = []
+    if opp_hitters_df is None or getattr(opp_hitters_df, "empty", True):
+        return rows
+    H = opp_hitters_df[(opp_hitters_df["game_pk"] == gpk)
+                       & (opp_hitters_df["faced_pitcher"] == fp)]
+    D = {}
+    if detail_df is not None and not getattr(detail_df, "empty", True):
+        dd = detail_df[(detail_df["game_pk"] == gpk)
+                       & (detail_df["faced_pitcher"] == fp)]
+        for _, r in dd.iterrows():
+            D[r["batter"]] = r
+    for _, r in H.iterrows():
+        d = D.get(r["Name"])
+        mx = _f(d["mx_ops"]) if d is not None else None
+        edge = (mx - lg_ops) if (mx is not None and lg_ops is not None
+                                 and pd.notna(lg_ops)) else None
+        rows.append(dict(
+            name=r["Name"], pos=str(r.get("Pos.") or ""),
+            bats=(str(r.get("bats") or ""))[:1].upper(),
+            xw=_f(r.get("xwOBA")),
+            adv=bool(d["platoon_adv"]) if d is not None else False,
+            ops=_f(d["ops_vs_hand"]) if d is not None else None,
+            pa=int(d["split_pa"] or 0) if d is not None else 0,
+            low=bool(d["low_sample"]) if d is not None else False,
+            mx=mx, edge=edge,
+        ))
+    return rows
+
+
+def _hitter_row_html(i, hr):
+    nm = _esc(hr["name"])
+    b = f"<span class='b'>{hr['bats']}</span>" if hr["bats"] else ""
+    adv = "<span class='adv' title='platoon advantage vs this SP'>◆</span>" if hr["adv"] else ""
+    if hr["ops"] is None:
+        ops_cell = "<td class='na'>—</td>"
+    else:
+        if hr["pa"] > 0:
+            src = f"<span class='pa'>({hr['pa']})</span>"
+            low = " <span class='flag mute'>low PA</span>" if hr["low"] else ""
+        else:
+            src, low = "<span class='pa'>(prior)</span>", ""
+        ops_cell = f"<td>{f3(hr['ops'])} {src}{low}</td>"
+    mx_cell = f"<td class='na'>—</td>" if hr["mx"] is None else f"<td>{f3(hr['mx'])}</td>"
+    if hr["edge"] is None:
+        bar = "<div class='eb'></div>"
+    else:
+        w = clamp(abs(hr["edge"]) / HITTER_EDGE_DOMAIN, 0, 1) * 50
+        cls = "w" if hr["edge"] >= 0 else "c"
+        bar = (f"<div class='eb' title='mx OPS edge vs league {sgn3(hr['edge'])}'>"
+               f"<i class='{cls}' style='width:{w:.0f}%'></i></div>")
+    lowcls = " class='low'" if (hr["ops"] is not None and (hr["pa"] == 0 or hr["low"])) else ""
+    return (f"<tr{lowcls}><td class='ord'>{i}</td>"
+            f"<td class='n'>{nm}{b}{adv}</td><td class='pos'>{_esc(hr['pos'])}</td>"
+            f"<td>{f3(hr['xw'])}</td>{ops_cell}{mx_cell}"
+            f"<td class='bar'>{bar}</td></tr>")
+
+
+def _lineup_details(side_d):
+    st = side_d["lu_status"]
+    st_lab = {"posted": "posted", "partial_filled": "partial", "projected": "projected"}.get(st, st or "—")
+    st_cls = {"posted": "posted", "partial_filled": "partial", "projected": "projected"}.get(st, "projected")
+    parts = []
+    if side_d["opp_xw"] is not None:
+        parts.append(f"wt xwOBA {f3(side_d['opp_xw'])}")
+    if side_d["pl_mx"] is not None:
+        parts.append(f"mx {f3(side_d['pl_mx'])}")
+    summ = " · ".join(parts) if parts else ""
+    hand = side_d["t"] if side_d["t"] in ("L", "R") else "?"
+    head = (f"<tr><th></th><th class='n'>Hitter</th><th></th><th>xwOBA</th>"
+            f"<th>vs-{hand} OPS</th><th>mx</th><th>edge</th></tr>")
+    body = "".join(_hitter_row_html(i + 1, hr) for i, hr in enumerate(side_d["hitters"]))
+    if not body:
+        body = "<tr><td class='na' colspan='7'>lineup unavailable</td></tr>"
+    return (
+        "<details class='lineup' open>"
+        "<summary><span class='chev'>▶</span>"
+        f"<span class='tl'>{_esc(side_d['opp_abbr'])} lineup</span>"
+        f"<span class='st {st_cls}'>{st_lab}</span>"
+        f"<span class='lw'>{summ}</span></summary>"
+        f"<table class='lu'>{head}{body}</table></details>")
+
+
+def _sp_stat_cell(lab, val, fmt, sub=None):
+    s = f"<div class='s'>{sub}</div>" if sub else ""
+    return (f"<div class='stat'><div class='l'>{lab}</div>"
+            f"<div class='v'>{fmt(val)}</div>{s}</div>")
+
+
+def _side_html(label, d, league_baseline):
+    badge = f"<span class='hand'>{d['t']}HP</span>" if d["t"] in ("L", "R") else ""
+    thin = (f"<span class='flag warn'>thin SP {d['pl_fl']['thin']}bf</span>"
+            if "thin" in d["pl_fl"] else "")
+    comp = (f"{d['R']}R/{d['L']}L" + (f"/{d['S']}S" if d["S"] else "")) if d["has_pl"] else "—"
+    padv = f" · {d['padv']} plt-adv" if d["has_pl"] else ""
+    lb = league_baseline or {}
+    lg = {k: _f(lb.get(k)) for k in ("xwOBA", "K%", "Hard Hit%")}
+    stats = (
+        _sp_stat_cell("xwOBA agn", d["pit_xw"], f3,
+                      f"lg {f3(lg['xwOBA'])}" if lg["xwOBA"] is not None else None)
+        + _sp_stat_cell("K%", d["pit_k"], f1,
+                        f"lg {f1(lg['K%'])}" if lg["K%"] is not None else None)
+        + _sp_stat_cell("HardHit%", d["pit_hh"], f1,
+                        f"lg {f1(lg['Hard Hit%'])}" if lg["Hard Hit%"] is not None else None)
+        + _sp_stat_cell("OPS alwd*", d["pl_sp"], f3,
+                        f"raw {f3(d['pl_sp_raw'])}" if d["pl_sp_raw"] is not None else None))
+    pl_bits = f3(None) if not d["has_pl"] else sgn3(d["pl_edge"])
+    pl_col = edge_color(d["pl_edge"]) if (d["has_pl"] and d["pl_reliable"]) else "var(--faint)"
+    pl_flag = "" if (not d["has_pl"] or d["pl_reliable"]) else " <span class='flag mute'>prior-driven</span>"
+    return (
+        f"<section class='side'>"
+        f"<div class='sp'><div class='who'><span class='nm'>{_esc(d['p'])}</span>{badge}{thin}</div>"
+        f"<div class='role'>{label} SP · faces {_esc(d['opp_abbr'])} lineup · {comp}{padv}</div>"
+        f"<div class='spstats'>{stats}</div></div>"
+        f"<div class='agg'>"
+        f"<div class='e' style='color:{edge_color(d['xw_edge'])}'>"
+        f"<span>xw edge (drives lean)</span>{sgn3(d['xw_edge'])}</div>"
+        f"<div class='e' style='color:{pl_col}'><span>ops edge</span>{pl_bits}{pl_flag}</div>"
+        f"</div>"
+        f"{_lineup_details(d)}"
+        f"</section>")
+
+
+def _consensus_html(away_abbr, home_abbr, a, h):
+    xw_home, xw_away = h["xw_edge"], a["xw_edge"]
+    have_xw = xw_home is not None and xw_away is not None
+    xw_fav = home_abbr if (have_xw and a["xw_edge"] >= h["xw_edge"]) else away_abbr
+    # NOTE: a = away SP row; a's xw_edge is the HOME offense's edge, and vice
+    # versa -- identical convention to the previous _consensus().
+    xw_d = abs(a["xw_edge"] - h["xw_edge"]) if have_xw else None
+    pl_home = a["pl_edge"] if (a["has_pl"] and a["pl_reliable"]) else None
+    pl_away = h["pl_edge"] if (h["has_pl"] and h["pl_reliable"]) else None
+    if pl_home is not None and pl_away is not None:
+        pl_fav = home_abbr if pl_home >= pl_away else away_abbr
+        pl_d = abs(pl_home - pl_away)
+        tag, tcl = ("AGREE", "agree") if pl_fav == xw_fav else ("DIVERGE", "diverge")
+        pl_txt = f"OPS → <b>{pl_fav}</b> Δ{pl_d:.3f}"
+    else:
+        tag, tcl = "n/a", "na"
+        pl_txt = "OPS → <span class='muted'>unreliable / no split</span>"
+    xw_txt = (f"xwOBA → <b>{xw_fav}</b> Δ{xw_d:.3f}" if xw_d is not None
+              else "xwOBA → <span class='muted'>—</span>")
+    return (f"<div class='consensus'>{xw_txt}<span class='dot'>·</span>{pl_txt}"
+            f"<span class='ctag {tcl}'>{tag}</span></div>")
+
+
+def _market_html(o, away_abbr, home_abbr, built_short):
+    o = o or {}
+    def _mlcell(lab, cur, opn):
+        sub = f" <span class='mv'>← {_fmt_ml(opn)} open</span>" if opn is not None else ""
+        return (f"<div class='mcell'><div class='l'>DK ML · {lab}</div>"
+                f"<div class='v'>{_fmt_ml(cur)}{sub}</div></div>")
+    tot = f"o/u {o['total']:g}" if o.get("total") is not None else "—"
+    ph = f"{o['p_home'] * 100:.1f}%" if o.get("p_home") is not None else "—"
+    return (
+        "<div class='market'>"
+        + _mlcell(away_abbr, o.get("away_ml"), o.get("open_away_ml"))
+        + _mlcell(home_abbr, o.get("home_ml"), o.get("open_home_ml"))
+        + f"<div class='mcell'><div class='l'>Total</div><div class='v'>{tot}</div></div>"
+        + f"<div class='mcell'><div class='l'>Implied {home_abbr} (devig)</div><div class='v'>{ph}</div></div>"
+        + f"<div class='mcell note'><div class='l'>Market</div><div class='v'>as of build {built_short}</div></div>"
+        + "</div>")
+
+
+def cmb_card(g, built_short):
+    a, h = g["away"], g["home"]
+    away_abbr, home_abbr = g["away_abbr"], g["home_abbr"]
+    # a = away SP -> his xw_edge is the HOME offense edge (same as before).
+    home_off = a["xw_edge"] if a["xw_edge"] is not None else 0.0
+    away_off = h["xw_edge"] if h["xw_edge"] is not None else 0.0
+    delta = abs(home_off - away_off)
+    fav = home_abbr if home_off >= away_off else away_abbr
+    when = " · ".join(x for x in (g.get("time_pt"), g.get("venue")) if x)
+    return (
+        "<article class='card'>"
+        "<div class='gamehead'>"
+        f"<span class='teams'>{away_abbr} <span class='at'>@</span> {home_abbr}</span>"
+        + (f"<span class='when'>{_esc(when)}</span>" if when else "")
+        + f"<span class='lean'><span class='lk'>lean</span><span class='lt'>{fav}</span>"
+        f"<span class='ld'>Δxw {delta:.3f}</span></span>"
+        f"{_consensus_html(away_abbr, home_abbr, a, h)}"
+        "</div>"
+        f"{_market_html(g.get('odds'), away_abbr, home_abbr, built_short)}"
+        f"<div class='sides'>{_side_html('AWAY', a, g['league_baseline'])}"
+        f"{_side_html('HOME', h, g['league_baseline'])}</div>"
+        "</article>")
+
+
+def build_combined(games, built_short):
+    cards = sorted(
+        games,
+        key=lambda g: abs((g['away']['xw_edge'] or 0) - (g['home']['xw_edge'] or 0)),
+        reverse=True)
+    return "<div class='grid'>" + "".join(cmb_card(g, built_short) for g in cards) + "</div>"
+
+
+def _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
+                          opp_hitters_df=None, detail_df=None, lg_ops=None,
+                          slate_df=None, lineup_df=None,
+                          league_baseline=None, odds=None):
+    throws = {}
+    if pitcher_rows_df is not None and not pitcher_rows_df.empty:
+        for _, pr in pitcher_rows_df.iterrows():
+            throws[(pr["game_pk"], pr["Name"])] = pr.get("throws")
     pl_map = _pl_lookup(pl_df)
+    slate_map = {}
+    if slate_df is not None and not getattr(slate_df, "empty", True):
+        for _, s in slate_df.iterrows():
+            slate_map[s["game_pk"]] = s
+    lu_map = {}
+    if lineup_df is not None and not getattr(lineup_df, "empty", True):
+        for _, s in lineup_df.iterrows():
+            lu_map[s["game_pk"]] = {"away": s.get("away_lineup_status"),
+                                    "home": s.get("home_lineup_status")}
+    lg_ops_f = _f(lg_ops)
+
     games = []
     for gpk, gg in xw_df.groupby("game_pk", sort=False):
         a, h = _rows_by_side(gg)
         if a is None or h is None:
             continue
+        srow = slate_map.get(gpk)
 
         def mk(r):
             side = r["side"]
-            t = throws.get((r["game_pk"], r["pitcher"]), "")
-            d = dict(p=r["pitcher"], t=t if t in ("L", "R") else "", opp=r["opp_team"],
-                     xw=_tup(r, "xwOBA"), hh=_tup(r, "Hard Hit%"), ev=_tup(r, "EV"),
-                     xs=_tup(r, "xSLG"), k=_tup(r, "K%"),
-                     has_pl=False, R=0, L=0, S=0, padv=0, pl_fl={})
-            pr = pl_map.get((r["game_pk"], side))
+            t = throws.get((gpk, r["pitcher"]), "")
+            opp_lu_side = "home" if side == "away" else "away"
+            d = dict(p=r["pitcher"], t=t if t in ("L", "R") else "",
+                     opp=r["opp_team"], opp_abbr=_abbr(r["opp_team"]),
+                     pit_xw=_f(r.get("pit_xwOBA")), pit_k=_f(r.get("pit_K%")),
+                     pit_hh=_f(r.get("pit_Hard Hit%")),
+                     opp_xw=_f(r.get("opp_xwOBA")),
+                     xw_edge=_f(r.get("edge_xwOBA")),
+                     lu_status=(lu_map.get(gpk) or {}).get(opp_lu_side),
+                     has_pl=False, R=0, L=0, S=0, padv=0, pl_fl={},
+                     pl_sp=None, pl_sp_raw=None, pl_mx=None, pl_edge=None,
+                     pl_reliable=False,
+                     hitters=_hitters_for(opp_hitters_df, detail_df,
+                                          gpk, r["pitcher"], lg_ops_f))
+            pr = pl_map.get((gpk, side))
             if pr is not None:
                 fl = {}
                 if bool(pr.get("pit_low_sample")) and int(pr.get("pit_min_split_bf") or 0) > 0:
@@ -1075,15 +1260,25 @@ def _df_to_combined_games(xw_df, pl_df, throws):
                 if int(pr.get("n_low_sample") or 0) > 0:
                     fl["lowpa"] = int(pr["n_low_sample"])
                 if not d["t"]:
-                    pt = pr.get("throws"); d["t"] = pt if pt in ("L", "R") else ""
+                    pt_ = pr.get("throws"); d["t"] = pt_ if pt_ in ("L", "R") else ""
                 d.update(has_pl=True,
                          R=int(pr.get("n_RHB") or 0), L=int(pr.get("n_LHB") or 0),
                          S=int(pr.get("n_SW") or 0), padv=int(pr.get("n_platoon_adv") or 0),
-                         pl_opp_raw=_f(pr.get("opp_OPS_raw")), pl_sp_raw=_f(pr.get("pit_OPS_raw")),
+                         pl_sp=_f(pr.get("pit_OPS_allowed")), pl_sp_raw=_f(pr.get("pit_OPS_raw")),
                          pl_mx=_f(pr.get("mx_OPS")), pl_edge=_f(pr.get("edge_OPS")),
                          pl_reliable=bool(pr.get("reliable")), pl_fl=fl)
             return d
-        games.append(dict(away=mk(a), home=mk(h)))
+
+        away_abbr = (srow.get("away_abbrev") if srow is not None else None) or _abbr(h["opp_team"])
+        home_abbr = (srow.get("home_abbrev") if srow is not None else None) or _abbr(a["opp_team"])
+        games.append(dict(
+            away=mk(a), home=mk(h),
+            away_abbr=away_abbr, home_abbr=home_abbr,
+            time_pt=_game_time_pt(srow.get("game_datetime_utc")) if srow is not None else "",
+            venue=str(srow.get("venue") or "") if srow is not None else "",
+            odds=(odds or {}).get(gpk),
+            league_baseline=league_baseline or {},
+        ))
     return games
 
 
@@ -1099,155 +1294,189 @@ def _legend(model_label, built_txt):
         "<span class='k'><i class='sw warm'></i>offense-favorable</span>"
         "<span class='k'><i class='sw cool'></i>pitcher-favorable</span>"
         "<span class='k'><i class='sw lean'></i>lean / net tilt (xwOBA)</span>"
-        "<span class='k'><i class='sw grey'></i>unreliable (prior-driven)</span>"
-        "<span class='k note'>top row = Statcast xwOBA · bottom = platoon OPS · cards sorted by xwOBA Δedge</span>"
+        "<span class='k'>◆ platoon advantage vs this SP</span>"
+        "<span class='k note'>*OPS allowed = lineup-composition-weighted, shrunk (raw beneath) · "
+        "edge bars = per-hitter mx OPS vs league, shared ±.100 axis · "
+        "odds = DK via ESPN, as of build · cards sorted by xwOBA Δedge</span>"
         "</div></div>")
 
 
 CSS = r"""/* ============================================================
-   MLB matchup leans -- design tokens
+   MLB matchup leans -- box-score / scout-sheet tokens
    ============================================================ */
 :root{
-  --bg:#eef0f4; --surface:#ffffff; --surface-2:#f7f8fb; --ink:#15171c;
-  --muted:#646b78; --faint:#9aa1ad; --line:#e6e8ee; --line-2:#eef0f5;
-  --warm:206,74,46;
-  --cool:18,138,140;
-  --lean:88,90,196;
+  --bg:#f3f5f7; --surface:#ffffff; --surface-2:#eef1f4; --ink:#161b20;
+  --muted:#5d6a76; --faint:#98a4af; --line:#dde3e8; --line-2:#eceff2;
+  --warm:198,84,44;             /* ember  -- offense-favorable  */
+  --cool:52,116,168;            /* steel  -- pitcher-favorable  */
+  --lean:176,124,16;            /* amber  -- lean pill / links  */
+  --amberbg:246,196,86;
   --chip-fg:#1b1e25;
-  --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
-  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Arial,sans-serif;
-  --shadow:0 1px 2px rgba(16,18,29,.05),0 14px 34px -22px rgba(16,18,29,.30);
-  --r:14px;
+  --mono:ui-monospace,"SF Mono","Cascadia Mono",Menlo,Consolas,monospace;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;
+  --shadow:0 1px 2px rgba(16,18,29,.05),0 10px 26px -20px rgba(16,18,29,.28);
+  --r:6px;
 }
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
-  --bg:#0c0e13; --surface:#161a22; --surface-2:#11141b; --ink:#e9ebf0;
-  --muted:#98a0ac; --faint:#646b78; --line:#242a35; --line-2:#1b202a;
-  --warm:232,108,76; --cool:52,176,176; --lean:124,126,228; --chip-fg:#e9ebf0;
-  --shadow:0 1px 2px rgba(0,0,0,.45),0 18px 40px -24px rgba(0,0,0,.8);
+  --bg:#0f1418; --surface:#171d24; --surface-2:#131920; --ink:#e7ecef;
+  --muted:#96a2ad; --faint:#5f6c78; --line:#242e38; --line-2:#1c242c;
+  --warm:236,122,72; --cool:96,158,208; --lean:244,196,96; --amberbg:244,196,96;
+  --chip-fg:#e7ecef;
+  --shadow:0 1px 2px rgba(0,0,0,.45),0 14px 32px -22px rgba(0,0,0,.8);
 }}
 html[data-theme="dark"]{
-  --bg:#0c0e13; --surface:#161a22; --surface-2:#11141b; --ink:#e9ebf0;
-  --muted:#98a0ac; --faint:#646b78; --line:#242a35; --line-2:#1b202a;
-  --warm:232,108,76; --cool:52,176,176; --lean:124,126,228; --chip-fg:#e9ebf0;
-  --shadow:0 1px 2px rgba(0,0,0,.45),0 18px 40px -24px rgba(0,0,0,.8);
+  --bg:#0f1418; --surface:#171d24; --surface-2:#131920; --ink:#e7ecef;
+  --muted:#96a2ad; --faint:#5f6c78; --line:#242e38; --line-2:#1c242c;
+  --warm:236,122,72; --cool:96,158,208; --lean:244,196,96; --amberbg:244,196,96;
+  --chip-fg:#e7ecef;
+  --shadow:0 1px 2px rgba(0,0,0,.45),0 14px 32px -22px rgba(0,0,0,.8);
 }
 
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
-  -webkit-font-smoothing:antialiased;padding:22px 16px 60px}
-.mx-wrap{max-width:760px;margin:0 auto}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 var(--sans);
+  -webkit-font-smoothing:antialiased;padding:20px 16px 60px}
+.mx-wrap{max-width:1060px;margin:0 auto}
 
-.topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px}
-.brand{font:750 15px/1 var(--mono);letter-spacing:.02em}
+.topbar{display:flex;align-items:baseline;justify-content:space-between;gap:12px;
+  border-bottom:2px solid var(--ink);padding-bottom:10px;margin-bottom:12px}
+.brand{font:800 16px/1 var(--sans);letter-spacing:.13em;text-transform:uppercase}
 .theme{appearance:none;border:1px solid var(--line);background:var(--surface);color:var(--muted);
-  font:600 12px/1 var(--sans);padding:8px 11px;border-radius:9px;cursor:pointer}
+  font:600 12px/1 var(--sans);padding:7px 11px;border-radius:6px;cursor:pointer}
 .theme:hover{color:var(--ink)}
+.theme:focus-visible{outline:2px solid rgba(var(--lean),1);outline-offset:2px}
 
-.legend{margin:2px 2px 16px}
-.lg-title{font-size:13px;font-weight:650;letter-spacing:.01em;margin-bottom:8px}
+.legend{margin:2px 2px 14px}
+.lg-title{font-size:13px;font-weight:650;letter-spacing:.01em;margin-bottom:7px}
 .lg-title em{font-style:normal;color:var(--muted);font-weight:500}
 .lg-keys{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:11.5px;color:var(--muted)}
 .lg-keys .k{display:inline-flex;align-items:center;gap:6px}
 .lg-keys .note{color:var(--faint)}
-.sw{width:11px;height:11px;border-radius:3px;display:inline-block}
+.sw{width:11px;height:11px;border-radius:2px;display:inline-block}
 .sw.warm{background:rgba(var(--warm),.85)} .sw.cool{background:rgba(var(--cool),.85)}
-.sw.lean{background:rgba(var(--lean),.9)}  .sw.grey{background:var(--line);border:1px solid var(--faint)}
+.sw.lean{background:rgba(var(--amberbg),.6)} .sw.grey{background:var(--line);border:1px solid var(--faint)}
 
-.grid{display:flex;flex-direction:column;gap:13px}
-.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
-  box-shadow:var(--shadow);overflow:hidden}
-
-.head{display:flex;align-items:center;justify-content:space-between;gap:12px;
-  padding:13px 16px 9px}
-.eyebrow{font:700 15px/1 var(--mono);letter-spacing:.04em}
-.eyebrow span{color:var(--faint);font-weight:500;margin:0 3px}
-.lean{display:inline-flex;align-items:baseline;gap:8px;padding:5px 11px;border-radius:999px;
-  border:1px solid var(--line-2)}
-.lean .lk{font:600 10px/1 var(--sans);text-transform:uppercase;letter-spacing:.13em;color:var(--muted)}
-.lean .lt{font:750 15px/1 var(--mono);letter-spacing:.03em;color:var(--ink)}
-.lean .ld{font:500 11.5px/1 var(--mono);color:var(--muted)}
-
-.mx-meter{display:flex;align-items:center;gap:10px;padding:2px 16px 14px}
-.mx-meter .pole{font:600 11px/1 var(--mono);letter-spacing:.04em;color:var(--faint);width:34px;
-  text-align:center;transition:.15s}
-.mx-meter .pole.left{text-align:right} .mx-meter .pole.right{text-align:left}
-.mx-meter .pole.on{color:var(--ink)}
-.track{position:relative;flex:1;height:7px;background:var(--line-2);border-radius:999px}
-.track .cen{position:absolute;left:50%;top:-3px;bottom:-3px;width:1px;background:var(--faint);opacity:.5}
-.track .fill{position:absolute;top:0;bottom:0;background:rgba(var(--lean),.30);border-radius:999px}
-.track .mark{position:absolute;top:50%;width:13px;height:13px;border-radius:50%;
-  background:rgba(var(--lean),1);transform:translate(-50%,-50%);
-  box-shadow:0 0 0 3px var(--surface),0 1px 4px rgba(0,0,0,.28)}
-
-.rows{border-top:1px solid var(--line-2)}
-.prow{padding:11px 16px;display:flex;flex-direction:column;gap:9px}
-.prow + .prow{border-top:1px solid var(--line-2)}
-.pmeta{display:flex;align-items:baseline;justify-content:space-between;gap:10px;flex-wrap:wrap}
-.pname{font:650 14px/1.1 var(--sans)}
-.pname em{font-style:normal;font-family:var(--mono);font-size:11px;color:#fff;
-  background:var(--faint);padding:1px 5px;border-radius:5px;margin-left:5px;vertical-align:1px}
-.prole{font-size:11.5px;color:var(--muted);letter-spacing:.01em}
-
-.strip{display:flex;gap:6px;flex-wrap:wrap}
-.chip{flex:1 1 64px;min-width:60px;border:1px solid var(--line-2);border-radius:9px;
+/* chips kept for grades.html summary */
+.chip{flex:1 1 64px;min-width:60px;border:1px solid var(--line-2);border-radius:6px;
   padding:6px 7px 5px;text-align:center;background:transparent}
 .chip .lab{font:600 9px/1 var(--sans);text-transform:uppercase;letter-spacing:.07em;color:var(--muted)}
 .chip .val{font:600 16px/1.15 var(--mono);color:var(--chip-fg);font-variant-numeric:tabular-nums;margin-top:2px}
 .chip .sub{font:400 10px/1 var(--mono);color:var(--muted);margin-top:2px}
-.chip .sub span{color:var(--faint);margin:0 1px}
-.chip.wide{flex:0 0 150px;text-align:left}
-.chip.wide .val{font-size:18px}
 
-.offedge{font:700 15px/1 var(--mono);font-variant-numeric:tabular-nums;text-align:right;
-  display:flex;align-items:baseline;justify-content:flex-end;gap:8px}
-.offedge span{font:600 9.5px/1 var(--sans);text-transform:uppercase;letter-spacing:.09em;color:var(--muted)}
+.grid{display:flex;flex-direction:column;gap:16px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
+  box-shadow:var(--shadow);overflow:hidden}
 
-.flag{font:600 9.5px/1 var(--mono);letter-spacing:.02em;color:var(--muted);
-  background:var(--surface-2);border:1px solid var(--line);border-radius:5px;
-  padding:2px 5px;margin-left:4px;white-space:nowrap}
-.flag.warn{color:rgba(var(--warm),1);border-color:rgba(var(--warm),.35);background:rgba(var(--warm),.07)}
+/* ---------- game header ---------- */
+.gamehead{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;
+  padding:12px 16px 10px;border-bottom:1px solid var(--line-2)}
+.teams{font:800 22px/1 var(--sans);letter-spacing:.02em}
+.teams .at{color:var(--faint);font-weight:400;font-size:16px;margin:0 4px}
+.when{font:400 12px/1.3 var(--sans);color:var(--muted)}
+.lean{margin-left:auto;display:flex;align-items:baseline;gap:7px;
+  border:1px solid rgba(var(--amberbg),.55);background:rgba(var(--amberbg),.14);
+  border-radius:4px;padding:4px 10px}
+.lean .lk{font:600 10px/1 var(--sans);letter-spacing:.14em;text-transform:uppercase;color:rgba(var(--lean),1)}
+.lean .lt{font:800 15px/1 var(--sans)}
+.lean .ld{font:500 12px/1 var(--mono);color:var(--muted);font-variant-numeric:tabular-nums}
+.consensus{width:100%;font:600 12px/1.4 var(--mono);color:var(--muted);
+  display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center;font-variant-numeric:tabular-nums}
+.consensus b{color:var(--ink);font-weight:600}
+.consensus .muted{color:var(--faint);font-weight:500}
+.consensus .dot{color:var(--faint)}
+.ctag{font:700 10px/1 var(--sans);letter-spacing:.12em;border-radius:3px;padding:2px 7px}
+.ctag.agree{color:rgba(var(--cool),1);border:1px solid rgba(var(--cool),.5)}
+.ctag.diverge{color:rgba(var(--warm),1);border:1px solid rgba(var(--warm),.5)}
+.ctag.na{color:var(--faint);border:1px solid var(--line)}
+
+/* ---------- market strip ---------- */
+.market{display:flex;flex-wrap:wrap;border-bottom:1px solid var(--line-2);background:var(--surface-2)}
+.mcell{padding:7px 16px;border-right:1px solid var(--line-2);min-width:110px}
+.mcell:last-child{border-right:0;margin-left:auto;min-width:0}
+.mcell .l{font:600 9px/1.4 var(--sans);letter-spacing:.14em;text-transform:uppercase;color:var(--faint)}
+.mcell .v{font:500 13px/1.4 var(--mono);font-variant-numeric:tabular-nums}
+.mcell .v .mv{color:var(--faint);font-size:11px}
+.mcell.note .v{color:var(--faint);font-size:11px;padding-top:3px}
+
+/* ---------- two sides ---------- */
+.sides{display:grid;grid-template-columns:1fr 1fr}
+.side{padding:12px 16px 14px;min-width:0}
+.side + .side{border-left:1px solid var(--line-2)}
+@media (max-width:760px){
+  .sides{grid-template-columns:1fr}
+  .side + .side{border-left:0;border-top:1px solid var(--line-2)}
+}
+
+/* SP block */
+.sp .who{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.sp .nm{font:700 16px/1.2 var(--sans)}
+.hand{font:500 10px/1.4 var(--mono);color:var(--muted);border:1px solid var(--line);border-radius:3px;padding:0 4px}
+.sp .role{font-size:11px;color:var(--faint);margin-top:1px}
+.spstats{display:flex;margin-top:8px;border:1px solid var(--line-2);border-radius:4px;overflow:hidden}
+.stat{flex:1;padding:6px 8px 5px;border-right:1px solid var(--line-2);min-width:0}
+.stat:last-child{border-right:0}
+.stat .l{font:600 9px/1.4 var(--sans);letter-spacing:.1em;text-transform:uppercase;color:var(--faint);white-space:nowrap}
+.stat .v{font:500 14px/1.3 var(--mono);font-variant-numeric:tabular-nums}
+.stat .s{font:400 10px/1.3 var(--mono);color:var(--faint)}
+.flag{font:600 9px/1.4 var(--sans);letter-spacing:.06em;color:var(--muted);
+  border:1px solid var(--line);border-radius:3px;padding:0 4px;margin-left:5px;white-space:nowrap}
+.flag.warn{color:rgba(var(--warm),1);border-color:rgba(var(--warm),.45)}
 .flag.mute{color:var(--faint)}
 
+/* side aggregate edges */
+.agg{display:flex;gap:14px;margin-top:9px;align-items:baseline;flex-wrap:wrap}
+.agg .e{font:600 13px/1.3 var(--mono);font-variant-numeric:tabular-nums}
+.agg .e span{font:600 9px/1 var(--sans);letter-spacing:.12em;text-transform:uppercase;color:var(--faint);margin-right:6px}
+
+/* ---------- lineup: order rail + shared-axis edge bars ---------- */
+details.lineup{margin-top:11px;border-top:1px solid var(--line-2)}
+details.lineup summary{cursor:pointer;list-style:none;display:flex;align-items:baseline;gap:8px;
+  padding:8px 0 6px;user-select:none}
+details.lineup summary::-webkit-details-marker{display:none}
+details.lineup summary:focus-visible{outline:2px solid rgba(var(--lean),1);outline-offset:2px}
+summary .tl{font:700 11px/1.4 var(--sans);letter-spacing:.12em;text-transform:uppercase}
+summary .st{font:600 10px/1.4 var(--sans);letter-spacing:.08em;border-radius:3px;padding:1px 6px}
+summary .st.posted{color:rgba(var(--cool),1);border:1px solid rgba(var(--cool),.45)}
+summary .st.partial{color:rgba(var(--lean),1);border:1px solid rgba(var(--amberbg),.5)}
+summary .st.projected{color:var(--faint);border:1px solid var(--line)}
+summary .lw{margin-left:auto;font:500 11px/1.4 var(--mono);color:var(--muted);font-variant-numeric:tabular-nums}
+summary .chev{font-size:10px;color:var(--faint);transition:transform .12s}
+details[open] summary .chev{transform:rotate(90deg)}
+@media (prefers-reduced-motion:reduce){summary .chev{transition:none}}
+
+table.lu{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+table.lu th{font:600 9px/1.4 var(--sans);letter-spacing:.1em;text-transform:uppercase;color:var(--faint);
+  text-align:right;padding:2px 6px 4px;border-bottom:1px solid var(--line-2);white-space:nowrap}
+table.lu th.n,table.lu td.n{text-align:left}
+table.lu td{font:400 12px/1.4 var(--mono);text-align:right;padding:4px 6px;
+  border-bottom:1px solid var(--line-2);white-space:nowrap}
+table.lu tr:last-child td{border-bottom:0}
+td.ord{font-size:11px;color:var(--faint);width:26px;text-align:center;border-right:1px solid var(--line-2)}
+td.n{font:400 12.5px/1.4 var(--sans);max-width:150px;overflow:hidden;text-overflow:ellipsis}
+td.n .b{font:400 9px/1 var(--mono);color:var(--muted);margin-left:4px}
+td.n .adv{color:rgba(var(--warm),1);font-size:9px;margin-left:2px}
+td.pos{color:var(--muted);font-size:10px}
+td .pa{color:var(--faint);font-size:10px}
+td.na{color:var(--faint)}
+tr.low td{color:var(--muted)}
+
+td.bar{width:86px;padding:4px 8px 4px 2px}
+.eb{position:relative;height:9px;background:linear-gradient(var(--line-2),var(--line-2)) no-repeat center/1px 100%}
+.eb i{position:absolute;top:1px;bottom:1px;border-radius:1px}
+.eb i.w{background:rgba(var(--warm),.85);left:50%}
+.eb i.c{background:rgba(var(--cool),.85);right:50%}
+
 @media (max-width:540px){
-  .head{flex-direction:column;align-items:flex-start;gap:7px}
-  .chip.wide{flex:1}
-  .offedge{justify-content:flex-start}
-}
-"""
-
-CSS_COMBINED = r"""
-.lensline{display:flex;align-items:center;gap:10px}
-.lensline + .lensline{margin-top:8px}
-.lensline > .strip{flex:1 1 auto}
-.lensline.pl{padding-top:7px;border-top:1px dashed var(--line-2)}
-.lensline.pl .chip.wide{flex:0 0 168px}
-.chip.wide.muted{opacity:.55} .chip.wide.muted .val{color:var(--faint)}
-.chip.wide.unrel{border-style:dashed}
-.chip.wide .lab{display:flex;align-items:center;gap:5px;flex-wrap:wrap}
-
-.consensus{display:flex;align-items:center;flex-wrap:wrap;gap:7px;
-  padding:0 16px 12px;font:600 12px/1.3 var(--mono);color:var(--ink);
-  font-variant-numeric:tabular-nums}
-.consensus .muted{color:var(--muted);font-weight:500}
-.consensus .dot{color:var(--faint)}
-.consensus .ctag{font:700 9.5px/1 var(--sans);letter-spacing:.08em;text-transform:uppercase;
-  padding:3px 7px;border-radius:6px;margin-left:auto}
-.consensus .ctag.agree{color:rgba(var(--warm),1);background:rgba(var(--warm),.12);
-  border:1px solid rgba(var(--warm),.3)}
-.consensus .ctag.diverge{color:rgba(var(--cool),1);background:rgba(var(--cool),.12);
-  border:1px solid rgba(var(--cool),.3)}
-.consensus .ctag.na{color:var(--faint);background:var(--surface-2);border:1px solid var(--line)}
-
-@media (max-width:540px){
-  .lensline{flex-wrap:wrap}
-  .lensline.pl .chip.wide{flex:1 1 auto}
-  .consensus .ctag{margin-left:0}
+  .gamehead{gap:6px 10px}
+  .teams{font-size:19px}
+  .lean{margin-left:0}
+  .mcell{min-width:0;flex:1 1 45%}
+  td.n{max-width:110px}
 }
 """
 
 CSS_GRADES = r"""
 .gradestrip{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 14px;margin:0 2px 16px;
-  padding:10px 14px;background:var(--surface);border:1px solid var(--line);border-radius:11px;
+  padding:10px 14px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
   font:600 12px/1.4 var(--mono);color:var(--ink);font-variant-numeric:tabular-nums}
 .gradestrip .lab{font:600 9.5px/1 var(--sans);text-transform:uppercase;letter-spacing:.09em;color:var(--muted)}
 .gradestrip .muted{color:var(--muted);font-weight:500}
@@ -1307,7 +1536,7 @@ def html_document(body, built_txt, title=None):
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
         f"<title>{title}</title>"
         "<meta name='robots' content='noindex'>"
-        f"<style>{CSS}{CSS_COMBINED}{CSS_GRADES}</style></head><body>"
+        f"<style>{CSS}{CSS_GRADES}</style></head><body>"
         f"<div class='mx-wrap'>"
         "<div class='topbar'><div class='brand'>MLB matchup leans</div>"
         "<button id='themeBtn' class='theme' type='button'>Theme: auto</button></div>"
@@ -1507,19 +1736,22 @@ def render_grades_html(built_txt):
     return html_document(back + head + summary + table, built_txt, title="MLB lean grades")
 
 
-def render_combined_html(xw_df, pl_df, pitcher_rows_df, built_txt):
-    throws = {}
-    if pitcher_rows_df is not None and not pitcher_rows_df.empty:
-        for _, pr in pitcher_rows_df.iterrows():
-            throws[(pr["game_pk"], pr["Name"])] = pr.get("throws")
-    games = _df_to_combined_games(xw_df, pl_df, throws)
+def render_combined_html(xw_df, pl_df, pitcher_rows_df, built_txt,
+                         opp_hitters_df=None, detail_df=None, lg_ops=None,
+                         slate_df=None, lineup_df=None,
+                         league_baseline=None, odds=None):
+    games = _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
+                                  opp_hitters_df=opp_hitters_df, detail_df=detail_df,
+                                  lg_ops=lg_ops, slate_df=slate_df, lineup_df=lineup_df,
+                                  league_baseline=league_baseline, odds=odds)
     legend = _legend("MLB matchup leans — xwOBA + platoon OPS", built_txt)
     strip = records_strip_html()
     if not games:
         inner = legend + strip + "<div class='legend'><div class='lg-title'>No paired probables yet — " \
                                  "probables/lineups not posted. Check back closer to first pitch.</div></div>"
         return html_document(inner, built_txt)
-    body = legend + strip + build_combined(games)
+    built_short = built_txt.split("·")[0].strip()
+    body = legend + strip + build_combined(games, built_short)
     return html_document(body, built_txt)
 
 
@@ -1536,7 +1768,9 @@ def empty_slate_html(built_txt):
 # MAIN
 # ============================================================
 def main():
-    built_txt = datetime.now(ET).strftime("%H:%M ET · %Y-%m-%d")
+    now_pt = datetime.now(PT)
+    built_txt = (now_pt.strftime("%I:%M %p").lstrip("0")
+                 + now_pt.strftime(" PT · %Y-%m-%d"))
     os.makedirs(OUT_DIR, exist_ok=True)
     out_path = os.path.join(OUT_DIR, "index.html")
 
@@ -1577,7 +1811,7 @@ def main():
 
     log("Building platoon-OPS matchup ...")
     try:
-        matchup_platoon_df, _detail, _lg = build_platoon_matchup(
+        matchup_platoon_df, platoon_detail_df, league_ops_overall = build_platoon_matchup(
             pitcher_rows_df, opp_hitters_df, data["people"],
             data["player_splits_hit"], data["player_splits_pit"],
             league_splits=data.get("player_splits_hit_league"),
@@ -1586,6 +1820,7 @@ def main():
         # Platoon lens is optional; degrade to xwOBA-only rather than fail.
         log(f"Platoon lens skipped: {e!r}")
         matchup_platoon_df = pd.DataFrame()
+        platoon_detail_df, league_ops_overall = pd.DataFrame(), np.nan
 
     # Dump the day's model outputs for the grading ledger (grade_leans.py
     # ingests these on the next CI step; data/ is committed back to the repo).
@@ -1594,8 +1829,20 @@ def main():
     if matchup_platoon_df is not None and not matchup_platoon_df.empty:
         matchup_platoon_df.to_csv(f"data/leans_{SLATE_DATE}_pl.csv", index=False)
 
+    log("Fetching pregame odds (best-effort, display-only) ...")
+    try:
+        odds = fetch_pregame_odds(data["slate_df"])
+    except Exception as e:  # noqa: BLE001
+        log(f"pregame odds skipped: {e!r}")
+        odds = {}
+
     log("Rendering index.html ...")
-    html = render_combined_html(matchup_df, matchup_platoon_df, pitcher_rows_df, built_txt)
+    html = render_combined_html(
+        matchup_df, matchup_platoon_df, pitcher_rows_df, built_txt,
+        opp_hitters_df=opp_hitters_df, detail_df=platoon_detail_df,
+        lg_ops=league_ops_overall, slate_df=data["slate_df"],
+        lineup_df=data["lineup_projection_df"],
+        league_baseline=data["league_baseline"], odds=odds)
     with open(out_path, "w") as f:
         f.write(html)
     log(f"Wrote {out_path} ({len(html):,} bytes, {len(matchup_df)} matchup rows)")
