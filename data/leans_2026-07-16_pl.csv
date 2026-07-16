@@ -1,3 +1,3 @@
 game_pk,game_date,matchup,side,pitcher,throws,opp_team,n_opp,n_LHB,n_RHB,n_SW,n_platoon_adv,n_low_sample,pit_min_split_bf,pit_low_sample,reliable,opp_OPS_raw,opp_OPS_vs_hand,pit_OPS_raw,pit_OPS_allowed,mx_OPS,edge_OPS
-823440,2026-07-16,New York Mets @ Philadelphia Phillies,away,Christian Scott,R,Philadelphia Phillies,9,5,4,0,5,0,89,False,True,0.762,0.757,0.687,0.698,0.724,0.003
-823440,2026-07-16,New York Mets @ Philadelphia Phillies,home,Aaron Nola,R,New York Mets,9,5,3,1,6,0,174,False,True,0.743,0.74,0.836,0.822,0.832,0.111
+823440,2026-07-16,New York Mets @ Philadelphia Phillies,away,Christian Scott,R,Philadelphia Phillies,9,6,3,0,6,0,89,False,True,0.763,0.759,0.685,0.699,0.725,0.004
+823440,2026-07-16,New York Mets @ Philadelphia Phillies,home,Aaron Nola,R,New York Mets,9,5,2,2,7,0,174,False,True,0.751,0.748,0.839,0.826,0.841,0.12
