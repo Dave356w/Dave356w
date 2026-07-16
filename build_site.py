@@ -1301,8 +1301,8 @@ def _legend(model_label, built_txt):
         "<span><b>xOPS</b> Estimated lineup OPS vs this starter from regressed batter and "
         "pitcher handedness splits; lineup average weighted by hitter vs-hand PA.</span>"
         "<span><b>SP OPS alwd*</b> Starter's regressed OPS allowed against today's batter-side mix, "
-        "using the same lineup weights; <i>raw</i> below is the unregressed split.</span>"
-        "<span><b>Edge bars</b> Per-hitter xOPS minus overall league OPS; shared ±.100 scale.</span>"
+        "using the same lineup weights.</span>"
+        "<span><b>Edge bars</b> Per-hitter xOPS minus overall league OPS.</span>"
         "<span class='wide'>Odds are DraftKings via ESPN at build time. Cards are sorted by "
         "the difference between the two offenses' xwOBA edges.</span>"
         "</div></div>")
