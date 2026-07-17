@@ -57,7 +57,7 @@ CACHE_DIR = os.environ.get("CACHE_DIR", ".")
 OUT_DIR = os.environ.get("OUT_DIR", "public")
 DATA_DIR = os.environ.get("DATA_DIR", "data")            # grading ledger home
 LEDGER_PATH = os.path.join(DATA_DIR, "mlb_lean_ledger.csv")
-MODEL_TAG = os.environ.get("MODEL_TAG", "xw+plat_consol_v1")  # keep in sync with grade_leans.py
+MODEL_TAG = os.environ.get("MODEL_TAG", "xw+plat_consol_v3")  # keep in sync with grade_leans.py
 
 STATCAST_SELECTIONS = ["pa", "k_percent", "bb_percent", "xwoba", "xba", "xslg",
                        "exit_velocity_avg", "launch_angle_avg", "hard_hit_percent"]
@@ -150,6 +150,8 @@ def get_slate(slate_date, sport_id=1):
                 "game_pk": g.get("gamePk"),
                 "game_date": od,
                 "game_datetime_utc": g.get("gameDate"),
+                "game_number": g.get("gameNumber"),
+                "double_header": g.get("doubleHeader"),
                 "matchup": f'{a["team"]["name"]} @ {h["team"]["name"]}',
                 "away_team": a["team"]["name"], "home_team": h["team"]["name"],
                 "away_team_id": a["team"]["id"], "home_team_id": h["team"]["id"],
@@ -335,8 +337,10 @@ BB_COLS = ["GB%", "FB%", "LD%", "PU%", "Pull%", "Straight%", "Oppo%"]
 
 
 def _meta(row):
-    return {k: row[k] for k in ["game_pk", "game_date", "matchup", "away_team", "home_team",
-                                "away_probable_pitcher", "home_probable_pitcher", "savant_preview_url"]}
+    return {k: row[k] for k in ["game_pk", "game_date", "game_datetime_utc",
+                                "matchup", "away_team", "home_team",
+                                "away_probable_pitcher", "home_probable_pitcher",
+                                "savant_preview_url"]}
 
 
 def build_tables(slate, lineups, batter_stat, pitcher_stat, batter_bb, pitcher_bb, people):
@@ -394,7 +398,7 @@ def build_tables(slate, lineups, batter_stat, pitcher_stat, batter_bb, pitcher_b
         pitcher_row(asp, 1, "bb"); hitter_rows(home_lu, 1, "bb")
         pitcher_row(hsp, 2, "bb"); hitter_rows(away_lu, 2, "bb")
 
-    META = ["game_pk", "game_date", "matchup", "away_team", "home_team",
+    META = ["game_pk", "game_date", "game_datetime_utc", "matchup", "away_team", "home_team",
             "away_probable_pitcher", "home_probable_pitcher", "savant_preview_url",
             "table_type", "table_index", "Name"]
     pdf = pd.DataFrame(pit_rows)
@@ -634,6 +638,7 @@ def build_matchup(P, agg, rate_cols, league_baseline):
         side = a["pitcher_side"]
         opp_team = pr.get("home_team") if side == "away" else pr.get("away_team") if side == "home" else None
         rec = {"game_pk": a["game_pk"], "game_date": pr.get("game_date"),
+               "game_datetime_utc": pr.get("game_datetime_utc"),
                "matchup": pr.get("matchup"), "side": side, "pitcher": a["faced_pitcher"],
                "opp_team": opp_team, "n_opp": int(a["n_opp_hitters"])}
         for c in rate_cols:
@@ -1124,7 +1129,7 @@ def _sp_stat_cell(lab, val, fmt, sub=None, heat=""):
 
 def _side_html(label, d, league_baseline):
     badge = f"<span class='hand'>{d['t']}HP</span>" if d["t"] in ("L", "R") else ""
-    thin = (f"<span class='flag warn'>thin SP {d['pl_fl']['thin']}bf</span>"
+    thin = (f"<span class='flag warn'>thin hand split {d['pl_fl']['thin']} BF</span>"
             if "thin" in d["pl_fl"] else "")
     comp = (f"{d['R']}R/{d['L']}L" + (f"/{d['S']}S" if d["S"] else "")) if d["has_pl"] else "—"
     padv = f" · {d['padv']} plt-adv" if d["has_pl"] else ""
@@ -1202,6 +1207,22 @@ def _market_html(o, away_abbr, home_abbr, built_short):
 
 
 def cmb_card(g, built_short):
+    if g.get("unavailable"):
+        game_no = f" <span class='game-no'>{_esc(g['game_label'])}</span>" if g.get("game_label") else ""
+        when = " · ".join(x for x in (g.get("time_pt"), g.get("venue")) if x)
+        probables = " vs ".join(
+            "TBD" if x is None or (isinstance(x, float) and pd.isna(x)) else str(x)
+            for x in (g.get("away_probable"), g.get("home_probable")))
+        return (
+            "<article class='card unavailable'>"
+            "<div class='gamehead'>"
+            f"<span class='teams'>{g['away_abbr']} <span class='at'>@</span> {g['home_abbr']}{game_no}</span>"
+            + (f"<span class='when'>{_esc(when)}</span>" if when else "")
+            + "</div>"
+            "<div class='card-note'><b>Awaiting paired probable pitchers</b>"
+            f"<span>{_esc(probables)} · matchup lean will appear after both starters are listed.</span></div>"
+            "</article>")
+
     a, h = g["away"], g["home"]
     away_abbr, home_abbr = g["away_abbr"], g["home_abbr"]
     # a = away SP -> his xw_edge is the HOME offense edge (same as before).
@@ -1210,10 +1231,11 @@ def cmb_card(g, built_short):
     delta = abs(home_off - away_off)
     fav = home_abbr if home_off >= away_off else away_abbr
     when = " · ".join(x for x in (g.get("time_pt"), g.get("venue")) if x)
+    game_no = f" <span class='game-no'>{_esc(g['game_label'])}</span>" if g.get("game_label") else ""
     return (
         "<article class='card'>"
         "<div class='gamehead'>"
-        f"<span class='teams'>{away_abbr} <span class='at'>@</span> {home_abbr}</span>"
+        f"<span class='teams'>{away_abbr} <span class='at'>@</span> {home_abbr}{game_no}</span>"
         + (f"<span class='when'>{_esc(when)}</span>" if when else "")
         + f"<span class='lean'><span class='lk'>lean</span><span class='lt'>{fav}</span>"
         f"<span class='ld'>Δxw {delta:.3f}</span></span>"
@@ -1228,7 +1250,8 @@ def cmb_card(g, built_short):
 def build_combined(games, built_short):
     cards = sorted(
         games,
-        key=lambda g: abs((g['away']['xw_edge'] or 0) - (g['home']['xw_edge'] or 0)),
+        key=lambda g: (-1 if g.get("unavailable") else
+                       abs((g['away']['xw_edge'] or 0) - (g['home']['xw_edge'] or 0))),
         reverse=True)
     return "<div class='grid'>" + "".join(cmb_card(g, built_short) for g in cards) + "</div>"
 
@@ -1295,14 +1318,40 @@ def _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
 
         away_abbr = (srow.get("away_abbrev") if srow is not None else None) or _abbr(h["opp_team"])
         home_abbr = (srow.get("home_abbrev") if srow is not None else None) or _abbr(a["opp_team"])
+        game_number = pd.to_numeric(srow.get("game_number"), errors="coerce") if srow is not None else np.nan
+        is_dh = (str(srow.get("double_header") or "N") != "N") if srow is not None else False
+        game_label = f"G{int(game_number)}" if pd.notna(game_number) and (is_dh or game_number > 1) else ""
         games.append(dict(
             away=mk(a), home=mk(h),
             away_abbr=away_abbr, home_abbr=home_abbr,
+            game_pk=gpk, game_label=game_label,
             time_pt=_game_time_pt(srow.get("game_datetime_utc")) if srow is not None else "",
             venue=str(srow.get("venue") or "") if srow is not None else "",
             odds=(odds or {}).get(gpk),
             league_baseline={**(league_baseline or {}), "OPS": lg_ops_f},
         ))
+
+    # Keep the slate complete even when one or both probable pitchers are not
+    # posted yet. Previously these games silently disappeared because no paired
+    # xwOBA rows could be built.
+    built_game_pks = {int(g["game_pk"]) for g in games if g.get("game_pk") is not None}
+    if slate_df is not None and not getattr(slate_df, "empty", True):
+        for _, srow in slate_df.iterrows():
+            gpk = int(srow["game_pk"])
+            if gpk in built_game_pks:
+                continue
+            game_number = pd.to_numeric(srow.get("game_number"), errors="coerce")
+            is_dh = str(srow.get("double_header") or "N") != "N"
+            game_label = f"G{int(game_number)}" if pd.notna(game_number) and (is_dh or game_number > 1) else ""
+            games.append(dict(
+                unavailable=True, game_pk=gpk, game_label=game_label,
+                away_abbr=srow.get("away_abbrev") or _abbr(srow.get("away_team")),
+                home_abbr=srow.get("home_abbrev") or _abbr(srow.get("home_team")),
+                time_pt=_game_time_pt(srow.get("game_datetime_utc")),
+                venue=str(srow.get("venue") or ""),
+                away_probable=srow.get("away_probable_pitcher"),
+                home_probable=srow.get("home_probable_pitcher"),
+            ))
     return games
 
 
@@ -1409,12 +1458,15 @@ body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 var(--sans);
   padding:12px 16px 10px;border-bottom:1px solid var(--line-2)}
 .teams{font:800 22px/1 var(--sans);letter-spacing:.02em}
 .teams .at{color:var(--faint);font-weight:400;font-size:16px;margin:0 4px}
+.game-no{font:700 11px/1 var(--mono);color:var(--muted);vertical-align:middle}
 .when{font:400 12px/1.3 var(--sans);color:var(--muted)}
 .lean{margin-left:auto;display:flex;align-items:baseline;gap:7px;
   border:1px solid rgba(var(--amberbg),.55);background:rgba(var(--amberbg),.14);
   border-radius:4px;padding:4px 10px}
 .lean .lk{font:600 10px/1 var(--sans);letter-spacing:.14em;text-transform:uppercase;color:rgba(var(--lean),1)}
 .lean .lt{font:800 15px/1 var(--sans)}
+.card-note{display:flex;flex-direction:column;gap:4px;padding:14px 16px 16px;color:var(--muted)}
+.card-note b{color:var(--ink);font-size:13px}.card-note span{font-size:12px}
 .lean .ld{font:500 12px/1 var(--mono);color:var(--muted);font-variant-numeric:tabular-nums}
 .consensus{width:100%;font:600 12px/1.4 var(--mono);color:var(--muted);
   display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center;font-variant-numeric:tabular-nums}
@@ -1719,7 +1771,8 @@ def render_grades_html(built_txt):
             f"Grading ledger · {n_graded} graded · {n_pend} pending"
             + (f" · {n_void} void" if n_void else "")
             + f" · built {built_txt}<br>"
-            f"<em>records below are for model {_esc(MODEL_TAG)} · graded rows are immutable · "
+            f"<em>summary records are for model {_esc(MODEL_TAG)} and hard-locked pregame snapshots · "
+            "legacy model rows remain in the table for transparency · "
             "platoon records count reliable-split games only</em></div></div>")
 
     g = led[(led["status"] == "graded") & (led["model_tag"] == MODEL_TAG)]
@@ -1811,21 +1864,36 @@ def empty_slate_html(built_txt):
 # ============================================================
 # MAIN
 # ============================================================
-def main():
+def _built_text_now():
     now_pt = datetime.now(PT)
-    built_txt = (now_pt.strftime("%I:%M %p").lstrip("0")
-                 + now_pt.strftime(" PT · %Y-%m-%d"))
-    os.makedirs(OUT_DIR, exist_ok=True)
-    out_path = os.path.join(OUT_DIR, "index.html")
+    return (now_pt.strftime("%I:%M %p").lstrip("0")
+            + now_pt.strftime(" PT · %Y-%m-%d"))
 
-    # Grades page renders purely from the committed ledger, so it's written
-    # up front and ships on every path that deploys (full, empty-slate,
-    # check-back). If the build aborts on a fetch failure nothing deploys,
-    # same as before.
+
+def write_grades_page(built_txt=None):
+    """Render grades.html from the latest on-disk ledger without fetching a slate."""
+    built_txt = built_txt or _built_text_now()
+    os.makedirs(OUT_DIR, exist_ok=True)
     grades_path = os.path.join(OUT_DIR, "grades.html")
     with open(grades_path, "w") as f:
         f.write(render_grades_html(built_txt))
     log(f"Wrote {grades_path}")
+    return grades_path
+
+
+def main():
+    built_txt = _built_text_now()
+    if "--grades-only" in sys.argv:
+        write_grades_page(built_txt)
+        return 0
+
+    os.makedirs(OUT_DIR, exist_ok=True)
+    out_path = os.path.join(OUT_DIR, "index.html")
+
+    # Render once here for local/partial paths. CI renders it again after the
+    # post-build grading pass so the deployed ledger includes newly ingested
+    # matchups from this same build.
+    write_grades_page(built_txt)
 
     # Top-level guard: a failed core fetch must NOT write index.html, so CI
     # skips the deploy and the last good page stays live.
@@ -1866,12 +1934,20 @@ def main():
         matchup_platoon_df = pd.DataFrame()
         platoon_detail_df, league_ops_overall = pd.DataFrame(), np.nan
 
-    # Dump the day's model outputs for the grading ledger (grade_leans.py
-    # ingests these on the next CI step; data/ is committed back to the repo).
-    os.makedirs("data", exist_ok=True)
-    matchup_df.to_csv(f"data/leans_{SLATE_DATE}_xw.csv", index=False)
+    # Dump an auditable pregame snapshot for the grading ledger. The grader
+    # rejects rows captured at/after their scheduled start, so in-progress
+    # refreshes cannot alter the published pregame record.
+    snapshot_utc = datetime.now(UTC).isoformat()
+    for frame in (matchup_df, matchup_platoon_df):
+        if frame is not None and not frame.empty:
+            frame["model_tag"] = MODEL_TAG
+            frame["snapshot_utc"] = snapshot_utc
+            if "game_datetime_utc" in frame.columns:
+                frame["scheduled_start_utc"] = frame["game_datetime_utc"]
+    os.makedirs(DATA_DIR, exist_ok=True)
+    matchup_df.to_csv(os.path.join(DATA_DIR, f"leans_{SLATE_DATE}_xw.csv"), index=False)
     if matchup_platoon_df is not None and not matchup_platoon_df.empty:
-        matchup_platoon_df.to_csv(f"data/leans_{SLATE_DATE}_pl.csv", index=False)
+        matchup_platoon_df.to_csv(os.path.join(DATA_DIR, f"leans_{SLATE_DATE}_pl.csv"), index=False)
 
     log("Fetching pregame odds (best-effort, display-only) ...")
     try:

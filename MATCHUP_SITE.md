@@ -11,13 +11,14 @@ It pulls everything through keyless APIs (no browser, no secrets):
 - **Baseball Savant `gf?game_pk=`** — posted lineups (JSON)
 - **Baseball Savant CSV leaderboards** — custom (xwOBA/xBA/xSLG/EV/LA/HardHit/K/BB) + batted-ball, cached once per day
 
-The model matches the updated notebook: log5 / odds-ratio matchup anchored on
-league average (`M = B·P/L`, additive for EV/LA), with `edge = M − L` as the
-signal. The platoon lens regresses each side's vs-hand OPS toward an
+The model matches the updated notebook's multiplicative-ratio matchup anchored
+on league average (`M = B·P/L`, additive for EV/LA), with `edge = M − L` as the
+signal. This is a relative-rate heuristic, not the probability-odds form of
+log5. The platoon lens regresses each side's vs-hand OPS toward an
 overall×league-platoon prior and is reliability-gated. Lean is xwOBA-driven;
 platoon edge shows alongside with an AGREE / DIVERGE consensus tag.
 
-Model version `xw+plat_consol_v2` (set via `MODEL_TAG` in the workflow) adds:
+Historical model version `xw+plat_consol_v2` added:
 
 - **Lineup partial fill** — valid posted Savant hitters are kept in order and
   only missing slots are filled from the active-roster top-PA pool
@@ -31,6 +32,13 @@ Model version `xw+plat_consol_v2` (set via `MODEL_TAG` in the workflow) adds:
 - **Composition-weighted SP platoon OPS** — displayed SP OPS-allowed (and all
   platoon aggregates) are lineup-composition weighted rather than simple means
   over exposed handedness cells.
+
+Model version `xw+plat_consol_v3` leaves the prediction math unchanged and
+starts a clean performance record with a hard pregame snapshot lock. Each dump
+stores its capture and scheduled-start timestamps; the ledger rejects new or
+refreshed rows captured at/after scheduled first pitch. Ledger identity is
+`(game_pk, game_date)`, so a postponed game that keeps its MLB gamePk can be
+recorded again on its make-up date.
 
 ## Files
 
@@ -103,9 +111,10 @@ last night's results in the same run.
 
 Every CI run, `grade_leans.py`:
 
-- **Ingests** any `data/leans_*_xw.csv` not yet in the ledger as `pending`
-  rows. Re-runs on the same date refresh still-pending rows (SP scratches /
-  lineup swaps up to first pitch); graded rows are immutable.
+- **Ingests** timestamped pregame `data/leans_*_xw.csv` snapshots not yet in
+  the ledger as `pending` rows. Re-runs refresh still-pending rows only while
+  the snapshot precedes scheduled first pitch; late and legacy-unverified
+  refreshes are rejected, and graded rows are immutable.
 - **Grades** all pending rows via `schedule?hydrate=linescore` (one call per
   date): full-game and first-5-innings W/L/T per lean. Live games stay
   pending; postponed/cancelled go `void`.
