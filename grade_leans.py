@@ -12,9 +12,11 @@
 #
 # This script then, on every CI run:
 #   INGEST : any data/leans_*_xw.csv not yet ledgered -> pending rows.
-#            Re-runs on the same date REFRESH still-pending rows (handles
-#            SP scratches / lineup swaps up to first pitch). Graded rows
-#            are never touched.
+#            Re-runs on the same date REFRESH still-pending rows only when
+#            the dump carries a snapshot timestamp before scheduled first
+#            pitch (handles pregame SP scratches / lineup swaps). Late and
+#            legacy-unverified refreshes are rejected; graded rows are never
+#            touched.
 #   GRADE  : all pending rows via schedule?hydrate=linescore, one call per
 #            date. Full-game + F5 (innings 1-5). Live games stay pending;
 #            postponed/cancelled -> void.
@@ -35,25 +37,27 @@
 #
 # SP-vs-lineup weight fit: logs d_lineup / d_sp per game; once >= N_FIT_MIN
 # graded F5 decisions accumulate, fits logit(home F5 win) ~ d_lineup + d_sp.
-# Symmetric log5 implies b_sp/b_lineup ≈ 1; a stable departure is the
-# reweight: net_w = d_lineup + w·d_sp.
+# The symmetric multiplicative-ratio matchup gives both components equal
+# first-order weight; a stable departure is the reweight:
+# net_w = d_lineup + w·d_sp.
 # ============================================================
 import glob
 import math
 import os
 import re
 import time
+from datetime import datetime, timezone
 
 import numpy as np
 import pandas as pd
 import requests
 
-from market_backfill import attach_market
+from market_backfill import MARKET_COLS, attach_market
 
 DATA_DIR    = os.environ.get("DATA_DIR", "data")
 LEDGER_PATH = os.path.join(DATA_DIR, "mlb_lean_ledger.csv")
 REPORT_PATH = os.path.join(DATA_DIR, "ledger_report.txt")
-MODEL_TAG   = os.environ.get("MODEL_TAG", "xw+plat_consol_v1")
+MODEL_TAG   = os.environ.get("MODEL_TAG", "xw+plat_consol_v3")
 N_FIT_MIN   = 120
 _FINAL  = {"Final", "Game Over", "Completed Early"}
 _VOID   = {"Postponed", "Cancelled"}
@@ -96,21 +100,55 @@ LEDGER_COLS = [
     "status","full_away","full_home","f5_away","f5_home",
     "xw_full","xw_f5","ops_full","ops_f5",
 ]
-MODEL_FIELDS = LEDGER_COLS[1:23]   # everything refreshable while pending
+AUDIT_COLS = ["snapshot_utc", "scheduled_start_utc", "lock_status"]
+MODEL_FIELDS = [
+    "game_date","away","home","away_sp","home_sp","model_tag",
+    "B_home","B_away","P_awaySP","P_homeSP","d_lineup","d_sp",
+    "home_off_edge","away_off_edge","xw_net","xw_lean","xw_delta",
+    "ops_net","ops_lean","ops_delta","ops_valid","consensus",
+    "snapshot_utc","scheduled_start_utc","lock_status",
+]
 
 def load_ledger():
     if os.path.exists(LEDGER_PATH):
         led = pd.read_csv(LEDGER_PATH)
-        for c in LEDGER_COLS:
+        persisted_cols = (LEDGER_COLS + [c for c in MARKET_COLS if c not in LEDGER_COLS]
+                          + AUDIT_COLS)
+        for c in persisted_cols:
             if c not in led.columns: led[c] = np.nan
-        led = led[LEDGER_COLS]
+        # Preserve already attached market columns. Dropping them here forced
+        # every CI run to refetch the full closing-odds history.
+        led = led[persisted_cols]
         # W/L/T grade columns still all-NaN read back from CSV as float64;
         # pandas >=3 refuses string assignment into float columns, so force
         # object dtype before grading writes W/L/T into them.
         for c in ("xw_full", "xw_f5", "ops_full", "ops_f5"):
             led[c] = led[c].astype(object)
         return led
-    return pd.DataFrame(columns=LEDGER_COLS)
+    return pd.DataFrame(columns=LEDGER_COLS + AUDIT_COLS)
+
+
+def _utc_datetime(value):
+    """Parse an API/ISO timestamp as an aware UTC datetime, or return None."""
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return None
+    text = str(value).strip()
+    if not text or text.lower() in {"nan", "none"}:
+        return None
+    try:
+        dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _lock_status(snapshot_utc, scheduled_start_utc):
+    snap, start = _utc_datetime(snapshot_utc), _utc_datetime(scheduled_start_utc)
+    if snap is None or start is None:
+        return "legacy_unverified"
+    return "pregame" if snap < start else "late_snapshot"
 
 # ---- INGEST ------------------------------------------------------------
 def rows_from_dump(xw_df, pl_df):
@@ -142,9 +180,17 @@ def rows_from_dump(xw_df, pl_df):
                 ops_valid = bool(pa.get("reliable")) and bool(ph.get("reliable"))
         xw_lean = home_team if xw_net >= 0 else away_team
         consensus = "NA" if not ops_valid else ("AGREE" if ops_lean == xw_lean else "DIVERGE")
+        snapshot_utc = a.get("snapshot_utc")
+        scheduled_start_utc = a.get("scheduled_start_utc")
+        if scheduled_start_utc is None or pd.isna(scheduled_start_utc):
+            scheduled_start_utc = a.get("game_datetime_utc")
+        lock_status = _lock_status(snapshot_utc, scheduled_start_utc)
+        dump_model_tag = a.get("model_tag")
+        if dump_model_tag is None or (isinstance(dump_model_tag, float) and pd.isna(dump_model_tag)):
+            dump_model_tag = MODEL_TAG
         out.append(dict(
             game_pk=gpk, game_date=str(a.get("game_date")), away=away_team, home=home_team,
-            away_sp=a.get("pitcher"), home_sp=h.get("pitcher"), model_tag=MODEL_TAG,
+            away_sp=a.get("pitcher"), home_sp=h.get("pitcher"), model_tag=str(dump_model_tag),
             B_home=B_home, B_away=B_away, P_awaySP=P_aSP, P_homeSP=P_hSP,
             d_lineup=d_lu, d_sp=d_sp,
             home_off_edge=home_off, away_off_edge=away_off,
@@ -153,6 +199,8 @@ def rows_from_dump(xw_df, pl_df):
             ops_lean=ops_lean,
             ops_delta=(round(ops_delta, 4) if ops_delta is not None else np.nan),
             ops_valid=ops_valid, consensus=consensus,
+            snapshot_utc=snapshot_utc, scheduled_start_utc=scheduled_start_utc,
+            lock_status=lock_status,
             status="pending", full_away=np.nan, full_home=np.nan,
             f5_away=np.nan, f5_home=np.nan,
             xw_full=None, xw_f5=None, ops_full=None, ops_f5=None,
@@ -160,22 +208,38 @@ def rows_from_dump(xw_df, pl_df):
     return out
 
 def ingest(led):
-    n_new = n_ref = 0
+    n_new = n_ref = n_late = n_legacy = 0
     for xw_path in sorted(glob.glob(os.path.join(DATA_DIR, "leans_*_xw.csv"))):
         pl_path = xw_path.replace("_xw.csv", "_pl.csv")
         xw = pd.read_csv(xw_path)
         pl = pd.read_csv(pl_path) if os.path.exists(pl_path) else None
         for row in rows_from_dump(xw, pl):
-            hit = led.index[pd.to_numeric(led["game_pk"], errors="coerce") == row["game_pk"]]
+            # gamePk is retained when MLB reschedules a postponed game, so the
+            # ledger identity must include the slate date. This lets the played
+            # make-up entry coexist with the original void entry.
+            hit = led.index[
+                (pd.to_numeric(led["game_pk"], errors="coerce") == row["game_pk"]) &
+                (led["game_date"].astype(str) == row["game_date"])
+            ]
             if len(hit) == 0:
-                add = pd.DataFrame([row])[LEDGER_COLS]
+                if row["lock_status"] != "pregame":
+                    if row["lock_status"] == "late_snapshot": n_late += 1
+                    else: n_legacy += 1
+                    continue
+                add = pd.DataFrame([row])[LEDGER_COLS + AUDIT_COLS]
                 led = add if led.empty else pd.concat([led, add], ignore_index=True)
                 n_new += 1
             elif led.at[hit[0], "status"] == "pending":
+                if row["lock_status"] != "pregame":
+                    if row["lock_status"] == "late_snapshot": n_late += 1
+                    else: n_legacy += 1
+                    continue
                 for k in MODEL_FIELDS:                    # refresh scratches pre-lock
                     led.at[hit[0], k] = row[k]
                 n_ref += 1
-    print(f"ingest: +{n_new} new, {n_ref} pending refreshed ({len(led)} total)")
+    print(f"ingest: +{n_new} new, {n_ref} pending refreshed, "
+          f"{n_late} late snapshots rejected, {n_legacy} legacy refreshes skipped "
+          f"({len(led)} total)")
     return led
 
 # ---- GRADE -------------------------------------------------------------
@@ -294,7 +358,8 @@ def report(led):
             raw_lu = b[1] / fit["d_lineup"].std(); raw_sp = b[2] / fit["d_sp"].std()
             ratio = raw_sp / raw_lu if raw_lu else np.nan
             say(f"  b_lineup={b[1]:+.3f}±{se[1]:.3f}  b_sp={b[2]:+.3f}±{se[2]:.3f}  HFA={b[0]:+.3f}")
-            say(f"  implied w = b_sp/b_lineup = {ratio:+.2f}  (symmetric log5 ⇒ ≈ +1.00)")
+            say(f"  implied w = b_sp/b_lineup = {ratio:+.2f}  "
+                "(symmetric matchup ratio ⇒ ≈ +1.00)")
     txt = "\n".join(lines)
     print("=" * 60); print(txt); print("=" * 60)
     with open(REPORT_PATH, "w") as f:
