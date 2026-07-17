@@ -195,7 +195,8 @@ class RecentStarterEraTests(unittest.TestCase):
         )
         self.assertIn("ERA · L5", html)
         self.assertIn("3.03", html)
-        self.assertIn("5 GS · season 3.85", html)
+        self.assertIn("season 3.85", html)
+        self.assertNotIn("5 GS", html)
         self.assertIn(
             "<div class='stat' style='background:rgba(var(--cool),0.23)'>"
             "<div class='l'>ERA · L5</div>",
