@@ -98,6 +98,16 @@ class LedgerLockTests(unittest.TestCase):
 
 
 class SlateCompletenessTests(unittest.TestCase):
+    def test_games_sort_chronologically_with_stable_doubleheader_ties(self):
+        games = [
+            dict(game_pk=30, game_number=1, game_datetime_utc="2026-07-17T23:10:00Z"),
+            dict(game_pk=20, game_number=2, game_datetime_utc="2026-07-17T20:05:00Z"),
+            dict(game_pk=10, game_number=1, game_datetime_utc="2026-07-17T20:05:00Z"),
+            dict(game_pk=40, game_number=1, game_datetime_utc=None),
+        ]
+        ordered = sorted(games, key=build_site._game_order_key)
+        self.assertEqual([g["game_pk"] for g in ordered], [10, 20, 30, 40])
+
     def test_game_without_paired_probables_renders_placeholder(self):
         slate = pd.DataFrame([dict(
             game_pk=789,

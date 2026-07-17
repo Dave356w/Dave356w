@@ -1256,12 +1256,27 @@ def cmb_card(g, built_short):
         "</article>")
 
 
+def _game_order_key(game):
+    """Chronological slate order with deterministic doubleheader tie-breaks."""
+    raw_start = game.get("game_datetime_utc")
+    try:
+        start = datetime.fromisoformat(str(raw_start).replace("Z", "+00:00"))
+        if start.tzinfo is None:
+            start = start.replace(tzinfo=UTC)
+        start = start.astimezone(UTC)
+    except (TypeError, ValueError):
+        start = datetime.max.replace(tzinfo=UTC)
+    game_number = pd.to_numeric(game.get("game_number"), errors="coerce")
+    game_pk = pd.to_numeric(game.get("game_pk"), errors="coerce")
+    return (
+        start,
+        int(game_number) if pd.notna(game_number) else 99,
+        int(game_pk) if pd.notna(game_pk) else 2**63 - 1,
+    )
+
+
 def build_combined(games, built_short):
-    cards = sorted(
-        games,
-        key=lambda g: (-1 if g.get("unavailable") else
-                       abs((g['away']['xw_edge'] or 0) - (g['home']['xw_edge'] or 0))),
-        reverse=True)
+    cards = sorted(games, key=_game_order_key)
     return "<div class='grid'>" + "".join(cmb_card(g, built_short) for g in cards) + "</div>"
 
 
@@ -1333,7 +1348,8 @@ def _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
         games.append(dict(
             away=mk(a), home=mk(h),
             away_abbr=away_abbr, home_abbr=home_abbr,
-            game_pk=gpk, game_label=game_label,
+            game_pk=gpk, game_number=game_number, game_label=game_label,
+            game_datetime_utc=(srow.get("game_datetime_utc") if srow is not None else None),
             time_pt=_game_time_pt(srow.get("game_datetime_utc")) if srow is not None else "",
             venue=str(srow.get("venue") or "") if srow is not None else "",
             odds=(odds or {}).get(gpk),
@@ -1353,7 +1369,8 @@ def _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
             is_dh = str(srow.get("double_header") or "N") != "N"
             game_label = f"G{int(game_number)}" if pd.notna(game_number) and (is_dh or game_number > 1) else ""
             games.append(dict(
-                unavailable=True, game_pk=gpk, game_label=game_label,
+                unavailable=True, game_pk=gpk, game_number=game_number, game_label=game_label,
+                game_datetime_utc=srow.get("game_datetime_utc"),
                 away_abbr=srow.get("away_abbrev") or _abbr(srow.get("away_team")),
                 home_abbr=srow.get("home_abbrev") or _abbr(srow.get("home_team")),
                 time_pt=_game_time_pt(srow.get("game_datetime_utc")),
