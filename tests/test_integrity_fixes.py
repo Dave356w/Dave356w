@@ -135,6 +135,55 @@ class SlateCompletenessTests(unittest.TestCase):
         self.assertIn("BOS", html)
 
 
+class RecentStarterEraTests(unittest.TestCase):
+    def test_last_five_era_excludes_relief_current_day_and_older_starts(self):
+        rows = [
+            ("2026-07-16", "6.0", 2, 1),
+            ("2026-07-10", "5.2", 3, 1),
+            ("2026-07-04", "7.0", 1, 1),
+            ("2026-06-28", "4.1", 4, 1),
+            ("2026-06-22", "6.2", 0, 1),
+            ("2026-06-16", "1.0", 9, 1),  # older sixth start
+            ("2026-07-15", "2.0", 0, 0),  # relief appearance
+            ("2026-07-17", "3.0", 5, 1),  # current slate
+        ]
+        response = {"stats": [{"splits": [
+            {"date": date, "game": {"gamePk": i + 1},
+             "stat": {"inningsPitched": ip, "earnedRuns": er, "gamesStarted": gs}}
+            for i, (date, ip, er, gs) in enumerate(rows)
+        ]}]}
+        with mock.patch.object(build_site, "SLATE_DATE", "2026-07-17"), \
+                mock.patch.object(build_site, "_get_json", return_value=response), \
+                mock.patch.object(build_site.time, "sleep"):
+            result = build_site.load_recent_start_era([123])
+        self.assertEqual(result[123], {"era": 3.03, "starts": 5})
+
+    def test_league_era_uses_earned_runs_and_baseball_innings(self):
+        response = {"stats": [{"splits": [
+            {"stat": {"inningsPitched": "10.0", "earnedRuns": 4}},
+            {"stat": {"inningsPitched": "5.2", "earnedRuns": 2}},
+        ]}]}
+        with mock.patch.object(build_site, "_get_json", return_value=response):
+            self.assertEqual(build_site.load_league_era(), 3.45)
+
+    def test_pitcher_card_renders_recent_era_vs_league(self):
+        side = dict(
+            t="R", pl_fl={}, R=5, L=4, S=0, has_pl=False, padv=0,
+            era_l5=3.03, era_l5_gs=5, pit_xw=.310, pit_k=27.1, pit_hh=35.0,
+            pl_sp=None, pl_sp_raw=None, pl_edge=None, pl_reliable=False,
+            xw_edge=-.015, p="Test Pitcher", opp_abbr="TST", lu_status="posted",
+            opp_xw=None, pl_mx=None, hitters=[],
+        )
+        html = build_site._side_html(
+            "AWAY", side,
+            {"ERA": 4.20, "xwOBA": .320, "K%": 22.0, "Hard Hit%": 39.0,
+             "OPS": .720},
+        )
+        self.assertIn("ERA · L5", html)
+        self.assertIn("3.03", html)
+        self.assertIn("5 GS · lg 4.20", html)
+
+
 class ScheduleGateTests(unittest.TestCase):
     NOW = pd.Timestamp("2026-07-17T16:00:00Z").to_pydatetime()
 

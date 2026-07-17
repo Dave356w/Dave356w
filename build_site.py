@@ -78,6 +78,7 @@ BATTED_RATE_COLS_FOR_BASELINE = ["GB%", "FB%", "LD%", "PU%", "Pull%", "Straight%
 # Costs ~10-15 batched StatsAPI calls (~+5s) but removes slate-dependent shrinkage baselines.
 FULL_LEAGUE_PLATOON_BASELINES = True
 MIN_LEAGUE_BASELINE_PA = 1
+RECENT_STARTS = 5
 
 
 def slate_date_now():
@@ -262,6 +263,84 @@ def load_splits(ids, group):
             out[p["id"]] = rec
         time.sleep(REQUEST_DELAY)
     return out
+
+
+def _innings_to_outs(value):
+    """Convert MLB's baseball-notation innings (for example, 5.2) to outs."""
+    if value is None or (isinstance(value, float) and np.isnan(value)):
+        return 0
+    s = str(value).strip()
+    if not s:
+        return 0
+    try:
+        whole, dot, frac = s.partition(".")
+        extra = int(frac[:1] or 0) if dot else 0
+        return max(0, int(whole) * 3 + min(max(extra, 0), 2))
+    except (TypeError, ValueError):
+        return 0
+
+
+def load_recent_start_era(ids, limit=RECENT_STARTS):
+    """Aggregate each probable pitcher's ERA over starts before this slate."""
+    out = {}
+    for pid in sorted({int(i) for i in ids if pd.notna(i)}):
+        try:
+            data = _get_json(
+                f"https://statsapi.mlb.com/api/v1/people/{pid}/stats",
+                {"stats": "gameLog", "group": "pitching", "season": SEASON,
+                 "gameType": "R"})
+        except Exception as e:  # noqa: BLE001
+            log(f"  recent-start ERA unavailable for {pid}: {e!r}")
+            continue
+
+        starts = []
+        for blk in data.get("stats", []):
+            for sk in blk.get("splits", []):
+                st = sk.get("stat", {}) or {}
+                if int(st.get("gamesStarted") or 0) < 1:
+                    continue
+                # Never let the current slate's start leak into a pregame metric.
+                game_date = str(sk.get("date") or
+                                (sk.get("game", {}) or {}).get("gameDate") or "")[:10]
+                if not game_date or game_date >= SLATE_DATE:
+                    continue
+                try:
+                    er = float(st.get("earnedRuns") or 0)
+                except (TypeError, ValueError):
+                    continue
+                game_pk = (sk.get("game", {}) or {}).get("gamePk") or 0
+                starts.append((game_date, int(game_pk),
+                               _innings_to_outs(st.get("inningsPitched")), er))
+
+        recent = sorted(starts, key=lambda x: (x[0], x[1]), reverse=True)[:limit]
+        outs = sum(x[2] for x in recent)
+        earned_runs = sum(x[3] for x in recent)
+        out[pid] = {
+            "era": round(earned_runs * 27.0 / outs, 2) if outs > 0 else np.nan,
+            "starts": len(recent),
+        }
+        time.sleep(REQUEST_DELAY)
+    return out
+
+
+def load_league_era():
+    """Current-season MLB pitching ERA for the recent-start comparison."""
+    endpoint = "https://statsapi.mlb.com/api/v1/stats"
+    data = _get_json(endpoint, {
+        "stats": "season", "group": "pitching", "season": SEASON,
+        "sportIds": SPORT_ID, "gameType": "R", "playerPool": "ALL",
+        "limit": 5000,
+    })
+    outs = earned_runs = 0
+    for blk in data.get("stats", []):
+        for sk in blk.get("splits", []):
+            st = sk.get("stat", {}) or {}
+            outs += _innings_to_outs(st.get("inningsPitched"))
+            try:
+                earned_runs += int(st.get("earnedRuns") or 0)
+            except (TypeError, ValueError):
+                pass
+    return round(earned_runs * 27.0 / outs, 2) if outs > 0 else np.nan
 
 
 _gf_cache = {}
@@ -487,6 +566,15 @@ def fetch_all(slate_date):
     os.makedirs(DATA_DIR, exist_ok=True)
     lineup_projection_df.to_csv(os.path.join(DATA_DIR, "lineup_resolution_audit.csv"), index=False)
 
+    log(f"Loading probable-pitcher ERA over the last {RECENT_STARTS} starts ...")
+    recent_start_era = load_recent_start_era(prob_ids)
+    try:
+        league_baseline["ERA"] = load_league_era()
+    except Exception as e:  # noqa: BLE001
+        log(f"  league ERA unavailable: {e!r}")
+        league_baseline["ERA"] = np.nan
+    log(f"  recent ERA: {len(recent_start_era)} pitchers | league {league_baseline['ERA']}")
+
     log("Loading player bio + vL/vR platoon splits ...")
     league_hitter_ids = {int(pid) for pid, st in batter_stat.items()
                          if pd.notna((st or {}).get("PA"))
@@ -505,6 +593,15 @@ def fetch_all(slate_date):
     log("Assembling tables ...")
     pitchers_df, batted_ball_profile_df = build_tables(
         slate_df, lineups, batter_stat, pitcher_stat, batter_bb, pitcher_bb, people)
+    if not pitchers_df.empty:
+        def _recent_value(r, key, default=np.nan):
+            if r.get("Pos.") != "P" or pd.isna(r.get("player_id")):
+                return default
+            return recent_start_era.get(int(r["player_id"]), {}).get(key, default)
+
+        pitchers_df["ERA_L5"] = pitchers_df.apply(lambda r: _recent_value(r, "era"), axis=1)
+        pitchers_df["ERA_L5_GS"] = pitchers_df.apply(
+            lambda r: _recent_value(r, "starts", 0), axis=1)
 
     side_status = pd.concat([lineup_projection_df["away_lineup_status"].rename("status"),
                              lineup_projection_df["home_lineup_status"].rename("status")],
@@ -954,7 +1051,7 @@ HITTER_EDGE_DOMAIN = 0.100  # shared per-hitter edge-bar axis (|mx_ops - lg|)
 # ---------- heatmap tints (casual-UI layer; numbers unchanged) ----------
 HEAT_ALPHA_MAX = 0.30
 HEAT_DOMAINS = {"xwOBA_sp": 0.035, "K%": 6.0, "Hard Hit%": 7.0,
-                "OPS": 0.080, "xwOBA_bat": 0.045}   # |dev| at full saturation
+                "OPS": 0.080, "ERA": 1.50, "xwOBA_bat": 0.045}   # |dev| at full saturation
 
 
 def heat_style(val, lg, domain, hi="warm"):
@@ -982,6 +1079,10 @@ def edge_color(edge, ksign=1):
 
 def f3(v):
     return "—" if v is None else f"{v:.3f}".lstrip("0") if 0 < abs(v) < 1 else f"{v:.3f}"
+
+
+def f2(v):
+    return "—" if v is None else f"{v:.2f}"
 
 
 def f1(v):
@@ -1143,9 +1244,17 @@ def _side_html(label, d, league_baseline):
     comp = (f"{d['R']}R/{d['L']}L" + (f"/{d['S']}S" if d["S"] else "")) if d["has_pl"] else "—"
     padv = f" · {d['padv']} plt-adv" if d["has_pl"] else ""
     lb = league_baseline or {}
-    lg = {k: _f(lb.get(k)) for k in ("xwOBA", "K%", "Hard Hit%", "OPS")}
+    lg = {k: _f(lb.get(k)) for k in ("xwOBA", "K%", "Hard Hit%", "OPS", "ERA")}
+    era_sub = []
+    if d["era_l5_gs"]:
+        era_sub.append(f"{d['era_l5_gs']} GS")
+    if lg["ERA"] is not None:
+        era_sub.append(f"lg {f2(lg['ERA'])}")
     stats = (
-        _sp_stat_cell("xwOBA agn", d["pit_xw"], f3,
+        _sp_stat_cell("ERA · L5", d["era_l5"], f2,
+                      " · ".join(era_sub) or None,
+                      heat=heat_style(d["era_l5"], lg["ERA"], HEAT_DOMAINS["ERA"]))
+        + _sp_stat_cell("xwOBA agn", d["pit_xw"], f3,
                       f"lg {f3(lg['xwOBA'])}" if lg["xwOBA"] is not None else None,
                       heat=heat_style(d["pit_xw"], lg["xwOBA"], HEAT_DOMAINS["xwOBA_sp"]))
         + _sp_stat_cell("K%", d["pit_k"], f1,
@@ -1285,9 +1394,12 @@ def _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
                           slate_df=None, lineup_df=None,
                           league_baseline=None, odds=None):
     throws = {}
+    recent_era = {}
     if pitcher_rows_df is not None and not pitcher_rows_df.empty:
         for _, pr in pitcher_rows_df.iterrows():
             throws[(pr["game_pk"], pr["Name"])] = pr.get("throws")
+            recent_era[(pr["game_pk"], pr["Name"])] = (
+                _f(pr.get("ERA_L5")), int(pr.get("ERA_L5_GS") or 0))
     pl_map = _pl_lookup(pl_df)
     slate_map = {}
     if slate_df is not None and not getattr(slate_df, "empty", True):
@@ -1315,6 +1427,8 @@ def _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
                      opp=r["opp_team"], opp_abbr=_abbr(r["opp_team"]),
                      pit_xw=_f(r.get("pit_xwOBA")), pit_k=_f(r.get("pit_K%")),
                      pit_hh=_f(r.get("pit_Hard Hit%")),
+                     era_l5=recent_era.get((gpk, r["pitcher"]), (None, 0))[0],
+                     era_l5_gs=recent_era.get((gpk, r["pitcher"]), (None, 0))[1],
                      opp_xw=_f(r.get("opp_xwOBA")),
                      xw_edge=_f(r.get("edge_xwOBA")),
                      lu_status=(lu_map.get(gpk) or {}).get(opp_lu_side),
@@ -1402,6 +1516,8 @@ def _legend(model_label, built_txt):
         "pitcher handedness splits; lineup average weighted by hitter vs-hand PA.</span>"
         "<span><b>SP OPS alwd*</b> Starter's regressed OPS allowed against today's batter-side mix, "
         "using the same lineup weights.</span>"
+        f"<span><b>ERA · L{RECENT_STARTS}</b> ERA across the probable starter's {RECENT_STARTS} most recent "
+        "starts before today's slate; lg is current-season MLB pitching ERA.</span>"
         "<span><b>Edge bars</b> Per-hitter xOPS minus overall league OPS.</span>"
         "<span><b>Shading</b> Stat cells tint ember when the number favors hitters, "
         "steel when it favors the pitcher; deeper tint = further from league average.</span>"
