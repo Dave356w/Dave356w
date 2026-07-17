@@ -97,6 +97,8 @@ Environment variables:
   launches the full build only when at least one game is 15–45 minutes from
   first pitch, normally refreshing near T-30. A separate 4:17am ET pass grades
   the prior slate. Push and manual runs always build immediately.
+- **Chronological slate.** Matchup cards render by scheduled first pitch rather
+  than lean strength; doubleheader game number and gamePk provide stable ties.
 
 ## One-time setup
 
