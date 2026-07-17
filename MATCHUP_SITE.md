@@ -33,10 +33,11 @@ Historical model version `xw+plat_consol_v2` added:
   platoon aggregates) are lineup-composition weighted rather than simple means
   over exposed handedness cells.
 
-Model version `xw+plat_consol_v3` leaves the prediction math unchanged and
-starts a clean performance record with a hard pregame snapshot lock. Each dump
-stores its capture and scheduled-start timestamps; the ledger rejects new or
-refreshed rows captured at/after scheduled first pitch. Ledger identity is
+Model version `xw+plat_consol_v3` leaves the prediction math unchanged and adds
+a hard pregame snapshot lock. Its performance results therefore append to the
+v2 series; row tags still identify the audit regime. Each dump stores its
+capture and scheduled-start timestamps, and the ledger rejects new or refreshed
+rows captured at/after scheduled first pitch. Ledger identity is
 `(game_pk, game_date)`, so a postponed game that keeps its MLB gamePk can be
 recorded again on its make-up date.
 
@@ -70,6 +71,9 @@ Environment variables:
   `America/New_York` with a ~3am ET rollover so night games don't roll early.
 - `CACHE_DIR` — where the once/day Savant CSVs are cached (default `.`).
 - `OUT_DIR` — output directory for `index.html` (default `public`).
+- `MODEL_TAG` — row-level model/audit lineage for newly captured predictions.
+- `RECORD_TAGS` — comma-separated tags whose unchanged prediction math should
+  be summarized as one continuous performance family.
 
 ## Unattended-run behaviour
 
@@ -88,9 +92,11 @@ Environment variables:
 - **Cache.** Savant CSV leaderboards are cached via `actions/cache` keyed to the
   ET slate date (`savant-YYYY-MM-DD`), reproducing the notebook's once/day
   behaviour across that day's runs.
-- **Cron cadence.** Scheduled passes run a morning projected pass plus a window
-  through the afternoon/evening to catch posted `gf` lineups (scheduled
-  workflows can lag/skip under load — fine for a leans page).
+- **Slate-aware cadence.** A lightweight Actions poll runs every 15 minutes
+  from 10am–11:59pm ET. `schedule_gate.py` fetches that day's MLB schedule and
+  launches the full build only when at least one game is 15–45 minutes from
+  first pitch, normally refreshing near T-30. A separate 4:17am ET pass grades
+  the prior slate. Push and manual runs always build immediately.
 
 ## One-time setup
 
@@ -101,7 +107,8 @@ Actions**. After that the workflow deploys on each scheduled run (and on manual
 ## Grading ledger
 
 Grades are also rendered into the site: the main page shows a **records
-strip** (headline xwOBA + platoon records for the current `MODEL_TAG`,
+strip** (headline xwOBA + platoon records for the configured `RECORD_TAGS`
+model family,
 linking to the ledger), and **`grades.html`** shows summary chips plus the
 full ledger table — every game's leans, final/F5 scores, and W/L/T grades,
 pending and void rows included. Both render purely from
@@ -128,12 +135,12 @@ Every CI run, `grade_leans.py`:
   (record vs market-expected wins → z, flat-stake ROI).
 - **Reports** records to the Actions log and `data/ledger_report.txt`
   (overall, reliable-only platoon subset, |Δ| terciles, DIVERGE head-to-head,
-  and — once 120 graded F5 decisions accumulate under the current
-  `MODEL_TAG` — an SP-vs-lineup logit weight fit).
+  and — once 120 graded F5 decisions accumulate across the configured
+  `RECORD_TAGS` model family — an SP-vs-lineup logit weight fit).
 
 The ledger persists by being committed: the workflow's `Commit ledger` step
 pushes `data/` back to `main` on each run (the `contents: write` permission).
-The ~4:15am ET cron is the grading pass — it runs after night games end and
-grades the previous slate. Any model change must bump `MODEL_TAG` (env var on
-the `Grade leans` step) so pre/post-change games never mix in the records or
-the weight fit.
+The ~4:17am ET cron is the grading pass — it runs after night games end and
+grades the previous slate. A prediction-math change must bump `MODEL_TAG` and
+start a new `RECORD_TAGS` family so incompatible games never mix in the records
+or the weight fit. An audit-only tag change may remain in the same family.

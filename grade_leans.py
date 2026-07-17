@@ -58,6 +58,15 @@ DATA_DIR    = os.environ.get("DATA_DIR", "data")
 LEDGER_PATH = os.path.join(DATA_DIR, "mlb_lean_ledger.csv")
 REPORT_PATH = os.path.join(DATA_DIR, "ledger_report.txt")
 MODEL_TAG   = os.environ.get("MODEL_TAG", "xw+plat_consol_v3")
+_RECORD_FAMILIES = {
+    # v3 changed only ledger locking/identity; its prediction math is v2.
+    "xw+plat_consol_v3": ("xw+plat_consol_v2", "xw+plat_consol_v3"),
+}
+RECORD_TAGS = tuple(
+    t.strip() for t in os.environ.get(
+        "RECORD_TAGS", ",".join(_RECORD_FAMILIES.get(MODEL_TAG, (MODEL_TAG,)))
+    ).split(",") if t.strip()
+)
 N_FIT_MIN   = 120
 _FINAL  = {"Final", "Game Over", "Completed Early"}
 _VOID   = {"Postponed", "Cancelled"}
@@ -320,14 +329,19 @@ def _logit_fit(X, y, iters=60):
     cov = np.linalg.inv(X.T @ (X * Wd[:, None]) + np.eye(X.shape[1]) * 1e-9)
     return b, np.sqrt(np.diag(cov))
 
+
+def _record_grades(led):
+    """Graded rows whose tags share the current prediction methodology."""
+    return led[(led["status"] == "graded") & (led["model_tag"].isin(RECORD_TAGS))].copy()
+
 def report(led):
     lines = []
     say = lines.append
-    g = led[(led["status"] == "graded") & (led["model_tag"] == MODEL_TAG)].copy()
+    g = _record_grades(led)
     if g.empty:
         say("no graded games yet.")
     else:
-        say(f"LEAN LEDGER — {len(g)} graded games  [{MODEL_TAG}]")
+        say(f"LEAN LEDGER — {len(g)} graded games  [{' + '.join(RECORD_TAGS)}]")
         say(f"xwOBA lean   full: {_rec(g['xw_full'])}   F5: {_rec(g['xw_f5'])}")
         ov = g[g["ops_valid"] == True]                                # noqa: E712
         if len(ov):
