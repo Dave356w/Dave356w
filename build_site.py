@@ -1253,8 +1253,6 @@ def _side_html(label, d, league_baseline):
     lb = league_baseline or {}
     lg = {k: _f(lb.get(k)) for k in ("xwOBA", "K%", "Hard Hit%", "OPS", "ERA")}
     era_sub = []
-    if d["era_l5_gs"]:
-        era_sub.append(f"{d['era_l5_gs']} GS")
     if d["era_season"] is not None:
         era_sub.append(f"season {f2(d['era_season'])}")
     stats = (
