@@ -166,10 +166,24 @@ class RecentStarterEraTests(unittest.TestCase):
         with mock.patch.object(build_site, "_get_json", return_value=response):
             self.assertEqual(build_site.load_league_era(), 3.45)
 
-    def test_pitcher_card_renders_recent_era_vs_league(self):
+    def test_pitching_splits_include_season_era(self):
+        response = {"people": [{
+            "id": 123,
+            "stats": [{
+                "type": {"displayName": "season"},
+                "splits": [{"split": {}, "stat": {"era": "3.85", "battersFaced": 400}}],
+            }],
+        }]}
+        with mock.patch.object(build_site, "_get_json", return_value=response), \
+                mock.patch.object(build_site.time, "sleep"):
+            result = build_site.load_splits([123], "pitching")
+        self.assertEqual(result[123]["overall"]["era"], 3.85)
+
+    def test_pitcher_card_shows_season_era_but_colors_l5_vs_league(self):
         side = dict(
             t="R", pl_fl={}, R=5, L=4, S=0, has_pl=False, padv=0,
-            era_l5=3.03, era_l5_gs=5, pit_xw=.310, pit_k=27.1, pit_hh=35.0,
+            era_l5=3.03, era_l5_gs=5, era_season=3.85,
+            pit_xw=.310, pit_k=27.1, pit_hh=35.0,
             pl_sp=None, pl_sp_raw=None, pl_edge=None, pl_reliable=False,
             xw_edge=-.015, p="Test Pitcher", opp_abbr="TST", lu_status="posted",
             opp_xw=None, pl_mx=None, hitters=[],
@@ -181,7 +195,12 @@ class RecentStarterEraTests(unittest.TestCase):
         )
         self.assertIn("ERA · L5", html)
         self.assertIn("3.03", html)
-        self.assertIn("5 GS · lg 4.20", html)
+        self.assertIn("5 GS · season 3.85", html)
+        self.assertIn(
+            "<div class='stat' style='background:rgba(var(--cool),0.23)'>"
+            "<div class='l'>ERA · L5</div>",
+            html,
+        )
 
 
 class ScheduleGateTests(unittest.TestCase):

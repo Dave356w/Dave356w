@@ -254,12 +254,14 @@ def load_splits(ids, group):
                     val = {"ops": _parse_rate(st.get("ops")),
                            "obp": _parse_rate(st.get("obp")),
                            "slg": _parse_rate(st.get("slg")),
+                           "era": _parse_rate(st.get("era")),
                            "pa": int(st.get(pa_field) or st.get("plateAppearances") or 0),
                            "k": st.get("strikeOuts"), "bb": st.get("baseOnBalls")}
                     if tname == "statSplits" and code in ("vl", "vr"):
                         rec["L" if code == "vl" else "R"] = val
                     elif tname == "season" and code is None:
-                        rec["overall"] = {"ops": val["ops"], "pa": val["pa"]}
+                        rec["overall"] = {"ops": val["ops"], "pa": val["pa"],
+                                          "era": val["era"]}
             out[p["id"]] = rec
         time.sleep(REQUEST_DELAY)
     return out
@@ -602,6 +604,11 @@ def fetch_all(slate_date):
         pitchers_df["ERA_L5"] = pitchers_df.apply(lambda r: _recent_value(r, "era"), axis=1)
         pitchers_df["ERA_L5_GS"] = pitchers_df.apply(
             lambda r: _recent_value(r, "starts", 0), axis=1)
+        pitchers_df["ERA_SEASON"] = pitchers_df.apply(
+            lambda r: ((player_splits_pit.get(int(r["player_id"]), {}).get("overall", {})
+                        or {}).get("era", np.nan))
+            if r.get("Pos.") == "P" and pd.notna(r.get("player_id")) else np.nan,
+            axis=1)
 
     side_status = pd.concat([lineup_projection_df["away_lineup_status"].rename("status"),
                              lineup_projection_df["home_lineup_status"].rename("status")],
@@ -1248,8 +1255,8 @@ def _side_html(label, d, league_baseline):
     era_sub = []
     if d["era_l5_gs"]:
         era_sub.append(f"{d['era_l5_gs']} GS")
-    if lg["ERA"] is not None:
-        era_sub.append(f"lg {f2(lg['ERA'])}")
+    if d["era_season"] is not None:
+        era_sub.append(f"season {f2(d['era_season'])}")
     stats = (
         _sp_stat_cell("ERA · L5", d["era_l5"], f2,
                       " · ".join(era_sub) or None,
@@ -1399,7 +1406,8 @@ def _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
         for _, pr in pitcher_rows_df.iterrows():
             throws[(pr["game_pk"], pr["Name"])] = pr.get("throws")
             recent_era[(pr["game_pk"], pr["Name"])] = (
-                _f(pr.get("ERA_L5")), int(pr.get("ERA_L5_GS") or 0))
+                _f(pr.get("ERA_L5")), int(pr.get("ERA_L5_GS") or 0),
+                _f(pr.get("ERA_SEASON")))
     pl_map = _pl_lookup(pl_df)
     slate_map = {}
     if slate_df is not None and not getattr(slate_df, "empty", True):
@@ -1427,8 +1435,9 @@ def _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
                      opp=r["opp_team"], opp_abbr=_abbr(r["opp_team"]),
                      pit_xw=_f(r.get("pit_xwOBA")), pit_k=_f(r.get("pit_K%")),
                      pit_hh=_f(r.get("pit_Hard Hit%")),
-                     era_l5=recent_era.get((gpk, r["pitcher"]), (None, 0))[0],
-                     era_l5_gs=recent_era.get((gpk, r["pitcher"]), (None, 0))[1],
+                     era_l5=recent_era.get((gpk, r["pitcher"]), (None, 0, None))[0],
+                     era_l5_gs=recent_era.get((gpk, r["pitcher"]), (None, 0, None))[1],
+                     era_season=recent_era.get((gpk, r["pitcher"]), (None, 0, None))[2],
                      opp_xw=_f(r.get("opp_xwOBA")),
                      xw_edge=_f(r.get("edge_xwOBA")),
                      lu_status=(lu_map.get(gpk) or {}).get(opp_lu_side),
@@ -1517,7 +1526,8 @@ def _legend(model_label, built_txt):
         "<span><b>SP OPS alwd*</b> Starter's regressed OPS allowed against today's batter-side mix, "
         "using the same lineup weights.</span>"
         f"<span><b>ERA · L{RECENT_STARTS}</b> ERA across the probable starter's {RECENT_STARTS} most recent "
-        "starts before today's slate; lg is current-season MLB pitching ERA.</span>"
+        "starts before today's slate, shown with his season ERA for trend context; "
+        "cell shading remains relative to current-season MLB pitching ERA.</span>"
         "<span><b>Edge bars</b> Per-hitter xOPS minus overall league OPS.</span>"
         "<span><b>Shading</b> Stat cells tint ember when the number favors hitters, "
         "steel when it favors the pitcher; deeper tint = further from league average.</span>"
