@@ -58,6 +58,15 @@ OUT_DIR = os.environ.get("OUT_DIR", "public")
 DATA_DIR = os.environ.get("DATA_DIR", "data")            # grading ledger home
 LEDGER_PATH = os.path.join(DATA_DIR, "mlb_lean_ledger.csv")
 MODEL_TAG = os.environ.get("MODEL_TAG", "xw+plat_consol_v3")  # keep in sync with grade_leans.py
+_RECORD_FAMILIES = {
+    # v3 changed only ledger locking/identity; its prediction math is v2.
+    "xw+plat_consol_v3": ("xw+plat_consol_v2", "xw+plat_consol_v3"),
+}
+RECORD_TAGS = tuple(
+    t.strip() for t in os.environ.get(
+        "RECORD_TAGS", ",".join(_RECORD_FAMILIES.get(MODEL_TAG, (MODEL_TAG,)))
+    ).split(",") if t.strip()
+)
 
 STATCAST_SELECTIONS = ["pa", "k_percent", "bb_percent", "xwoba", "xba", "xslg",
                        "exit_velocity_avg", "launch_angle_avg", "hard_hit_percent"]
@@ -1675,11 +1684,16 @@ def _rec_txt(s):
     return f"{base} ({pct})" if pct else base
 
 
+def _record_grades(led):
+    """Graded rows whose tags share the current prediction methodology."""
+    return led[(led["status"] == "graded") & (led["model_tag"].isin(RECORD_TAGS))]
+
+
 def records_strip_html():
     led = load_ledger_df()
     if led is None:
         return ""
-    g = led[(led["status"] == "graded") & (led["model_tag"] == MODEL_TAG)]
+    g = _record_grades(led)
     if g.empty:
         inner = "<span class='muted'>no graded games yet</span>"
     else:
@@ -1771,11 +1785,11 @@ def render_grades_html(built_txt):
             f"Grading ledger · {n_graded} graded · {n_pend} pending"
             + (f" · {n_void} void" if n_void else "")
             + f" · built {built_txt}<br>"
-            f"<em>summary records are for model {_esc(MODEL_TAG)} and hard-locked pregame snapshots · "
-            "legacy model rows remain in the table for transparency · "
+            f"<em>summary records combine {_esc(' + '.join(RECORD_TAGS))} because the prediction math is unchanged · "
+            f"new {_esc(MODEL_TAG)} rows are hard-locked pregame · row tags preserve the audit regime · "
             "platoon records count reliable-split games only</em></div></div>")
 
-    g = led[(led["status"] == "graded") & (led["model_tag"] == MODEL_TAG)]
+    g = _record_grades(led)
     chips, notes = [], []
 
     def chip(lab, val, sub=None):
@@ -1784,7 +1798,7 @@ def render_grades_html(built_txt):
                      f"<div class='val'>{val}</div>{s}</div>")
 
     if g.empty:
-        summary = "<div class='gr-note'>No graded games under this model tag yet.</div>"
+        summary = "<div class='gr-note'>No graded games in this model family yet.</div>"
     else:
         chip("Graded", str(len(g)), f"{n_pend} pending")
         b, p = _rec_parts(g["xw_full"]); chip("xwOBA · full", b, p)

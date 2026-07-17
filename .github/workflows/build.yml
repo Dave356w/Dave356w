@@ -7,21 +7,17 @@ on:
     branches: [main]
   # Manual trigger (lets you rebuild on demand from the Actions tab).
   workflow_dispatch:
-  # Scheduled passes (UTC). MLB lineups post a few hours before first pitch,
-  # so a single daily run would miss posted lineups. We run a morning
-  # "projected" pass plus a window through the afternoon/evening to catch
-  # posted `gf` lineups. Scheduled workflows can lag 5-15 min under load and
-  # are occasionally skipped -- fine for a leans page. The build resolves the
-  # slate date itself in America/New_York (with a ~3am rollover), so the UTC
-  # cron times only decide *when* to refresh, not *which* day is shown.
-  # Times are labelled for EDT; in EST every run lands one hour earlier.
+  # GitHub cron cannot be rewritten from the day's MLB slate. Instead, a cheap
+  # poll runs off the top of the hour and schedule_gate.py starts the full build
+  # only when a game is 15-45 minutes from first pitch. This normally produces
+  # a snapshot near T-30 while tolerating modest Actions queue delay. A separate
+  # early-morning pass grades the prior slate. Timezone-aware entries avoid DST
+  # drift; push/manual events always build immediately.
   schedule:
-    - cron: '15 8 * * *'   # ~04:15 EDT  after night games end; grades yesterday
-    - cron: '0 11 * * *'   # ~07:00 EDT  morning projected pass
-    - cron: '0 16 * * *'   # ~12:00 EDT
-    - cron: '0 19 * * *'   # ~15:00 EDT  early posted lineups
-    - cron: '0 21 * * *'   # ~17:00 EDT
-    - cron: '0 23 * * *'   # ~19:00 EDT  evening slate posted
+    - cron: '17 4 * * *'
+      timezone: America/New_York
+    - cron: '7,22,37,52 10-23 * * *'
+      timezone: America/New_York
 
 # Allow exactly one deploy at a time; don't cancel an in-flight deploy.
 concurrency:
@@ -34,18 +30,37 @@ permissions:
   id-token: write
 
 jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      should_run: ${{ steps.gate.outputs.should_run }}
+      slate_date: ${{ steps.gate.outputs.slate_date }}
+      reason: ${{ steps.gate.outputs.reason }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Gate scheduled build against today's first pitches
+        id: gate
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_SCHEDULE: ${{ github.event.schedule }}
+        run: python schedule_gate.py
+
   build:
+    needs: plan
+    if: needs.plan.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15        # fail fast if an upstream API hangs
     env:
-      # Model version for the grading ledger. Bump on ANY lean-affecting model
-      # change (new tag, same ledger) so pre/post games never mix in records
-      # or the weight fit. Job-level so grade_leans.py AND build_site.py's
-      # records rendering see the same tag.
-      # v3 starts a clean, hard pregame-locked performance record. Prediction
-      # math is unchanged from v2; the version bump isolates the corrected
-      # ledger methodology from legacy rows that could refresh after first pitch.
+      # MODEL_TAG records row lineage. On any prediction-math change, bump it
+      # and start a new RECORD_TAGS family so incompatible results and weight
+      # fits never mix. Audit-only tags may remain in one family. Job-level so
+      # grade_leans.py and build_site.py see the same configuration.
+      # v3 identifies the hard pregame-lock audit regime. Prediction math is
+      # unchanged from v2, so headline records deliberately continue across
+      # both tags while the row tags preserve which locking regime produced it.
       MODEL_TAG: xw+plat_consol_v3
+      RECORD_TAGS: xw+plat_consol_v2,xw+plat_consol_v3
     steps:
       - uses: actions/checkout@v4
 
@@ -62,20 +77,6 @@ jobs:
           python-version: '3.12'
           cache: pip
 
-      - name: Resolve slate date (America/New_York, ~3am rollover)
-        id: slate
-        run: |
-          DATE=$(python - <<'PY'
-          from datetime import datetime, timedelta
-          from zoneinfo import ZoneInfo
-          n = datetime.now(ZoneInfo("America/New_York"))
-          d = n.date() if n.hour >= 3 else (n - timedelta(days=1)).date()
-          print(d.isoformat())
-          PY
-          )
-          echo "date=$DATE" >> "$GITHUB_OUTPUT"
-          echo "Slate date: $DATE"
-
       # Reproduce the notebook's once/day Savant leaderboard cache. The cache is
       # keyed to the ET slate date so a given day's CSVs are pulled once and
       # reused across that day's runs; a new day misses and re-pulls.
@@ -83,7 +84,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .savant_cache
-          key: savant-${{ steps.slate.outputs.date }}
+          key: savant-${{ needs.plan.outputs.slate_date }}
 
       - name: Install dependencies
         run: |
@@ -93,7 +94,7 @@ jobs:
       # Grade BEFORE the build: ingest any committed lean dumps and grade
       # pending games via StatsAPI linescores, so the records strip and
       # grades.html the build renders reflect last night's results in the
-      # same run. The ~4:15am ET run is the one that grades yesterday.
+      # same run. The ~4:17am ET run is the one that grades yesterday.
       - name: Grade leans (pre-build)
         run: python grade_leans.py
 
@@ -103,7 +104,7 @@ jobs:
       # stays live. A legitimately empty slate writes a friendly page instead.
       - name: Build static site
         env:
-          SLATE_DATE: ${{ steps.slate.outputs.date }}
+          SLATE_DATE: ${{ needs.plan.outputs.slate_date }}
           CACHE_DIR: .savant_cache
           OUT_DIR: public
         run: python build_site.py

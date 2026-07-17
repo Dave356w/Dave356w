@@ -7,6 +7,7 @@ import pandas as pd
 
 import build_site
 import grade_leans
+import schedule_gate
 
 
 def _dump_rows(game_pk, game_date, snapshot, start):
@@ -26,6 +27,16 @@ def _dump_rows(game_pk, game_date, snapshot, start):
 
 
 class LedgerLockTests(unittest.TestCase):
+    def test_v2_and_v3_share_one_record_family(self):
+        ledger = pd.DataFrame([
+            dict(game_pk=1, status="graded", model_tag="xw+plat_consol_v1"),
+            dict(game_pk=2, status="graded", model_tag="xw+plat_consol_v2"),
+            dict(game_pk=3, status="graded", model_tag="xw+plat_consol_v3"),
+            dict(game_pk=4, status="pending", model_tag="xw+plat_consol_v3"),
+        ])
+        self.assertEqual(set(build_site._record_grades(ledger)["game_pk"]), {2, 3})
+        self.assertEqual(set(grade_leans._record_grades(ledger)["game_pk"]), {2, 3})
+
     def test_load_ledger_preserves_market_history(self):
         with tempfile.TemporaryDirectory() as td:
             path = os.path.join(td, "ledger.csv")
@@ -112,6 +123,45 @@ class SlateCompletenessTests(unittest.TestCase):
         self.assertIn("G2", html)
         self.assertIn("TB", html)
         self.assertIn("BOS", html)
+
+
+class ScheduleGateTests(unittest.TestCase):
+    NOW = pd.Timestamp("2026-07-17T16:00:00Z").to_pydatetime()
+
+    @staticmethod
+    def game(game_pk, minutes, state="Preview"):
+        start = ScheduleGateTests.NOW + pd.Timedelta(minutes=minutes)
+        return {
+            "gamePk": game_pk,
+            "gameDate": start.isoformat().replace("+00:00", "Z"),
+            "status": {"abstractGameState": state},
+        }
+
+    def test_scheduled_poll_runs_near_first_pitch(self):
+        run, day, reason = schedule_gate.decision(
+            "schedule", "7,22,37,52 10-23 * * *", self.NOW,
+            games=[self.game(101, 30)],
+        )
+        self.assertTrue(run)
+        self.assertEqual(day, "2026-07-17")
+        self.assertIn("101", reason)
+
+    def test_scheduled_poll_skips_outside_window_and_final_games(self):
+        games = [self.game(101, 10), self.game(102, 30, state="Final")]
+        run, _, reason = schedule_gate.decision(
+            "schedule", "7,22,37,52 10-23 * * *", self.NOW, games=games,
+        )
+        self.assertFalse(run)
+        self.assertIn("no game", reason)
+
+    def test_grade_push_and_manual_events_always_run(self):
+        grade = schedule_gate.decision("schedule", schedule_gate.DAILY_GRADE_CRON,
+                                       self.NOW, games=[])
+        push = schedule_gate.decision("push", "", self.NOW, games=[])
+        manual = schedule_gate.decision("workflow_dispatch", "", self.NOW, games=[])
+        self.assertTrue(grade[0])
+        self.assertTrue(push[0])
+        self.assertTrue(manual[0])
 
 
 if __name__ == "__main__":
