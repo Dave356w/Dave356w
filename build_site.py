@@ -937,6 +937,24 @@ ABBR = {
 
 HITTER_EDGE_DOMAIN = 0.100  # shared per-hitter edge-bar axis (|mx_ops - lg|)
 
+# ---------- heatmap tints (casual-UI layer; numbers unchanged) ----------
+HEAT_ALPHA_MAX = 0.30
+HEAT_DOMAINS = {"xwOBA_sp": 0.035, "K%": 6.0, "Hard Hit%": 7.0,
+                "OPS": 0.080, "xwOBA_bat": 0.045}   # |dev| at full saturation
+
+
+def heat_style(val, lg, domain, hi="warm"):
+    """Cell tint vs league. hi = token when value is ABOVE league:
+    'warm' (offense-favorable) or 'cool' (pitcher-favorable)."""
+    v, L = _f(val), _f(lg)
+    if v is None or L is None:
+        return ""
+    a = clamp(abs(v - L) / domain, 0.0, 1.0) * HEAT_ALPHA_MAX
+    if a < 0.04:          # dead zone: ~league-average stays untinted
+        return ""
+    tok = hi if v > L else ("cool" if hi == "warm" else "warm")
+    return f"background:rgba(var(--{tok}),{a:.2f})"
+
 
 def clamp(x, a, b):
     return a if x < a else b if x > b else x
@@ -1043,7 +1061,7 @@ def _hitters_for(opp_hitters_df, detail_df, gpk, fp, lg_ops):
     return rows
 
 
-def _hitter_row_html(i, hr):
+def _hitter_row_html(i, hr, lg_xw=None):
     nm = _esc(hr["name"])
     b = f"<span class='b'>{hr['bats']}</span>" if hr["bats"] else ""
     adv = "<span class='adv' title='platoon advantage vs this SP'>◆</span>" if hr["adv"] else ""
@@ -1064,13 +1082,15 @@ def _hitter_row_html(i, hr):
         bar = (f"<div class='eb' title='xOPS edge vs league {sgn3(hr['edge'])}'>"
                f"<i class='{cls}' style='width:{w:.0f}%'></i></div>")
     lowcls = " class='low'" if (hr["ops"] is not None and (hr["pa"] == 0 or hr["low"])) else ""
+    xw_st = heat_style(hr["xw"], lg_xw, HEAT_DOMAINS["xwOBA_bat"])
+    xw_td = f"<td style='{xw_st}'>{f3(hr['xw'])}</td>" if xw_st else f"<td>{f3(hr['xw'])}</td>"
     return (f"<tr{lowcls}><td class='ord'>{i}</td>"
             f"<td class='n'>{nm}{b}{adv}</td><td class='pos'>{_esc(hr['pos'])}</td>"
-            f"<td>{f3(hr['xw'])}</td>{ops_cell}"
+            f"{xw_td}{ops_cell}"
             f"<td class='bar'>{bar}</td></tr>")
 
 
-def _lineup_details(side_d):
+def _lineup_details(side_d, lg_xw=None):
     st = side_d["lu_status"]
     st_lab = {"posted": "posted", "partial_filled": "partial", "projected": "projected"}.get(st, st or "—")
     st_cls = {"posted": "posted", "partial_filled": "partial", "projected": "projected"}.get(st, "projected")
@@ -1083,7 +1103,7 @@ def _lineup_details(side_d):
     hand = side_d["t"] if side_d["t"] in ("L", "R") else "?"
     head = (f"<tr><th></th><th class='n'>Hitter</th><th></th><th>xwOBA</th>"
             f"<th>vs-{hand} OPS</th><th>edge</th></tr>")
-    body = "".join(_hitter_row_html(i + 1, hr) for i, hr in enumerate(side_d["hitters"]))
+    body = "".join(_hitter_row_html(i + 1, hr, lg_xw) for i, hr in enumerate(side_d["hitters"]))
     if not body:
         body = "<tr><td class='na' colspan='6'>lineup unavailable</td></tr>"
     return (
@@ -1092,12 +1112,13 @@ def _lineup_details(side_d):
         f"<span class='tl'>{_esc(side_d['opp_abbr'])} lineup</span>"
         f"<span class='st {st_cls}'>{st_lab}</span>"
         f"<span class='lw'>{summ}</span></summary>"
-        f"<table class='lu'>{head}{body}</table></details>")
+        f"<div class='lu-scroll'><table class='lu'>{head}{body}</table></div></details>")
 
 
-def _sp_stat_cell(lab, val, fmt, sub=None):
+def _sp_stat_cell(lab, val, fmt, sub=None, heat=""):
     s = f"<div class='s'>{sub}</div>" if sub else ""
-    return (f"<div class='stat'><div class='l'>{lab}</div>"
+    st = f" style='{heat}'" if heat else ""
+    return (f"<div class='stat'{st}><div class='l'>{lab}</div>"
             f"<div class='v'>{fmt(val)}</div>{s}</div>")
 
 
@@ -1108,16 +1129,20 @@ def _side_html(label, d, league_baseline):
     comp = (f"{d['R']}R/{d['L']}L" + (f"/{d['S']}S" if d["S"] else "")) if d["has_pl"] else "—"
     padv = f" · {d['padv']} plt-adv" if d["has_pl"] else ""
     lb = league_baseline or {}
-    lg = {k: _f(lb.get(k)) for k in ("xwOBA", "K%", "Hard Hit%")}
+    lg = {k: _f(lb.get(k)) for k in ("xwOBA", "K%", "Hard Hit%", "OPS")}
     stats = (
         _sp_stat_cell("xwOBA agn", d["pit_xw"], f3,
-                      f"lg {f3(lg['xwOBA'])}" if lg["xwOBA"] is not None else None)
+                      f"lg {f3(lg['xwOBA'])}" if lg["xwOBA"] is not None else None,
+                      heat=heat_style(d["pit_xw"], lg["xwOBA"], HEAT_DOMAINS["xwOBA_sp"]))
         + _sp_stat_cell("K%", d["pit_k"], f1,
-                        f"lg {f1(lg['K%'])}" if lg["K%"] is not None else None)
+                        f"lg {f1(lg['K%'])}" if lg["K%"] is not None else None,
+                        heat=heat_style(d["pit_k"], lg["K%"], HEAT_DOMAINS["K%"], hi="cool"))
         + _sp_stat_cell("HardHit%", d["pit_hh"], f1,
-                        f"lg {f1(lg['Hard Hit%'])}" if lg["Hard Hit%"] is not None else None)
+                        f"lg {f1(lg['Hard Hit%'])}" if lg["Hard Hit%"] is not None else None,
+                        heat=heat_style(d["pit_hh"], lg["Hard Hit%"], HEAT_DOMAINS["Hard Hit%"]))
         + _sp_stat_cell("OPS alwd*", d["pl_sp"], f3,
-                        f"raw {f3(d['pl_sp_raw'])}" if d["pl_sp_raw"] is not None else None))
+                        f"raw {f3(d['pl_sp_raw'])}" if d["pl_sp_raw"] is not None else None,
+                        heat=heat_style(d["pl_sp"], lg["OPS"], HEAT_DOMAINS["OPS"])))
     pl_bits = f3(None) if not d["has_pl"] else sgn3(d["pl_edge"])
     pl_col = edge_color(d["pl_edge"]) if (d["has_pl"] and d["pl_reliable"]) else "var(--faint)"
     pl_flag = "" if (not d["has_pl"] or d["pl_reliable"]) else " <span class='flag mute'>prior-driven</span>"
@@ -1131,7 +1156,7 @@ def _side_html(label, d, league_baseline):
         f"<span>xw edge (drives lean)</span>{sgn3(d['xw_edge'])}</div>"
         f"<div class='e' style='color:{pl_col}'><span>xOPS edge</span>{pl_bits}{pl_flag}</div>"
         f"</div>"
-        f"{_lineup_details(d)}"
+        f"{_lineup_details(d, lg['xwOBA'])}"
         f"</section>")
 
 
@@ -1276,7 +1301,7 @@ def _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
             time_pt=_game_time_pt(srow.get("game_datetime_utc")) if srow is not None else "",
             venue=str(srow.get("venue") or "") if srow is not None else "",
             odds=(odds or {}).get(gpk),
-            league_baseline=league_baseline or {},
+            league_baseline={**(league_baseline or {}), "OPS": lg_ops_f},
         ))
     return games
 
@@ -1303,6 +1328,8 @@ def _legend(model_label, built_txt):
         "<span><b>SP OPS alwd*</b> Starter's regressed OPS allowed against today's batter-side mix, "
         "using the same lineup weights.</span>"
         "<span><b>Edge bars</b> Per-hitter xOPS minus overall league OPS.</span>"
+        "<span><b>Shading</b> Stat cells tint ember when the number favors hitters, "
+        "steel when it favors the pitcher; deeper tint = further from league average.</span>"
         "<span class='wide'>Odds are DraftKings via ESPN at build time. Cards are sorted by "
         "the difference between the two offenses' xwOBA edges.</span>"
         "</div></div>")
@@ -1454,6 +1481,7 @@ summary .chev{font-size:10px;color:var(--faint);transition:transform .12s}
 details[open] summary .chev{transform:rotate(90deg)}
 @media (prefers-reduced-motion:reduce){summary .chev{transition:none}}
 
+.lu-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
 table.lu{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
 table.lu th{font:600 9px/1.4 var(--sans);letter-spacing:.1em;text-transform:uppercase;color:var(--faint);
   text-align:right;padding:2px 6px 4px;border-bottom:1px solid var(--line-2);white-space:nowrap}
@@ -1483,7 +1511,10 @@ td.bar{width:86px;padding:4px 8px 4px 2px}
   .mcell{min-width:0;flex:1 1 45%}
   .lg-notes{grid-template-columns:1fr}
   .lg-notes .wide{grid-column:auto}
-  td.n{max-width:110px}
+  td.n{max-width:none}
+  table.lu{min-width:460px}
+  .spstats{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  .stat{min-width:88px}
 }
 """
 
@@ -1617,7 +1648,7 @@ def _wlt_badge(v):
     return "<span class='wlt none'>–</span>"
 
 
-def _fmt_ml(v):
+def _fmt_ml_cell(v):
     v = pd.to_numeric(v, errors="coerce")
     if pd.isna(v):
         return "<span class='muted'>—</span>"
@@ -1629,7 +1660,7 @@ def _lean_ml_cell(r, lean_col):
     lean = r.get(lean_col)
     if not isinstance(lean, str) or not lean:
         return "<span class='muted'>—</span>"
-    return _fmt_ml(r.get("close_home_ml") if lean == r.get("home") else r.get("close_away_ml"))
+    return _fmt_ml_cell(r.get("close_home_ml") if lean == r.get("home") else r.get("close_away_ml"))
 
 
 def _lean_cell(lean, delta, muted=False):
