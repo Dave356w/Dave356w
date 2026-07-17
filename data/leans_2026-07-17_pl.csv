@@ -19,10 +19,11 @@ game_pk,game_date,matchup,side,pitcher,throws,opp_team,n_opp,n_LHB,n_RHB,n_SW,n_
 824414,2026-07-17,Pittsburgh Pirates @ Cleveland Guardians,home,Gavin Williams,R,Pittsburgh Pirates,9,2,5,2,4,0,170,False,True,0.786,0.778,0.696,0.693,0.741,0.02
 824655,2026-07-17,Minnesota Twins @ Chicago Cubs,away,Bailey Ober,R,Chicago Cubs,9,3,5,1,4,0,136,False,True,0.746,0.745,0.728,0.727,0.755,0.034
 824655,2026-07-17,Minnesota Twins @ Chicago Cubs,home,Colin Rea,R,Minnesota Twins,9,3,3,3,6,0,171,False,True,0.743,0.743,0.799,0.79,0.801,0.08
-824766,2026-07-17,Tampa Bay Rays @ Boston Red Sox,away,Griffin Jax,R,Boston Red Sox,9,3,5,1,4,0,109,False,True,0.661,0.676,0.719,0.719,0.675,-0.046
-824766,2026-07-17,Tampa Bay Rays @ Boston Red Sox,home,Jake Bennett,L,Tampa Bay Rays,9,4,4,1,5,1,46,True,False,0.682,0.706,0.513,0.604,0.6,-0.121
+824766,2026-07-17,Tampa Bay Rays @ Boston Red Sox,away,Griffin Jax,R,Boston Red Sox,9,4,4,1,5,2,109,False,True,0.66,0.677,0.72,0.721,0.675,-0.046
+824766,2026-07-17,Tampa Bay Rays @ Boston Red Sox,home,Jake Bennett,L,Tampa Bay Rays,9,2,6,1,7,0,46,True,False,0.72,0.731,0.549,0.615,0.626,-0.095
 824901,2026-07-17,Texas Rangers @ Atlanta Braves,away,Cal Quantrill,R,Atlanta Braves,9,4,4,1,5,0,95,False,True,0.753,0.753,0.698,0.701,0.724,0.003
 824901,2026-07-17,Texas Rangers @ Atlanta Braves,home,Chris Sale,L,Texas Rangers,9,4,5,0,5,1,102,False,True,0.781,0.756,0.611,0.629,0.668,-0.053
 824981,2026-07-17,Washington Nationals @ Athletics,away,Cade Cavalli,R,Athletics,9,4,4,1,5,1,174,False,True,0.697,0.712,0.708,0.715,0.697,-0.024
 824981,2026-07-17,Washington Nationals @ Athletics,home,Gage Jump,L,Washington Nationals,9,5,2,2,4,1,57,False,True,0.76,0.757,0.741,0.705,0.76,0.039
+825060,2026-07-17,St. Louis Cardinals @ Arizona Diamondbacks,away,Michael McGreevy,R,Arizona Diamondbacks,9,1,4,4,5,0,145,False,True,0.698,0.713,0.663,0.679,0.664,-0.057
 825060,2026-07-17,St. Louis Cardinals @ Arizona Diamondbacks,home,Merrill Kelly,R,St. Louis Cardinals,9,4,5,0,4,0,175,False,True,0.764,0.757,0.86,0.838,0.884,0.163
