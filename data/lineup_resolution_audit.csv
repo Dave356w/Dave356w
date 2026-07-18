@@ -4,6 +4,7 @@ game_pk,away_lineup_projected,home_lineup_projected,away_lineup_status,home_line
 824657,False,False,posted,posted,9,9,0,0,9,9
 823441,False,False,posted,posted,9,9,0,0,9,9
 822790,False,False,posted,posted,9,9,0,0,9,9
+<<<<<<< Updated upstream
 824331,False,True,posted,projected,9,0,0,9,9,9
 824169,True,True,projected,projected,0,0,9,9,9,9
 824088,True,False,projected,posted,0,9,9,0,9,9
@@ -11,6 +12,15 @@ game_pk,away_lineup_projected,home_lineup_projected,away_lineup_status,home_line
 824738,True,False,projected,posted,0,9,9,0,9,9
 824899,True,False,projected,posted,0,9,9,0,9,9
 823763,True,True,projected,projected,0,0,9,9,9,9
+=======
+824331,False,False,posted,posted,9,9,0,0,9,9
+824169,True,True,partial_filled,partial_filled,8,8,1,1,9,9
+824088,False,False,posted,posted,9,9,0,0,9,9
+825059,False,False,posted,posted,9,9,0,0,9,9
+824738,False,False,posted,posted,9,9,0,0,9,9
+824899,False,False,posted,posted,9,9,0,0,9,9
+823763,False,False,posted,posted,9,9,0,0,9,9
+>>>>>>> Stashed changes
 823116,True,True,projected,projected,0,0,9,9,9,9
 823523,True,True,projected,projected,0,0,9,9,9,9
 824979,True,True,projected,projected,0,0,9,9,9,9
