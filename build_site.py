@@ -1057,7 +1057,7 @@ HITTER_EDGE_DOMAIN = 0.100  # shared per-hitter edge-bar axis (|mx_ops - lg|)
 
 # ---------- heatmap tints (casual-UI layer; numbers unchanged) ----------
 HEAT_ALPHA_MAX = 0.30
-HEAT_DOMAINS = {"xwOBA_sp": 0.035, "K%": 6.0, "Hard Hit%": 7.0,
+HEAT_DOMAINS = {"xwOBA_sp": 0.035, "K-BB%": 7.0,
                 "OPS": 0.080, "ERA": 1.50, "xwOBA_bat": 0.045}   # |dev| at full saturation
 
 
@@ -1251,26 +1251,32 @@ def _side_html(label, d, league_baseline):
     comp = (f"{d['R']}R/{d['L']}L" + (f"/{d['S']}S" if d["S"] else "")) if d["has_pl"] else "—"
     padv = f" · {d['padv']} plt-adv" if d["has_pl"] else ""
     lb = league_baseline or {}
-    lg = {k: _f(lb.get(k)) for k in ("xwOBA", "K%", "Hard Hit%", "OPS", "ERA")}
+    # lg K%/BB% come from the PA-weighted *batter* leaderboard; league K% and
+    # BB% are symmetric (every batter K/BB is a pitcher K/BB), so they are
+    # valid pitcher references and lg K-BB% = lg K% - lg BB%.
+    lg = {k: _f(lb.get(k)) for k in ("xwOBA", "K%", "BB%", "OPS", "ERA")}
+    kbb = (d["pit_k"] - d["pit_bb"]) if (d["pit_k"] is not None
+                                         and d["pit_bb"] is not None) else None
+    lg_kbb = (lg["K%"] - lg["BB%"]) if (lg["K%"] is not None
+                                        and lg["BB%"] is not None) else None
     era_sub = []
     if d["era_season"] is not None:
         era_sub.append(f"season {f2(d['era_season'])}")
+    gs = int(d.get("era_l5_gs") or 0)
+    era_lab = f"ERA · L{gs}" if 0 < gs < RECENT_STARTS else f"ERA · L{RECENT_STARTS}"
     stats = (
-        _sp_stat_cell("ERA · L5", d["era_l5"], f2,
-                      " · ".join(era_sub) or None,
-                      heat=heat_style(d["era_l5"], lg["ERA"], HEAT_DOMAINS["ERA"]))
-        + _sp_stat_cell("xwOBA agn", d["pit_xw"], f3,
+        _sp_stat_cell("xwOBA agn", d["pit_xw"], f3,
                       f"lg {f3(lg['xwOBA'])}" if lg["xwOBA"] is not None else None,
                       heat=heat_style(d["pit_xw"], lg["xwOBA"], HEAT_DOMAINS["xwOBA_sp"]))
-        + _sp_stat_cell("K%", d["pit_k"], f1,
-                        f"lg {f1(lg['K%'])}" if lg["K%"] is not None else None,
-                        heat=heat_style(d["pit_k"], lg["K%"], HEAT_DOMAINS["K%"], hi="cool"))
-        + _sp_stat_cell("HardHit%", d["pit_hh"], f1,
-                        f"lg {f1(lg['Hard Hit%'])}" if lg["Hard Hit%"] is not None else None,
-                        heat=heat_style(d["pit_hh"], lg["Hard Hit%"], HEAT_DOMAINS["Hard Hit%"]))
+        + _sp_stat_cell("K-BB%", kbb, f1,
+                        f"lg {f1(lg_kbb)}" if lg_kbb is not None else None,
+                        heat=heat_style(kbb, lg_kbb, HEAT_DOMAINS["K-BB%"], hi="cool"))
         + _sp_stat_cell("OPS alwd*", d["pl_sp"], f3,
                         f"raw {f3(d['pl_sp_raw'])}" if d["pl_sp_raw"] is not None else None,
-                        heat=heat_style(d["pl_sp"], lg["OPS"], HEAT_DOMAINS["OPS"])))
+                        heat=heat_style(d["pl_sp"], lg["OPS"], HEAT_DOMAINS["OPS"]))
+        + _sp_stat_cell(era_lab, d["era_l5"], f2,
+                        " · ".join(era_sub) or None,
+                        heat=heat_style(d["era_l5"], lg["ERA"], HEAT_DOMAINS["ERA"])))
     pl_bits = f3(None) if not d["has_pl"] else sgn3(d["pl_edge"])
     pl_col = edge_color(d["pl_edge"]) if (d["has_pl"] and d["pl_reliable"]) else "var(--faint)"
     pl_flag = "" if (not d["has_pl"] or d["pl_reliable"]) else " <span class='flag mute'>prior-driven</span>"
@@ -1432,7 +1438,7 @@ def _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
             d = dict(p=r["pitcher"], t=t if t in ("L", "R") else "",
                      opp=r["opp_team"], opp_abbr=_abbr(r["opp_team"]),
                      pit_xw=_f(r.get("pit_xwOBA")), pit_k=_f(r.get("pit_K%")),
-                     pit_hh=_f(r.get("pit_Hard Hit%")),
+                     pit_bb=_f(r.get("pit_BB%")),
                      era_l5=recent_era.get((gpk, r["pitcher"]), (None, 0, None))[0],
                      era_l5_gs=recent_era.get((gpk, r["pitcher"]), (None, 0, None))[1],
                      era_season=recent_era.get((gpk, r["pitcher"]), (None, 0, None))[2],
@@ -1523,9 +1529,12 @@ def _legend(model_label, built_txt):
         "pitcher handedness splits; lineup average weighted by hitter vs-hand PA.</span>"
         "<span><b>SP OPS alwd*</b> Starter's regressed OPS allowed against today's batter-side mix, "
         "using the same lineup weights.</span>"
-        f"<span><b>ERA · L{RECENT_STARTS}</b> ERA across the probable starter's {RECENT_STARTS} most recent "
-        "starts before today's slate, shown with his season ERA for trend context; "
-        "cell shading remains relative to current-season MLB pitching ERA.</span>"
+        "<span><b>K-BB%</b> Season strikeout rate minus walk rate; the most stable single "
+        "SP skill indicator (defense- and sequencing-free). Higher favors the pitcher.</span>"
+        f"<span><b>ERA · L{RECENT_STARTS}</b> ERA across the probable starter's most recent "
+        f"starts (up to {RECENT_STARTS}; label shows the actual count when fewer), with season "
+        "ERA for trend context; shading relative to current-season MLB pitching ERA. "
+        "Trend context only -- small-sample ERA is mostly noise.</span>"
         "<span><b>Edge bars</b> Per-hitter xOPS minus overall league OPS.</span>"
         "<span><b>Shading</b> Stat cells tint ember when the number favors hitters, "
         "steel when it favors the pitcher; deeper tint = further from league average.</span>"
