@@ -1,13 +1,13 @@
-LEAN LEDGER — 176 graded games  [xw+plat_consol_v2 + xw+plat_consol_v3]
-xwOBA lean   full: 102-74  (0.580)   F5: 82-70-24  (0.539)
-platoon lean full: 71-59  (0.546)   F5: 66-46-18  (0.589)   (reliable-only, n=130)
-xwOBA on same subset  full: 74-56  (0.569)   F5: 59-53-18  (0.527)
+LEAN LEDGER — 177 graded games  [xw+plat_consol_v2 + xw+plat_consol_v3]
+xwOBA lean   full: 103-74  (0.582)   F5: 83-70-24  (0.542)
+platoon lean full: 71-60  (0.542)   F5: 66-47-18  (0.584)   (reliable-only, n=131)
+xwOBA on same subset  full: 75-56  (0.573)   F5: 60-53-18  (0.531)
 xwOBA F5 by |Δ| tercile:
-  low  29-24-9  (0.547)   (Δ 0.000–0.026, n=62)
-  mid  29-19-9  (0.604)   (Δ 0.027–0.049, n=57)
+  low  28-22-9  (0.560)   (Δ 0.000–0.025, n=59)
+  mid  31-21-9  (0.596)   (Δ 0.026–0.049, n=61)
   hi   24-27-6  (0.471)   (Δ 0.050–0.269, n=57)
-DIVERGE h2h (F5): xwOBA 5 — platoon 12  (n=21)
-home F5 baseline: 0.513  (n=152)
-weight fit: 152 usable F5 decisions (gate 120)
-  b_lineup=-0.177±0.165  b_sp=+0.073±0.164  HFA=+0.053
+DIVERGE h2h (F5): xwOBA 6 — platoon 12  (n=22)
+home F5 baseline: 0.516  (n=153)
+weight fit: 153 usable F5 decisions (gate 120)
+  b_lineup=-0.180±0.164  b_sp=+0.077±0.163  HFA=+0.066
   implied w = b_sp/b_lineup = -0.12  (symmetric matchup ratio ⇒ ≈ +1.00)
