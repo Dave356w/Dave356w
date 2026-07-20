@@ -57,10 +57,13 @@ from market_backfill import MARKET_COLS, attach_market
 DATA_DIR    = os.environ.get("DATA_DIR", "data")
 LEDGER_PATH = os.path.join(DATA_DIR, "mlb_lean_ledger.csv")
 REPORT_PATH = os.path.join(DATA_DIR, "ledger_report.txt")
-MODEL_TAG   = os.environ.get("MODEL_TAG", "xw+plat_consol_v3")
+MODEL_TAG   = os.environ.get("MODEL_TAG", "xw+plat_consol_v4")
 _RECORD_FAMILIES = {
     # v3 changed only ledger locking/identity; its prediction math is v2.
     "xw+plat_consol_v3": ("xw+plat_consol_v2", "xw+plat_consol_v3"),
+    # v4 re-weights lineup composites by expected PA per batting-order slot
+    # (was season BBE / split PA); that changes prediction math, so it starts a
+    # fresh record family and never mixes with v2/v3 in the ledger or weight fit.
 }
 RECORD_TAGS = tuple(
     t.strip() for t in os.environ.get(

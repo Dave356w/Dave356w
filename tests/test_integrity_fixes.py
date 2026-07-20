@@ -33,9 +33,17 @@ class LedgerLockTests(unittest.TestCase):
             dict(game_pk=2, status="graded", model_tag="xw+plat_consol_v2"),
             dict(game_pk=3, status="graded", model_tag="xw+plat_consol_v3"),
             dict(game_pk=4, status="pending", model_tag="xw+plat_consol_v3"),
+            dict(game_pk=5, status="graded", model_tag="xw+plat_consol_v4"),
         ])
-        self.assertEqual(set(build_site._record_grades(ledger)["game_pk"]), {2, 3})
-        self.assertEqual(set(grade_leans._record_grades(ledger)["game_pk"]), {2, 3})
+        v3_family = ("xw+plat_consol_v2", "xw+plat_consol_v3")
+        with mock.patch.object(build_site, "RECORD_TAGS", v3_family), \
+                mock.patch.object(grade_leans, "RECORD_TAGS", v3_family):
+            self.assertEqual(set(build_site._record_grades(ledger)["game_pk"]), {2, 3})
+            self.assertEqual(set(grade_leans._record_grades(ledger)["game_pk"]), {2, 3})
+        # v4 re-weights the lineup composites (slot-PA), so it starts a fresh
+        # record family and never mixes with the v2/v3 prediction math.
+        with mock.patch.object(build_site, "RECORD_TAGS", ("xw+plat_consol_v4",)):
+            self.assertEqual(set(build_site._record_grades(ledger)["game_pk"]), {5})
 
     def test_load_ledger_preserves_market_history(self):
         with tempfile.TemporaryDirectory() as td:
@@ -241,6 +249,58 @@ class ScheduleGateTests(unittest.TestCase):
         self.assertTrue(grade[0])
         self.assertTrue(push[0])
         self.assertTrue(manual[0])
+
+
+class BattingOrderSlotWeightingTests(unittest.TestCase):
+    def test_slot_pa_weights_follow_lineup_position(self):
+        w = build_site.slot_pa_weights([1, 5, 9])
+        self.assertEqual(list(w), [4.61, 4.18, 3.76])
+        # Top of the order carries more in-game exposure than the bottom.
+        self.assertGreater(w.iloc[0], w.iloc[2])
+
+    def test_slot_pa_weights_out_of_range_is_nan(self):
+        w = build_site.slot_pa_weights([1, 0, 12, None])
+        self.assertEqual(w.iloc[0], 4.61)
+        self.assertTrue(pd.isna(w.iloc[1]))
+        self.assertTrue(pd.isna(w.iloc[2]))
+        self.assertTrue(pd.isna(w.iloc[3]))
+
+    @staticmethod
+    def _lineup(order_xwoba_bbe):
+        rows = []
+        for order, xwoba, bbe in order_xwoba_bbe:
+            rows.append(dict(
+                game_pk=1, faced_pitcher="SP", pitcher_side="away",
+                batting_side="home", xwOBA=xwoba, BBE=bbe,
+                batting_order=order,
+            ))
+        return pd.DataFrame(rows)
+
+    def test_aggregate_lineup_weights_by_batting_slot_not_season_volume(self):
+        # Slot 1 (4.61 PA) hits .400, slot 9 (3.76 PA) hits .300, but season BBE
+        # is lopsided toward the .300 hitter -- slot weighting must ignore that.
+        H = self._lineup([(1, .400, 100), (9, .300, 400)])
+        with mock.patch.object(build_site, "USE_SLOT_PA_WEIGHTS", True):
+            out = build_site.aggregate_lineup(H, ["xwOBA"], weighted=True)
+        expected = (4.61 * .400 + 3.76 * .300) / (4.61 + 3.76)
+        self.assertAlmostEqual(out.loc[0, "opp_xwOBA"], round(expected, 3))
+        # Distinct from both the equal mean (.350) and the BBE mean (.320).
+        self.assertNotAlmostEqual(out.loc[0, "opp_xwOBA"], .350)
+        self.assertNotAlmostEqual(out.loc[0, "opp_xwOBA"], .320)
+
+    def test_aggregate_lineup_falls_back_to_bbe_when_disabled(self):
+        H = self._lineup([(1, .400, 100), (9, .300, 400)])
+        with mock.patch.object(build_site, "USE_SLOT_PA_WEIGHTS", False):
+            out = build_site.aggregate_lineup(H, ["xwOBA"], weighted=True)
+        expected = (100 * .400 + 400 * .300) / 500  # BBE-weighted == .320
+        self.assertAlmostEqual(out.loc[0, "opp_xwOBA"], round(expected, 3))
+
+    def test_aggregate_lineup_falls_back_when_order_missing(self):
+        H = self._lineup([(1, .400, 100), (9, .300, 400)]).drop(columns=["batting_order"])
+        with mock.patch.object(build_site, "USE_SLOT_PA_WEIGHTS", True):
+            out = build_site.aggregate_lineup(H, ["xwOBA"], weighted=True)
+        expected = (100 * .400 + 400 * .300) / 500  # falls back to BBE == .320
+        self.assertAlmostEqual(out.loc[0, "opp_xwOBA"], round(expected, 3))
 
 
 if __name__ == "__main__":

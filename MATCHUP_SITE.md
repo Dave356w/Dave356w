@@ -41,6 +41,18 @@ rows captured at/after scheduled first pitch. Ledger identity is
 `(game_pk, game_date)`, so a postponed game that keeps its MLB gamePk can be
 recorded again on its make-up date.
 
+Model version `xw+plat_consol_v4` re-weights the lineup composites:
+
+- **Batting-order slot weighting** — the xwOBA lineup composite and every
+  platoon-OPS aggregate are weighted by expected plate appearances *per
+  batting-order slot* (leadoff ~4.61 PA/game → 9-hole ~3.76, `LINEUP_SLOT_PA`)
+  instead of by each hitter's season volume (batted-ball events / handedness
+  split PA). Slot weighting reflects tonight's in-game exposure rather than who
+  has simply logged the most playing time; it falls back to the old
+  season-volume weights wherever a batting order is unavailable
+  (`USE_SLOT_PA_WEIGHTS`). This changes the prediction math, so v4 starts a new
+  `RECORD_TAGS` family and its games never mix with v2/v3 in the records.
+
 ## Files
 
 | Path | Purpose |
