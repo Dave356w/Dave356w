@@ -56,11 +56,12 @@ jobs:
       # and start a new RECORD_TAGS family so incompatible results and weight
       # fits never mix. Audit-only tags may remain in one family. Job-level so
       # grade_leans.py and build_site.py see the same configuration.
-      # v3 identifies the hard pregame-lock audit regime. Prediction math is
-      # unchanged from v2, so headline records deliberately continue across
-      # both tags while the row tags preserve which locking regime produced it.
-      MODEL_TAG: xw+plat_consol_v3
-      RECORD_TAGS: xw+plat_consol_v2,xw+plat_consol_v3
+      # v4 re-weights the lineup composites by expected PA per batting-order slot
+      # (was season BBE / split PA). That changes prediction math, so it starts a
+      # fresh record family; v4 games never mix with the v2/v3 season-volume
+      # results in the headline records or the weight fit.
+      MODEL_TAG: xw+plat_consol_v4
+      RECORD_TAGS: xw+plat_consol_v4
     steps:
       - uses: actions/checkout@v4
 
