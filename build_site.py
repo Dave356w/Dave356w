@@ -53,14 +53,30 @@ ROLLOVER_HOUR = 3          # hold "today" until ~3am ET so night games don't rol
 SPORT_ID = 1
 LINEUP_SIZE = 9
 REQUEST_DELAY = 0.25
+
+# Column carrying a hitter's 1-9 batting-order slot through the pipeline.
+BATTING_ORDER_COL = "batting_order"
+# Expected plate appearances per game by batting-order slot. A lineup turns over
+# from the top, so the leadoff man bats ~4.6 times while the 9-hole bats ~3.8 --
+# roughly a 22% spread in in-game exposure across the order. We weight lineup
+# composites by this slot expectation instead of by each hitter's season volume
+# (BBE / split PA), which otherwise over-weights whoever has simply logged more
+# playing time rather than who will actually see more pitches tonight. Values are
+# league PA/game-by-order-position anchors (modern 9-inning norms).
+LINEUP_SLOT_PA = {1: 4.61, 2: 4.50, 3: 4.39, 4: 4.29, 5: 4.18,
+                  6: 4.08, 7: 3.97, 8: 3.87, 9: 3.76}
+USE_SLOT_PA_WEIGHTS = True
 CACHE_DIR = os.environ.get("CACHE_DIR", ".")
 OUT_DIR = os.environ.get("OUT_DIR", "public")
 DATA_DIR = os.environ.get("DATA_DIR", "data")            # grading ledger home
 LEDGER_PATH = os.path.join(DATA_DIR, "mlb_lean_ledger.csv")
-MODEL_TAG = os.environ.get("MODEL_TAG", "xw+plat_consol_v3")  # keep in sync with grade_leans.py
+MODEL_TAG = os.environ.get("MODEL_TAG", "xw+plat_consol_v4")  # keep in sync with grade_leans.py
 _RECORD_FAMILIES = {
     # v3 changed only ledger locking/identity; its prediction math is v2.
     "xw+plat_consol_v3": ("xw+plat_consol_v2", "xw+plat_consol_v3"),
+    # v4 re-weights lineup composites by expected PA per batting-order slot
+    # (was season BBE / split PA); that changes prediction math, so it starts a
+    # fresh record family and never mixes with v2/v3 in the ledger or weight fit.
 }
 RECORD_TAGS = tuple(
     t.strip() for t in os.environ.get(
@@ -462,7 +478,7 @@ def build_tables(slate, lineups, batter_stat, pitcher_stat, batter_bb, pitcher_b
                                 "throws": bio.get("throws")})
 
         def hitter_rows(lu, tidx, table):
-            for pid in lu:
+            for slot, pid in enumerate(lu, start=1):
                 pid = int(pid)
                 bio = people.get(pid, {})
                 nm = bio.get("name") or f"batter_{pid}"
@@ -470,7 +486,8 @@ def build_tables(slate, lineups, batter_stat, pitcher_stat, batter_bb, pitcher_b
                 if pos == "P":
                     pos = "DH"
                 src = (batter_stat if table == "stat" else batter_bb).get(pid, {})
-                base = {**meta, "table_index": tidx, "Name": nm}
+                base = {**meta, "table_index": tidx, "Name": nm,
+                        BATTING_ORDER_COL: slot}
                 if table == "stat":
                     pit_rows.append({**base, "table_type": "pitchers", "Pos.": pos,
                                      **{c: src.get(c) for c in STAT_COLS},
@@ -493,10 +510,10 @@ def build_tables(slate, lineups, batter_stat, pitcher_stat, batter_bb, pitcher_b
             "table_type", "table_index", "Name"]
     pdf = pd.DataFrame(pit_rows)
     if not pdf.empty:
-        pdf = pdf[META + ["Pos."] + STAT_COLS + ["player_id", "bats", "throws"]]
+        pdf = pdf[META + ["Pos.", BATTING_ORDER_COL] + STAT_COLS + ["player_id", "bats", "throws"]]
     bdf = pd.DataFrame(bb_rows)
     if not bdf.empty:
-        bdf = bdf[META + ["Pos."] + BB_COLS + ["BBE", "player_id", "bats", "throws"]]
+        bdf = bdf[META + ["Pos.", BATTING_ORDER_COL] + BB_COLS + ["BBE", "player_id", "bats", "throws"]]
     return pdf, bdf
 
 
@@ -683,6 +700,31 @@ def wmean(vals, wts):
     return float(np.average(vals[m], weights=wts[m]))
 
 
+def slot_pa_weights(order):
+    """Map a batting-order (1-9) series to expected PA/game weights.
+
+    Returns a positionally-reindexed Series (aligns with the equally
+    reset-indexed value vectors used by wmean/_wmean); slots outside 1-9 map to
+    NaN so wmean falls back to an equal mean for them.
+    """
+    o = pd.to_numeric(pd.Series(order).reset_index(drop=True), errors="coerce")
+    return o.map(LINEUP_SLOT_PA)
+
+
+def lineup_weight(g, fallback_col):
+    """Slot-PA weights for a lineup group, falling back to season volume.
+
+    Uses expected PA-per-order-slot when enabled and a usable batting_order is
+    present; otherwise returns the group's season-volume weight column so
+    behavior is unchanged wherever the order is unavailable.
+    """
+    if USE_SLOT_PA_WEIGHTS and BATTING_ORDER_COL in getattr(g, "columns", []):
+        w = slot_pa_weights(g[BATTING_ORDER_COL])
+        if w.notna().any():
+            return w
+    return g.get(fallback_col) if hasattr(g, "get") else None
+
+
 def segment_pitcher_blocks(df, rate_cols):
     df = coerce_numeric(df, rate_cols)
     has_pos = "Pos." in df.columns
@@ -726,11 +768,14 @@ def aggregate_lineup(H, rate_cols, weighted=True):
                "pitcher_side": g["pitcher_side"].iloc[0],
                "batting_side": g["batting_side"].iloc[0],
                "n_opp_hitters": len(g)}
+        # Weight the lineup composite by expected PA per batting-order slot
+        # (top of the order sees more pitches) rather than by season BBE volume.
+        w = lineup_weight(g, WEIGHT_COL)
         for c in rate_cols:
             if c not in g.columns:
                 continue
             rec[f"opp_{c}_mean"] = round(float(g[c].mean(skipna=True)), 3) if g[c].notna().any() else np.nan
-            rec[f"opp_{c}_wmean"] = round(wmean(g[c], g.get(WEIGHT_COL)), 3)
+            rec[f"opp_{c}_wmean"] = round(wmean(g[c], w), 3)
             rec[f"opp_{c}"] = rec[f"opp_{c}_wmean"] if weighted else rec[f"opp_{c}_mean"]
         out.append(rec)
     return pd.DataFrame(out)
@@ -875,6 +920,7 @@ def build_platoon_matchup(pitcher_rows_df, opp_hitters_df, people,
             pd.isna(B) or pd.isna(P)) else np.nan
         rows.append({
             "game_pk": gpk, "matchup": h.get("matchup"), "faced_pitcher": fp,
+            BATTING_ORDER_COL: h.get(BATTING_ORDER_COL),
             "pitcher_throws": T, "batter": h["Name"], "bats": bats or "?",
             "eff_stand": eff_stand, "platoon_adv": eff_stand != T,
             "ops_vs_hand_raw": B_raw, "ops_vs_hand": round(B, 3) if pd.notna(B) else np.nan,
@@ -898,9 +944,14 @@ def build_platoon_matchup(pitcher_rows_df, opp_hitters_df, people,
     plat_rows = []
     for (gpk, fp), g in opp_platoon_detail_df.groupby(["game_pk", "faced_pitcher"], sort=False):
         T = g["pitcher_throws"].iloc[0]
-        # All aggregates are lineup-composition weighted (clip 0-PA splits to 1 so
-        # prior-driven bats still count as lineup exposure, incl. SP OPS display).
-        lineup_w = pd.to_numeric(g["split_pa"], errors="coerce").fillna(0).clip(lower=1)
+        # All aggregates are lineup-composition weighted by expected PA per
+        # batting-order slot (top of the order carries more in-game exposure).
+        # Fall back to season split PA (clip 0-PA splits to 1 so prior-driven
+        # bats still count as lineup exposure, incl. SP OPS display) wherever the
+        # batting order is unavailable.
+        lineup_w = lineup_weight(g, None)
+        if lineup_w is None or not pd.Series(lineup_w).notna().any():
+            lineup_w = pd.to_numeric(g["split_pa"], errors="coerce").fillna(0).clip(lower=1)
         opp_ops_raw = _wmean(g["ops_vs_hand_raw"], lineup_w)
         opp_ops = _wmean(g["ops_vs_hand"], lineup_w)
         pit_ops_raw = _wmean(g["pit_ops_allowed_raw"], lineup_w)
