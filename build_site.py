@@ -1907,11 +1907,11 @@ def _grades_row(r, show_tag, show_ml=False):
         else _lean_cell(r["ops_lean"], r["ops_delta"], muted=True),
     ]
     if show_ml:
-        cells += [_lean_ml_cell(r, "xw_lean"), _lean_ml_cell(r, "ops_lean")]
+        cells += [_lean_ml_cell(r, "xw_lean")]
     cells += [
         final, f5,
-        _wlt_badge(r["xw_full"]), _wlt_badge(r["xw_f5"]),
-        _wlt_badge(r["ops_full"]), _wlt_badge(r["ops_f5"]),
+        _wlt_badge(r["xw_full"]),
+        _wlt_badge(r["ops_f5"]),
     ]
     if show_tag:
         cells.append(f"<span class='muted'>{_esc(r['model_tag'])}</span>")
@@ -1952,17 +1952,9 @@ def render_grades_html(built_txt):
     else:
         chip("Graded", str(len(g)), f"{n_pend} pending")
         b, p = _rec_parts(g["xw_full"]); chip("xwOBA · full", b, p)
-        b, p = _rec_parts(g["xw_f5"]);   chip("xwOBA · F5", b, p)
         ov = g[g["ops_valid"] == True]                                # noqa: E712
         if len(ov):
-            b, p = _rec_parts(ov["ops_full"]); chip("Platoon · full", b, p)
-            b, p = _rec_parts(ov["ops_f5"]);   chip("Platoon · F5", b, p)
-            notes.append(f"reliable-platoon subset n={len(ov)}: xwOBA on those games "
-                         f"full {_rec_txt(ov['xw_full'])}, F5 {_rec_txt(ov['xw_f5'])}")
-        dv = g[g["consensus"] == "DIVERGE"]
-        if len(dv):
-            notes.append(f"DIVERGE head-to-head (F5): xwOBA {int((dv['xw_f5'] == 'W').sum())} — "
-                         f"platoon {int((dv['ops_f5'] == 'W').sum())}  (n={len(dv)})")
+            b, p = _rec_parts(ov["ops_f5"]); chip("Platoon · F5", b, p)
         # vs-market scoreboard (closing DK MLs attached by grade_leans.py via
         # market_backfill; columns absent until the first market run).
         if "close_p_home" in g.columns and g["close_p_home"].notna().any():
@@ -1972,22 +1964,22 @@ def render_grades_html(built_txt):
             except Exception as e:  # noqa: BLE001
                 log(f"vs-market summary degraded: {e!r}")
                 mkt = {}
-            for lab, key in (("xwOBA · vs mkt", "xwOBA"), ("Platoon · vs mkt", "platoon")):
-                m = mkt.get(key)
-                if m:
-                    chip(lab, f"{m['w']}-{m['n'] - m['w']}",
-                         f"z {m['z']:+.2f} · {m['roi_units']:+.2f}u flat")
-            if mkt:
-                notes.append("market = closing DK moneylines via ESPN, devigged two-way; "
-                             "vs-market z and flat ROI are the primary metrics")
+            m = mkt.get("xwOBA")
+            if m:
+                chip("xwOBA · vs mkt", f"{m['w']}-{m['n'] - m['w']}",
+                     f"z {m['z']:+.2f} · {m['roi_units']:+.2f}u flat")
+        notes.append("xwOBA graded full-game vs devigged DK closing ML (ESPN capture); "
+                     "z and flat ROI are the primary metrics. Platoon graded F5 "
+                     "outcome-only, reliable-split games — no F5 market benchmark "
+                     "exists in the capture stack.")
         summary = ("<div class='gr-summary'>" + "".join(chips) + "</div>"
                    + (f"<div class='gr-note'>{' · '.join(notes)}</div>" if notes else ""))
 
     show_tag = led["model_tag"].nunique() > 1
     show_ml = "close_home_ml" in led.columns and led["close_home_ml"].notna().any()
     heads = (["Date", "Game", "xwOBA lean", "Platoon lean"]
-             + (["xw ML", "pl ML"] if show_ml else [])
-             + ["Final", "F5", "xw F", "xw F5", "pl F", "pl F5"]
+             + (["xw ML"] if show_ml else [])
+             + ["Final", "F5", "xw F", "pl F5"]
              + (["Model"] if show_tag else []))
     led = led.sort_values(["game_date", "game_pk"], ascending=[False, True])
     rows = "".join(_grades_row(r, show_tag, show_ml) for _, r in led.iterrows())
