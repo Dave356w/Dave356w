@@ -1847,12 +1847,21 @@ def records_strip_html():
     if g.empty:
         inner = "<span class='muted'>no graded games yet</span>"
     else:
-        bits = [f"xwOBA full {_rec_txt(g['xw_full'])}",
-                f"F5 {_rec_txt(g['xw_f5'])}"]
+        bits = [f"xwOBA full {_rec_txt(g['xw_full'])}"]
         ov = g[g["ops_valid"] == True]                                # noqa: E712
         if len(ov):
-            bits.append(f"platoon full {_rec_txt(ov['ops_full'])}")
-            bits.append(f"F5 {_rec_txt(ov['ops_f5'])}")
+            bits.append(f"platoon F5 {_rec_txt(ov['ops_f5'])}")
+        # xwOBA vs-market (z / flat ROI) — mirrors the grades-page core card;
+        # market columns are absent until the first market run.
+        if "close_p_home" in g.columns and g["close_p_home"].notna().any():
+            try:
+                from market_backfill import vs_market_summary
+                m = vs_market_summary(g).get("xwOBA")
+            except Exception as e:  # noqa: BLE001
+                log(f"vs-market strip degraded: {e!r}")
+                m = None
+            if m:
+                bits.append(f"xwOBA vs mkt z {m['z']:+.2f} ({m['roi_units']:+.2f}u)")
         inner = " <span class='muted'>·</span> ".join(bits)
     return ("<div class='gradestrip'><span class='lab'>Record</span>"
             f"<span>{inner}</span><a href='grades.html'>full ledger →</a></div>")
