@@ -152,6 +152,9 @@ def main():
     pending = df[df[col["away_runs"]].isna() | df[col["home_runs"]].isna()]
     if pending["close_home_ml"].notna().any():
         fail("close values present on pending rows — lookahead violation")
+    if "f5_close_home_ml" in pending.columns \
+            and pending["f5_close_home_ml"].notna().any():
+        fail("F5 close values present on pending rows — lookahead violation")
 
     print()
     mb.vs_market_summary(df, col=col)

@@ -12,6 +12,12 @@
 # COLUMNS ADDED:
 #   gamePk, espn_id, open_away_ml, open_home_ml, close_away_ml, close_home_ml,
 #   close_p_home  (devigged two-way home win prob at close)
+#   f5_open_*_ml, f5_close_*_ml, f5_close_p_home  (DK "1st 5 Innings Moneyline"
+#   from the same event's propBets child; devigged prob is CONDITIONAL on a
+#   decided half -- DK F5 ties push. Post-final `value` validated as the
+#   pregame close in docs/f5_market_validation.md: movement identical across
+#   lastUpdated stamp classes (p99 5.9 pts both, 0/302 sides > 10 pts) and
+#   lookahead gain -0.0005 Brier vs the mapped-FG baseline over 151 games.)
 #
 # JOIN LOGIC (validated 59/59 on 07-02..07-07 slate):
 #   ledger row -> MLB StatsAPI schedule (date + away + home), doubleheaders
@@ -47,6 +53,8 @@ COL = dict(
     xw_team="xw_lean",      # lean side abbrs
     pl_team="ops_lean",
     pl_reliable="ops_valid",
+    f5_away_runs="f5_away",  # F5 line score; ties push in the F5 market
+    f5_home_runs="f5_home",
 )
 
 THROTTLE_S = 0.15
@@ -54,7 +62,9 @@ LEDGER2SA = {"ARI": "AZ"}                       # ledger -> StatsAPI abbr
 ESPN2SA = {"CHW": "CWS", "ARI": "AZ", "OAK": "ATH"}  # ESPN -> StatsAPI abbr
 
 MARKET_COLS = ["gamePk", "espn_id", "open_away_ml", "open_home_ml",
-               "close_away_ml", "close_home_ml", "close_p_home"]
+               "close_away_ml", "close_home_ml", "close_p_home",
+               "f5_open_away_ml", "f5_open_home_ml",
+               "f5_close_away_ml", "f5_close_home_ml", "f5_close_p_home"]
 
 
 # ---------------------------------------------------------------- helpers ---
@@ -125,6 +135,7 @@ def _espn_day(date):
             eid=ev["id"], start=ev["date"],
             away_sc=sc["away"], home_sc=sc["home"],
             state=_dig(comp, "status", "type", "state"),
+            tid={str(c["team"]["id"]): c["homeAway"] for c in comp["competitors"]},
         ))
     return out
 
@@ -144,6 +155,40 @@ def _espn_close(eid):
     )
 
 
+def _espn_f5(eid, tid):
+    """DK '1st 5 Innings Moneyline' (type.id=136) from the event's propBets.
+
+    Items live in the propBets child (~500-700 player props per game), keyed
+    by team $ref id; `tid` maps those ids to home/away. `value` is the last
+    posted price and `open` the opener. On settled events the value behaves
+    as the pregame close (validation: docs/f5_market_validation.md); stamps
+    in `lastUpdated` mark item touches incl. settlement bookkeeping and must
+    NOT be read as price-change times.
+    """
+    base = (f"https://sports.core.api.espn.com/v2/sports/baseball/leagues/mlb"
+            f"/events/{eid}/competitions/{eid}/odds/100/propBets")
+    try:
+        pb = _get(base + "?limit=200")
+        items = list(pb.get("items", []))
+        for pg in range(2, int(pb.get("pageCount", 1)) + 1):
+            time.sleep(THROTTLE_S)
+            items += _get(base + f"?limit=200&page={pg}").get("items", [])
+    except Exception:  # noqa: BLE001  (404 = props never posted for event)
+        return None
+    out = dict(f5_open_away_ml=None, f5_open_home_ml=None,
+               f5_close_away_ml=None, f5_close_home_ml=None)
+    for it in items:
+        if str(_dig(it, "type", "id")) != "136":
+            continue
+        side = tid.get(str((_dig(it, "team", "$ref") or "")
+                           .rsplit("/", 1)[-1].split("?")[0]))
+        if side not in ("away", "home"):
+            continue
+        out[f"f5_close_{side}_ml"] = _amer(_dig(it, "odds", "american", "value"))
+        out[f"f5_open_{side}_ml"] = _amer(_dig(it, "odds", "american", "open"))
+    return out
+
+
 # ------------------------------------------------------------- main entry ---
 def attach_market(df, col=COL, verbose=True):
     """Idempotently attach gamePk + DK closing MLs to settled ledger rows.
@@ -159,7 +204,8 @@ def attach_market(df, col=COL, verbose=True):
     df["espn_id"] = df["espn_id"].astype("string")
     df["gamePk"] = df["gamePk"].astype("Int64")
     settled = df[col["away_runs"]].notna() & df[col["home_runs"]].notna()
-    todo = df.index[settled & df["close_home_ml"].isna()]
+    todo = df.index[settled & (df["close_home_ml"].isna()
+                               | df["f5_close_home_ml"].isna())]
     if len(todo) == 0:
         if verbose:
             print("market backfill: nothing to do")
@@ -220,18 +266,34 @@ def attach_market(df, col=COL, verbose=True):
             skips.append((i, "espn event not settled; close unreliable"))
             continue
 
-        ml = _espn_close(evs[0]["eid"])
-        time.sleep(THROTTLE_S)
-        if ml is None or ml["close_home_ml"] is None or ml["close_away_ml"] is None:
-            skips.append((i, "no DK close on event"))
-            continue
-
-        ph, pa = _imp(ml["close_home_ml"]), _imp(ml["close_away_ml"])
+        eid = evs[0]["eid"]
         df.loc[i, "gamePk"] = g["gamePk"]
-        df.loc[i, "espn_id"] = evs[0]["eid"]
-        for k, v in ml.items():
-            df.loc[i, k] = v
-        df.loc[i, "close_p_home"] = ph / (ph + pa)
+        df.loc[i, "espn_id"] = eid
+
+        if pd.isna(df.loc[i, "close_home_ml"]):
+            ml = _espn_close(eid)
+            time.sleep(THROTTLE_S)
+            if ml is None or ml["close_home_ml"] is None or ml["close_away_ml"] is None:
+                skips.append((i, "no DK close on event"))
+                continue
+            ph, pa = _imp(ml["close_home_ml"]), _imp(ml["close_away_ml"])
+            for k, v in ml.items():
+                df.loc[i, k] = v
+            df.loc[i, "close_p_home"] = ph / (ph + pa)
+
+        # F5 rides the same verified event; a missing F5 market never blocks
+        # or erases the full-game close -- it logs and retries next run.
+        if pd.isna(df.loc[i, "f5_close_home_ml"]):
+            f5 = _espn_f5(eid, evs[0].get("tid") or {})
+            time.sleep(THROTTLE_S)
+            if (f5 is None or f5["f5_close_home_ml"] is None
+                    or f5["f5_close_away_ml"] is None):
+                skips.append((i, "no DK F5 ML on event"))
+            else:
+                for k, v in f5.items():
+                    df.loc[i, k] = v
+                ph5, pa5 = _imp(f5["f5_close_home_ml"]), _imp(f5["f5_close_away_ml"])
+                df.loc[i, "f5_close_p_home"] = ph5 / (ph5 + pa5)
 
     df.attrs["market_skips"] = skips
     if verbose:
@@ -274,4 +336,33 @@ def vs_market_summary(df, col=COL):
                           fav_baseline=f"{fav_w}-{n - fav_w}")
         print(f"{label}: {w}-{n - w} | market-expected {exp:.1f}W -> z {z:+.2f} | "
               f"ROI {pnl:+.2f}u | agrees w/ fav {fav_agree:.0%} | fav baseline {fav_w}-{n - fav_w}")
+
+    # Platoon lean vs the F5 close -- the market this lean actually targets.
+    # DK F5 ties push, so ties are excluded and the devigged close_p is the
+    # matching conditional probability; stakes on pushes return (ROI 0).
+    f = df[df["f5_close_p_home"].notna()
+           & (df[col["pl_reliable"]] == True)                    # noqa: E712
+           & df[col["pl_team"]].notna()
+           & df[col["f5_away_runs"]].notna()
+           & df[col["f5_home_runs"]].notna()].copy()
+    pushes = int((f[col["f5_home_runs"]] == f[col["f5_away_runs"]]).sum())
+    f = f[f[col["f5_home_runs"]] != f[col["f5_away_runs"]]]
+    if len(f):
+        f["winner5"] = np.where(f[col["f5_home_runs"]] > f[col["f5_away_runs"]],
+                                f[col["home"]], f[col["away"]])
+        p_side = np.where(f[col["pl_team"]] == f[col["home"]],
+                          f["f5_close_p_home"], 1 - f["f5_close_p_home"])
+        w = int((f[col["pl_team"]] == f["winner5"]).sum())
+        n = len(f)
+        exp, var = float(p_side.sum()), float((p_side * (1 - p_side)).sum())
+        z = (w - exp) / np.sqrt(var) if var > 0 else np.nan
+        ml5 = np.where(f[col["pl_team"]] == f[col["home"]],
+                       f["f5_close_home_ml"], f["f5_close_away_ml"])
+        pnl = float(np.where(f[col["pl_team"]] == f["winner5"],
+                             [_dec(int(m)) - 1 for m in ml5], -1.0).sum())
+        out["platoon_f5"] = dict(n=n, w=w, exp=round(exp, 1),
+                                 z=round(float(z), 2), roi_units=round(pnl, 2),
+                                 pushes=pushes)
+        print(f"platoon vs F5 close: {w}-{n - w} ({pushes} push) | "
+              f"market-expected {exp:.1f}W -> z {z:+.2f} | ROI {pnl:+.2f}u")
     return out
