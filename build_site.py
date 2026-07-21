@@ -459,14 +459,18 @@ def build_tables(slate, lineups, batter_stat, pitcher_stat, batter_bb, pitcher_b
         asp, hsp = g["away_probable_pitcher_id"], g["home_probable_pitcher_id"]
         away_lu, home_lu = lineups[g["game_pk"]]
 
-        def pitcher_row(pid, tidx, table):
+        # sp_side names the block's pitcher side (structural, from the call
+        # site) and is_sp marks the probable-pitcher row; both are carried on
+        # every row so segment_pitcher_blocks assigns sides without name matching.
+        def pitcher_row(pid, tidx, table, sp_side):
             if pd.isna(pid):
                 return
             pid = int(pid)
             bio = people.get(pid, {})
             nm = bio.get("name") or f"pitcher_{pid}"
             src = (pitcher_stat if table == "stat" else pitcher_bb).get(pid, {})
-            base = {**meta, "table_index": tidx, "Name": nm}
+            base = {**meta, "table_index": tidx, "Name": nm,
+                    "sp_side": sp_side, "is_sp": True}
             if table == "stat":
                 pit_rows.append({**base, "table_type": "pitchers", "Pos.": "P",
                                  **{c: src.get(c) for c in STAT_COLS}, "PA": src.get("PA"),
@@ -479,7 +483,7 @@ def build_tables(slate, lineups, batter_stat, pitcher_stat, batter_bb, pitcher_b
                                 "player_id": pid, "bats": bio.get("bats"),
                                 "throws": bio.get("throws")})
 
-        def hitter_rows(lu, tidx, table):
+        def hitter_rows(lu, tidx, table, sp_side):
             for slot, pid in enumerate(lu, start=1):
                 pid = int(pid)
                 bio = people.get(pid, {})
@@ -489,7 +493,7 @@ def build_tables(slate, lineups, batter_stat, pitcher_stat, batter_bb, pitcher_b
                     pos = "DH"
                 src = (batter_stat if table == "stat" else batter_bb).get(pid, {})
                 base = {**meta, "table_index": tidx, "Name": nm,
-                        BATTING_ORDER_COL: slot}
+                        BATTING_ORDER_COL: slot, "sp_side": sp_side, "is_sp": False}
                 if table == "stat":
                     pit_rows.append({**base, "table_type": "pitchers", "Pos.": pos,
                                      **{c: src.get(c) for c in STAT_COLS}, "PA": src.get("PA"),
@@ -502,20 +506,23 @@ def build_tables(slate, lineups, batter_stat, pitcher_stat, batter_bb, pitcher_b
                                     "player_id": pid, "bats": bio.get("bats"),
                                     "throws": bio.get("throws")})
 
-        pitcher_row(asp, 1, "stat"); hitter_rows(home_lu, 1, "stat")
-        pitcher_row(hsp, 2, "stat"); hitter_rows(away_lu, 2, "stat")
-        pitcher_row(asp, 1, "bb"); hitter_rows(home_lu, 1, "bb")
-        pitcher_row(hsp, 2, "bb"); hitter_rows(away_lu, 2, "bb")
+        # Block 1 = away SP vs home lineup; block 2 = home SP vs away lineup.
+        pitcher_row(asp, 1, "stat", "away"); hitter_rows(home_lu, 1, "stat", "away")
+        pitcher_row(hsp, 2, "stat", "home"); hitter_rows(away_lu, 2, "stat", "home")
+        pitcher_row(asp, 1, "bb", "away"); hitter_rows(home_lu, 1, "bb", "away")
+        pitcher_row(hsp, 2, "bb", "home"); hitter_rows(away_lu, 2, "bb", "home")
 
     META = ["game_pk", "game_date", "game_datetime_utc", "matchup", "away_team", "home_team",
             "away_probable_pitcher", "home_probable_pitcher", "savant_preview_url",
             "table_type", "table_index", "Name"]
     pdf = pd.DataFrame(pit_rows)
     if not pdf.empty:
-        pdf = pdf[META + ["Pos.", BATTING_ORDER_COL] + STAT_COLS + ["PA", "player_id", "bats", "throws"]]
+        pdf = pdf[META + ["Pos.", BATTING_ORDER_COL] + STAT_COLS
+                  + ["PA", "player_id", "bats", "throws", "sp_side", "is_sp"]]
     bdf = pd.DataFrame(bb_rows)
     if not bdf.empty:
-        bdf = bdf[META + ["Pos.", BATTING_ORDER_COL] + BB_COLS + ["BBE", "player_id", "bats", "throws"]]
+        bdf = bdf[META + ["Pos.", BATTING_ORDER_COL] + BB_COLS
+                  + ["BBE", "player_id", "bats", "throws", "sp_side", "is_sp"]]
     return pdf, bdf
 
 
@@ -716,16 +723,6 @@ def matchup_value(B, P, stat, L):
     return (B * P / L) if L else np.nan
 
 
-def norm_name(x):
-    if x is None or (isinstance(x, float) and pd.isna(x)):
-        return ""
-    s = unicodedata.normalize("NFKD", str(x)).encode("ascii", "ignore").decode()
-    s = s.lower().replace("\xa0", " ")
-    s = re.sub(r"\b(jr|sr|ii|iii|iv|v)\b", " ", s)
-    s = re.sub(r"[^a-z0-9 ]", " ", s)
-    return re.sub(r"\s+", " ", s).strip()
-
-
 def coerce_numeric(df, cols):
     df = df.copy()
     for c in set(cols) | {WEIGHT_COL}:
@@ -834,21 +831,19 @@ def estimate_shrink_k(pairs, prior, default, band):
 
 def segment_pitcher_blocks(df, rate_cols):
     df = coerce_numeric(df, rate_cols)
-    has_pos = "Pos." in df.columns
-    pos = df["Pos."].astype(str).str.upper().str.strip() if has_pos else None
 
     pitcher_rows, hitter_rows = [], []
     for _, g in df.groupby(["game_pk", "table_index"], sort=False):
         cur_p = cur_side = None
-        away_key = norm_name(g["away_probable_pitcher"].iloc[0]) if "away_probable_pitcher" in g else ""
-        home_key = norm_name(g["home_probable_pitcher"].iloc[0]) if "home_probable_pitcher" in g else ""
-        for idx, r in g.iterrows():
+        for _, r in g.iterrows():
             name = r.get("Name")
-            nkey = norm_name(name)
-            is_pitcher = (pos.loc[idx] == "P") if has_pos else (nkey in {away_key, home_key} and nkey != "")
-            if is_pitcher:
+            # Structural detection: is_sp marks the probable-pitcher row and
+            # sp_side names its side. This replaces name matching, which failed
+            # when a missing bio left a `pitcher_{pid}` fallback name and could
+            # collide on identical normalized names across the two probables.
+            if bool(r.get("is_sp")):
                 cur_p = name
-                cur_side = "away" if nkey == away_key else "home" if nkey == home_key else None
+                cur_side = r.get("sp_side")
                 pitcher_rows.append({**r.to_dict(), "pitcher_side": cur_side})
                 continue
             if cur_p is None:
