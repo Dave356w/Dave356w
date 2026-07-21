@@ -547,6 +547,18 @@ def fetch_all(slate_date):
     if slate_df.empty:
         return {"slate_df": slate_df, "empty": True}
 
+    # Log game statuses (no filtering change) so postponed/suspended games are
+    # visible in the build log rather than blending into the slate count.
+    if "status" in slate_df.columns:
+        log(f"  game statuses: {slate_df['status'].value_counts(dropna=False).to_dict()}")
+        _NORMAL_STATUS = {"Scheduled", "Pre-Game", "Warmup", "In Progress",
+                          "Final", "Game Over"}
+        for _, gg in slate_df.iterrows():
+            st = gg.get("status")
+            if st not in _NORMAL_STATUS:
+                log(f"  non-standard status {st!r}: {gg.get('matchup')} "
+                    f"(game_pk={int(gg['game_pk'])})")
+
     log("Loading Savant leaderboards (cached once/day) ...")
     batter_stat, batter_bb, batter_cust = load_stat_lookups("batter")
     pitcher_stat, pitcher_bb, pitcher_cust = load_stat_lookups("pitcher")
@@ -980,12 +992,16 @@ def build_platoon_matchup(pitcher_rows_df, opp_hitters_df, people,
         return o.get("ops"), (o.get("pa") or 0)
 
     def _shrink(obs, n, overall, overall_pa, Lcell, Loverall, K):
-        if overall is not None and not pd.isna(overall) and Loverall:
+        # NaN is truthy, so a bare `if Lcell`/`Loverall` would let an empty
+        # (early-season) league cell propagate a NaN prior; guard explicitly.
+        Lcell_ok = pd.notna(Lcell) and Lcell
+        Loverall_ok = pd.notna(Loverall) and Loverall
+        if overall is not None and not pd.isna(overall) and Loverall_ok:
             op = overall_pa or 0
             overall_reg = (op * overall + K0 * Loverall) / (op + K0)
-            prior = overall_reg * (Lcell / Loverall) if Lcell else overall_reg
+            prior = overall_reg * (Lcell / Loverall) if Lcell_ok else overall_reg
         else:
-            prior = Lcell if Lcell else Loverall
+            prior = Lcell if Lcell_ok else Loverall
         if obs is None or pd.isna(obs):
             return prior
         n = n or 0
@@ -1591,10 +1607,19 @@ def cmb_card(g, built_short):
     a, h = g["away"], g["home"]
     away_abbr, home_abbr = g["away_abbr"], g["home_abbr"]
     # a = away SP -> his xw_edge is the HOME offense edge (same as before).
-    home_off = a["xw_edge"] if a["xw_edge"] is not None else 0.0
-    away_off = h["xw_edge"] if h["xw_edge"] is not None else 0.0
-    delta = abs(home_off - away_off)
-    fav = home_abbr if home_off >= away_off else away_abbr
+    # When either side's edge is missing there is no defined lean: render a
+    # neutral "no lean" pill (no favorite, no Δ) rather than substituting 0.0,
+    # which would fabricate a tie/favorite. Card position is unchanged.
+    if a["xw_edge"] is not None and h["xw_edge"] is not None:
+        home_off, away_off = a["xw_edge"], h["xw_edge"]
+        delta = abs(home_off - away_off)
+        fav = home_abbr if home_off >= away_off else away_abbr
+        lean_html = (f"<span class='lean'><span class='lk'>lean</span>"
+                     f"<span class='lt'>{fav}</span>"
+                     f"<span class='ld'>Δxw {delta:.3f}</span></span>")
+    else:
+        lean_html = ("<span class='lean nolean'><span class='lk'>lean</span>"
+                     "<span class='lt'>—</span><span class='ld'>no lean</span></span>")
     when = " · ".join(x for x in (g.get("time_pt"), g.get("venue")) if x)
     game_no = f" <span class='game-no'>{_esc(g['game_label'])}</span>" if g.get("game_label") else ""
     return (
@@ -1603,9 +1628,8 @@ def cmb_card(g, built_short):
         f"<span class='teams'>{away_abbr}{_l10_span(g.get('away_l10'))} "
         f"<span class='at'>@</span> {home_abbr}{_l10_span(g.get('home_l10'))}{game_no}</span>"
         + (f"<span class='when'>{_esc(when)}</span>" if when else "")
-        + f"<span class='lean'><span class='lk'>lean</span><span class='lt'>{fav}</span>"
-        f"<span class='ld'>Δxw {delta:.3f}</span></span>"
-        f"{_consensus_html(away_abbr, home_abbr, a, h)}"
+        + lean_html
+        + f"{_consensus_html(away_abbr, home_abbr, a, h)}"
         "</div>"
         f"{_market_html(g.get('odds'), away_abbr, home_abbr, built_short)}"
         f"<div class='sides'>{_side_html('AWAY', a, g['league_baseline'])}"
@@ -1901,6 +1925,8 @@ body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 var(--sans);
   border-radius:4px;padding:4px 10px}
 .lean .lk{font:600 10px/1 var(--sans);letter-spacing:.14em;text-transform:uppercase;color:rgba(var(--lean),1)}
 .lean .lt{font:800 15px/1 var(--sans)}
+.lean.nolean{border-color:var(--line);background:var(--surface-2)}
+.lean.nolean .lk,.lean.nolean .lt,.lean.nolean .ld{color:var(--muted)}
 .card-note{display:flex;flex-direction:column;gap:4px;padding:14px 16px 16px;color:var(--muted)}
 .card-note b{color:var(--ink);font-size:13px}.card-note span{font-size:12px}
 .lean .ld{font:500 12px/1 var(--mono);color:var(--muted);font-variant-numeric:tabular-nums}
