@@ -1230,6 +1230,39 @@ def fetch_pregame_odds(slate_df):
     return out
 
 
+def fetch_last10_records(slate_df=None):
+    """team_id -> 'W-L' over each team's last 10 games (StatsAPI standings).
+
+    Display-only and strictly best-effort: any failure logs and returns an
+    empty map so the card header simply omits the record rather than failing
+    the build. `slate_df` is accepted for signature symmetry with the odds
+    fetch; standings cover all teams regardless of the slate.
+    """
+    out = {}
+    try:
+        js = _get_json("https://statsapi.mlb.com/api/v1/standings",
+                       {"leagueId": "103,104", "season": SEASON,
+                        "date": SLATE_DATE, "standingsTypes": "regularSeason"},
+                       tries=2)
+    except Exception as e:  # noqa: BLE001
+        log(f"last-10 records: standings fetch failed ({e!r}) -> header omits")
+        return out
+    for grp in js.get("records", []):
+        for tr in grp.get("teamRecords", []):
+            tid = (tr.get("team") or {}).get("id")
+            if tid is None:
+                continue
+            l10 = next((s for s in (tr.get("records") or {}).get("splitRecords", [])
+                        if s.get("type") == "lastTen"), None)
+            if l10 and l10.get("wins") is not None and l10.get("losses") is not None:
+                try:
+                    out[int(tid)] = f"{int(l10['wins'])}-{int(l10['losses'])}"
+                except (TypeError, ValueError):
+                    continue
+    log(f"last-10 records attached: {len(out)} teams")
+    return out
+
+
 # ============================================================
 # CELL 6 -- CARD RENDER (per-hitter lineup layout, emits HTML)
 # ============================================================
@@ -1531,6 +1564,11 @@ def _market_html(o, away_abbr, home_abbr, built_short):
         + "</div>")
 
 
+def _l10_span(rec):
+    """Small 'W-L' chip (last-10 record) appended to a team abbr; '' if unknown."""
+    return f"<span class='l10' title='last 10 games'>{_esc(rec)}</span>" if rec else ""
+
+
 def cmb_card(g, built_short):
     if g.get("unavailable"):
         game_no = f" <span class='game-no'>{_esc(g['game_label'])}</span>" if g.get("game_label") else ""
@@ -1541,7 +1579,8 @@ def cmb_card(g, built_short):
         return (
             "<article class='card unavailable'>"
             "<div class='gamehead'>"
-            f"<span class='teams'>{g['away_abbr']} <span class='at'>@</span> {g['home_abbr']}{game_no}</span>"
+            f"<span class='teams'>{g['away_abbr']}{_l10_span(g.get('away_l10'))} "
+            f"<span class='at'>@</span> {g['home_abbr']}{_l10_span(g.get('home_l10'))}{game_no}</span>"
             + (f"<span class='when'>{_esc(when)}</span>" if when else "")
             + "</div>"
             "<div class='card-note'><b>Awaiting paired probable pitchers</b>"
@@ -1560,7 +1599,8 @@ def cmb_card(g, built_short):
     return (
         "<article class='card'>"
         "<div class='gamehead'>"
-        f"<span class='teams'>{away_abbr} <span class='at'>@</span> {home_abbr}{game_no}</span>"
+        f"<span class='teams'>{away_abbr}{_l10_span(g.get('away_l10'))} "
+        f"<span class='at'>@</span> {home_abbr}{_l10_span(g.get('home_l10'))}{game_no}</span>"
         + (f"<span class='when'>{_esc(when)}</span>" if when else "")
         + f"<span class='lean'><span class='lk'>lean</span><span class='lt'>{fav}</span>"
         f"<span class='ld'>Δxw {delta:.3f}</span></span>"
@@ -1599,7 +1639,15 @@ def build_combined(games, built_short):
 def _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
                           opp_hitters_df=None, detail_df=None, lg_ops=None,
                           slate_df=None, lineup_df=None,
-                          league_baseline=None, odds=None):
+                          league_baseline=None, odds=None, last10=None):
+    last10 = last10 or {}
+
+    def _l10(team_id):
+        try:
+            return last10.get(int(team_id))
+        except (TypeError, ValueError):
+            return None
+
     throws = {}
     recent_era = {}
     if pitcher_rows_df is not None and not pitcher_rows_df.empty:
@@ -1671,6 +1719,8 @@ def _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
         games.append(dict(
             away=mk(a), home=mk(h),
             away_abbr=away_abbr, home_abbr=home_abbr,
+            away_l10=_l10(srow.get("away_team_id")) if srow is not None else None,
+            home_l10=_l10(srow.get("home_team_id")) if srow is not None else None,
             game_pk=gpk, game_number=game_number, game_label=game_label,
             game_datetime_utc=(srow.get("game_datetime_utc") if srow is not None else None),
             time_pt=_game_time_pt(srow.get("game_datetime_utc")) if srow is not None else "",
@@ -1696,6 +1746,8 @@ def _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
                 game_datetime_utc=srow.get("game_datetime_utc"),
                 away_abbr=srow.get("away_abbrev") or _abbr(srow.get("away_team")),
                 home_abbr=srow.get("home_abbrev") or _abbr(srow.get("home_team")),
+                away_l10=_l10(srow.get("away_team_id")),
+                home_l10=_l10(srow.get("home_team_id")),
                 time_pt=_game_time_pt(srow.get("game_datetime_utc")),
                 venue=str(srow.get("venue") or ""),
                 away_probable=srow.get("away_probable_pitcher"),
@@ -1814,6 +1866,8 @@ body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 var(--sans);
   padding:12px 16px 10px;border-bottom:1px solid var(--line-2)}
 .teams{font:800 22px/1 var(--sans);letter-spacing:.02em}
 .teams .at{color:var(--faint);font-weight:400;font-size:16px;margin:0 4px}
+.teams .l10{font:600 11px/1 var(--mono);color:var(--muted);letter-spacing:0;
+  margin-left:3px;vertical-align:middle}
 .game-no{font:700 11px/1 var(--mono);color:var(--muted);vertical-align:middle}
 .when{font:400 12px/1.3 var(--sans);color:var(--muted)}
 .lean{margin-left:auto;display:flex;align-items:baseline;gap:7px;
@@ -2202,11 +2256,11 @@ def render_grades_html(built_txt):
 def render_combined_html(xw_df, pl_df, pitcher_rows_df, built_txt,
                          opp_hitters_df=None, detail_df=None, lg_ops=None,
                          slate_df=None, lineup_df=None,
-                         league_baseline=None, odds=None):
+                         league_baseline=None, odds=None, last10=None):
     games = _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
                                   opp_hitters_df=opp_hitters_df, detail_df=detail_df,
                                   lg_ops=lg_ops, slate_df=slate_df, lineup_df=lineup_df,
-                                  league_baseline=league_baseline, odds=odds)
+                                  league_baseline=league_baseline, odds=odds, last10=last10)
     legend = _legend("MLB matchup leans — xwOBA + platoon OPS", built_txt)
     strip = records_strip_html()
     if not games:
@@ -2322,13 +2376,20 @@ def main():
         log(f"pregame odds skipped: {e!r}")
         odds = {}
 
+    log("Fetching last-10 records (best-effort, display-only) ...")
+    try:
+        last10 = fetch_last10_records(data["slate_df"])
+    except Exception as e:  # noqa: BLE001
+        log(f"last-10 records skipped: {e!r}")
+        last10 = {}
+
     log("Rendering index.html ...")
     html = render_combined_html(
         matchup_df, matchup_platoon_df, pitcher_rows_df, built_txt,
         opp_hitters_df=opp_hitters_df, detail_df=platoon_detail_df,
         lg_ops=league_ops_overall, slate_df=data["slate_df"],
         lineup_df=data["lineup_projection_df"],
-        league_baseline=data["league_baseline"], odds=odds)
+        league_baseline=data["league_baseline"], odds=odds, last10=last10)
     with open(out_path, "w") as f:
         f.write(html)
     log(f"Wrote {out_path} ({len(html):,} bytes, {len(matchup_df)} matchup rows)")
