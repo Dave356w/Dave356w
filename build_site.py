@@ -1536,15 +1536,15 @@ def _consensus_html(away_abbr, home_abbr, a, h):
     if pl_home is not None and pl_away is not None:
         pl_fav = home_abbr if pl_home >= pl_away else away_abbr
         pl_d = abs(pl_home - pl_away)
-        tag, tcl = ("AGREE", "agree") if pl_fav == xw_fav else ("DIVERGE", "diverge")
         pl_txt = f"OPS → <b>{pl_fav}</b> Δ{pl_d:.3f}"
     else:
-        tag, tcl = "n/a", "na"
         pl_txt = "OPS → <span class='muted'>unreliable / no split</span>"
     xw_txt = (f"xwOBA → <b>{xw_fav}</b> Δ{xw_d:.3f}" if xw_d is not None
               else "xwOBA → <span class='muted'>—</span>")
-    return (f"<div class='consensus'>{xw_txt}<span class='dot'>·</span>{pl_txt}"
-            f"<span class='ctag {tcl}'>{tag}</span></div>")
+    # The AGREE/DIVERGE tag was removed: the xwOBA and platoon-OPS lenses share
+    # the same lineup-vs-starter inputs, so their agreement is not independent
+    # confirmation. The two per-lens readouts remain.
+    return (f"<div class='consensus'>{xw_txt}<span class='dot'>·</span>{pl_txt}</div>")
 
 
 def _market_html(o, away_abbr, home_abbr, built_short):
@@ -1914,10 +1914,6 @@ body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 var(--sans);
 .consensus b{color:var(--ink);font-weight:600}
 .consensus .muted{color:var(--faint);font-weight:500}
 .consensus .dot{color:var(--faint)}
-.ctag{font:700 10px/1 var(--sans);letter-spacing:.12em;border-radius:3px;padding:2px 7px}
-.ctag.agree{color:rgba(var(--cool),1);border:1px solid rgba(var(--cool),.5)}
-.ctag.diverge{color:rgba(var(--warm),1);border:1px solid rgba(var(--warm),.5)}
-.ctag.na{color:var(--faint);border:1px solid var(--line)}
 
 /* ---------- market strip ---------- */
 .market{display:flex;flex-wrap:wrap;border-bottom:1px solid var(--line-2);background:var(--surface-2)}
