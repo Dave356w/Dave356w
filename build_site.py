@@ -602,6 +602,12 @@ def fetch_all(slate_date):
         for c in ("away_probable_pitcher_id", "home_probable_pitcher_id"):
             if pd.notna(g[c]):
                 prob_ids.add(int(g[c]))
+        # A NaN probable id drops that side's block downstream; log it so every
+        # game on the slate is accounted for in the build log.
+        if pd.isna(g["away_probable_pitcher_id"]) or pd.isna(g["home_probable_pitcher_id"]):
+            log(f"  TBD probable: {g.get('matchup')} (game_pk={int(g['game_pk'])}) — "
+                f"away={g.get('away_probable_pitcher') or 'TBD'}, "
+                f"home={g.get('home_probable_pitcher') or 'TBD'}")
         time.sleep(REQUEST_DELAY)
     lineup_projection_df = pd.DataFrame(proj_flags)
     os.makedirs(DATA_DIR, exist_ok=True)
@@ -1672,6 +1678,10 @@ def _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
     for gpk, gg in xw_df.groupby("game_pk", sort=False):
         a, h = _rows_by_side(gg)
         if a is None or h is None:
+            miss = ", ".join(s for s, v in (("away SP", a), ("home SP", h)) if v is None)
+            matchup = gg["matchup"].iloc[0] if "matchup" in gg.columns and len(gg) else "?"
+            log(f"  game skipped from paired cards — missing {miss}: "
+                f"{matchup} (game_pk={gpk})")
             continue
         srow = slate_map.get(gpk)
 
