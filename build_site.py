@@ -1155,8 +1155,9 @@ def fetch_pregame_odds(slate_df):
             t = {c["homeAway"]: _ESPN2SA.get(c["team"]["abbreviation"],
                                              c["team"]["abbreviation"])
                  for c in comp["competitors"]}
+            tid = {str(c["team"]["id"]): c["homeAway"] for c in comp["competitors"]}
             evs.setdefault((t["away"], t["home"]), []).append(
-                dict(eid=ev["id"], start=ev.get("date")))
+                dict(eid=ev["id"], start=ev.get("date"), tid=tid))
         except Exception:  # noqa: BLE001
             continue
 
@@ -1201,9 +1202,29 @@ def fetch_pregame_odds(slate_df):
         if h_cur is not None and a_cur is not None:
             ih, ia = _imp_ml(h_cur), _imp_ml(a_cur)
             p_home = ih / (ih + ia) if (ih + ia) > 0 else None
+        # F5 (1st 5 innings) DK ML from the same event's propBets child, using
+        # the validated parser from market_backfill; pregame `value` is the
+        # current F5 price, `open` its opener. Best-effort: any failure omits
+        # F5 and the strip renders em-dashes. Devig is CONDITIONAL on a decided
+        # half (DK F5 ties push).
+        f5a = f5h = f5a_opn = f5h_opn = f5_p_home = None
+        try:
+            from market_backfill import _espn_f5
+            f5 = _espn_f5(pick["eid"], pick.get("tid") or {})
+            if f5:
+                f5a, f5h = f5["f5_close_away_ml"], f5["f5_close_home_ml"]
+                f5a_opn, f5h_opn = f5["f5_open_away_ml"], f5["f5_open_home_ml"]
+                if f5a is not None and f5h is not None:
+                    ih5, ia5 = _imp_ml(f5h), _imp_ml(f5a)
+                    f5_p_home = ih5 / (ih5 + ia5) if (ih5 + ia5) > 0 else None
+        except Exception as e:  # noqa: BLE001
+            log(f"pregame odds: game_pk={g['game_pk']} F5 fetch failed ({e!r})")
         out[g["game_pk"]] = dict(away_ml=a_cur, home_ml=h_cur,
                                  open_away_ml=a_opn, open_home_ml=h_opn,
-                                 total=total, p_home=p_home)
+                                 total=total, p_home=p_home,
+                                 f5_away_ml=f5a, f5_home_ml=f5h,
+                                 f5_open_away_ml=f5a_opn, f5_open_home_ml=f5h_opn,
+                                 f5_p_home=f5_p_home)
         time.sleep(0.15)
     log(f"pregame odds attached: {len(out)}/{len(slate_df)} games")
     return out
@@ -1489,18 +1510,23 @@ def _consensus_html(away_abbr, home_abbr, a, h):
 
 def _market_html(o, away_abbr, home_abbr, built_short):
     o = o or {}
-    def _mlcell(lab, cur, opn):
+    def _mlcell(prefix, lab, cur, opn):
         sub = f" <span class='mv'>← {_fmt_ml(opn)} open</span>" if opn is not None else ""
-        return (f"<div class='mcell'><div class='l'>DK ML · {lab}</div>"
+        return (f"<div class='mcell'><div class='l'>{prefix} · {lab}</div>"
                 f"<div class='v'>{_fmt_ml(cur)}{sub}</div></div>")
     tot = f"o/u {o['total']:g}" if o.get("total") is not None else "—"
     ph = f"{o['p_home'] * 100:.1f}%" if o.get("p_home") is not None else "—"
+    # F5 devig is conditional on a decided half (DK F5 ties push).
+    ph5 = f"{o['f5_p_home'] * 100:.1f}%" if o.get("f5_p_home") is not None else "—"
     return (
         "<div class='market'>"
-        + _mlcell(away_abbr, o.get("away_ml"), o.get("open_away_ml"))
-        + _mlcell(home_abbr, o.get("home_ml"), o.get("open_home_ml"))
+        + _mlcell("DK ML", away_abbr, o.get("away_ml"), o.get("open_away_ml"))
+        + _mlcell("DK ML", home_abbr, o.get("home_ml"), o.get("open_home_ml"))
+        + _mlcell("DK F5", away_abbr, o.get("f5_away_ml"), o.get("f5_open_away_ml"))
+        + _mlcell("DK F5", home_abbr, o.get("f5_home_ml"), o.get("f5_open_home_ml"))
         + f"<div class='mcell'><div class='l'>Total</div><div class='v'>{tot}</div></div>"
         + f"<div class='mcell'><div class='l'>Implied {home_abbr} (devig)</div><div class='v'>{ph}</div></div>"
+        + f"<div class='mcell'><div class='l'>F5 impl {home_abbr} (devig · cond.)</div><div class='v'>{ph5}</div></div>"
         + f"<div class='mcell note'><div class='l'>Market</div><div class='v'>as of build {built_short}</div></div>"
         + "</div>")
 
