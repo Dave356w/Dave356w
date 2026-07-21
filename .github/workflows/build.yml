@@ -56,12 +56,13 @@ jobs:
       # and start a new RECORD_TAGS family so incompatible results and weight
       # fits never mix. Audit-only tags may remain in one family. Job-level so
       # grade_leans.py and build_site.py see the same configuration.
-      # v4 re-weights the lineup composites by expected PA per batting-order slot
-      # (was season BBE / split PA). That changes prediction math, so it starts a
-      # fresh record family; v4 games never mix with the v2/v3 season-volume
+      # v5 adds empirical-Bayes xwOBA shrinkage (each hitter and the starter are
+      # regressed toward the league xwOBA baseline by sample size) on top of v4's
+      # slot-PA weighting. Another prediction-math change, so it starts a fresh
+      # record family; v5 games never mix with v4 or the v2/v3 season-volume
       # results in the headline records or the weight fit.
-      MODEL_TAG: xw+plat_consol_v4
-      RECORD_TAGS: xw+plat_consol_v4
+      MODEL_TAG: xw+plat_consol_v5
+      RECORD_TAGS: xw+plat_consol_v5
     steps:
       - uses: actions/checkout@v4
 

@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from unittest import mock
 
+import numpy as np
 import pandas as pd
 
 import build_site
@@ -301,6 +302,75 @@ class BattingOrderSlotWeightingTests(unittest.TestCase):
             out = build_site.aggregate_lineup(H, ["xwOBA"], weighted=True)
         expected = (100 * .400 + 400 * .300) / 500  # falls back to BBE == .320
         self.assertAlmostEqual(out.loc[0, "opp_xwOBA"], round(expected, 3))
+
+
+class XwobaShrinkageTests(unittest.TestCase):
+    def test_shrink_pulls_low_sample_toward_prior(self):
+        prior, k = 0.317, 100.0
+        # 20-PA .450 hitter is mostly prior; 600-PA .450 hitter is mostly self.
+        low = float(build_site.shrink_xwoba([0.450], [20], prior, k).iloc[0])
+        high = float(build_site.shrink_xwoba([0.450], [600], prior, k).iloc[0])
+        self.assertAlmostEqual(low, (20 * .450 + k * prior) / (20 + k), places=6)
+        self.assertLess(low, high)                 # small sample regressed harder
+        self.assertGreater(low, prior)             # but still above league
+        self.assertLess(high, 0.450)               # even big sample shrinks a bit
+
+    def test_shrink_missing_rate_or_zero_n_is_prior(self):
+        prior, k = 0.317, 200.0
+        out = build_site.shrink_xwoba([np.nan, 0.400], [500, 0], prior, k)
+        self.assertAlmostEqual(float(out.iloc[0]), prior, places=6)  # NaN rate -> prior
+        self.assertAlmostEqual(float(out.iloc[1]), prior, places=6)  # n=0 -> prior
+
+    def test_shrink_disabled_is_passthrough(self):
+        with mock.patch.object(build_site, "USE_XWOBA_SHRINK", False):
+            out = build_site.shrink_xwoba([0.450], [20], 0.317, 100.0)
+        self.assertAlmostEqual(float(out.iloc[0]), 0.450, places=6)
+
+    def test_scalar_shrink_matches_series(self):
+        prior, k = 0.317, 300.0
+        s = float(build_site.shrink_xwoba([0.360], [150], prior, k).iloc[0])
+        self.assertAlmostEqual(build_site._shrink_one(0.360, 150, prior, k), s, places=6)
+
+    def test_mom_k_recovers_planted_ratio(self):
+        # Plant tau^2 and sigma^2, synthesize a pool, recover K = sigma^2/tau^2.
+        rng = np.random.default_rng(0)
+        prior, tau, sigma = 0.317, 0.030, 0.5
+        n = rng.integers(30, 650, size=1200).astype(float)
+        theta = rng.normal(prior, tau, size=1200)          # true talent
+        x = rng.normal(theta, sigma / np.sqrt(n))          # observed, noisier at low n
+        k, note = build_site.estimate_shrink_k(list(zip(x, n)), prior,
+                                               build_site.K_BAT_DEFAULT, (10.0, 5000.0))
+        planted = sigma ** 2 / tau ** 2                    # ~278
+        self.assertEqual(note, "ok")
+        self.assertLess(abs(k - planted) / planted, 0.35)  # within ~35% of truth
+
+    def test_mom_k_falls_back_on_thin_pool(self):
+        k, note = build_site.estimate_shrink_k([(0.4, 100), (0.3, 200)], 0.317,
+                                               build_site.K_PIT_DEFAULT, build_site.K_PIT_BAND)
+        self.assertEqual(k, build_site.K_PIT_DEFAULT)
+        self.assertTrue(note.startswith("fallback"))
+
+    def _lineup_H(self, rows):
+        # rows: (batting_order, xwOBA, PA); one game vs one pitcher.
+        return pd.DataFrame([
+            dict(game_pk=1, faced_pitcher="SP", pitcher_side="away",
+                 batting_side="home", xwOBA=xw, PA=pa, BBE=50, batting_order=o)
+            for (o, xw, pa) in rows
+        ])
+
+    def test_aggregate_lineup_shrinks_bats_before_compositing(self):
+        prior, k = 0.317, 150.0
+        H = self._lineup_H([(1, 0.500, 15), (2, 0.300, 550)])
+        agg = build_site.aggregate_lineup(H, ["xwOBA"], weighted=True,
+                                          shrink_prior=prior, shrink_k=k)
+        s1 = (15 * .500 + k * prior) / (15 + k)
+        s2 = (550 * .300 + k * prior) / (550 + k)
+        w1, w2 = build_site.LINEUP_SLOT_PA[1], build_site.LINEUP_SLOT_PA[2]
+        expected = round((w1 * s1 + w2 * s2) / (w1 + w2), 3)
+        self.assertAlmostEqual(agg.loc[0, "opp_xwOBA"], expected)
+        # Without shrinkage the hot 15-PA bat would drag the composite higher.
+        raw = build_site.aggregate_lineup(H, ["xwOBA"], weighted=True)
+        self.assertLess(agg.loc[0, "opp_xwOBA"], raw.loc[0, "opp_xwOBA"])
 
 
 if __name__ == "__main__":

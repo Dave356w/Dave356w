@@ -53,6 +53,22 @@ Model version `xw+plat_consol_v4` re-weights the lineup composites:
   (`USE_SLOT_PA_WEIGHTS`). This changes the prediction math, so v4 starts a new
   `RECORD_TAGS` family and its games never mix with v2/v3 in the records.
 
+Model version `xw+plat_consol_v5` adds xwOBA shrinkage on top of v4:
+
+- **Empirical-Bayes xwOBA shrinkage** — before they drive the lean, each
+  hitter's season xwOBA and the starter's season xwOBA-allowed are regressed
+  toward the league xwOBA baseline by sample size, `x* = (n·x + K·prior)/(n+K)`
+  (`shrink_xwoba`). Both sides share the league baseline as the prior. `K` is
+  estimated by **method of moments per player pool** each build
+  (`estimate_shrink_k`): sampling noise scales as `1/n`, so the gap between the
+  unweighted and the PA-weighted dispersion of the leaderboard identifies the
+  within-PA and between-player variance components, and `K = σ²/τ²` — no fixed
+  per-PA constant. The estimate is clamped to a plausible PA band with a fixed
+  fallback (`K_BAT_*` / `K_PIT_*`) and logged each run. Shrinkage touches only
+  xwOBA (the lean stat); other columns and the raw per-hitter card values are
+  untouched. This changes the prediction math, so v5 starts a new `RECORD_TAGS`
+  family and its games never mix with v4 or v2/v3.
+
 ## Files
 
 | Path | Purpose |

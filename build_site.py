@@ -70,13 +70,15 @@ CACHE_DIR = os.environ.get("CACHE_DIR", ".")
 OUT_DIR = os.environ.get("OUT_DIR", "public")
 DATA_DIR = os.environ.get("DATA_DIR", "data")            # grading ledger home
 LEDGER_PATH = os.path.join(DATA_DIR, "mlb_lean_ledger.csv")
-MODEL_TAG = os.environ.get("MODEL_TAG", "xw+plat_consol_v4")  # keep in sync with grade_leans.py
+MODEL_TAG = os.environ.get("MODEL_TAG", "xw+plat_consol_v5")  # keep in sync with grade_leans.py
 _RECORD_FAMILIES = {
     # v3 changed only ledger locking/identity; its prediction math is v2.
     "xw+plat_consol_v3": ("xw+plat_consol_v2", "xw+plat_consol_v3"),
     # v4 re-weights lineup composites by expected PA per batting-order slot
     # (was season BBE / split PA); that changes prediction math, so it starts a
     # fresh record family and never mixes with v2/v3 in the ledger or weight fit.
+    # v5 adds empirical-Bayes xwOBA shrinkage (batters + starter) on top of v4;
+    # another prediction-math change, so it starts its own family again.
 }
 RECORD_TAGS = tuple(
     t.strip() for t in os.environ.get(
@@ -467,7 +469,7 @@ def build_tables(slate, lineups, batter_stat, pitcher_stat, batter_bb, pitcher_b
             base = {**meta, "table_index": tidx, "Name": nm}
             if table == "stat":
                 pit_rows.append({**base, "table_type": "pitchers", "Pos.": "P",
-                                 **{c: src.get(c) for c in STAT_COLS},
+                                 **{c: src.get(c) for c in STAT_COLS}, "PA": src.get("PA"),
                                  "player_id": pid, "bats": bio.get("bats"),
                                  "throws": bio.get("throws")})
             else:
@@ -490,7 +492,7 @@ def build_tables(slate, lineups, batter_stat, pitcher_stat, batter_bb, pitcher_b
                         BATTING_ORDER_COL: slot}
                 if table == "stat":
                     pit_rows.append({**base, "table_type": "pitchers", "Pos.": pos,
-                                     **{c: src.get(c) for c in STAT_COLS},
+                                     **{c: src.get(c) for c in STAT_COLS}, "PA": src.get("PA"),
                                      "player_id": pid, "bats": bio.get("bats"),
                                      "throws": bio.get("throws")})
                 else:
@@ -510,7 +512,7 @@ def build_tables(slate, lineups, batter_stat, pitcher_stat, batter_bb, pitcher_b
             "table_type", "table_index", "Name"]
     pdf = pd.DataFrame(pit_rows)
     if not pdf.empty:
-        pdf = pdf[META + ["Pos.", BATTING_ORDER_COL] + STAT_COLS + ["player_id", "bats", "throws"]]
+        pdf = pdf[META + ["Pos.", BATTING_ORDER_COL] + STAT_COLS + ["PA", "player_id", "bats", "throws"]]
     bdf = pd.DataFrame(bb_rows)
     if not bdf.empty:
         bdf = bdf[META + ["Pos.", BATTING_ORDER_COL] + BB_COLS + ["BBE", "player_id", "bats", "throws"]]
@@ -540,7 +542,7 @@ def fetch_all(slate_date):
 
     log("Loading Savant leaderboards (cached once/day) ...")
     batter_stat, batter_bb, batter_cust = load_stat_lookups("batter")
-    pitcher_stat, pitcher_bb, _ = load_stat_lookups("pitcher")
+    pitcher_stat, pitcher_bb, pitcher_cust = load_stat_lookups("pitcher")
     log(f"  batters: {len(batter_stat)} | pitchers: {len(pitcher_stat)}")
 
     league_baseline = compute_league_baseline(batter_cust)
@@ -556,6 +558,26 @@ def fetch_all(slate_date):
         league_baseline[c] = round(float(np.average(vals, weights=wts)), 3) if vals else np.nan
     log("  league baselines:", {k: league_baseline.get(k) for k in
         ["xwOBA", "Hard Hit%", "K%", "EV", "GB%", "FB%", "Pull%"]})
+
+    # Method-of-moments xwOBA shrinkage constants, estimated once per build over
+    # the full custom leaderboards (xwoba + pa columns). Stashed on
+    # league_baseline so build_xwoba_matchup can read them without a new arg.
+    if USE_XWOBA_SHRINK:
+        prior = league_baseline.get("xwOBA")
+
+        def _xw_pa_pairs(cust):
+            if cust is None or "xwoba" not in cust.columns or "pa" not in cust.columns:
+                return []
+            xw = pd.to_numeric(cust["xwoba"], errors="coerce")
+            pa = pd.to_numeric(cust["pa"], errors="coerce")
+            return list(zip(xw.tolist(), pa.tolist()))
+
+        k_bat, note_b = estimate_shrink_k(_xw_pa_pairs(batter_cust), prior, K_BAT_DEFAULT, K_BAT_BAND)
+        k_pit, note_p = estimate_shrink_k(_xw_pa_pairs(pitcher_cust), prior, K_PIT_DEFAULT, K_PIT_BAND)
+        league_baseline["_xwOBA_K_bat"] = k_bat
+        league_baseline["_xwOBA_K_pit"] = k_pit
+        log(f"  xwOBA shrink: prior={prior} | K_bat={k_bat:.0f} ({note_b}) "
+            f"| K_pit={k_pit:.0f} ({note_p})")
 
     log("Resolving lineups (gf -> posted/partial-fill/projected) ...")
     lineups, proj_flags, lineup_ids, prob_ids = {}, [], set(), set()
@@ -657,6 +679,28 @@ WEIGHT_COL = "BBE"
 USE_WEIGHTED = True
 ADD_STATS = {"EV", "LA°"}
 
+# --- xwOBA empirical-Bayes shrinkage (v5) ----------------------------------
+# Season xwOBA (each hitter) and xwOBA-allowed (the starter) are regressed
+# toward the league xwOBA baseline by sample size before they drive the lean:
+#     x* = (n*x + K*prior) / (n + K)
+# so a small-sample bat or a starter with few batters faced is pulled toward
+# league-average rather than taken at face value. Both sides share one prior
+# (the league xwOBA baseline). K is estimated by method of moments per player
+# pool each build: sampling noise scales as 1/n, so the gap between the
+# unweighted and the PA-weighted dispersion around the mean identifies the
+# within-PA (sigma^2) and between-player (tau^2) variance components, and
+# K = sigma^2 / tau^2 -- no fixed per-PA variance constant. The estimate is
+# clamped to a plausible PA band with a fixed fallback and logged each run, so
+# a degenerate pool cannot silently distort leans. Shrinkage touches only
+# xwOBA (the lean stat); the other columns and the raw per-hitter card values
+# are untouched.
+USE_XWOBA_SHRINK = True
+XWOBA_SHRINK_COL = "xwOBA"
+K_BAT_DEFAULT, K_BAT_BAND = 130.0, (40.0, 500.0)
+K_PIT_DEFAULT, K_PIT_BAND = 600.0, (120.0, 1500.0)
+MIN_K_POOL_PA = 10        # drop 1-PA noise from the K-estimation pool
+MIN_K_POOL_N = 20         # need a real population to split the variance
+
 
 def matchup_value(B, P, stat, L):
     if pd.isna(B) or pd.isna(P) or pd.isna(L):
@@ -725,6 +769,63 @@ def lineup_weight(g, fallback_col):
     return g.get(fallback_col) if hasattr(g, "get") else None
 
 
+def shrink_xwoba(x, n, prior, k):
+    """Regress observed rate(s) toward prior by sample size: (n*x + k*prior)/(n+k).
+
+    Series in / positionally-reindexed Series out (aligns with wmean's reset
+    index). A missing rate or n<=0 collapses to the prior. Pass-through when
+    shrinkage is disabled or k/prior are unusable.
+    """
+    xs = pd.to_numeric(pd.Series(x).reset_index(drop=True), errors="coerce")
+    if not USE_XWOBA_SHRINK or k is None or not np.isfinite(k) or prior is None or not np.isfinite(prior):
+        return xs
+    ns = pd.to_numeric(pd.Series(n).reset_index(drop=True), errors="coerce").fillna(0.0).clip(lower=0.0)
+    return (ns * xs.fillna(prior) + k * prior) / (ns + k)
+
+
+def _shrink_one(x, n, prior, k):
+    """Scalar form of shrink_xwoba for a single pitcher row."""
+    if not USE_XWOBA_SHRINK or k is None or not np.isfinite(k) or prior is None or pd.isna(prior):
+        return x
+    n = float(n) if pd.notna(n) else 0.0
+    x = float(prior) if pd.isna(x) else float(x)
+    return (n * x + k * prior) / (n + k)
+
+
+def estimate_shrink_k(pairs, prior, default, band):
+    """Method-of-moments shrinkage constant K = sigma^2 / tau^2 over (rate, n) pairs.
+
+    Sampling variance scales as 1/n, so the unweighted dispersion (which lets
+    low-n players count fully) exceeds the n-weighted dispersion by exactly the
+    sampling component; that gap identifies sigma^2 (within-PA) and leaves
+    tau^2 (between-player talent). Returns (k, note); falls back to `default`
+    and clamps to `band` when the pool is thin or a component goes non-positive.
+    """
+    lo, hi = band
+    if prior is None or not np.isfinite(prior):
+        return default, "fallback:no_prior"
+    x = np.array([p[0] for p in pairs], dtype=float)
+    n = np.array([p[1] for p in pairs], dtype=float)
+    m = np.isfinite(x) & np.isfinite(n) & (n >= MIN_K_POOL_PA)
+    x, n = x[m], n[m]
+    if len(x) < MIN_K_POOL_N or n.sum() <= 0:
+        return default, "fallback:thin_pool"
+    d2 = (x - prior) ** 2
+    Vw = float(np.average(d2, weights=n))                 # PA-weighted dispersion
+    Vu = float(d2.mean())                                 # unweighted dispersion
+    coef = float((1.0 / n).mean() - 1.0 / n.mean())       # >= 0 by AM-HM; 0 iff all n equal
+    if coef <= 0:
+        return default, "fallback:equal_n"
+    sig2 = (Vu - Vw) / coef
+    tau2 = Vw - sig2 / n.mean()
+    if sig2 <= 0 or tau2 <= 0:
+        return default, "fallback:neg_var_component"
+    k = sig2 / tau2
+    if not np.isfinite(k) or k <= 0:
+        return default, "fallback:bad_k"
+    return float(min(max(k, lo), hi)), ("ok" if lo <= k <= hi else f"clamped_from_{k:.0f}")
+
+
 def segment_pitcher_blocks(df, rate_cols):
     df = coerce_numeric(df, rate_cols)
     has_pos = "Pos." in df.columns
@@ -759,7 +860,7 @@ def segment_pitcher_blocks(df, rate_cols):
     return P, H
 
 
-def aggregate_lineup(H, rate_cols, weighted=True):
+def aggregate_lineup(H, rate_cols, weighted=True, shrink_prior=None, shrink_k=None):
     if H is None or H.empty:
         return pd.DataFrame()
     out = []
@@ -774,14 +875,21 @@ def aggregate_lineup(H, rate_cols, weighted=True):
         for c in rate_cols:
             if c not in g.columns:
                 continue
-            rec[f"opp_{c}_mean"] = round(float(g[c].mean(skipna=True)), 3) if g[c].notna().any() else np.nan
-            rec[f"opp_{c}_wmean"] = round(wmean(g[c], w), 3)
+            # Regress each hitter's xwOBA toward the league prior by their PA
+            # BEFORE compositing, so a small-sample bat can't swing the lineup
+            # number; other columns pass through raw.
+            if c == XWOBA_SHRINK_COL and shrink_prior is not None and "PA" in g.columns:
+                vals = shrink_xwoba(g[c], g["PA"], shrink_prior, shrink_k)
+            else:
+                vals = pd.to_numeric(pd.Series(g[c]).reset_index(drop=True), errors="coerce")
+            rec[f"opp_{c}_mean"] = round(float(vals.mean(skipna=True)), 3) if vals.notna().any() else np.nan
+            rec[f"opp_{c}_wmean"] = round(wmean(vals, w), 3)
             rec[f"opp_{c}"] = rec[f"opp_{c}_wmean"] if weighted else rec[f"opp_{c}_mean"]
         out.append(rec)
     return pd.DataFrame(out)
 
 
-def build_matchup(P, agg, rate_cols, league_baseline):
+def build_matchup(P, agg, rate_cols, league_baseline, shrink_prior=None, shrink_k=None):
     if P.empty or agg.empty:
         return pd.DataFrame()
     Pk = P.set_index(["game_pk", "Name"])
@@ -801,6 +909,12 @@ def build_matchup(P, agg, rate_cols, league_baseline):
                "opp_team": opp_team, "n_opp": int(a["n_opp_hitters"])}
         for c in rate_cols:
             pv = pd.to_numeric(pr.get(c), errors="coerce")
+            # Regress the starter's xwOBA-allowed toward the league prior by
+            # batters faced (PA), so a short-sample starter isn't taken at face
+            # value. This shrunk value drives the lean and the SP card display.
+            if c == XWOBA_SHRINK_COL and shrink_prior is not None:
+                pv = _shrink_one(pv, pd.to_numeric(pr.get("PA"), errors="coerce"),
+                                 shrink_prior, shrink_k)
             ov = a.get(f"opp_{c}")
             L = league_baseline.get(c, np.nan)
             rec[f"pit_{c}"] = round(float(pv), 3) if pd.notna(pv) else np.nan
@@ -816,9 +930,14 @@ def build_matchup(P, agg, rate_cols, league_baseline):
 
 
 def build_xwoba_matchup(pitchers_df, league_baseline):
+    prior = league_baseline.get(XWOBA_SHRINK_COL) if USE_XWOBA_SHRINK else None
+    k_bat = league_baseline.get("_xwOBA_K_bat")
+    k_pit = league_baseline.get("_xwOBA_K_pit")
     pitcher_rows_df, opp_hitters_df = segment_pitcher_blocks(pitchers_df, STATCAST_RATE_COLS)
-    opp_lineup_agg_df = aggregate_lineup(opp_hitters_df, STATCAST_RATE_COLS, weighted=USE_WEIGHTED)
-    matchup_df = build_matchup(pitcher_rows_df, opp_lineup_agg_df, STATCAST_RATE_COLS, league_baseline)
+    opp_lineup_agg_df = aggregate_lineup(opp_hitters_df, STATCAST_RATE_COLS, weighted=USE_WEIGHTED,
+                                         shrink_prior=prior, shrink_k=k_bat)
+    matchup_df = build_matchup(pitcher_rows_df, opp_lineup_agg_df, STATCAST_RATE_COLS, league_baseline,
+                               shrink_prior=prior, shrink_k=k_pit)
     return matchup_df, pitcher_rows_df, opp_hitters_df
 
 
@@ -1574,7 +1693,8 @@ def _legend(model_label, built_txt):
         "<span class='k'>◆ platoon advantage vs this SP</span>"
         "</div>"
         "<div class='lg-notes'>"
-        "<span><b>xwOBA</b> Lineup season xwOBA, weighted by batted-ball events; "
+        "<span><b>xwOBA</b> Lineup season xwOBA, each bat regressed to league by "
+        "sample size and weighted by expected PA per batting-order slot; "
         "not adjusted for today's starter.</span>"
         "<span><b>xOPS</b> Estimated lineup OPS vs this starter from regressed batter and "
         "pitcher handedness splits; lineup average weighted by hitter vs-hand PA.</span>"
