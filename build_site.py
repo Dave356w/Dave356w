@@ -1758,37 +1758,49 @@ def _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
 
 def _legend(model_label, built_txt):
     date = SLATE_DATE
-    dtxt = f" · {date}" if date else ""
-    btxt = f" · built {built_txt}" if built_txt else ""
+    head = model_label
+    if built_txt:
+        head += f" · built {built_txt}"
+    elif date:
+        head += f" · {date}"
     return (
         "<div class='legend'>"
-        f"<div class='lg-title'>{model_label}{dtxt}{btxt} · "
-        #"<em>offense-vs-starter</em></div>"
+        f"<div class='lg-title'>{head}</div>"
+        "<div class='lg-lead'><b>How to read a card:</b> each one sets a team's "
+        "projected lineup against the other team's starting pitcher, both ways. The "
+        "<b>lean</b> points to the side the models favor — a bigger tilt means a "
+        "stronger lean. Everything here is an estimate of matchup strength from "
+        "season data, not a prediction of the final score.</div>"
         "<div class='lg-keys'>"
-        "<span class='k'><i class='sw warm'></i>hitter-favorable</span>"
-        "<span class='k'><i class='sw cool'></i>pitcher-favorable</span>"
+        "<span class='k'><i class='sw warm'></i>warmer = better for hitters</span>"
+        "<span class='k'><i class='sw cool'></i>cooler = better for the pitcher</span>"
         "<span class='k'><i class='sw lean'></i>lean / net tilt (xwOBA)</span>"
-        "<span class='k'>◆ platoon advantage vs this SP</span>"
+        "<span class='k'>◆ lineup has the lefty/righty edge vs the starter</span>"
         "</div>"
         "<div class='lg-notes'>"
-        "<span><b>xwOBA</b> Lineup season xwOBA, each bat regressed to league by "
-        "sample size and weighted by expected PA per batting-order slot; "
-        "not adjusted for today's starter.</span>"
-        "<span><b>xOPS</b> Estimated lineup OPS vs this starter from regressed batter and "
-        "pitcher handedness splits; lineup average weighted by hitter vs-hand PA.</span>"
-        "<span><b>SP OPS alwd*</b> Starter's regressed OPS allowed against today's batter-side mix, "
-        "using the same lineup weights.</span>"
-        "<span><b>K-BB%</b> Season strikeout rate minus walk rate; the most stable single "
-        "SP skill indicator (defense- and sequencing-free). Higher favors the pitcher.</span>"
-        f"<span><b>ERA · L{RECENT_STARTS}</b> ERA across the probable starter's most recent "
-        f"starts (up to {RECENT_STARTS}; label shows the actual count when fewer), with season "
-        "ERA for trend context; shading relative to current-season MLB pitching ERA. "
-        "Trend context only -- small-sample ERA is mostly noise.</span>"
-        "<span><b>Edge bars</b> Per-hitter xOPS minus overall league OPS.</span>"
-        "<span><b>Shading</b> Stat cells tint ember when the number favors hitters, "
-        "steel when it favors the pitcher; deeper tint = further from league average.</span>"
-        "<span class='wide'>Odds are DraftKings via ESPN at build time. Cards are sorted by "
-        "the difference between the two offenses' xwOBA edges.</span>"
+        "<span><b>xwOBA</b> This lineup's overall hitting quality this season (expected "
+        "on-base value per plate appearance). Hitters we've seen little of are pulled "
+        "toward the league average, then each is weighted by the plate appearances his "
+        "spot in the order usually gets. Not adjusted for today's starter.</span>"
+        "<span><b>xOPS</b> The matchup number: how this lineup projects to hit against "
+        "<i>today's starter specifically</i>, built from each hitter's and the pitcher's "
+        "lefty/righty splits and weighted by expected same-hand at-bats.</span>"
+        "<span><b>SP OPS alwd*</b> How much hitting today's starter has typically given up, "
+        "measured against the exact lefty/righty mix he'll face tonight. Lower is better "
+        "for the pitcher.</span>"
+        "<span><b>K-BB%</b> Strikeout rate minus walk rate — the most reliable single read "
+        "on a starter's skill (it ignores defense and luck). Higher favors the pitcher.</span>"
+        f"<span><b>ERA · L{RECENT_STARTS}</b> Earned runs allowed per 9 innings over the "
+        f"starter's last few outings (up to {RECENT_STARTS}; the label shows the real count "
+        "when fewer), with his season ERA alongside for trend. Context only — a handful of "
+        "starts is mostly noise.</span>"
+        "<span><b>Edge bars</b> For each hitter, how far his matchup projection (xOPS) sits "
+        "above or below a league-average bat.</span>"
+        "<span><b>Shading</b> Cells tint ember when the number favors hitters and steel when "
+        "it favors the pitcher; the deeper the tint, the further from the league average.</span>"
+        "<span class='wide'>Moneylines are DraftKings prices pulled from ESPN at build time. "
+        "Cards are ordered by the biggest gap between the two lineups' xwOBA edges — the "
+        "games where the models see the clearest side come first.</span>"
         "</div></div>")
 
 
@@ -1839,6 +1851,8 @@ body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 var(--sans);
 .legend{margin:2px 2px 14px}
 .lg-title{font-size:13px;font-weight:650;letter-spacing:.01em;margin-bottom:7px}
 .lg-title em{font-style:normal;color:var(--muted);font-weight:500}
+.lg-lead{font-size:11.5px;line-height:1.5;color:var(--muted);max-width:82ch;margin-bottom:9px}
+.lg-lead b{color:var(--ink);font-weight:700}
 .lg-keys{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:11.5px;color:var(--muted)}
 .lg-keys .k{display:inline-flex;align-items:center;gap:6px}
 .lg-notes{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px 18px;
