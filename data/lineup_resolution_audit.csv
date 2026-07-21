@@ -1,8 +1,7 @@
 game_pk,away_lineup_projected,home_lineup_projected,away_lineup_status,home_lineup_status,away_posted_count,home_posted_count,away_filled_count,home_filled_count,away_resolved_count,home_resolved_count
-824409,True,True,projected,projected,0,0,9,9,9,9
-823437,True,True,projected,projected,0,0,9,9,9,9
-823519,True,True,projected,projected,0,0,9,9,9,9
-822787,True,True,projected,projected,0,0,9,9,9,9
+824409,True,False,projected,posted,0,9,9,0,9,9
+823437,True,False,projected,posted,0,9,9,0,9,9
+822787,True,False,projected,posted,0,9,9,0,9,9
 824735,True,True,projected,projected,0,0,9,9,9,9
 824895,True,True,projected,projected,0,0,9,9,9,9
 824085,True,True,projected,projected,0,0,9,9,9,9
@@ -14,3 +13,4 @@ game_pk,away_lineup_projected,home_lineup_projected,away_lineup_status,home_line
 824005,True,True,projected,projected,0,0,9,9,9,9
 825056,True,True,projected,projected,0,0,9,9,9,9
 823114,True,True,projected,projected,0,0,9,9,9,9
+823519,True,True,projected,projected,0,0,9,9,9,9
