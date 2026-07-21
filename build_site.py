@@ -2205,7 +2205,7 @@ def _lean_cell(lean, delta, muted=False):
     return f"<span class='muted'>{txt}</span>" if muted else txt
 
 
-def _grades_row(r, show_tag, show_ml=False):
+def _grades_row(r, show_ml=False):
     status = str(r["status"])
     fa, fh = pd.to_numeric(r["full_away"], errors="coerce"), pd.to_numeric(r["full_home"], errors="coerce")
     f5a, f5h = pd.to_numeric(r["f5_away"], errors="coerce"), pd.to_numeric(r["f5_home"], errors="coerce")
@@ -2231,8 +2231,6 @@ def _grades_row(r, show_tag, show_ml=False):
         _wlt_badge(r["xw_full"]),
         _wlt_badge(r["ops_f5"]),
     ]
-    if show_tag:
-        cells.append(f"<span class='muted'>{_esc(r['model_tag'])}</span>")
     cls = " class='void'" if status == "void" else ""
     return f"<tr{cls}>" + "".join(f"<td>{c}</td>" for c in cells) + "</tr>"
 
@@ -2253,10 +2251,7 @@ def render_grades_html(built_txt):
             f"Grading ledger · {n_graded} graded · {n_pend} pending"
             + (f" · {n_void} void" if n_void else "")
             + f" · built {built_txt}<br>"
-            "<em>records combine every model version into one record per market — the "
-            f"versions are one incremental lineage · new {_esc(MODEL_TAG)} rows are "
-            "hard-locked pregame · row tags preserve the audit regime · "
-            "platoon records count reliable-split games only</em></div></div>")
+            "<em>all rows locked before first pitch</em></div></div>")
 
     g = _display_grades(led)
     chips, notes = [], []
@@ -2298,14 +2293,12 @@ def render_grades_html(built_txt):
         summary = ("<div class='gr-summary'>" + "".join(chips) + "</div>"
                    + (f"<div class='gr-note'>{' · '.join(notes)}</div>" if notes else ""))
 
-    show_tag = led["model_tag"].nunique() > 1
     show_ml = "close_home_ml" in led.columns and led["close_home_ml"].notna().any()
     heads = (["Date", "Game", "xwOBA lean", "Platoon lean"]
              + (["xw ML"] if show_ml else [])
-             + ["Final", "F5", "xw F", "pl F5"]
-             + (["Model"] if show_tag else []))
+             + ["Final", "F5", "xw F", "pl F5"])
     led = led.sort_values(["game_date", "game_pk"], ascending=[False, True])
-    rows = "".join(_grades_row(r, show_tag, show_ml) for _, r in led.iterrows())
+    rows = "".join(_grades_row(r, show_ml) for _, r in led.iterrows())
     table = ("<div class='gr-tablewrap'><table class='gr'><thead><tr>"
              + "".join(f"<th>{h}</th>" for h in heads)
              + f"</tr></thead><tbody>{rows}</tbody></table></div>")
