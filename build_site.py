@@ -1799,8 +1799,7 @@ def _legend(model_label, built_txt):
         "<span><b>Shading</b> Cells tint ember when the number favors hitters and steel when "
         "it favors the pitcher; the deeper the tint, the further from the league average.</span>"
         "<span class='wide'>Moneylines are DraftKings prices pulled from ESPN at build time. "
-        "Cards are ordered by the biggest gap between the two lineups' xwOBA edges — the "
-        "games where the models see the clearest side come first.</span>"
+        "Cards are listed in chronological order, earliest first pitch first.</span>"
         "</div></div>")
 
 
@@ -2100,15 +2099,25 @@ def _rec_txt(s):
 
 
 def _record_grades(led):
-    """Graded rows whose tags share the current prediction methodology."""
+    """Graded rows whose tags share the current prediction methodology.
+
+    Kept for the weight-fit / audit regime that must not mix prediction-math
+    changes. The user-facing combined record uses _display_grades instead."""
     return led[(led["status"] == "graded") & (led["model_tag"].isin(RECORD_TAGS))]
+
+
+def _display_grades(led):
+    """All graded rows, every model version joined. The versions are one
+    incremental lineage, so the displayed record combines them into a single
+    record per market (audit slicing still lives in _record_grades)."""
+    return led[led["status"] == "graded"]
 
 
 def records_strip_html():
     led = load_ledger_df()
     if led is None:
         return ""
-    g = _record_grades(led)
+    g = _display_grades(led)
     if g.empty:
         inner = "<span class='muted'>no graded games yet</span>"
     else:
@@ -2209,11 +2218,12 @@ def render_grades_html(built_txt):
             f"Grading ledger · {n_graded} graded · {n_pend} pending"
             + (f" · {n_void} void" if n_void else "")
             + f" · built {built_txt}<br>"
-            f"<em>summary records combine {_esc(' + '.join(RECORD_TAGS))} because the prediction math is unchanged · "
-            f"new {_esc(MODEL_TAG)} rows are hard-locked pregame · row tags preserve the audit regime · "
+            "<em>records combine every model version into one record per market — the "
+            f"versions are one incremental lineage · new {_esc(MODEL_TAG)} rows are "
+            "hard-locked pregame · row tags preserve the audit regime · "
             "platoon records count reliable-split games only</em></div></div>")
 
-    g = _record_grades(led)
+    g = _display_grades(led)
     chips, notes = [], []
 
     def chip(lab, val, sub=None):
@@ -2222,7 +2232,7 @@ def render_grades_html(built_txt):
                      f"<div class='val'>{val}</div>{s}</div>")
 
     if g.empty:
-        summary = "<div class='gr-note'>No graded games in this model family yet.</div>"
+        summary = "<div class='gr-note'>No graded games yet.</div>"
     else:
         chip("Graded", str(len(g)), f"{n_pend} pending")
         b, p = _rec_parts(g["xw_full"]); chip("xwOBA · full", b, p)
