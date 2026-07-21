@@ -459,14 +459,18 @@ def build_tables(slate, lineups, batter_stat, pitcher_stat, batter_bb, pitcher_b
         asp, hsp = g["away_probable_pitcher_id"], g["home_probable_pitcher_id"]
         away_lu, home_lu = lineups[g["game_pk"]]
 
-        def pitcher_row(pid, tidx, table):
+        # sp_side names the block's pitcher side (structural, from the call
+        # site) and is_sp marks the probable-pitcher row; both are carried on
+        # every row so segment_pitcher_blocks assigns sides without name matching.
+        def pitcher_row(pid, tidx, table, sp_side):
             if pd.isna(pid):
                 return
             pid = int(pid)
             bio = people.get(pid, {})
             nm = bio.get("name") or f"pitcher_{pid}"
             src = (pitcher_stat if table == "stat" else pitcher_bb).get(pid, {})
-            base = {**meta, "table_index": tidx, "Name": nm}
+            base = {**meta, "table_index": tidx, "Name": nm,
+                    "sp_side": sp_side, "is_sp": True}
             if table == "stat":
                 pit_rows.append({**base, "table_type": "pitchers", "Pos.": "P",
                                  **{c: src.get(c) for c in STAT_COLS}, "PA": src.get("PA"),
@@ -479,7 +483,7 @@ def build_tables(slate, lineups, batter_stat, pitcher_stat, batter_bb, pitcher_b
                                 "player_id": pid, "bats": bio.get("bats"),
                                 "throws": bio.get("throws")})
 
-        def hitter_rows(lu, tidx, table):
+        def hitter_rows(lu, tidx, table, sp_side):
             for slot, pid in enumerate(lu, start=1):
                 pid = int(pid)
                 bio = people.get(pid, {})
@@ -489,7 +493,7 @@ def build_tables(slate, lineups, batter_stat, pitcher_stat, batter_bb, pitcher_b
                     pos = "DH"
                 src = (batter_stat if table == "stat" else batter_bb).get(pid, {})
                 base = {**meta, "table_index": tidx, "Name": nm,
-                        BATTING_ORDER_COL: slot}
+                        BATTING_ORDER_COL: slot, "sp_side": sp_side, "is_sp": False}
                 if table == "stat":
                     pit_rows.append({**base, "table_type": "pitchers", "Pos.": pos,
                                      **{c: src.get(c) for c in STAT_COLS}, "PA": src.get("PA"),
@@ -502,20 +506,23 @@ def build_tables(slate, lineups, batter_stat, pitcher_stat, batter_bb, pitcher_b
                                     "player_id": pid, "bats": bio.get("bats"),
                                     "throws": bio.get("throws")})
 
-        pitcher_row(asp, 1, "stat"); hitter_rows(home_lu, 1, "stat")
-        pitcher_row(hsp, 2, "stat"); hitter_rows(away_lu, 2, "stat")
-        pitcher_row(asp, 1, "bb"); hitter_rows(home_lu, 1, "bb")
-        pitcher_row(hsp, 2, "bb"); hitter_rows(away_lu, 2, "bb")
+        # Block 1 = away SP vs home lineup; block 2 = home SP vs away lineup.
+        pitcher_row(asp, 1, "stat", "away"); hitter_rows(home_lu, 1, "stat", "away")
+        pitcher_row(hsp, 2, "stat", "home"); hitter_rows(away_lu, 2, "stat", "home")
+        pitcher_row(asp, 1, "bb", "away"); hitter_rows(home_lu, 1, "bb", "away")
+        pitcher_row(hsp, 2, "bb", "home"); hitter_rows(away_lu, 2, "bb", "home")
 
     META = ["game_pk", "game_date", "game_datetime_utc", "matchup", "away_team", "home_team",
             "away_probable_pitcher", "home_probable_pitcher", "savant_preview_url",
             "table_type", "table_index", "Name"]
     pdf = pd.DataFrame(pit_rows)
     if not pdf.empty:
-        pdf = pdf[META + ["Pos.", BATTING_ORDER_COL] + STAT_COLS + ["PA", "player_id", "bats", "throws"]]
+        pdf = pdf[META + ["Pos.", BATTING_ORDER_COL] + STAT_COLS
+                  + ["PA", "player_id", "bats", "throws", "sp_side", "is_sp"]]
     bdf = pd.DataFrame(bb_rows)
     if not bdf.empty:
-        bdf = bdf[META + ["Pos.", BATTING_ORDER_COL] + BB_COLS + ["BBE", "player_id", "bats", "throws"]]
+        bdf = bdf[META + ["Pos.", BATTING_ORDER_COL] + BB_COLS
+                  + ["BBE", "player_id", "bats", "throws", "sp_side", "is_sp"]]
     return pdf, bdf
 
 
@@ -539,6 +546,18 @@ def fetch_all(slate_date):
     log(f"Games: {len(slate_df)}")
     if slate_df.empty:
         return {"slate_df": slate_df, "empty": True}
+
+    # Log game statuses (no filtering change) so postponed/suspended games are
+    # visible in the build log rather than blending into the slate count.
+    if "status" in slate_df.columns:
+        log(f"  game statuses: {slate_df['status'].value_counts(dropna=False).to_dict()}")
+        _NORMAL_STATUS = {"Scheduled", "Pre-Game", "Warmup", "In Progress",
+                          "Final", "Game Over"}
+        for _, gg in slate_df.iterrows():
+            st = gg.get("status")
+            if st not in _NORMAL_STATUS:
+                log(f"  non-standard status {st!r}: {gg.get('matchup')} "
+                    f"(game_pk={int(gg['game_pk'])})")
 
     log("Loading Savant leaderboards (cached once/day) ...")
     batter_stat, batter_bb, batter_cust = load_stat_lookups("batter")
@@ -602,6 +621,12 @@ def fetch_all(slate_date):
         for c in ("away_probable_pitcher_id", "home_probable_pitcher_id"):
             if pd.notna(g[c]):
                 prob_ids.add(int(g[c]))
+        # A NaN probable id drops that side's block downstream; log it so every
+        # game on the slate is accounted for in the build log.
+        if pd.isna(g["away_probable_pitcher_id"]) or pd.isna(g["home_probable_pitcher_id"]):
+            log(f"  TBD probable: {g.get('matchup')} (game_pk={int(g['game_pk'])}) — "
+                f"away={g.get('away_probable_pitcher') or 'TBD'}, "
+                f"home={g.get('home_probable_pitcher') or 'TBD'}")
         time.sleep(REQUEST_DELAY)
     lineup_projection_df = pd.DataFrame(proj_flags)
     os.makedirs(DATA_DIR, exist_ok=True)
@@ -708,16 +733,6 @@ def matchup_value(B, P, stat, L):
     if stat in ADD_STATS:
         return B + P - L
     return (B * P / L) if L else np.nan
-
-
-def norm_name(x):
-    if x is None or (isinstance(x, float) and pd.isna(x)):
-        return ""
-    s = unicodedata.normalize("NFKD", str(x)).encode("ascii", "ignore").decode()
-    s = s.lower().replace("\xa0", " ")
-    s = re.sub(r"\b(jr|sr|ii|iii|iv|v)\b", " ", s)
-    s = re.sub(r"[^a-z0-9 ]", " ", s)
-    return re.sub(r"\s+", " ", s).strip()
 
 
 def coerce_numeric(df, cols):
@@ -828,21 +843,19 @@ def estimate_shrink_k(pairs, prior, default, band):
 
 def segment_pitcher_blocks(df, rate_cols):
     df = coerce_numeric(df, rate_cols)
-    has_pos = "Pos." in df.columns
-    pos = df["Pos."].astype(str).str.upper().str.strip() if has_pos else None
 
     pitcher_rows, hitter_rows = [], []
     for _, g in df.groupby(["game_pk", "table_index"], sort=False):
         cur_p = cur_side = None
-        away_key = norm_name(g["away_probable_pitcher"].iloc[0]) if "away_probable_pitcher" in g else ""
-        home_key = norm_name(g["home_probable_pitcher"].iloc[0]) if "home_probable_pitcher" in g else ""
-        for idx, r in g.iterrows():
+        for _, r in g.iterrows():
             name = r.get("Name")
-            nkey = norm_name(name)
-            is_pitcher = (pos.loc[idx] == "P") if has_pos else (nkey in {away_key, home_key} and nkey != "")
-            if is_pitcher:
+            # Structural detection: is_sp marks the probable-pitcher row and
+            # sp_side names its side. This replaces name matching, which failed
+            # when a missing bio left a `pitcher_{pid}` fallback name and could
+            # collide on identical normalized names across the two probables.
+            if bool(r.get("is_sp")):
                 cur_p = name
-                cur_side = "away" if nkey == away_key else "home" if nkey == home_key else None
+                cur_side = r.get("sp_side")
                 pitcher_rows.append({**r.to_dict(), "pitcher_side": cur_side})
                 continue
             if cur_p is None:
@@ -979,12 +992,16 @@ def build_platoon_matchup(pitcher_rows_df, opp_hitters_df, people,
         return o.get("ops"), (o.get("pa") or 0)
 
     def _shrink(obs, n, overall, overall_pa, Lcell, Loverall, K):
-        if overall is not None and not pd.isna(overall) and Loverall:
+        # NaN is truthy, so a bare `if Lcell`/`Loverall` would let an empty
+        # (early-season) league cell propagate a NaN prior; guard explicitly.
+        Lcell_ok = pd.notna(Lcell) and Lcell
+        Loverall_ok = pd.notna(Loverall) and Loverall
+        if overall is not None and not pd.isna(overall) and Loverall_ok:
             op = overall_pa or 0
             overall_reg = (op * overall + K0 * Loverall) / (op + K0)
-            prior = overall_reg * (Lcell / Loverall) if Lcell else overall_reg
+            prior = overall_reg * (Lcell / Loverall) if Lcell_ok else overall_reg
         else:
-            prior = Lcell if Lcell else Loverall
+            prior = Lcell if Lcell_ok else Loverall
         if obs is None or pd.isna(obs):
             return prior
         n = n or 0
@@ -1530,15 +1547,15 @@ def _consensus_html(away_abbr, home_abbr, a, h):
     if pl_home is not None and pl_away is not None:
         pl_fav = home_abbr if pl_home >= pl_away else away_abbr
         pl_d = abs(pl_home - pl_away)
-        tag, tcl = ("AGREE", "agree") if pl_fav == xw_fav else ("DIVERGE", "diverge")
         pl_txt = f"OPS → <b>{pl_fav}</b> Δ{pl_d:.3f}"
     else:
-        tag, tcl = "n/a", "na"
         pl_txt = "OPS → <span class='muted'>unreliable / no split</span>"
     xw_txt = (f"xwOBA → <b>{xw_fav}</b> Δ{xw_d:.3f}" if xw_d is not None
               else "xwOBA → <span class='muted'>—</span>")
-    return (f"<div class='consensus'>{xw_txt}<span class='dot'>·</span>{pl_txt}"
-            f"<span class='ctag {tcl}'>{tag}</span></div>")
+    # The AGREE/DIVERGE tag was removed: the xwOBA and platoon-OPS lenses share
+    # the same lineup-vs-starter inputs, so their agreement is not independent
+    # confirmation. The two per-lens readouts remain.
+    return (f"<div class='consensus'>{xw_txt}<span class='dot'>·</span>{pl_txt}</div>")
 
 
 def _market_html(o, away_abbr, home_abbr, built_short):
@@ -1590,10 +1607,19 @@ def cmb_card(g, built_short):
     a, h = g["away"], g["home"]
     away_abbr, home_abbr = g["away_abbr"], g["home_abbr"]
     # a = away SP -> his xw_edge is the HOME offense edge (same as before).
-    home_off = a["xw_edge"] if a["xw_edge"] is not None else 0.0
-    away_off = h["xw_edge"] if h["xw_edge"] is not None else 0.0
-    delta = abs(home_off - away_off)
-    fav = home_abbr if home_off >= away_off else away_abbr
+    # When either side's edge is missing there is no defined lean: render a
+    # neutral "no lean" pill (no favorite, no Δ) rather than substituting 0.0,
+    # which would fabricate a tie/favorite. Card position is unchanged.
+    if a["xw_edge"] is not None and h["xw_edge"] is not None:
+        home_off, away_off = a["xw_edge"], h["xw_edge"]
+        delta = abs(home_off - away_off)
+        fav = home_abbr if home_off >= away_off else away_abbr
+        lean_html = (f"<span class='lean'><span class='lk'>lean</span>"
+                     f"<span class='lt'>{fav}</span>"
+                     f"<span class='ld'>Δxw {delta:.3f}</span></span>")
+    else:
+        lean_html = ("<span class='lean nolean'><span class='lk'>lean</span>"
+                     "<span class='lt'>—</span><span class='ld'>no lean</span></span>")
     when = " · ".join(x for x in (g.get("time_pt"), g.get("venue")) if x)
     game_no = f" <span class='game-no'>{_esc(g['game_label'])}</span>" if g.get("game_label") else ""
     return (
@@ -1602,9 +1628,8 @@ def cmb_card(g, built_short):
         f"<span class='teams'>{away_abbr}{_l10_span(g.get('away_l10'))} "
         f"<span class='at'>@</span> {home_abbr}{_l10_span(g.get('home_l10'))}{game_no}</span>"
         + (f"<span class='when'>{_esc(when)}</span>" if when else "")
-        + f"<span class='lean'><span class='lk'>lean</span><span class='lt'>{fav}</span>"
-        f"<span class='ld'>Δxw {delta:.3f}</span></span>"
-        f"{_consensus_html(away_abbr, home_abbr, a, h)}"
+        + lean_html
+        + f"{_consensus_html(away_abbr, home_abbr, a, h)}"
         "</div>"
         f"{_market_html(g.get('odds'), away_abbr, home_abbr, built_short)}"
         f"<div class='sides'>{_side_html('AWAY', a, g['league_baseline'])}"
@@ -1672,6 +1697,10 @@ def _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
     for gpk, gg in xw_df.groupby("game_pk", sort=False):
         a, h = _rows_by_side(gg)
         if a is None or h is None:
+            miss = ", ".join(s for s, v in (("away SP", a), ("home SP", h)) if v is None)
+            matchup = gg["matchup"].iloc[0] if "matchup" in gg.columns and len(gg) else "?"
+            log(f"  game skipped from paired cards — missing {miss}: "
+                f"{matchup} (game_pk={gpk})")
             continue
         srow = slate_map.get(gpk)
 
@@ -1896,6 +1925,8 @@ body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 var(--sans);
   border-radius:4px;padding:4px 10px}
 .lean .lk{font:600 10px/1 var(--sans);letter-spacing:.14em;text-transform:uppercase;color:rgba(var(--lean),1)}
 .lean .lt{font:800 15px/1 var(--sans)}
+.lean.nolean{border-color:var(--line);background:var(--surface-2)}
+.lean.nolean .lk,.lean.nolean .lt,.lean.nolean .ld{color:var(--muted)}
 .card-note{display:flex;flex-direction:column;gap:4px;padding:14px 16px 16px;color:var(--muted)}
 .card-note b{color:var(--ink);font-size:13px}.card-note span{font-size:12px}
 .lean .ld{font:500 12px/1 var(--mono);color:var(--muted);font-variant-numeric:tabular-nums}
@@ -1904,10 +1935,6 @@ body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 var(--sans);
 .consensus b{color:var(--ink);font-weight:600}
 .consensus .muted{color:var(--faint);font-weight:500}
 .consensus .dot{color:var(--faint)}
-.ctag{font:700 10px/1 var(--sans);letter-spacing:.12em;border-radius:3px;padding:2px 7px}
-.ctag.agree{color:rgba(var(--cool),1);border:1px solid rgba(var(--cool),.5)}
-.ctag.diverge{color:rgba(var(--warm),1);border:1px solid rgba(var(--warm),.5)}
-.ctag.na{color:var(--faint);border:1px solid var(--line)}
 
 /* ---------- market strip ---------- */
 .market{display:flex;flex-wrap:wrap;border-bottom:1px solid var(--line-2);background:var(--surface-2)}
