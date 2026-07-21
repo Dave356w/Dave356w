@@ -2148,10 +2148,14 @@ def render_grades_html(built_txt):
             if m:
                 chip("xwOBA · vs mkt", f"{m['w']}-{m['n'] - m['w']}",
                      f"z {m['z']:+.2f} · {m['roi_units']:+.2f}u flat")
+            m5 = mkt.get("platoon_f5")
+            if m5:
+                chip("Platoon · vs F5 mkt", f"{m5['w']}-{m5['n'] - m5['w']}",
+                     f"z {m5['z']:+.2f} · {m5['roi_units']:+.2f}u flat")
         notes.append("xwOBA graded full-game vs devigged DK closing ML (ESPN capture); "
-                     "z and flat ROI are the primary metrics. Platoon graded F5 "
-                     "outcome-only, reliable-split games — no F5 market benchmark "
-                     "exists in the capture stack.")
+                     "z and flat ROI are the primary metrics. Platoon graded vs the "
+                     "devigged DK F5 closing ML from the same capture (ties push), "
+                     "reliable-split games only.")
         summary = ("<div class='gr-summary'>" + "".join(chips) + "</div>"
                    + (f"<div class='gr-note'>{' · '.join(notes)}</div>" if notes else ""))
 
