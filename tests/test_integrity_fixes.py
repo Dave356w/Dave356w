@@ -192,7 +192,7 @@ class RecentStarterEraTests(unittest.TestCase):
         side = dict(
             t="R", pl_fl={}, R=5, L=4, S=0, has_pl=False, padv=0,
             era_l5=3.03, era_l5_gs=5, era_season=3.85,
-            pit_xw=.310, pit_k=27.1, pit_hh=35.0,
+            pit_xw=.310, pit_k=27.1, pit_bb=7.5, pit_hh=35.0,
             pl_sp=None, pl_sp_raw=None, pl_edge=None, pl_reliable=False,
             xw_edge=-.015, p="Test Pitcher", opp_abbr="TST", lu_status="posted",
             opp_xw=None, pl_mx=None, hitters=[],
