@@ -3,6 +3,13 @@
 GitHub cron is static, so the workflow polls every 15 minutes and this script
 gates expensive work against the live MLB slate. Push/manual events always run;
 the daily early-morning schedule always runs to grade completed games.
+
+The pregame window is 15-90 minutes before first pitch. Actions frequently
+delays scheduled runs by 5-20+ minutes, so a narrow window can fall entirely
+between two delayed polls and no pregame refresh ever fires; a 75-minute-wide
+window survives ~30 minutes of jitter. Later builds inside the window refresh
+still-pending rows, so the lock is still the LAST accepted pregame snapshot
+(grade_leans.py keeps rejecting anything captured at/after scheduled start).
 """
 
 import json
@@ -15,7 +22,7 @@ ET = ZoneInfo("America/New_York")
 ROLLOVER_HOUR = 3
 DAILY_GRADE_CRON = "17 4 * * *"
 MIN_MINUTES_BEFORE = 15
-MAX_MINUTES_BEFORE = 45
+MAX_MINUTES_BEFORE = 90
 
 
 def slate_date(now):
@@ -67,7 +74,8 @@ def decision(event_name, event_schedule, now=None, games=None):
         return True, day, f"schedule lookup failed; fail-open ({type(exc).__name__})"
     if due:
         return True, day, "pregame window: " + ",".join(map(str, due))
-    return False, day, "no game 15-45 minutes from first pitch"
+    return False, day, (f"no game {MIN_MINUTES_BEFORE}-{MAX_MINUTES_BEFORE} "
+                        "minutes from first pitch")
 
 
 def emit_output(name, value):

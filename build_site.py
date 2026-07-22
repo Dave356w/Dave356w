@@ -2197,6 +2197,19 @@ def _lean_ml_cell(r, lean_col):
     return _fmt_ml_cell(r.get("close_home_ml") if lean == r.get("home") else r.get("close_away_ml"))
 
 
+def _pl_f5_ml_cell(r):
+    """F5 closing ML of the platoon lean's side; muted when the platoon lean
+    itself renders muted (unreliable splits), '—' when lean or market absent."""
+    lean = r.get("ops_lean")
+    if not isinstance(lean, str) or not lean:
+        return "<span class='muted'>—</span>"
+    cell = _fmt_ml_cell(r.get("f5_close_home_ml") if lean == r.get("home")
+                        else r.get("f5_close_away_ml"))
+    ops_valid = bool(r["ops_valid"]) if pd.notna(r["ops_valid"]) else False
+    if not ops_valid and not cell.startswith("<span"):
+        cell = f"<span class='muted'>{cell}</span>"
+    return cell
+
 def _lean_cell(lean, delta, muted=False):
     if not isinstance(lean, str) or not lean:
         return "<span class='muted'>—</span>"
@@ -2205,7 +2218,7 @@ def _lean_cell(lean, delta, muted=False):
     return f"<span class='muted'>{txt}</span>" if muted else txt
 
 
-def _grades_row(r, show_ml=False):
+def _grades_row(r, show_ml=False, show_f5_ml=False):
     status = str(r["status"])
     fa, fh = pd.to_numeric(r["full_away"], errors="coerce"), pd.to_numeric(r["full_home"], errors="coerce")
     f5a, f5h = pd.to_numeric(r["f5_away"], errors="coerce"), pd.to_numeric(r["f5_home"], errors="coerce")
@@ -2216,9 +2229,16 @@ def _grades_row(r, show_ml=False):
         final = f"{int(fa)}–{int(fh)}" if pd.notna(fa) and pd.notna(fh) else "<span class='muted'>—</span>"
         f5 = f"{int(f5a)}–{int(f5h)}" if pd.notna(f5a) and pd.notna(f5h) else "<span class='muted'>—</span>"
     ops_valid = bool(r["ops_valid"]) if pd.notna(r["ops_valid"]) else False
+    # Muted marker when the accepted snapshot locked with a fully projected
+    # lineup on either side (lineup_status_* audit columns; NaN on legacy rows).
+    proj_mark = ""
+    if any(str(r.get(c)) == "projected"
+           for c in ("lineup_status_away", "lineup_status_home")):
+        proj_mark = (" <span class='muted' title='locked with a projected "
+                     "lineup'>°</span>")
     cells = [
         _esc(r["game_date"]),
-        (f"{_esc(r['away'])} <span class='muted'>@</span> {_esc(r['home'])}"
+        (f"{_esc(r['away'])} <span class='muted'>@</span> {_esc(r['home'])}{proj_mark}"
          f"<br><span class='sp'>{_esc(r.get('away_sp') or '—')} v {_esc(r.get('home_sp') or '—')}</span>"),
         _lean_cell(r["xw_lean"], r["xw_delta"]),
         _lean_cell(r["ops_lean"] if ops_valid else None, r["ops_delta"]) if ops_valid
@@ -2226,6 +2246,8 @@ def _grades_row(r, show_ml=False):
     ]
     if show_ml:
         cells += [_lean_ml_cell(r, "xw_lean")]
+    if show_f5_ml:
+        cells += [_pl_f5_ml_cell(r)]
     cells += [
         final, f5,
         _wlt_badge(r["xw_full"]),
@@ -2294,11 +2316,18 @@ def render_grades_html(built_txt):
                    + (f"<div class='gr-note'>{' · '.join(notes)}</div>" if notes else ""))
 
     show_ml = "close_home_ml" in led.columns and led["close_home_ml"].notna().any()
+    # F5 close column degrades cleanly on pre-market ledgers, same gate
+    # pattern as the full-game "xw ML" column.
+    show_f5_ml = ("f5_close_home_ml" in led.columns
+                  and "f5_close_away_ml" in led.columns
+                  and (led["f5_close_home_ml"].notna().any()
+                       or led["f5_close_away_ml"].notna().any()))
     heads = (["Date", "Game", "xwOBA lean", "Platoon lean"]
              + (["xw ML"] if show_ml else [])
+             + (["pl F5 ML"] if show_f5_ml else [])
              + ["Final", "F5", "xw F", "pl F5"])
     led = led.sort_values(["game_date", "game_pk"], ascending=[False, True])
-    rows = "".join(_grades_row(r, show_ml) for _, r in led.iterrows())
+    rows = "".join(_grades_row(r, show_ml, show_f5_ml) for _, r in led.iterrows())
     table = ("<div class='gr-tablewrap'><table class='gr'><thead><tr>"
              + "".join(f"<th>{h}</th>" for h in heads)
              + f"</tr></thead><tbody>{rows}</tbody></table></div>")
@@ -2331,6 +2360,23 @@ def empty_slate_html(built_txt):
         "<div class='lg-keys'><span class='k'>No MLB games scheduled for this date.</span></div>"
         "</div>") + records_strip_html()
     return html_document(body, built_txt)
+
+
+def _lineup_status_columns(lineup_df):
+    """Per-game lineup resolution (posted / partial_filled / projected +
+    posted counts) keyed by game_pk, for stamping onto the lean dumps so the
+    ledger can audit lineup freshness at lock. lineup_resolution_audit.csv is
+    overwritten each build; the dump is what persists. Instrumentation only —
+    no effect on leans or grading."""
+    if lineup_df is None or lineup_df.empty:
+        return {}
+    idx = lineup_df.set_index("game_pk")
+    return {
+        "lineup_status_away": idx["away_lineup_status"],
+        "lineup_status_home": idx["home_lineup_status"],
+        "lineup_posted_away": idx["away_posted_count"],
+        "lineup_posted_home": idx["home_posted_count"],
+    }
 
 
 # ============================================================
@@ -2410,12 +2456,15 @@ def main():
     # rejects rows captured at/after their scheduled start, so in-progress
     # refreshes cannot alter the published pregame record.
     snapshot_utc = datetime.now(UTC).isoformat()
+    lu_cols = _lineup_status_columns(data["lineup_projection_df"])
     for frame in (matchup_df, matchup_platoon_df):
         if frame is not None and not frame.empty:
             frame["model_tag"] = MODEL_TAG
             frame["snapshot_utc"] = snapshot_utc
             if "game_datetime_utc" in frame.columns:
                 frame["scheduled_start_utc"] = frame["game_datetime_utc"]
+            for col, series in lu_cols.items():
+                frame[col] = frame["game_pk"].map(series)
     os.makedirs(DATA_DIR, exist_ok=True)
     matchup_df.to_csv(os.path.join(DATA_DIR, f"leans_{SLATE_DATE}_xw.csv"), index=False)
     if matchup_platoon_df is not None and not matchup_platoon_df.empty:

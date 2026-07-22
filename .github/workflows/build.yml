@@ -9,8 +9,9 @@ on:
   workflow_dispatch:
   # GitHub cron cannot be rewritten from the day's MLB slate. Instead, a cheap
   # poll runs off the top of the hour and schedule_gate.py starts the full build
-  # only when a game is 15-45 minutes from first pitch. This normally produces
-  # a snapshot near T-30 while tolerating modest Actions queue delay. A separate
+  # only when a game is 15-90 minutes from first pitch. The wide window rides
+  # out Actions queue delay (runs regularly start 5-20+ min late); pending-row
+  # refresh means the lock is the last pregame snapshot regardless. A separate
   # early-morning pass grades the prior slate. Timezone-aware entries avoid DST
   # drift; push/manual events always build immediately.
   schedule:
@@ -19,9 +20,10 @@ on:
     - cron: '7,22,37,52 10-23 * * *'
       timezone: America/New_York
 
-# Allow exactly one deploy at a time; don't cancel an in-flight deploy.
+# Serialize whole workflow runs: exactly one build/deploy at a time, queued
+# not cancelled, so overlapping crons can't interleave ledger commits.
 concurrency:
-  group: pages
+  group: site-build
   cancel-in-progress: false
 
 permissions:
@@ -125,11 +127,16 @@ jobs:
 
       # The ledger persists by being committed. Pushes made with the default
       # GITHUB_TOKEN don't retrigger this workflow, so no recursion. The
-      # rebase absorbs any commit that landed on main mid-run.
+      # rebase absorbs any commit that landed on main mid-run. Stage data/
+      # BEFORE the rebase: untracked lean CSVs would otherwise abort the
+      # rebase when a mid-run commit already carries the same files, and a
+      # failed commit loses this build's snapshots (stale locks). Autostash
+      # re-applies the stash unstaged, so re-add after the pull too.
       - name: Commit ledger
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/
           git pull --rebase --autostash origin main
           git add data/
           git diff --cached --quiet || git commit -m "ledger $(date -u +%FT%H:%MZ)"

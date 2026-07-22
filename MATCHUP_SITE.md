@@ -122,9 +122,10 @@ Environment variables:
   behaviour across that day's runs.
 - **Slate-aware cadence.** A lightweight Actions poll runs every 15 minutes
   from 10am–11:59pm ET. `schedule_gate.py` fetches that day's MLB schedule and
-  launches the full build only when at least one game is 15–45 minutes from
-  first pitch, normally refreshing near T-30. A separate 4:17am ET pass grades
-  the prior slate. Push and manual runs always build immediately.
+  launches the full build only when at least one game is 15–90 minutes from
+  first pitch; the wide window rides out Actions queue jitter, and pending-row
+  refresh keeps the lock at the last pregame snapshot. A separate 4:17am ET
+  pass grades the prior slate. Push and manual runs always build immediately.
 - **Chronological slate.** Matchup cards render by scheduled first pitch rather
   than lean strength; doubleheader game number and gamePk provide stable ties.
 

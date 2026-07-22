@@ -114,13 +114,24 @@ LEDGER_COLS = [
     "status","full_away","full_home","f5_away","f5_home",
     "xw_full","xw_f5","ops_full","ops_f5",
 ]
-AUDIT_COLS = ["snapshot_utc", "scheduled_start_utc", "lock_status"]
+# Audit-only columns. The lineup_* fields record each side's lineup
+# resolution (posted / partial_filled / projected + posted count) as of the
+# accepted snapshot, so lineup freshness at lock is auditable per row. They
+# are NaN on legacy rows dumped before the columns existed — intentionally
+# never backfilled — and instrumentation only: no effect on grading.
+AUDIT_COLS = [
+    "snapshot_utc", "scheduled_start_utc", "lock_status",
+    "lineup_status_away", "lineup_status_home",
+    "lineup_posted_away", "lineup_posted_home",
+]
 MODEL_FIELDS = [
     "game_date","away","home","away_sp","home_sp","model_tag",
     "B_home","B_away","P_awaySP","P_homeSP","d_lineup","d_sp",
     "home_off_edge","away_off_edge","xw_net","xw_lean","xw_delta",
     "ops_net","ops_lean","ops_delta","ops_valid","consensus",
     "snapshot_utc","scheduled_start_utc","lock_status",
+    "lineup_status_away","lineup_status_home",
+    "lineup_posted_away","lineup_posted_home",
 ]
 
 def load_ledger():
@@ -135,8 +146,13 @@ def load_ledger():
         led = led[persisted_cols]
         # W/L/T grade columns still all-NaN read back from CSV as float64;
         # pandas >=3 refuses string assignment into float columns, so force
-        # object dtype before grading writes W/L/T into them.
-        for c in ("xw_full", "xw_f5", "ops_full", "ops_f5"):
+        # object dtype before grading writes W/L/T into them. Same for the
+        # lineup status audit columns, which are all-NaN on a ledger that
+        # predates them but receive strings on pending refresh, and for
+        # consensus, whose "NA" marker read_csv parses as NaN (a ledger with
+        # no AGREE/DIVERGE row yet reloads it as float64).
+        for c in ("xw_full", "xw_f5", "ops_full", "ops_f5", "consensus",
+                  "lineup_status_away", "lineup_status_home"):
             led[c] = led[c].astype(object)
         return led
     return pd.DataFrame(columns=LEDGER_COLS + AUDIT_COLS)
@@ -215,6 +231,10 @@ def rows_from_dump(xw_df, pl_df):
             ops_valid=ops_valid, consensus=consensus,
             snapshot_utc=snapshot_utc, scheduled_start_utc=scheduled_start_utc,
             lock_status=lock_status,
+            lineup_status_away=a.get("lineup_status_away", np.nan),
+            lineup_status_home=a.get("lineup_status_home", np.nan),
+            lineup_posted_away=a.get("lineup_posted_away", np.nan),
+            lineup_posted_home=a.get("lineup_posted_home", np.nan),
             status="pending", full_away=np.nan, full_home=np.nan,
             f5_away=np.nan, f5_home=np.nan,
             xw_full=None, xw_f5=None, ops_full=None, ops_f5=None,
