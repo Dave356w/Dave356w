@@ -1785,16 +1785,21 @@ def _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
     return games
 
 
-def _legend(model_label, built_txt):
+def _legend_head(model_label, built_txt):
+    """Slim title bar shown above the cards; the how-to-read guide moved to
+    the bottom of the page (_legend_guide) so the cards lead."""
     date = SLATE_DATE
     head = model_label
     if built_txt:
         head += f" · built {built_txt}"
     elif date:
         head += f" · {date}"
+    return f"<div class='legend'><div class='lg-title'>{head}</div></div>"
+
+
+def _legend_guide():
     return (
         "<div class='legend'>"
-        f"<div class='lg-title'>{head}</div>"
         "<div class='lg-lead'><b>How to read a card:</b> each one sets a team's "
         "projected lineup against the other team's starting pitcher, both ways. The "
         "<b>lean</b> points to the side the models favor — a bigger tilt means a "
@@ -2342,14 +2347,15 @@ def render_combined_html(xw_df, pl_df, pitcher_rows_df, built_txt,
                                   opp_hitters_df=opp_hitters_df, detail_df=detail_df,
                                   lg_ops=lg_ops, slate_df=slate_df, lineup_df=lineup_df,
                                   league_baseline=league_baseline, odds=odds, last10=last10)
-    legend = _legend("MLB matchup leans — xwOBA + platoon OPS", built_txt)
-    strip = records_strip_html()
+    head = _legend_head("MLB matchup leans — xwOBA + platoon OPS", built_txt)
+    # Cards lead; the how-to-read guide and the record strip sit below them.
+    footer = _legend_guide() + records_strip_html()
     if not games:
-        inner = legend + strip + "<div class='legend'><div class='lg-title'>No paired probables yet — " \
-                                 "probables/lineups not posted. Check back closer to first pitch.</div></div>"
+        inner = head + "<div class='legend'><div class='lg-title'>No paired probables yet — " \
+                       "probables/lineups not posted. Check back closer to first pitch.</div></div>" + footer
         return html_document(inner, built_txt)
     built_short = built_txt.split("·")[0].strip()
-    body = legend + strip + build_combined(games, built_short)
+    body = head + build_combined(games, built_short) + footer
     return html_document(body, built_txt)
 
 
