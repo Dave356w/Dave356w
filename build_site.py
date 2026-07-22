@@ -1753,8 +1753,8 @@ def _pyth_cell(py, o):
             val += " <span class='cg'>prior-light</span>"
         elif hg is not None and ag is not None:
             val += f" <span class='cg'>n {int(hg)}/{int(ag)}</span>"
-    return (f"<div class='mcell ctrl'><div class='l'>pythag</div>"
-            f"<div class='v'>{val}</div></div>")
+    return (f"<div class='mcell ctrl'><div class='l'>pythag</div>")
+            #f"<div class='v'>{val}</div></div>")
 
 
 def _market_html(o, py, away_abbr, home_abbr, built_short):
