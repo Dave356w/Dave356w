@@ -228,6 +228,38 @@ class SlateCompletenessTests(unittest.TestCase):
         self.assertIn("TB", html)
         self.assertIn("BOS", html)
 
+    def test_legend_guide_and_record_strip_render_below_cards(self):
+        slate = pd.DataFrame([dict(
+            game_pk=789,
+            away_abbrev="TB",
+            home_abbrev="BOS",
+            away_team="Tampa Bay Rays",
+            home_team="Boston Red Sox",
+            away_probable_pitcher=None,
+            home_probable_pitcher=None,
+            game_datetime_utc="2026-07-17T23:10:00Z",
+            game_number=2,
+            double_header="Y",
+            venue="Fenway Park",
+        )])
+        html = build_site.render_combined_html(
+            pd.DataFrame(columns=["game_pk", "side"]),
+            pd.DataFrame(),
+            pd.DataFrame(),
+            "test build",
+            slate_df=slate,
+        )
+        # Title bar leads, cards next, how-to-read guide after the cards, and
+        # the record strip (when a ledger exists) at the very bottom. Match on
+        # element markup, not bare class names, which also appear in the CSS.
+        self.assertLess(html.index("<div class='lg-title'>"),
+                        html.index("Awaiting paired"))
+        self.assertLess(html.index("Awaiting paired"),
+                        html.index("How to read a card"))
+        if "<div class='gradestrip'>" in html:
+            self.assertLess(html.index("How to read a card"),
+                            html.index("<div class='gradestrip'>"))
+
 
 class RecentStarterEraTests(unittest.TestCase):
     def test_last_five_era_excludes_relief_current_day_and_older_starts(self):
