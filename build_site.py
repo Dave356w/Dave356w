@@ -1730,11 +1730,12 @@ def _consensus_html(away_abbr, home_abbr, a, h):
     return (f"<div class='consensus'>{xw_txt}<span class='dot'>·</span>{pl_txt}</div>")
 
 
-def _pyth_cell(py, o, home_abbr):
+def _pyth_cell(py, o):
     """Pythagorean CONTROL cell for the market strip. Deliberately styled as a
     benchmark, not a lean: the home win% from the naive season runs-scored /
     runs-allowed model, its gap vs the market's devigged implied %, and a
-    prior-games badge so a thin, early-season estimate is visible as such.
+    prior-games badge so a thin, early-season estimate is visible as such. The
+    label is just `pythag` — the legend carries the control/benchmark intent.
     Missing data renders an em-dash like the other market cells, never a
     default."""
     py = py or {}
@@ -1752,7 +1753,7 @@ def _pyth_cell(py, o, home_abbr):
             val += " <span class='cg'>prior-light</span>"
         elif hg is not None and ag is not None:
             val += f" <span class='cg'>n {int(hg)}/{int(ag)}</span>"
-    return (f"<div class='mcell ctrl'><div class='l'>Control P({home_abbr}) · pythag</div>"
+    return (f"<div class='mcell ctrl'><div class='l'>pythag</div>"
             f"<div class='v'>{val}</div></div>")
 
 
@@ -1774,7 +1775,7 @@ def _market_html(o, py, away_abbr, home_abbr, built_short):
         + _mlcell("DK F5", home_abbr, o.get("f5_home_ml"), o.get("f5_open_home_ml"))
         + f"<div class='mcell'><div class='l'>Total</div><div class='v'>{tot}</div></div>"
         + f"<div class='mcell'><div class='l'>Implied {home_abbr} (devig)</div><div class='v'>{ph}</div></div>"
-        + _pyth_cell(py, o, home_abbr)
+        + _pyth_cell(py, o)
         + f"<div class='mcell'><div class='l'>F5 impl {home_abbr} (devig · cond.)</div><div class='v'>{ph5}</div></div>"
         + f"<div class='mcell note'><div class='l'>Market</div><div class='v'>as of build {built_short}</div></div>"
         + "</div>")
@@ -2046,7 +2047,7 @@ def _legend_guide():
         "above or below a league-average bat.</span>"
         "<span><b>Shading</b> Cells tint ember when the number favors hitters and steel when "
         "it favors the pitcher; the deeper the tint, the further from the league average.</span>"
-        "<span><b>Control P(home) · pythag</b> A benchmark, not a pick. A deliberately "
+        "<span><b>pythag</b> A benchmark, not a pick. A deliberately "
         "naive Pythagorean win probability for the home team, built only from each "
         "club's runs scored and allowed so far this season (plus a league home-field "
         "adjustment) — no lineups, no starter, no market. It's here to measure the "
