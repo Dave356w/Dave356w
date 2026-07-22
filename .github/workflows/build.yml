@@ -119,6 +119,23 @@ jobs:
       - name: Grade leans (post-build)
         run: python grade_leans.py
 
+      # Pythagorean CONTROL arm: a no-lookahead, market-free win probability
+      # (season-to-date runs scored/allowed, Log5, explicit league home-field
+      # term) merged into the ledger under its own PYTHAG_TAG-versioned columns,
+      # plus a daily slate for the cards and an evaluation report. It is a
+      # benchmark for the xwOBA/platoon leans, never a lean itself, so
+      # continue-on-error keeps a control hiccup from ever blocking the
+      # grade/build/deploy path or the ledger commit below.
+      - name: Pythagorean control (merge + slate + report)
+        continue-on-error: true
+        env:
+          PYTHAG_TAG: pythag_v1
+          SLATE_DATE: ${{ needs.plan.outputs.slate_date }}
+        run: |
+          python pythag_control.py --season 2026 \
+            --ledger data/mlb_lean_ledger.csv --merge-ledger \
+            --slate-date "$SLATE_DATE" --report
+
       # build_site.py initially renders grades.html before fetching the slate.
       # Re-render after post-build ingestion so the deployed table and pending
       # count include every matchup produced by this exact build.
