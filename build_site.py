@@ -98,6 +98,20 @@ FULL_LEAGUE_PLATOON_BASELINES = True
 MIN_LEAGUE_BASELINE_PA = 1
 RECENT_STARTS = 5
 
+# Opener fallback. A probable pitcher whose recent starts average fewer than
+# OPENER_MAX_AVG_IP innings is an "opener": his own Statcast line reflects a
+# handful of batters and is not representative of the innings his club will
+# actually pitch. For those games the xwOBA lean substitutes a batters-faced-
+# weighted aggregate of the club's rostered pitching staff (built from the
+# custom leaderboard the build already fetches) for the opener's own numbers.
+# The platoon lens is left alone -- an opener's tiny vL/vR split already fails
+# the reliability gate, so that lens abstains on its own. Each affected side is
+# flagged (card badge + ledger opener_* columns) so these games stay auditable.
+OPENER_FALLBACK = True
+OPENER_MAX_AVG_IP = 3.0     # avg IP/start below this => treat probable as an opener
+OPENER_MIN_STARTS = 2       # need a repeated pattern, not one rain-shortened start
+OPENER_MIN_STAFF = 3        # team aggregate needs at least this many staff pitchers
+
 
 def slate_date_now():
     """Slate date in ET with a ~3am rollover. Env override wins."""
@@ -338,6 +352,9 @@ def load_recent_start_era(ids, limit=RECENT_STARTS):
         out[pid] = {
             "era": round(earned_runs * 27.0 / outs, 2) if outs > 0 else np.nan,
             "starts": len(recent),
+            # Average innings per recent start -- the opener signal. Openers are
+            # credited a game started but pitch ~1 inning, so this runs low.
+            "avg_ip": round(outs / 3.0 / len(recent), 2) if recent else np.nan,
         }
         time.sleep(REQUEST_DELAY)
     return out
@@ -442,6 +459,81 @@ def resolve_lineup(game_pk, side, team_id, batter_stat, return_meta=False):
 
 STAT_COLS = ["BBE", "LA°", "EV", "Hard Hit%", "xwOBA", "xBA", "xSLG", "K%", "BB%"]
 BB_COLS = ["GB%", "FB%", "LD%", "PU%", "Pull%", "Straight%", "Oppo%"]
+
+_pitcher_roster_cache = {}
+
+
+def pitcher_roster(team_id):
+    """Active-roster pitcher ids for a team (StatsAPI)."""
+    team_id = int(team_id)
+    if team_id in _pitcher_roster_cache:
+        return _pitcher_roster_cache[team_id]
+    data = _get_json(f"https://statsapi.mlb.com/api/v1/teams/{team_id}/roster",
+                     {"rosterType": "active"})
+    ids = [int(r["person"]["id"]) for r in data.get("roster", [])
+           if (r.get("position", {}) or {}).get("abbreviation") == "P"]
+    _pitcher_roster_cache[team_id] = ids
+    return ids
+
+
+def team_pitching_aggregate(team_id, pitcher_stat, pitcher_bb):
+    """Batters-faced-weighted aggregate of a club's rostered pitchers over the
+    Savant custom leaderboard the build already fetched. Returns (stat, bb)
+    dicts shaped like pitcher_stat[pid] / pitcher_bb[pid] so an opener's entry
+    can be swapped for the staff aggregate, or (None, None) when too few staff
+    pitchers appear in the leaderboard to trust the aggregate."""
+    weighted = []
+    for pid in pitcher_roster(team_id):
+        pa = _f((pitcher_stat.get(pid) or {}).get("PA"))
+        if pa and pa > 0:
+            weighted.append((pid, pa))
+    if len(weighted) < OPENER_MIN_STAFF:
+        return None, None
+    stat = {}
+    for col in STAT_COLS:
+        if col == "BBE":                       # a count, summed below, not a rate
+            continue
+        num = den = 0.0
+        for pid, pa in weighted:
+            v = _f(pitcher_stat[pid].get(col))
+            if v is None:
+                continue
+            num += v * pa
+            den += pa
+        stat[col] = round(num / den, 3) if den else np.nan
+    # Large batters-faced total => the shrinkage step barely pulls the staff
+    # xwOBA toward league, which is what we want for a full-staff sample.
+    stat["PA"] = float(sum(pa for _, pa in weighted))
+    stat["BBE"] = float(sum(_f((pitcher_stat.get(pid) or {}).get("BBE")) or 0
+                            for pid, _ in weighted))
+    bb_weighted = [(pid, _f((pitcher_stat.get(pid) or {}).get("BBE")))
+                   for pid, _ in weighted]
+    bb_weighted = [(pid, w) for pid, w in bb_weighted if w and w > 0]
+    bb = {}
+    for col in BB_COLS:
+        num = den = 0.0
+        for pid, w in bb_weighted:
+            v = _f((pitcher_bb.get(pid) or {}).get(col))
+            if v is None:
+                continue
+            num += v * w
+            den += w
+        bb[col] = round(num / den, 3) if den else np.nan
+    return stat, bb
+
+
+def opener_pids(recent_start_era, max_avg_ip=OPENER_MAX_AVG_IP,
+                min_starts=OPENER_MIN_STARTS):
+    """Probable-pitcher ids whose recent starts average below the opener IP
+    threshold over at least min_starts starts."""
+    out = set()
+    for pid, m in (recent_start_era or {}).items():
+        ip = (m or {}).get("avg_ip")
+        if ip is None or (isinstance(ip, float) and np.isnan(ip)):
+            continue
+        if ip < max_avg_ip and int((m or {}).get("starts") or 0) >= min_starts:
+            out.add(int(pid))
+    return out
 
 
 def _meta(row):
@@ -634,6 +726,44 @@ def fetch_all(slate_date):
 
     log(f"Loading probable-pitcher ERA over the last {RECENT_STARTS} starts ...")
     recent_start_era = load_recent_start_era(prob_ids)
+
+    # Opener fallback: swap each opener's own Statcast pitching line for his
+    # club's batters-faced-weighted staff aggregate, in place in the lookup
+    # dicts so the whole matchup pipeline downstream uses the staff numbers
+    # without further plumbing. opener_sides drives the card badge + ledger flag.
+    opener_sides = set()
+    if OPENER_FALLBACK:
+        pid_team, pid_sides = {}, {}
+        for _, g in slate_df.iterrows():
+            for side in ("away", "home"):
+                pid = g.get(f"{side}_probable_pitcher_id")
+                tid = g.get(f"{side}_team_id")
+                if pd.notna(pid) and pd.notna(tid):
+                    pid_team[int(pid)] = int(tid)
+                    pid_sides.setdefault(int(pid), []).append((int(g["game_pk"]), side))
+        team_agg = {}
+        for pid in opener_pids(recent_start_era):
+            tid = pid_team.get(pid)
+            if tid is None:
+                continue
+            if tid not in team_agg:
+                try:
+                    team_agg[tid] = team_pitching_aggregate(tid, pitcher_stat, pitcher_bb)
+                except Exception as e:  # noqa: BLE001
+                    log(f"  opener aggregate failed for team {tid}: {e!r}")
+                    team_agg[tid] = (None, None)
+            st_agg, bb_agg = team_agg[tid]
+            if st_agg is None:
+                log(f"  opener pid={pid}: team {tid} staff too thin in leaderboard; "
+                    "keeping own line")
+                continue
+            pitcher_stat[pid] = st_agg
+            pitcher_bb[pid] = bb_agg
+            opener_sides.update(pid_sides.get(pid, []))
+            log(f"  opener fallback: pid={pid} avg_ip="
+                f"{recent_start_era[pid].get('avg_ip')} -> team {tid} staff "
+                f"xwOBA {st_agg.get('xwOBA')} (n_bf {st_agg.get('PA'):.0f})")
+
     try:
         league_baseline["ERA"] = load_league_era()
     except Exception as e:  # noqa: BLE001
@@ -693,6 +823,7 @@ def fetch_all(slate_date):
         "player_splits_hit_league": player_splits_hit_league,
         "people_league_hitters": people_league_hitters,
         "lineup_projection_df": lineup_projection_df,
+        "opener_sides": opener_sides,
     }
 
 
@@ -1487,6 +1618,10 @@ def _sp_stat_cell(lab, val, fmt, sub=None, heat=""):
 
 def _side_html(label, d, league_baseline):
     badge = f"<span class='hand'>{d['t']}HP</span>" if d["t"] in ("L", "R") else ""
+    opener = ("<span class='flag warn' title='Opener: the club's batters-faced-"
+              "weighted staff aggregate is shown in place of this starter's own "
+              "Statcast line, since he faces only a handful of batters.'>opener · "
+              "team staff</span>") if d.get("is_opener") else ""
     thin = (f"<span class='flag warn'>thin hand split {d['pl_fl']['thin']} BF</span>"
             if "thin" in d["pl_fl"] else "")
     comp = (f"{d['R']}R/{d['L']}L" + (f"/{d['S']}S" if d["S"] else "")) if d["has_pl"] else "—"
@@ -1523,7 +1658,7 @@ def _side_html(label, d, league_baseline):
     pl_flag = "" if (not d["has_pl"] or d["pl_reliable"]) else " <span class='flag mute'>prior-driven</span>"
     return (
         f"<section class='side'>"
-        f"<div class='sp'><div class='who'><span class='nm'>{_esc(d['p'])}</span>{badge}{thin}</div>"
+        f"<div class='sp'><div class='who'><span class='nm'>{_esc(d['p'])}</span>{badge}{opener}{thin}</div>"
         f"<div class='role'>{label} SP · faces {_esc(d['opp_abbr'])} lineup · {comp}{padv}</div>"
         f"<div class='spstats'>{stats}</div></div>"
         f"<div class='agg'>"
@@ -1718,6 +1853,7 @@ def _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
                      opp_xw=_f(r.get("opp_xwOBA")),
                      xw_edge=_f(r.get("edge_xwOBA")),
                      lu_status=(lu_map.get(gpk) or {}).get(opp_lu_side),
+                     is_opener=bool(r.get("opener")),
                      has_pl=False, R=0, L=0, S=0, padv=0, pl_fl={},
                      pl_sp=None, pl_sp_raw=None, pl_mx=None, pl_edge=None,
                      pl_reliable=False,
@@ -1836,6 +1972,10 @@ def _legend_guide():
         f"starter's last few outings (up to {RECENT_STARTS}; the label shows the real count "
         "when fewer), with his season ERA alongside for trend. Context only — a handful of "
         "starts is mostly noise.</span>"
+        "<span><b>opener · team staff</b> When a starter is an opener (his recent "
+        "outings average under three innings), his own line covers too few batters to "
+        "mean much, so the pitcher stats shown are his club's batters-faced-weighted "
+        "staff aggregate instead. The platoon read abstains on these.</span>"
         "<span><b>Edge bars</b> For each hitter, how far his matchup projection (xOPS) sits "
         "above or below a league-average bat.</span>"
         "<span><b>Shading</b> Cells tint ember when the number favors hitters and steel when "
@@ -2433,6 +2573,16 @@ def main():
     log("Building xwOBA matchup ...")
     matchup_df, pitcher_rows_df, opp_hitters_df = build_xwoba_matchup(
         data["pitchers_df"], data["league_baseline"])
+
+    # Flag each side whose starter got the opener staff-aggregate fallback, so
+    # the card can badge it and the ledger can slice these games out later
+    # (the metric swap itself already happened upstream in fetch_all).
+    opener_sides = data.get("opener_sides") or set()
+    if matchup_df is not None and not matchup_df.empty:
+        matchup_df["opener"] = [
+            (int(gpk), side) in opener_sides
+            for gpk, side in zip(matchup_df["game_pk"], matchup_df["side"])
+        ]
 
     if matchup_df is None or matchup_df.empty:
         # Probables/lineups not posted yet. Render a valid "check back" page

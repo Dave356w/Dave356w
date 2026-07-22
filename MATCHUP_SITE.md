@@ -69,6 +69,28 @@ Model version `xw+plat_consol_v5` adds xwOBA shrinkage on top of v4:
   untouched. This changes the prediction math, so v5 starts a new `RECORD_TAGS`
   family and its games never mix with v4 or v2/v3.
 
+### Opener fallback (v5, `OPENER_FALLBACK`)
+
+A probable pitcher whose recent starts average fewer than `OPENER_MAX_AVG_IP`
+innings (over at least `OPENER_MIN_STARTS` starts) is treated as an **opener**:
+his own Statcast line reflects only a handful of batters and is not
+representative of the innings his club will actually pitch. For those sides the
+xwOBA lean substitutes a **batters-faced-weighted aggregate of the club's
+rostered pitching staff** (built from the pitcher custom leaderboard the build
+already fetches, plus one active-roster call per opener club) for the opener's
+own numbers; the swap happens in the lookup dicts, so the whole matchup
+pipeline downstream uses the staff numbers. The aggregate carries the staff's
+total batters faced as its sample size, so the xwOBA shrinkage step barely pulls
+it toward league. If too few staff pitchers appear in the leaderboard
+(`OPENER_MIN_STAFF`) the fallback is skipped and the opener's own line is kept.
+
+The platoon lens is deliberately left untouched — an opener's tiny vL/vR split
+already fails the reliability gate, so that lens abstains on its own. Openers
+are rare, so this refinement stays inside the `xw+plat_consol_v5` family rather
+than starting a new one; every affected side is flagged (a card badge and the
+ledger `opener_away` / `opener_home` columns) so opener games can be sliced out
+of the record if that mixing ever needs auditing.
+
 ## Files
 
 | Path | Purpose |

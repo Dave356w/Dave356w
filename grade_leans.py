@@ -105,6 +105,18 @@ def _fx(v):
         v = float(v); return None if math.isnan(v) else v
     except (TypeError, ValueError):
         return None
+def _optbool(v):
+    """Tri-state bool: True/False from a dump column, NaN when absent (legacy)."""
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return np.nan
+    if isinstance(v, str):
+        s = v.strip().lower()
+        if s in ("true", "1", "1.0"):
+            return True
+        if s in ("false", "0", "0.0"):
+            return False
+        return np.nan
+    return bool(v)
 
 LEDGER_COLS = [
     "game_pk","game_date","away","home","away_sp","home_sp","model_tag",
@@ -123,6 +135,9 @@ AUDIT_COLS = [
     "snapshot_utc", "scheduled_start_utc", "lock_status",
     "lineup_status_away", "lineup_status_home",
     "lineup_posted_away", "lineup_posted_home",
+    # True when that side's starter got the opener staff-aggregate fallback
+    # (build_site.OPENER_FALLBACK). NaN on legacy rows; never backfilled.
+    "opener_away", "opener_home",
 ]
 MODEL_FIELDS = [
     "game_date","away","home","away_sp","home_sp","model_tag",
@@ -132,6 +147,7 @@ MODEL_FIELDS = [
     "snapshot_utc","scheduled_start_utc","lock_status",
     "lineup_status_away","lineup_status_home",
     "lineup_posted_away","lineup_posted_home",
+    "opener_away","opener_home",
 ]
 
 def load_ledger():
@@ -152,7 +168,8 @@ def load_ledger():
         # consensus, whose "NA" marker read_csv parses as NaN (a ledger with
         # no AGREE/DIVERGE row yet reloads it as float64).
         for c in ("xw_full", "xw_f5", "ops_full", "ops_f5", "consensus",
-                  "lineup_status_away", "lineup_status_home"):
+                  "lineup_status_away", "lineup_status_home",
+                  "opener_away", "opener_home"):
             led[c] = led[c].astype(object)
         return led
     return pd.DataFrame(columns=LEDGER_COLS + AUDIT_COLS)
@@ -235,6 +252,8 @@ def rows_from_dump(xw_df, pl_df):
             lineup_status_home=a.get("lineup_status_home", np.nan),
             lineup_posted_away=a.get("lineup_posted_away", np.nan),
             lineup_posted_home=a.get("lineup_posted_home", np.nan),
+            opener_away=_optbool(a.get("opener")),
+            opener_home=_optbool(h.get("opener")),
             status="pending", full_away=np.nan, full_home=np.nan,
             f5_away=np.nan, f5_home=np.nan,
             xw_full=None, xw_f5=None, ops_full=None, ops_f5=None,
