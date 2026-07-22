@@ -1378,6 +1378,43 @@ def fetch_pregame_odds(slate_df):
     return out
 
 
+def load_pythag_slate(slate_date):
+    """game_pk -> {p_home, split_p_home, basis, home_games, away_games} from the
+    daily slate CSV pythag_control.py emits (data/pythag_slate_<date>.csv).
+
+    Display-only and strictly best-effort, exactly like the odds map: a missing
+    file (the control step is continue-on-error and may be skipped, or not have
+    run yet) yields an empty map, and the card's control cell renders an
+    em-dash — never a default. Keyed by int game_pk to match the odds map."""
+    path = os.path.join(DATA_DIR, f"pythag_slate_{slate_date}.csv")
+    out = {}
+    if not os.path.exists(path):
+        log(f"pythag control slate not found ({path}) -> control cell em-dashes")
+        return out
+    try:
+        df = pd.read_csv(path)
+    except Exception as e:  # noqa: BLE001
+        log(f"pythag control slate read failed ({e!r}) -> control cell em-dashes")
+        return out
+    for _, r in df.iterrows():
+        try:
+            gpk = int(r["gamePk"])
+        except (TypeError, ValueError):
+            continue
+        ph = _f(r.get("pythag_p_home"))
+        if ph is None:
+            continue
+        out[gpk] = dict(
+            p_home=ph,
+            split_p_home=_f(r.get("pythag_split_p_home")),
+            basis=str(r.get("pythag_basis") or ""),
+            home_games=_f(r.get("home_prior_games_all")),
+            away_games=_f(r.get("away_prior_games_all")),
+        )
+    log(f"pythag control attached: {len(out)}/{len(df)} games")
+    return out
+
+
 def fetch_last10_records(slate_df=None):
     """team_id -> 'W-L' over each team's last 10 games (StatsAPI standings).
 
@@ -1693,7 +1730,34 @@ def _consensus_html(away_abbr, home_abbr, a, h):
     return (f"<div class='consensus'>{xw_txt}<span class='dot'>·</span>{pl_txt}</div>")
 
 
-def _market_html(o, away_abbr, home_abbr, built_short):
+def _pyth_cell(py, o):
+    """Pythagorean CONTROL cell for the market strip. Deliberately styled as a
+    benchmark, not a lean: the home win% from the naive season runs-scored /
+    runs-allowed model, its gap vs the market's devigged implied %, and a
+    prior-games badge so a thin, early-season estimate is visible as such. The
+    label is just `pythag` — the legend carries the control/benchmark intent.
+    Missing data renders an em-dash like the other market cells, never a
+    default."""
+    py = py or {}
+    ph = py.get("p_home")
+    if ph is None:
+        val = "—"
+    else:
+        val = f"{ph * 100:.1f}%"
+        mk = (o or {}).get("p_home")
+        if mk is not None:
+            val += f" <span class='cd'>{(ph - mk) * 100:+.1f} vs mkt</span>"
+        basis = str(py.get("basis") or "")
+        hg, ag = py.get("home_games"), py.get("away_games")
+        if basis == "league":
+            val += " <span class='cg'>prior-light</span>"
+        elif hg is not None and ag is not None:
+            val += f" <span class='cg'>n {int(hg)}/{int(ag)}</span>"
+    return (f"<div class='mcell ctrl'><div class='l'>pythag</div>"
+            f"<div class='v'>{val}</div></div>")
+
+
+def _market_html(o, py, away_abbr, home_abbr, built_short):
     o = o or {}
     def _mlcell(prefix, lab, cur, opn):
         sub = f" <span class='mv'>← {_fmt_ml(opn)} open</span>" if opn is not None else ""
@@ -1711,6 +1775,7 @@ def _market_html(o, away_abbr, home_abbr, built_short):
         + _mlcell("DK F5", home_abbr, o.get("f5_home_ml"), o.get("f5_open_home_ml"))
         + f"<div class='mcell'><div class='l'>Total</div><div class='v'>{tot}</div></div>"
         + f"<div class='mcell'><div class='l'>Implied {home_abbr} (devig)</div><div class='v'>{ph}</div></div>"
+        + _pyth_cell(py, o)
         + f"<div class='mcell'><div class='l'>F5 impl {home_abbr} (devig · cond.)</div><div class='v'>{ph5}</div></div>"
         + f"<div class='mcell note'><div class='l'>Market</div><div class='v'>as of build {built_short}</div></div>"
         + "</div>")
@@ -1766,7 +1831,7 @@ def cmb_card(g, built_short):
         + lean_html
         + f"{_consensus_html(away_abbr, home_abbr, a, h)}"
         "</div>"
-        f"{_market_html(g.get('odds'), away_abbr, home_abbr, built_short)}"
+        f"{_market_html(g.get('odds'), g.get('pythag'), away_abbr, home_abbr, built_short)}"
         f"<div class='sides'>{_side_html('AWAY', a, g['league_baseline'])}"
         f"{_side_html('HOME', h, g['league_baseline'])}</div>"
         "</article>")
@@ -1799,7 +1864,8 @@ def build_combined(games, built_short):
 def _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
                           opp_hitters_df=None, detail_df=None, lg_ops=None,
                           slate_df=None, lineup_df=None,
-                          league_baseline=None, odds=None, last10=None):
+                          league_baseline=None, odds=None, last10=None,
+                          pythag=None):
     last10 = last10 or {}
 
     def _l10(team_id):
@@ -1891,6 +1957,7 @@ def _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
             time_pt=_game_time_pt(srow.get("game_datetime_utc")) if srow is not None else "",
             venue=str(srow.get("venue") or "") if srow is not None else "",
             odds=(odds or {}).get(gpk),
+            pythag=(pythag or {}).get(gpk),
             league_baseline={**(league_baseline or {}), "OPS": lg_ops_f},
         ))
 
@@ -1980,6 +2047,14 @@ def _legend_guide():
         "above or below a league-average bat.</span>"
         "<span><b>Shading</b> Cells tint ember when the number favors hitters and steel when "
         "it favors the pitcher; the deeper the tint, the further from the league average.</span>"
+        "<span><b>pythag</b> A benchmark, not a pick. A deliberately "
+        "naive Pythagorean win probability for the home team, built only from each "
+        "club's runs scored and allowed so far this season (plus a league home-field "
+        "adjustment) — no lineups, no starter, no market. It's here to measure the "
+        "lineup-based leans against a simple baseline: <i>vs mkt</i> is how far it sits "
+        "from the market's devigged implied %, and <i>n</i> is the prior games each club "
+        "(home/away) has on the books — a low count or <i>prior-light</i> means the "
+        "estimate is still thin. Never bet the control; watch whether the leans beat it.</span>"
         "<span class='wide'>Moneylines are DraftKings prices pulled from ESPN at build time. "
         "Cards are listed in chronological order, earliest first pitch first.</span>"
         "</div></div>")
@@ -1995,6 +2070,7 @@ CSS = r"""/* ============================================================
   --cool:52,116,168;            /* steel  -- pitcher-favorable  */
   --lean:176,124,16;            /* amber  -- lean pill / links  */
   --amberbg:246,196,86;
+  --ctrl:96,110,150;            /* slate  -- pythag control / benchmark */
   --chip-fg:#1b1e25;
   --mono:ui-monospace,"SF Mono","Cascadia Mono",Menlo,Consolas,monospace;
   --sans:system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;
@@ -2005,6 +2081,7 @@ CSS = r"""/* ============================================================
   --bg:#0f1418; --surface:#171d24; --surface-2:#131920; --ink:#e7ecef;
   --muted:#96a2ad; --faint:#5f6c78; --line:#242e38; --line-2:#1c242c;
   --warm:236,122,72; --cool:96,158,208; --lean:244,196,96; --amberbg:244,196,96;
+  --ctrl:140,154,196;
   --chip-fg:#e7ecef;
   --shadow:0 1px 2px rgba(0,0,0,.45),0 14px 32px -22px rgba(0,0,0,.8);
 }}
@@ -2012,6 +2089,7 @@ html[data-theme="dark"]{
   --bg:#0f1418; --surface:#171d24; --surface-2:#131920; --ink:#e7ecef;
   --muted:#96a2ad; --faint:#5f6c78; --line:#242e38; --line-2:#1c242c;
   --warm:236,122,72; --cool:96,158,208; --lean:244,196,96; --amberbg:244,196,96;
+  --ctrl:140,154,196;
   --chip-fg:#e7ecef;
   --shadow:0 1px 2px rgba(0,0,0,.45),0 14px 32px -22px rgba(0,0,0,.8);
 }
@@ -2089,6 +2167,12 @@ body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 var(--sans);
 .mcell .v{font:500 13px/1.4 var(--mono);font-variant-numeric:tabular-nums}
 .mcell .v .mv{color:var(--faint);font-size:11px}
 .mcell.note .v{color:var(--faint);font-size:11px;padding-top:3px}
+/* Pythagorean CONTROL cell: a slate left-rule and muted delta/badge mark it as
+   a benchmark, deliberately unlike the amber lean pill so it never reads as a pick. */
+.mcell.ctrl{border-left:3px solid rgb(var(--ctrl));background:rgba(var(--ctrl),.06)}
+.mcell.ctrl .l{color:rgb(var(--ctrl))}
+.mcell.ctrl .cd{color:var(--muted);font-size:11px;margin-left:5px;font-variant-numeric:tabular-nums}
+.mcell.ctrl .cg{color:var(--faint);font-size:10px;margin-left:5px;letter-spacing:.03em}
 
 /* ---------- two sides ---------- */
 .sides{display:grid;grid-template-columns:1fr 1fr}
@@ -2482,11 +2566,13 @@ def render_grades_html(built_txt):
 def render_combined_html(xw_df, pl_df, pitcher_rows_df, built_txt,
                          opp_hitters_df=None, detail_df=None, lg_ops=None,
                          slate_df=None, lineup_df=None,
-                         league_baseline=None, odds=None, last10=None):
+                         league_baseline=None, odds=None, last10=None,
+                         pythag=None):
     games = _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
                                   opp_hitters_df=opp_hitters_df, detail_df=detail_df,
                                   lg_ops=lg_ops, slate_df=slate_df, lineup_df=lineup_df,
-                                  league_baseline=league_baseline, odds=odds, last10=last10)
+                                  league_baseline=league_baseline, odds=odds, last10=last10,
+                                  pythag=pythag)
     head = _legend_head("MLB matchup leans — xwOBA + platoon OPS", built_txt)
     # Cards lead; the how-to-read guide and the record strip sit below them.
     footer = _legend_guide() + records_strip_html()
@@ -2640,13 +2726,21 @@ def main():
         log(f"last-10 records skipped: {e!r}")
         last10 = {}
 
+    log("Loading Pythagorean control slate (best-effort, display-only) ...")
+    try:
+        pythag = load_pythag_slate(SLATE_DATE)
+    except Exception as e:  # noqa: BLE001
+        log(f"pythag control slate skipped: {e!r}")
+        pythag = {}
+
     log("Rendering index.html ...")
     html = render_combined_html(
         matchup_df, matchup_platoon_df, pitcher_rows_df, built_txt,
         opp_hitters_df=opp_hitters_df, detail_df=platoon_detail_df,
         lg_ops=league_ops_overall, slate_df=data["slate_df"],
         lineup_df=data["lineup_projection_df"],
-        league_baseline=data["league_baseline"], odds=odds, last10=last10)
+        league_baseline=data["league_baseline"], odds=odds, last10=last10,
+        pythag=pythag)
     with open(out_path, "w") as f:
         f.write(html)
     log(f"Wrote {out_path} ({len(html):,} bytes, {len(matchup_df)} matchup rows)")

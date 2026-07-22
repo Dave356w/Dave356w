@@ -102,6 +102,26 @@ jobs:
       - name: Grade leans (pre-build)
         run: python grade_leans.py
 
+      # Pythagorean CONTROL arm — runs BEFORE the build so the daily slate CSV it
+      # emits is on disk when build_site.py renders the cards (each card shows the
+      # control's home win% beside the market implied %). It also merges a
+      # no-lookahead, market-free win probability (season-to-date runs
+      # scored/allowed, Log5, explicit league home-field term) into the ledger
+      # under its own PYTHAG_TAG-versioned columns, and writes an evaluation
+      # report. It is a benchmark for the xwOBA/platoon leans, never a lean
+      # itself, so continue-on-error keeps a control hiccup from ever blocking
+      # the build/grade/deploy path — build_site treats a missing slate as
+      # em-dashes, exactly like an odds outage.
+      - name: Pythagorean control (merge + slate + report)
+        continue-on-error: true
+        env:
+          PYTHAG_TAG: pythag_v1
+          SLATE_DATE: ${{ needs.plan.outputs.slate_date }}
+        run: |
+          python pythag_control.py --season 2026 \
+            --ledger data/mlb_lean_ledger.csv --merge-ledger \
+            --slate-date "$SLATE_DATE" --report
+
       # Build into ./public. On a hard fetch failure the script exits non-zero
       # WITHOUT writing index.html, so the steps below don't run, the artifact
       # is never uploaded, the deploy job is skipped, and the last good page
