@@ -4,23 +4,23 @@ Control arm. Season-to-date runs scored/allowed, empirical-Bayes shrunk, Log5, p
 
 ## Calibration
 
-pooled + HFA         n=1524  mean P(home) 0.5308  realized 0.5243  Brier 0.2483  vs constant 0.2494  skill +0.5%
-venue split + HFA    n=1524  mean P(home) 0.5313  realized 0.5243  Brier 0.2488  vs constant 0.2494  skill +0.3%
+pooled + HFA         n=1525  mean P(home) 0.5308  realized 0.5239  Brier 0.2483  vs constant 0.2494  skill +0.5%
+venue split + HFA    n=1525  mean P(home) 0.5312  realized 0.5239  Brier 0.2487  vs constant 0.2494  skill +0.3%
 
 reliability (pooled):
      P(home) bin |     n |   pred |   real |         95% CI
      (0.4, 0.45] |    20 |  0.439 |  0.300 | [0.15,0.52]
      (0.45, 0.5] |   225 |  0.480 |  0.453 | [0.39,0.52]
-     (0.5, 0.55] |   977 |  0.531 |  0.532 | [0.50,0.56]
+     (0.5, 0.55] |   978 |  0.530 |  0.532 | [0.50,0.56]
      (0.55, 0.6] |   249 |  0.567 |  0.570 | [0.51,0.63]
       (0.6, 1.0] |    53 |  0.615 |  0.547 | [0.41,0.67]
 
-straight-up side record: 828-696 (0.543) [0.518, 0.568]
+straight-up side record: 828-697 (0.543) [0.518, 0.568]
 
 ## Versus the market close (paired, same games)
 
-n=222   control Brier 0.2471   market Brier 0.2428
-paired ΔBrier (control − market): +0.00430  date-cluster 95% CI [-0.00252, +0.01048]
+n=223   control Brier 0.2472   market Brier 0.2432
+paired ΔBrier (control − market): +0.00394  date-cluster 95% CI [-0.00313, +0.01030]
 Note: the market's entire edge over a constant base rate is ~0.003 Brier. A single season resolves ΔBrier only to about ±0.005, so this line is a sanity check, not a verdict.
 
 ## Head-to-head on disagreement (the higher-powered test)
