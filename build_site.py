@@ -2196,6 +2196,20 @@ def _lean_ml_cell(r, lean_col):
         return "<span class='muted'>—</span>"
     return _fmt_ml_cell(r.get("close_home_ml") if lean == r.get("home") else r.get("close_away_ml"))
 
+
+def _pl_f5_ml_cell(r):
+    """F5 closing ML of the platoon lean's side; muted when the platoon lean
+    itself renders muted (unreliable splits), '—' when lean or market absent."""
+    lean = r.get("ops_lean")
+    if not isinstance(lean, str) or not lean:
+        return "<span class='muted'>—</span>"
+    cell = _fmt_ml_cell(r.get("f5_close_home_ml") if lean == r.get("home")
+                        else r.get("f5_close_away_ml"))
+    ops_valid = bool(r["ops_valid"]) if pd.notna(r["ops_valid"]) else False
+    if not ops_valid and not cell.startswith("<span"):
+        cell = f"<span class='muted'>{cell}</span>"
+    return cell
+
 def _lean_cell(lean, delta, muted=False):
     if not isinstance(lean, str) or not lean:
         return "<span class='muted'>—</span>"
@@ -2204,7 +2218,7 @@ def _lean_cell(lean, delta, muted=False):
     return f"<span class='muted'>{txt}</span>" if muted else txt
 
 
-def _grades_row(r, show_ml=False):
+def _grades_row(r, show_ml=False, show_f5_ml=False):
     status = str(r["status"])
     fa, fh = pd.to_numeric(r["full_away"], errors="coerce"), pd.to_numeric(r["full_home"], errors="coerce")
     f5a, f5h = pd.to_numeric(r["f5_away"], errors="coerce"), pd.to_numeric(r["f5_home"], errors="coerce")
@@ -2232,6 +2246,8 @@ def _grades_row(r, show_ml=False):
     ]
     if show_ml:
         cells += [_lean_ml_cell(r, "xw_lean")]
+    if show_f5_ml:
+        cells += [_pl_f5_ml_cell(r)]
     cells += [
         final, f5,
         _wlt_badge(r["xw_full"]),
@@ -2300,11 +2316,18 @@ def render_grades_html(built_txt):
                    + (f"<div class='gr-note'>{' · '.join(notes)}</div>" if notes else ""))
 
     show_ml = "close_home_ml" in led.columns and led["close_home_ml"].notna().any()
+    # F5 close column degrades cleanly on pre-market ledgers, same gate
+    # pattern as the full-game "xw ML" column.
+    show_f5_ml = ("f5_close_home_ml" in led.columns
+                  and "f5_close_away_ml" in led.columns
+                  and (led["f5_close_home_ml"].notna().any()
+                       or led["f5_close_away_ml"].notna().any()))
     heads = (["Date", "Game", "xwOBA lean", "Platoon lean"]
              + (["xw ML"] if show_ml else [])
+             + (["pl F5 ML"] if show_f5_ml else [])
              + ["Final", "F5", "xw F", "pl F5"])
     led = led.sort_values(["game_date", "game_pk"], ascending=[False, True])
-    rows = "".join(_grades_row(r, show_ml) for _, r in led.iterrows())
+    rows = "".join(_grades_row(r, show_ml, show_f5_ml) for _, r in led.iterrows())
     table = ("<div class='gr-tablewrap'><table class='gr'><thead><tr>"
              + "".join(f"<th>{h}</th>" for h in heads)
              + f"</tr></thead><tbody>{rows}</tbody></table></div>")

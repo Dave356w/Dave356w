@@ -369,6 +369,29 @@ class LineupStatusDumpTests(unittest.TestCase):
         self.assertEqual(build_site._lineup_status_columns(None), {})
 
 
+class PlatoonF5MlCellTests(unittest.TestCase):
+    @staticmethod
+    def _row(**kw):
+        base = dict(ops_lean="MIL", ops_valid=True, away="MIL", home="CHC",
+                    f5_close_away_ml=-115.0, f5_close_home_ml=105.0)
+        base.update(kw)
+        return pd.Series(base)
+
+    def test_renders_lean_sides_f5_close(self):
+        self.assertEqual(build_site._pl_f5_ml_cell(self._row()), "-115")
+        self.assertEqual(build_site._pl_f5_ml_cell(self._row(ops_lean="CHC")), "+105")
+
+    def test_missing_lean_or_market_is_dash(self):
+        dash = "<span class='muted'>—</span>"
+        self.assertEqual(build_site._pl_f5_ml_cell(self._row(ops_lean=np.nan)), dash)
+        self.assertEqual(
+            build_site._pl_f5_ml_cell(self._row(f5_close_away_ml=np.nan)), dash)
+
+    def test_unreliable_platoon_lean_renders_muted(self):
+        cell = build_site._pl_f5_ml_cell(self._row(ops_valid=False))
+        self.assertEqual(cell, "<span class='muted'>-115</span>")
+
+
 class BattingOrderSlotWeightingTests(unittest.TestCase):
     def test_slot_pa_weights_follow_lineup_position(self):
         w = build_site.slot_pa_weights([1, 5, 9])
