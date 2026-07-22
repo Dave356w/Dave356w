@@ -190,6 +190,39 @@ class LedgerLockTests(unittest.TestCase):
                 out = grade_leans.ingest(ledger)
             self.assertTrue(out.empty)
 
+    def test_opener_flag_carries_into_ledger_per_side(self):
+        with tempfile.TemporaryDirectory() as td:
+            xw = _dump_rows(
+                999,
+                "2026-07-20",
+                "2026-07-20T12:00:00Z",
+                "2026-07-20T23:00:00Z",
+            )
+            # away starter is an opener, home starter is not.
+            xw.loc[xw["side"] == "away", "opener"] = True
+            xw.loc[xw["side"] == "home", "opener"] = False
+            xw.to_csv(os.path.join(td, "leans_2026-07-20_xw.csv"), index=False)
+            ledger = pd.DataFrame(columns=grade_leans.LEDGER_COLS + grade_leans.AUDIT_COLS)
+            with mock.patch.object(grade_leans, "DATA_DIR", td):
+                out = grade_leans.ingest(ledger)
+            self.assertEqual(bool(out.iloc[0]["opener_away"]), True)
+            self.assertEqual(bool(out.iloc[0]["opener_home"]), False)
+
+    def test_legacy_dump_without_opener_column_stays_nan(self):
+        with tempfile.TemporaryDirectory() as td:
+            xw = _dump_rows(
+                998,
+                "2026-07-20",
+                "2026-07-20T12:00:00Z",
+                "2026-07-20T23:00:00Z",
+            )
+            xw.to_csv(os.path.join(td, "leans_2026-07-20_xw.csv"), index=False)
+            ledger = pd.DataFrame(columns=grade_leans.LEDGER_COLS + grade_leans.AUDIT_COLS)
+            with mock.patch.object(grade_leans, "DATA_DIR", td):
+                out = grade_leans.ingest(ledger)
+            self.assertTrue(pd.isna(out.iloc[0]["opener_away"]))
+            self.assertTrue(pd.isna(out.iloc[0]["opener_home"]))
+
 
 class SlateCompletenessTests(unittest.TestCase):
     def test_games_sort_chronologically_with_stable_doubleheader_ties(self):
@@ -282,7 +315,24 @@ class RecentStarterEraTests(unittest.TestCase):
                 mock.patch.object(build_site, "_get_json", return_value=response), \
                 mock.patch.object(build_site.time, "sleep"):
             result = build_site.load_recent_start_era([123])
-        self.assertEqual(result[123], {"era": 3.03, "starts": 5})
+        # 89 outs over 5 starts -> avg_ip 5.93; ERA excludes relief + current day.
+        self.assertEqual(result[123], {"era": 3.03, "starts": 5, "avg_ip": 5.93})
+
+    def test_avg_ip_flags_opener_from_short_starts(self):
+        # Three ~1-inning "starts" (opener pattern) -> avg_ip well below 3.
+        rows = [("2026-07-16", "1.0", 1, 1), ("2026-07-10", "1.1", 0, 1),
+                ("2026-07-04", "0.2", 2, 1)]
+        response = {"stats": [{"splits": [
+            {"date": d, "game": {"gamePk": i + 1},
+             "stat": {"inningsPitched": ip, "earnedRuns": er, "gamesStarted": gs}}
+            for i, (d, ip, er, gs) in enumerate(rows)
+        ]}]}
+        with mock.patch.object(build_site, "SLATE_DATE", "2026-07-17"), \
+                mock.patch.object(build_site, "_get_json", return_value=response), \
+                mock.patch.object(build_site.time, "sleep"):
+            result = build_site.load_recent_start_era([55])
+        self.assertLess(result[55]["avg_ip"], build_site.OPENER_MAX_AVG_IP)
+        self.assertEqual(build_site.opener_pids(result), {55})
 
     def test_league_era_uses_earned_runs_and_baseball_innings(self):
         response = {"stats": [{"splits": [
@@ -399,6 +449,98 @@ class LineupStatusDumpTests(unittest.TestCase):
     def test_empty_or_missing_lineup_df_yields_no_columns(self):
         self.assertEqual(build_site._lineup_status_columns(pd.DataFrame()), {})
         self.assertEqual(build_site._lineup_status_columns(None), {})
+
+
+class OpenerFallbackTests(unittest.TestCase):
+    def test_opener_pids_respects_ip_and_starts_thresholds(self):
+        era = {
+            1: {"avg_ip": 1.2, "starts": 3},   # opener
+            2: {"avg_ip": 5.8, "starts": 20},  # workhorse
+            3: {"avg_ip": 1.0, "starts": 1},   # one short start only -> not yet
+            4: {"avg_ip": np.nan, "starts": 0},  # no starts
+        }
+        self.assertEqual(build_site.opener_pids(era), {1})
+
+    def test_team_pitching_aggregate_is_bf_weighted(self):
+        pitcher_stat = {
+            10: {"xwOBA": .300, "K%": 28.0, "BB%": 6.0, "PA": 400, "BBE": 200,
+                 "xBA": .230, "xSLG": .380, "EV": 88.0, "LA°": 12.0, "Hard Hit%": 35.0},
+            11: {"xwOBA": .360, "K%": 20.0, "BB%": 9.0, "PA": 100, "BBE": 60,
+                 "xBA": .270, "xSLG": .440, "EV": 90.0, "LA°": 14.0, "Hard Hit%": 42.0},
+            12: {"xwOBA": .320, "K%": 24.0, "BB%": 7.0, "PA": 250, "BBE": 130,
+                 "xBA": .245, "xSLG": .400, "EV": 89.0, "LA°": 13.0, "Hard Hit%": 38.0},
+        }
+        pitcher_bb = {
+            10: {"GB%": 45.0, "FB%": 25.0, "LD%": 20.0, "PU%": 10.0,
+                 "Pull%": 40.0, "Straight%": 35.0, "Oppo%": 25.0},
+            11: {"GB%": 40.0, "FB%": 30.0, "LD%": 20.0, "PU%": 10.0,
+                 "Pull%": 42.0, "Straight%": 34.0, "Oppo%": 24.0},
+            12: {"GB%": 50.0, "FB%": 22.0, "LD%": 18.0, "PU%": 10.0,
+                 "Pull%": 38.0, "Straight%": 36.0, "Oppo%": 26.0},
+        }
+        with mock.patch.object(build_site, "pitcher_roster", return_value=[10, 11, 12]):
+            stat, bb = build_site.team_pitching_aggregate(1, pitcher_stat, pitcher_bb)
+        exp_xw = round((.300 * 400 + .360 * 100 + .320 * 250) / 750, 3)
+        self.assertEqual(stat["xwOBA"], exp_xw)
+        self.assertEqual(stat["PA"], 750.0)          # staff total BF -> minimal shrink
+        self.assertEqual(stat["BBE"], 390.0)         # summed, not averaged
+        exp_gb = round((45.0 * 200 + 40.0 * 60 + 50.0 * 130) / 390, 3)
+        self.assertEqual(bb["GB%"], exp_gb)          # batted-ball rates weighted by BBE
+
+    def test_team_aggregate_none_when_staff_too_thin(self):
+        pitcher_stat = {10: {"xwOBA": .300, "PA": 400, "BBE": 200}}
+        with mock.patch.object(build_site, "pitcher_roster", return_value=[10]):
+            stat, bb = build_site.team_pitching_aggregate(1, pitcher_stat, {})
+        self.assertIsNone(stat)
+        self.assertIsNone(bb)
+
+    def test_substituted_staff_xwoba_drives_the_matchup(self):
+        # The fallback works by replacing the opener's pitcher_stat entry before
+        # build_tables; the staff xwOBA must then surface as the side's lean
+        # input, barely shrunk thanks to the staff's large batters-faced total.
+        slate = pd.DataFrame([dict(
+            game_pk=1, game_date="2026-07-22",
+            game_datetime_utc="2026-07-22T23:00:00Z", matchup="AWY@HOM",
+            away_team="Away Team", home_team="Home Team",
+            away_probable_pitcher="Opener Guy", home_probable_pitcher="Normal Guy",
+            away_probable_pitcher_id=900, home_probable_pitcher_id=901,
+            savant_preview_url="")])
+        lineups = {1: (list(range(1, 10)), list(range(11, 20)))}
+        bstat = dict(xwOBA=.320, xBA=.24, xSLG=.40, **{"K%": 22.0, "BB%": 8.0,
+                     "EV": 88.0, "LA°": 12.0, "Hard Hit%": 38.0}, PA=400, BBE=180)
+        batter_stat = {p: dict(bstat) for p in range(1, 20)}
+        batter_bb = {p: {c: 40.0 for c in build_site.BB_COLS} for p in range(1, 20)}
+        pitcher_stat = {
+            901: dict(xwOBA=.300, xBA=.23, xSLG=.38, **{"K%": 26.0, "BB%": 6.0,
+                      "EV": 87.0, "LA°": 11.0, "Hard Hit%": 34.0}, PA=500, BBE=220),
+            # opener's own line already replaced by the staff aggregate:
+            900: dict(xwOBA=.345, xBA=.25, xSLG=.42, **{"K%": 21.0, "BB%": 8.0,
+                      "EV": 89.0, "LA°": 13.0, "Hard Hit%": 40.0}, PA=3200, BBE=1500),
+        }
+        pitcher_bb = {p: {c: 41.0 for c in build_site.BB_COLS} for p in (900, 901)}
+        people = {p: {"name": f"P{p}", "pos": "P" if p in (900, 901) else "OF",
+                      "bats": "R", "throws": "R"}
+                  for p in list(range(1, 20)) + [900, 901]}
+        pdf, _ = build_site.build_tables(slate, lineups, batter_stat, pitcher_stat,
+                                         batter_bb, pitcher_bb, people)
+        lb = {"xwOBA": .317, "_xwOBA_K_bat": 100.0, "_xwOBA_K_pit": 200.0}
+        mdf, _, _ = build_site.build_xwoba_matchup(pdf, lb)
+        away = mdf[mdf["side"] == "away"].iloc[0]   # away SP block = the opener
+        self.assertAlmostEqual(away["pit_xwOBA"], .345, delta=.006)
+
+    def test_opener_badge_renders_only_when_flagged(self):
+        side = dict(
+            t="R", pl_fl={}, R=5, L=4, S=0, has_pl=False, padv=0,
+            era_l5=0.0, era_l5_gs=1, era_season=3.65, is_opener=True,
+            pit_xw=.311, pit_k=24.0, pit_bb=10.0, pit_hh=35.0,
+            pl_sp=None, pl_sp_raw=None, pl_edge=None, pl_reliable=False,
+            xw_edge=-.009, p="Braydon Fisher", opp_abbr="TB", lu_status="posted",
+            opp_xw=None, pl_mx=None, hitters=[],
+        )
+        lg = {"ERA": 4.20, "xwOBA": .317, "K%": 22.0, "Hard Hit%": 39.0, "OPS": .720}
+        self.assertIn("opener · team staff", build_site._side_html("HOME", side, lg))
+        side["is_opener"] = False
+        self.assertNotIn("opener · team staff", build_site._side_html("HOME", side, lg))
 
 
 class PlatoonF5MlCellTests(unittest.TestCase):
