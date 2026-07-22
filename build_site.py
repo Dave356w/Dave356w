@@ -1730,30 +1730,16 @@ def _consensus_html(away_abbr, home_abbr, a, h):
     return (f"<div class='consensus'>{xw_txt}<span class='dot'>·</span>{pl_txt}</div>")
 
 
-def _pyth_cell(py, o):
+def _pyth_cell(py, home_abbr):
     """Pythagorean CONTROL cell for the market strip. Deliberately styled as a
     benchmark, not a lean: the home win% from the naive season runs-scored /
-    runs-allowed model, its gap vs the market's devigged implied %, and a
-    prior-games badge so a thin, early-season estimate is visible as such. The
-    label is just `pythag` — the legend carries the control/benchmark intent.
-    Missing data renders an em-dash like the other market cells, never a
-    default."""
+    runs-allowed model. The label includes the home-team abbreviation, matching
+    the adjacent implied-probability cells. Missing data renders an em-dash like
+    the other market cells, never a default."""
     py = py or {}
     ph = py.get("p_home")
-    if ph is None:
-        val = "—"
-    else:
-        val = f"{ph * 100:.1f}%"
-        mk = (o or {}).get("p_home")
-        if mk is not None:
-            val += f" <span class='cd'>{(ph - mk) * 100:+.1f} vs mkt</span>"
-        basis = str(py.get("basis") or "")
-        hg, ag = py.get("home_games"), py.get("away_games")
-        if basis == "league":
-            val += " <span class='cg'>prior-light</span>"
-        elif hg is not None and ag is not None:
-            val += f" <span class='cg'>n {int(hg)}/{int(ag)}</span>"
-    return (f"<div class='mcell ctrl'><div class='l'>pythag</div>"
+    val = "—" if ph is None else f"{ph * 100:.1f}%"
+    return (f"<div class='mcell ctrl'><div class='l'>pythag {home_abbr}</div>"
             f"<div class='v'>{val}</div></div>")
 
 
@@ -1775,7 +1761,7 @@ def _market_html(o, py, away_abbr, home_abbr, built_short):
         + _mlcell("DK F5", home_abbr, o.get("f5_home_ml"), o.get("f5_open_home_ml"))
         + f"<div class='mcell'><div class='l'>Total</div><div class='v'>{tot}</div></div>"
         + f"<div class='mcell'><div class='l'>Implied {home_abbr} (devig)</div><div class='v'>{ph}</div></div>"
-        + _pyth_cell(py, o)
+        + _pyth_cell(py, home_abbr)
         + f"<div class='mcell'><div class='l'>F5 impl {home_abbr} (devig · cond.)</div><div class='v'>{ph5}</div></div>"
         + f"<div class='mcell note'><div class='l'>Market</div><div class='v'>as of build {built_short}</div></div>"
         + "</div>")
@@ -2050,11 +2036,9 @@ def _legend_guide():
         "<span><b>pythag</b> A benchmark, not a pick. A deliberately "
         "naive Pythagorean win probability for the home team, built only from each "
         "club's runs scored and allowed so far this season (plus a league home-field "
-        "adjustment) — no lineups, no starter, no market. It's here to measure the "
-        "lineup-based leans against a simple baseline: <i>vs mkt</i> is how far it sits "
-        "from the market's devigged implied %, and <i>n</i> is the prior games each club "
-        "(home/away) has on the books — a low count or <i>prior-light</i> means the "
-        "estimate is still thin. Never bet the control; watch whether the leans beat it.</span>"
+        "adjustment) — no lineups, no starter, no market. It's here as a simple "
+        "baseline for the lineup-based leans. Never bet the control; watch whether "
+        "the leans beat it.</span>"
         "<span class='wide'>Moneylines are DraftKings prices pulled from ESPN at build time. "
         "Cards are listed in chronological order, earliest first pitch first.</span>"
         "</div></div>")
