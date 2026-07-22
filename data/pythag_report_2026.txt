@@ -4,18 +4,18 @@ Control arm. Season-to-date runs scored/allowed, empirical-Bayes shrunk, Log5, p
 
 ## Calibration
 
-pooled + HFA         n=1522  mean P(home) 0.5308  realized 0.5250  Brier 0.2482  vs constant 0.2494  skill +0.5%
-venue split + HFA    n=1522  mean P(home) 0.5313  realized 0.5250  Brier 0.2487  vs constant 0.2494  skill +0.3%
+pooled + HFA         n=1523  mean P(home) 0.5308  realized 0.5246  Brier 0.2482  vs constant 0.2494  skill +0.5%
+venue split + HFA    n=1523  mean P(home) 0.5313  realized 0.5246  Brier 0.2487  vs constant 0.2494  skill +0.3%
 
 reliability (pooled):
      P(home) bin |     n |   pred |   real |         95% CI
      (0.4, 0.45] |    20 |  0.439 |  0.300 | [0.15,0.52]
-     (0.45, 0.5] |   224 |  0.480 |  0.455 | [0.39,0.52]
+     (0.45, 0.5] |   225 |  0.480 |  0.453 | [0.39,0.52]
      (0.5, 0.55] |   977 |  0.531 |  0.532 | [0.50,0.56]
      (0.55, 0.6] |   248 |  0.567 |  0.573 | [0.51,0.63]
       (0.6, 1.0] |    53 |  0.615 |  0.547 | [0.41,0.67]
 
-straight-up side record: 827-695 (0.543) [0.518, 0.568]
+straight-up side record: 828-695 (0.544) [0.519, 0.569]
 
 ## Versus the market close (paired, same games)
 
