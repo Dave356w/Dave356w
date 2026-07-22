@@ -91,6 +91,91 @@ class LedgerLockTests(unittest.TestCase):
             new = out[out["game_date"] == "2026-07-11"].iloc[0]
             self.assertEqual(new["lock_status"], "pregame")
 
+    def test_lineup_status_columns_carry_into_ledger_and_refresh(self):
+        with tempfile.TemporaryDirectory() as td:
+            xw = _dump_rows(
+                777,
+                "2026-07-20",
+                "2026-07-20T12:00:00Z",
+                "2026-07-20T23:00:00Z",
+            )
+            xw["lineup_status_away"] = "projected"
+            xw["lineup_status_home"] = "posted"
+            xw["lineup_posted_away"] = 0
+            xw["lineup_posted_home"] = 9
+            path = os.path.join(td, "leans_2026-07-20_xw.csv")
+            xw.to_csv(path, index=False)
+            ledger = pd.DataFrame(columns=grade_leans.LEDGER_COLS + grade_leans.AUDIT_COLS)
+            with mock.patch.object(grade_leans, "DATA_DIR", td):
+                out = grade_leans.ingest(ledger)
+            row = out.iloc[0]
+            self.assertEqual(row["lineup_status_away"], "projected")
+            self.assertEqual(row["lineup_status_home"], "posted")
+            self.assertEqual(int(row["lineup_posted_away"]), 0)
+            self.assertEqual(int(row["lineup_posted_home"]), 9)
+            # A later pregame snapshot refreshes the pending row's status: the
+            # lock keeps whatever the LAST accepted snapshot said.
+            xw["snapshot_utc"] = "2026-07-20T22:30:00Z"
+            xw["lineup_status_away"] = "posted"
+            xw["lineup_posted_away"] = 9
+            xw.to_csv(path, index=False)
+            with mock.patch.object(grade_leans, "DATA_DIR", td):
+                out = grade_leans.ingest(out)
+            self.assertEqual(len(out), 1)
+            self.assertEqual(out.iloc[0]["lineup_status_away"], "posted")
+            self.assertEqual(int(out.iloc[0]["lineup_posted_away"]), 9)
+
+    def test_pending_refresh_writes_status_into_legacy_ledger(self):
+        # A ledger persisted before the lineup columns existed reads them back
+        # as all-NaN float64; a pending refresh must still be able to write
+        # string statuses into them (load_ledger forces object dtype).
+        with tempfile.TemporaryDirectory() as td:
+            legacy_cols = grade_leans.LEDGER_COLS + [
+                "snapshot_utc", "scheduled_start_utc", "lock_status"]
+            row = {c: None for c in legacy_cols}
+            row.update(game_pk=777, game_date="2026-07-20", status="pending",
+                       away="AWA", home="HOM", away_sp="Away Pitcher",
+                       home_sp="Home Pitcher", model_tag="test_v3",
+                       xw_lean="HOM", xw_net=0.02, xw_delta=0.02,
+                       ops_valid=False, consensus="NA",
+                       snapshot_utc="2026-07-20T12:00:00Z",
+                       scheduled_start_utc="2026-07-20T23:00:00Z",
+                       lock_status="pregame")
+            path = os.path.join(td, "mlb_lean_ledger.csv")
+            pd.DataFrame([row]).to_csv(path, index=False)
+            xw = _dump_rows(
+                777,
+                "2026-07-20",
+                "2026-07-20T22:30:00Z",
+                "2026-07-20T23:00:00Z",
+            )
+            xw["lineup_status_away"] = "posted"
+            xw["lineup_status_home"] = "partial_filled"
+            xw["lineup_posted_away"] = 9
+            xw["lineup_posted_home"] = 6
+            xw.to_csv(os.path.join(td, "leans_2026-07-20_xw.csv"), index=False)
+            with mock.patch.object(grade_leans, "DATA_DIR", td), \
+                    mock.patch.object(grade_leans, "LEDGER_PATH", path):
+                out = grade_leans.ingest(grade_leans.load_ledger())
+            self.assertEqual(out.iloc[0]["lineup_status_away"], "posted")
+            self.assertEqual(out.iloc[0]["lineup_status_home"], "partial_filled")
+            self.assertEqual(int(out.iloc[0]["lineup_posted_home"]), 6)
+
+    def test_legacy_dump_without_lineup_columns_stays_nan(self):
+        with tempfile.TemporaryDirectory() as td:
+            xw = _dump_rows(
+                888,
+                "2026-07-20",
+                "2026-07-20T12:00:00Z",
+                "2026-07-20T23:00:00Z",
+            )
+            xw.to_csv(os.path.join(td, "leans_2026-07-20_xw.csv"), index=False)
+            ledger = pd.DataFrame(columns=grade_leans.LEDGER_COLS + grade_leans.AUDIT_COLS)
+            with mock.patch.object(grade_leans, "DATA_DIR", td):
+                out = grade_leans.ingest(ledger)
+            self.assertTrue(pd.isna(out.iloc[0]["lineup_status_away"]))
+            self.assertTrue(pd.isna(out.iloc[0]["lineup_posted_home"]))
+
     def test_late_new_snapshot_is_rejected(self):
         with tempfile.TemporaryDirectory() as td:
             xw = _dump_rows(
@@ -242,6 +327,19 @@ class ScheduleGateTests(unittest.TestCase):
         self.assertFalse(run)
         self.assertIn("no game", reason)
 
+    def test_pregame_window_spans_15_to_90_minutes(self):
+        # The window is wide enough that Actions cron jitter (runs delayed
+        # 5-20+ min) can't skip a slate entirely: T-60 triggers, while games
+        # inside the late cutoff (T-10) or beyond the window (T-95) do not.
+        for minutes, expected in ((60, True), (10, False), (95, False)):
+            run, _, _ = schedule_gate.decision(
+                "schedule", "7,22,37,52 10-23 * * *", self.NOW,
+                games=[self.game(101, minutes)],
+            )
+            self.assertEqual(run, expected, f"T-{minutes}")
+        self.assertEqual(schedule_gate.MIN_MINUTES_BEFORE, 15)
+        self.assertEqual(schedule_gate.MAX_MINUTES_BEFORE, 90)
+
     def test_grade_push_and_manual_events_always_run(self):
         grade = schedule_gate.decision("schedule", schedule_gate.DAILY_GRADE_CRON,
                                        self.NOW, games=[])
@@ -250,6 +348,25 @@ class ScheduleGateTests(unittest.TestCase):
         self.assertTrue(grade[0])
         self.assertTrue(push[0])
         self.assertTrue(manual[0])
+
+
+class LineupStatusDumpTests(unittest.TestCase):
+    def test_lineup_status_columns_map_by_game_pk(self):
+        lu = pd.DataFrame([dict(
+            game_pk=1, away_lineup_status="posted", home_lineup_status="projected",
+            away_posted_count=9, home_posted_count=0,
+        )])
+        frame = pd.DataFrame({"game_pk": [1, 1], "side": ["away", "home"]})
+        for col, series in build_site._lineup_status_columns(lu).items():
+            frame[col] = frame["game_pk"].map(series)
+        self.assertEqual(list(frame["lineup_status_away"]), ["posted", "posted"])
+        self.assertEqual(list(frame["lineup_status_home"]), ["projected", "projected"])
+        self.assertEqual(list(frame["lineup_posted_away"]), [9, 9])
+        self.assertEqual(list(frame["lineup_posted_home"]), [0, 0])
+
+    def test_empty_or_missing_lineup_df_yields_no_columns(self):
+        self.assertEqual(build_site._lineup_status_columns(pd.DataFrame()), {})
+        self.assertEqual(build_site._lineup_status_columns(None), {})
 
 
 class BattingOrderSlotWeightingTests(unittest.TestCase):

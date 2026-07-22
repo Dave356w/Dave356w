@@ -2196,7 +2196,6 @@ def _lean_ml_cell(r, lean_col):
         return "<span class='muted'>—</span>"
     return _fmt_ml_cell(r.get("close_home_ml") if lean == r.get("home") else r.get("close_away_ml"))
 
-
 def _lean_cell(lean, delta, muted=False):
     if not isinstance(lean, str) or not lean:
         return "<span class='muted'>—</span>"
@@ -2216,9 +2215,16 @@ def _grades_row(r, show_ml=False):
         final = f"{int(fa)}–{int(fh)}" if pd.notna(fa) and pd.notna(fh) else "<span class='muted'>—</span>"
         f5 = f"{int(f5a)}–{int(f5h)}" if pd.notna(f5a) and pd.notna(f5h) else "<span class='muted'>—</span>"
     ops_valid = bool(r["ops_valid"]) if pd.notna(r["ops_valid"]) else False
+    # Muted marker when the accepted snapshot locked with a fully projected
+    # lineup on either side (lineup_status_* audit columns; NaN on legacy rows).
+    proj_mark = ""
+    if any(str(r.get(c)) == "projected"
+           for c in ("lineup_status_away", "lineup_status_home")):
+        proj_mark = (" <span class='muted' title='locked with a projected "
+                     "lineup'>°</span>")
     cells = [
         _esc(r["game_date"]),
-        (f"{_esc(r['away'])} <span class='muted'>@</span> {_esc(r['home'])}"
+        (f"{_esc(r['away'])} <span class='muted'>@</span> {_esc(r['home'])}{proj_mark}"
          f"<br><span class='sp'>{_esc(r.get('away_sp') or '—')} v {_esc(r.get('home_sp') or '—')}</span>"),
         _lean_cell(r["xw_lean"], r["xw_delta"]),
         _lean_cell(r["ops_lean"] if ops_valid else None, r["ops_delta"]) if ops_valid
@@ -2333,6 +2339,23 @@ def empty_slate_html(built_txt):
     return html_document(body, built_txt)
 
 
+def _lineup_status_columns(lineup_df):
+    """Per-game lineup resolution (posted / partial_filled / projected +
+    posted counts) keyed by game_pk, for stamping onto the lean dumps so the
+    ledger can audit lineup freshness at lock. lineup_resolution_audit.csv is
+    overwritten each build; the dump is what persists. Instrumentation only —
+    no effect on leans or grading."""
+    if lineup_df is None or lineup_df.empty:
+        return {}
+    idx = lineup_df.set_index("game_pk")
+    return {
+        "lineup_status_away": idx["away_lineup_status"],
+        "lineup_status_home": idx["home_lineup_status"],
+        "lineup_posted_away": idx["away_posted_count"],
+        "lineup_posted_home": idx["home_posted_count"],
+    }
+
+
 # ============================================================
 # MAIN
 # ============================================================
@@ -2410,12 +2433,15 @@ def main():
     # rejects rows captured at/after their scheduled start, so in-progress
     # refreshes cannot alter the published pregame record.
     snapshot_utc = datetime.now(UTC).isoformat()
+    lu_cols = _lineup_status_columns(data["lineup_projection_df"])
     for frame in (matchup_df, matchup_platoon_df):
         if frame is not None and not frame.empty:
             frame["model_tag"] = MODEL_TAG
             frame["snapshot_utc"] = snapshot_utc
             if "game_datetime_utc" in frame.columns:
                 frame["scheduled_start_utc"] = frame["game_datetime_utc"]
+            for col, series in lu_cols.items():
+                frame[col] = frame["game_pk"].map(series)
     os.makedirs(DATA_DIR, exist_ok=True)
     matchup_df.to_csv(os.path.join(DATA_DIR, f"leans_{SLATE_DATE}_xw.csv"), index=False)
     if matchup_platoon_df is not None and not matchup_platoon_df.empty:
