@@ -1821,8 +1821,8 @@ def _verdict_html(fav, odds, away_abbr, home_abbr):
 
 
 def _hitter_row_html(i, hr):
-    """One batting-order row. Casual: name + Statcast percentile bar. Analyst
-    (mach cells): raw xwOBA and the ◆ platoon-advantage marker."""
+    """One batting-order row: name + Statcast percentile bar, raw xwOBA, and the
+    ◆ platoon-advantage marker."""
     nm = _esc(hr["name"])
     b = f"<span class='b'>{hr['bats']}</span>" if hr["bats"] else ""
     adv = ("<span class='adv mach' title='platoon advantage vs this SP'>◆</span>"
@@ -2217,10 +2217,9 @@ def _legend_guide():
         "Agreeing means no edge on the line; a lean on the <i>underdog</i> is the spot the "
         "record is built to test.</span>"
         "<span class='wide'>Moneylines are DraftKings prices pulled from ESPN at build time; "
-        "cards are ordered by first pitch. Turn on <b>Analyst mode</b> (top right) to reveal "
-        "the model's raw inputs: regressed xwOBA, ◆ lefty/righty platoon-advantage markers, "
-        "each starter's full line (xwOBA-allowed, K−BB%, and xERA vs season ERA), and each "
-        "lean's Δxw and its rank.</span>"
+        "cards are ordered by first pitch. Each card also shows the model's raw inputs: "
+        "regressed xwOBA, ◆ lefty/righty platoon-advantage markers, each starter's full line "
+        "(xwOBA-allowed, K−BB%, and xERA vs season ERA), and each lean's Δxw and its rank.</span>"
         "</div></div>")
 
 
@@ -2408,8 +2407,8 @@ td.bar{width:86px;padding:4px 8px 4px 2px}
 }
 
 /* ============================================================
-   Casual redesign: percentile bars, plain-language read, verdict,
-   and the Analyst-mode machinery toggle.
+   Card layer: percentile bars, plain-language read, verdict, and the
+   full model machinery (always shown).
    ============================================================ */
 .matchlab{font:600 9.5px/1.4 var(--sans);letter-spacing:.1em;text-transform:uppercase;
   color:var(--faint);margin-bottom:6px}
@@ -2461,13 +2460,12 @@ td.nm{font:400 12.5px/1.4 var(--sans);max-width:170px;overflow:hidden;text-overf
 td.nm .b{font:400 9px/1 var(--mono);color:var(--muted);margin-left:4px}
 td.nm .adv{color:rgba(var(--warm),1);font-size:10px;margin-left:2px}
 
-/* Analyst machinery: hidden until Analyst mode is on */
-.mach{display:none}
-html.an-on .mach{display:block}
-html.an-on span.mach{display:inline}
-html.an-on td.mach,html.an-on th.mach{display:table-cell}
-html.an-on tr.mach{display:table-row}
-.theme.on{border-color:rgba(var(--lean),.6);background:rgba(var(--amberbg),.16);color:rgba(var(--lean),1)}
+/* Model machinery — always shown (analyst is the default and only view). The
+   per-element display types match how the old Analyst toggle revealed them. */
+.mach{display:block}
+span.mach{display:inline}
+td.mach,th.mach{display:table-cell}
+tr.mach{display:table-row}
 
 @media (max-width:540px){
   td.nm{max-width:none}
@@ -2528,18 +2526,6 @@ THEME_JS = r"""
     apply(n);try{localStorage.setItem(KEY,n);}catch(e){}
   });}
 })();
-(function(){
-  var b=document.getElementById('analystBtn');
-  if(!b){return;}
-  var on=false;
-  b.addEventListener('click',function(){
-    on=!on;
-    document.documentElement.classList.toggle('an-on',on);
-    b.classList.toggle('on',on);
-    b.setAttribute('aria-pressed',on?'true':'false');
-    b.textContent='Analyst mode: '+(on?'on':'off');
-  });
-})();
 """
 
 
@@ -2554,7 +2540,6 @@ def html_document(body, built_txt, title=None):
         f"<div class='mx-wrap'>"
         "<div class='topbar'><div class='brand'>MLB matchup leans</div>"
         "<div style='display:flex;gap:8px'>"
-        "<button id='analystBtn' class='theme' type='button' aria-pressed='false'>Analyst mode: off</button>"
         "<button id='themeBtn' class='theme' type='button'>Theme: auto</button></div></div>"
         f"{body}</div>"
         f"<script>{THEME_JS}</script>"

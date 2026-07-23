@@ -1,5 +1,6 @@
-"""Casual-card redesign: percentile bars, ledger-ranked lean strength, the
-plain-language read, the model-vs-market verdict, and the Analyst-mode split.
+"""Card redesign: percentile bars, ledger-ranked lean strength, the
+plain-language read, the model-vs-market verdict, and the always-shown model
+machinery.
 
 All display-only -- these guard the render layer, not the lean math."""
 import unittest
@@ -108,12 +109,14 @@ class RenderTests(unittest.TestCase):
         self.assertIn("against Gallen", read)       # LAD faces home SP Gallen
         self.assertIn("against Glasnow", read)      # ARI faces away SP Glasnow
 
-    def test_machinery_is_analyst_only(self):
+    def test_model_machinery_renders(self):
+        # The model machinery (formerly gated behind an Analyst toggle) is now
+        # always part of the card; the .mach classes remain as layout hooks.
         g, _ = self._cards()
         html = b.cmb_card(g, "9:00 AM PT", None)
-        self.assertIn("Δxw", html)                  # present...
-        self.assertIn("<span class='mach'>", html)  # ...inside a mach span
-        self.assertIn("consensus mach", html)       # xwOBA consensus -> analyst
+        self.assertIn("Δxw", html)
+        self.assertIn("<span class='mach'>", html)
+        self.assertIn("consensus mach", html)
 
     def test_pitcher_card_shows_xera_not_removed_lenses(self):
         g, _ = self._cards()
