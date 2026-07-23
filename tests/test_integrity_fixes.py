@@ -355,27 +355,26 @@ class RecentStarterEraTests(unittest.TestCase):
             result = build_site.load_splits([123], "pitching")
         self.assertEqual(result[123]["overall"]["era"], 3.85)
 
-    def test_pitcher_card_shows_season_era_but_colors_l5_vs_league(self):
+    def test_pitcher_card_shows_xera_vs_season_era(self):
         side = dict(
             t="R", pl_fl={}, R=5, L=4, S=0, has_pl=False, padv=0,
-            era_l5=3.03, era_l5_gs=5, era_season=3.85,
+            era_season=3.85, xera=3.03,
             pit_xw=.310, pit_k=27.1, pit_bb=7.5, pit_hh=35.0,
-            pl_sp=None, pl_sp_raw=None, pl_edge=None, pl_reliable=False,
             xw_edge=-.015, p="Test Pitcher", opp_abbr="TST", lu_status="posted",
-            opp_xw=None, pl_mx=None, hitters=[],
+            opp_xw=None, hitters=[],
         )
         html = build_site._side_html(
             "AWAY", side,
-            {"ERA": 4.20, "xwOBA": .320, "K%": 22.0, "Hard Hit%": 39.0,
-             "OPS": .720},
+            {"ERA": 4.20, "xwOBA": .320, "K%": 22.0, "Hard Hit%": 39.0},
         )
-        self.assertIn("ERA · L5", html)
         self.assertIn("3.03", html)
         self.assertIn("season 3.85", html)
-        self.assertNotIn("5 GS", html)
+        self.assertNotIn("ERA · L5", html)      # last-5 ERA removed
+        self.assertNotIn("OPS alwd", html)      # xOPS-against removed
+        # xERA tinted vs league ERA (below league -> cool = pitcher-favorable).
         self.assertIn(
             "<div class='stat' style='background:rgba(var(--cool),0.23)'>"
-            "<div class='l'>ERA · L5</div>",
+            "<div class='l'>xERA</div>",
             html,
         )
 
@@ -541,29 +540,6 @@ class OpenerFallbackTests(unittest.TestCase):
         self.assertIn("opener · team staff", build_site._side_html("HOME", side, lg))
         side["is_opener"] = False
         self.assertNotIn("opener · team staff", build_site._side_html("HOME", side, lg))
-
-
-class PlatoonF5MlCellTests(unittest.TestCase):
-    @staticmethod
-    def _row(**kw):
-        base = dict(ops_lean="MIL", ops_valid=True, away="MIL", home="CHC",
-                    f5_close_away_ml=-115.0, f5_close_home_ml=105.0)
-        base.update(kw)
-        return pd.Series(base)
-
-    def test_renders_lean_sides_f5_close(self):
-        self.assertEqual(build_site._pl_f5_ml_cell(self._row()), "-115")
-        self.assertEqual(build_site._pl_f5_ml_cell(self._row(ops_lean="CHC")), "+105")
-
-    def test_missing_lean_or_market_is_dash(self):
-        dash = "<span class='muted'>—</span>"
-        self.assertEqual(build_site._pl_f5_ml_cell(self._row(ops_lean=np.nan)), dash)
-        self.assertEqual(
-            build_site._pl_f5_ml_cell(self._row(f5_close_away_ml=np.nan)), dash)
-
-    def test_unreliable_platoon_lean_renders_muted(self):
-        cell = build_site._pl_f5_ml_cell(self._row(ops_valid=False))
-        self.assertEqual(cell, "<span class='muted'>-115</span>")
 
 
 class BattingOrderSlotWeightingTests(unittest.TestCase):

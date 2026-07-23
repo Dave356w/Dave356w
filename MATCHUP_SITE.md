@@ -16,7 +16,8 @@ on league average (`M = B·P/L`, additive for EV/LA), with `edge = M − L` as t
 signal. This is a relative-rate heuristic, not the probability-odds form of
 log5. The platoon lens regresses each side's vs-hand OPS toward an
 overall×league-platoon prior and is reliability-gated. Lean is xwOBA-driven;
-platoon edge shows alongside with an AGREE / DIVERGE consensus tag.
+the platoon lens is still computed and graded into the ledger for auditing but
+is no longer surfaced on the cards (the display is xwOBA-only).
 
 Historical model version `xw+plat_consol_v2` added:
 
@@ -160,14 +161,18 @@ Actions**. After that the workflow deploys on each scheduled run (and on manual
 ## Grading ledger
 
 Grades are also rendered into the site: the main page shows a **records
-strip** (headline xwOBA + platoon records for the configured `RECORD_TAGS`
-model family,
-linking to the ledger), and **`grades.html`** shows summary chips plus the
-full ledger table — every game's leans, final/F5 scores, and W/L/T grades,
-pending and void rows included. Both render purely from
-`data/mlb_lean_ledger.csv`; grading runs before the build in CI (with a
-second pass after it to ingest the day's fresh dumps), so the page reflects
-last night's results in the same run.
+strip** (the headline xwOBA full-game record for the configured `RECORD_TAGS`
+model family, linking to the ledger), and **`grades.html`** shows summary
+chips plus the full ledger table — every game's xwOBA lean, closing ML, final
+score, and full-game W/L/T grade, pending and void rows included. Both render
+purely from `data/mlb_lean_ledger.csv`; grading runs before the build in CI
+(with a second pass after it to ingest the day's fresh dumps), so the page
+reflects last night's results in the same run.
+
+The platoon-OPS lens and first-5-innings (F5) results are still computed and
+recorded in the ledger for auditing (`grade_leans.py` grades both), but the
+site display was pared back to the xwOBA full-game lens only; the pitcher card
+shows Statcast **xERA vs season ERA** in place of the last-5-starts ERA.
 
 Every CI run, `grade_leans.py`:
 
