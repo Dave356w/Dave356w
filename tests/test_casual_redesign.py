@@ -17,10 +17,9 @@ def _hitter(name, pos, bats, xw, pct, adv=False):
 
 def _side(p, opp_abbr, pit_xw_pct, kbb_pct, xw_edge, hitters):
     return dict(p=p, t="R", opp_abbr=opp_abbr, pit_xw=.300, pit_k=.24, pit_bb=.07,
-                era_l5=3.2, era_l5_gs=5, era_season=3.6, opp_xw=.330, xw_edge=xw_edge,
+                era_season=3.6, xera=3.4, opp_xw=.330, xw_edge=xw_edge,
                 pit_xw_pctile=pit_xw_pct, kbb_pctile=kbb_pct, lu_status="posted",
                 is_opener=False, has_pl=True, R=5, L=4, S=0, padv=3, pl_fl={},
-                pl_sp=.700, pl_sp_raw=.710, pl_mx=.740, pl_edge=.015, pl_reliable=True,
                 hitters=hitters)
 
 
@@ -28,7 +27,6 @@ def _game(away, home, a, h, odds):
     return dict(away=a, home=h, away_abbr=away, home_abbr=home, away_l10="5-5",
                 home_l10="5-5", game_pk=1, game_number=1, game_label="",
                 game_datetime_utc=None, time_pt="7:05 PM ET", venue="Park", odds=odds,
-                pythag=dict(p_home=.5),
                 league_baseline={"xwOBA": .312, "K%": .22, "BB%": .08, "OPS": .715, "ERA": 4.1})
 
 
@@ -115,8 +113,17 @@ class RenderTests(unittest.TestCase):
         html = b.cmb_card(g, "9:00 AM PT", None)
         self.assertIn("Δxw", html)                  # present...
         self.assertIn("<span class='mach'>", html)  # ...inside a mach span
-        self.assertIn("ctrl mach", html)            # pythag control -> analyst
-        self.assertIn("consensus mach", html)       # platoon lens -> analyst
+        self.assertIn("consensus mach", html)       # xwOBA consensus -> analyst
+
+    def test_pitcher_card_shows_xera_not_removed_lenses(self):
+        g, _ = self._cards()
+        html = b.cmb_card(g, "9:00 AM PT", None)
+        self.assertIn("xERA", html)                 # xERA cell present
+        self.assertIn("season 3.6", html)           # ...vs season ERA
+        self.assertNotIn("OPS alwd", html)          # xOPS-against removed
+        self.assertNotIn("xOPS edge", html)         # xOPS edge removed
+        self.assertNotIn("pythag", html)            # pythag control removed
+        self.assertNotIn("DK F5", html)             # F5 odds removed
 
     def test_verdict_agree_and_disagree(self):
         g_agree, g_dis = self._cards()

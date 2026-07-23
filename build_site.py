@@ -212,7 +212,11 @@ def get_slate(slate_date, sport_id=1):
 
 def load_stat_lookups(player_type):
     """player_type in {'batter','pitcher'} -> (stat dict, bbprofile dict, custom df)."""
-    sel = ",".join(STATCAST_SELECTIONS)
+    # xERA is a pitcher-only expected stat; request it only for pitchers so the
+    # batter leaderboard isn't asked for a column it doesn't carry. A leaderboard
+    # that omits it (unavailable selection) simply drops the column and the card
+    # cell degrades to an em-dash, like any other missing stat.
+    sel = ",".join(STATCAST_SELECTIONS + (["xera"] if player_type == "pitcher" else []))
     cust = cached_csv(
         f"https://baseballsavant.mlb.com/leaderboard/custom?year={SEASON}"
         f"&type={player_type}&min=1&selections={sel}&csv=true",
@@ -224,7 +228,7 @@ def load_stat_lookups(player_type):
 
     REN_STAT = {"xwoba": "xwOBA", "xba": "xBA", "xslg": "xSLG", "exit_velocity_avg": "EV",
                 "launch_angle_avg": "LA°", "hard_hit_percent": "Hard Hit%",
-                "k_percent": "K%", "bb_percent": "BB%", "pa": "PA"}
+                "k_percent": "K%", "bb_percent": "BB%", "pa": "PA", "xera": "xERA"}
     stat = {}
     for _, r in cust.iterrows():
         pid = int(r["player_id"])
@@ -834,6 +838,12 @@ def fetch_all(slate_date):
         pitchers_df["ERA_SEASON"] = pitchers_df.apply(
             lambda r: ((player_splits_pit.get(int(r["player_id"]), {}).get("overall", {})
                         or {}).get("era", np.nan))
+            if r.get("Pos.") == "P" and pd.notna(r.get("player_id")) else np.nan,
+            axis=1)
+        # Statcast xERA (expected ERA) from the pitcher custom leaderboard, shown
+        # against season ERA on the card. NaN wherever the leaderboard omits it.
+        pitchers_df["xERA"] = pitchers_df.apply(
+            lambda r: _f((pitcher_stat.get(int(r["player_id"]), {}) or {}).get("xERA"))
             if r.get("Pos.") == "P" and pd.notna(r.get("player_id")) else np.nan,
             axis=1)
 
@@ -1492,43 +1502,6 @@ def fetch_pregame_odds(slate_df):
     return out
 
 
-def load_pythag_slate(slate_date):
-    """game_pk -> {p_home, split_p_home, basis, home_games, away_games} from the
-    daily slate CSV pythag_control.py emits (data/pythag_slate_<date>.csv).
-
-    Display-only and strictly best-effort, exactly like the odds map: a missing
-    file (the control step is continue-on-error and may be skipped, or not have
-    run yet) yields an empty map, and the card's control cell renders an
-    em-dash — never a default. Keyed by int game_pk to match the odds map."""
-    path = os.path.join(DATA_DIR, f"pythag_slate_{slate_date}.csv")
-    out = {}
-    if not os.path.exists(path):
-        log(f"pythag control slate not found ({path}) -> control cell em-dashes")
-        return out
-    try:
-        df = pd.read_csv(path)
-    except Exception as e:  # noqa: BLE001
-        log(f"pythag control slate read failed ({e!r}) -> control cell em-dashes")
-        return out
-    for _, r in df.iterrows():
-        try:
-            gpk = int(r["gamePk"])
-        except (TypeError, ValueError):
-            continue
-        ph = _f(r.get("pythag_p_home"))
-        if ph is None:
-            continue
-        out[gpk] = dict(
-            p_home=ph,
-            split_p_home=_f(r.get("pythag_split_p_home")),
-            basis=str(r.get("pythag_basis") or ""),
-            home_games=_f(r.get("home_prior_games_all")),
-            away_games=_f(r.get("away_prior_games_all")),
-        )
-    log(f"pythag control attached: {len(out)}/{len(df)} games")
-    return out
-
-
 def fetch_last10_records(slate_df=None):
     """team_id -> 'W-L' over each team's last 10 games (StatsAPI standings).
 
@@ -1575,8 +1548,6 @@ ABBR = {
     "Seattle Mariners": "SEA", "St. Louis Cardinals": "STL", "Tampa Bay Rays": "TB", "Texas Rangers": "TEX",
     "Toronto Blue Jays": "TOR", "Washington Nationals": "WSH",
 }
-
-HITTER_EDGE_DOMAIN = 0.100  # shared per-hitter edge-bar axis (|mx_ops - lg|)
 
 # ---------- heatmap tints (casual-UI layer; numbers unchanged) ----------
 HEAT_ALPHA_MAX = 0.30
@@ -1819,33 +1790,16 @@ def _verdict_html(fav, odds, away_abbr, home_abbr):
 
 def _hitter_row_html(i, hr):
     """One batting-order row. Casual: name + Statcast percentile bar. Analyst
-    (mach cells): raw xwOBA, the vs-hand xOPS, the edge-vs-league bar, and the
-    ◆ platoon-advantage marker."""
+    (mach cells): raw xwOBA and the ◆ platoon-advantage marker."""
     nm = _esc(hr["name"])
     b = f"<span class='b'>{hr['bats']}</span>" if hr["bats"] else ""
     adv = ("<span class='adv mach' title='platoon advantage vs this SP'>◆</span>"
            if hr["adv"] else "")
     bar = _pct_bar(hr.get("xw_pctile"), "h")
     xw_c = f"<td class='r mach'>{f3(hr['xw'])}</td>"
-    if hr["ops"] is None:
-        ops_c = "<td class='r mach na'>—</td>"
-    else:
-        if hr["pa"] > 0:
-            src = f"<span class='pa'>({hr['pa']})</span>"
-            low = " <span class='flag mute'>low</span>" if hr["low"] else ""
-        else:
-            src, low = "<span class='pa'>(prior)</span>", ""
-        ops_c = f"<td class='r mach'>{f3(hr['ops'])} {src}{low}</td>"
-    if hr["edge"] is None:
-        eb = "<td class='mach'><div class='eb'></div></td>"
-    else:
-        w = clamp(abs(hr["edge"]) / HITTER_EDGE_DOMAIN, 0, 1) * 50
-        cls = "w" if hr["edge"] >= 0 else "c"
-        eb = (f"<td class='mach'><div class='eb' title='xOPS edge vs league {sgn3(hr['edge'])}'>"
-              f"<i class='{cls}' style='width:{w:.0f}%'></i></div></td>")
     return (f"<tr><td class='ord'>{i}</td>"
             f"<td class='nm' title='{nm}'>{nm}{adv}{b}</td><td class='pos'>{_esc(hr['pos'])}</td>"
-            f"<td class='pct r'>{bar}</td>{xw_c}{ops_c}{eb}</tr>")
+            f"<td class='pct r'>{bar}</td>{xw_c}</tr>")
 
 
 def _lineup_details(side_d):
@@ -1855,16 +1809,12 @@ def _lineup_details(side_d):
     parts = []
     if side_d["opp_xw"] is not None:
         parts.append(f"xwOBA {f3(side_d['opp_xw'])}")
-    if side_d["pl_mx"] is not None:
-        parts.append(f"xOPS {f3(side_d['pl_mx'])}")
     summ = " · ".join(parts) if parts else ""
-    hand = side_d["t"] if side_d["t"] in ("L", "R") else "?"
     head = ("<tr><th></th><th class='nm'>Hitter</th><th>Pos</th><th class='r'>xwOBA %ile</th>"
-            "<th class='r mach'>xwOBA</th>"
-            f"<th class='r mach'>vs-{hand} xOPS</th><th class='r mach'>edge</th></tr>")
+            "<th class='r mach'>xwOBA</th></tr>")
     body = "".join(_hitter_row_html(i + 1, hr) for i, hr in enumerate(side_d["hitters"]))
     if not body:
-        body = "<tr><td class='na' colspan='7'>lineup unavailable</td></tr>"
+        body = "<tr><td class='na' colspan='5'>lineup unavailable</td></tr>"
     return (
         "<details class='lineup' open>"
         "<summary><span class='chev'>▶</span>"
@@ -1895,16 +1845,15 @@ def _side_html(sp_abbr, d, league_baseline):
     # lg K%/BB% come from the PA-weighted *batter* leaderboard; league K% and
     # BB% are symmetric (every batter K/BB is a pitcher K/BB), so they are
     # valid pitcher references and lg K-BB% = lg K% - lg BB%.
-    lg = {k: _f(lb.get(k)) for k in ("xwOBA", "K%", "BB%", "OPS", "ERA")}
+    lg = {k: _f(lb.get(k)) for k in ("xwOBA", "K%", "BB%", "ERA")}
     kbb = (d["pit_k"] - d["pit_bb"]) if (d["pit_k"] is not None
                                          and d["pit_bb"] is not None) else None
     lg_kbb = (lg["K%"] - lg["BB%"]) if (lg["K%"] is not None
                                         and lg["BB%"] is not None) else None
-    era_sub = []
-    if d["era_season"] is not None:
-        era_sub.append(f"season {f2(d['era_season'])}")
-    gs = int(d.get("era_l5_gs") or 0)
-    era_lab = f"ERA · L{gs}" if 0 < gs < RECENT_STARTS else f"ERA · L{RECENT_STARTS}"
+    # xERA (Statcast expected ERA) shown against the starter's own season ERA;
+    # tinted vs league ERA (higher xERA = more offense-favorable = warm).
+    xera_sub = (f"season {f2(d['era_season'])}"
+                if d.get("era_season") is not None else None)
     stats = (
         _sp_stat_cell("xwOBA agn", d["pit_xw"], f3,
                       f"lg {f3(lg['xwOBA'])}" if lg["xwOBA"] is not None else None,
@@ -1912,15 +1861,8 @@ def _side_html(sp_abbr, d, league_baseline):
         + _sp_stat_cell("K-BB%", kbb, f1,
                         f"lg {f1(lg_kbb)}" if lg_kbb is not None else None,
                         heat=heat_style(kbb, lg_kbb, HEAT_DOMAINS["K-BB%"], hi="cool"))
-        + _sp_stat_cell("OPS alwd*", d["pl_sp"], f3,
-                        f"raw {f3(d['pl_sp_raw'])}" if d["pl_sp_raw"] is not None else None,
-                        heat=heat_style(d["pl_sp"], lg["OPS"], HEAT_DOMAINS["OPS"]))
-        + _sp_stat_cell(era_lab, d["era_l5"], f2,
-                        " · ".join(era_sub) or None,
-                        heat=heat_style(d["era_l5"], lg["ERA"], HEAT_DOMAINS["ERA"])))
-    pl_bits = f3(None) if not d["has_pl"] else sgn3(d["pl_edge"])
-    pl_col = edge_color(d["pl_edge"]) if (d["has_pl"] and d["pl_reliable"]) else "var(--faint)"
-    pl_flag = "" if (not d["has_pl"] or d["pl_reliable"]) else " <span class='flag mute'>prior-driven</span>"
+        + _sp_stat_cell("xERA", d.get("xera"), f2, xera_sub,
+                        heat=heat_style(d.get("xera"), lg["ERA"], HEAT_DOMAINS["ERA"])))
     tier_lab, tier_cls = _tier_word(d.get("pit_xw_pctile"))
     tier = f"<span class='tier {tier_cls}'>{tier_lab}</span>" if tier_lab else ""
     bars = (f"<div class='spct'><span class='lab'>xwOBA</span>{_pct_bar(d.get('pit_xw_pctile'), 'p')}</div>"
@@ -1935,7 +1877,6 @@ def _side_html(sp_abbr, d, league_baseline):
         f"<div class='agg mach'>"
         f"<div class='e' style='color:{edge_color(d['xw_edge'])}'>"
         f"<span>xw edge (drives lean)</span>{sgn3(d['xw_edge'])}</div>"
-        f"<div class='e' style='color:{pl_col}'><span>xOPS edge</span>{pl_bits}{pl_flag}</div>"
         f"</div>"
         f"{_spotlight_html(d['hitters'])}"
         f"{_lineup_details(d)}"
@@ -1949,36 +1890,12 @@ def _consensus_html(away_abbr, home_abbr, a, h):
     # NOTE: a = away SP row; a's xw_edge is the HOME offense's edge, and vice
     # versa -- identical convention to the previous _consensus().
     xw_d = abs(a["xw_edge"] - h["xw_edge"]) if have_xw else None
-    pl_home = a["pl_edge"] if (a["has_pl"] and a["pl_reliable"]) else None
-    pl_away = h["pl_edge"] if (h["has_pl"] and h["pl_reliable"]) else None
-    if pl_home is not None and pl_away is not None:
-        pl_fav = home_abbr if pl_home >= pl_away else away_abbr
-        pl_d = abs(pl_home - pl_away)
-        pl_txt = f"OPS → <b>{pl_fav}</b> Δ{pl_d:.3f}"
-    else:
-        pl_txt = "OPS → <span class='muted'>unreliable / no split</span>"
     xw_txt = (f"xwOBA → <b>{xw_fav}</b> Δ{xw_d:.3f}" if xw_d is not None
               else "xwOBA → <span class='muted'>—</span>")
-    # The AGREE/DIVERGE tag was removed: the xwOBA and platoon-OPS lenses share
-    # the same lineup-vs-starter inputs, so their agreement is not independent
-    # confirmation. The two per-lens readouts remain.
-    return (f"<div class='consensus mach'>{xw_txt}<span class='dot'>·</span>{pl_txt}</div>")
+    return (f"<div class='consensus mach'>{xw_txt}</div>")
 
 
-def _pyth_cell(py, home_abbr):
-    """Pythagorean CONTROL cell for the market strip. Deliberately styled as a
-    benchmark, not a lean: the home win% from the naive season runs-scored /
-    runs-allowed model. The label includes the home-team abbreviation, matching
-    the adjacent implied-probability cells. Missing data renders an em-dash like
-    the other market cells, never a default."""
-    py = py or {}
-    ph = py.get("p_home")
-    val = "—" if ph is None else f"{ph * 100:.1f}%"
-    return (f"<div class='mcell ctrl mach'><div class='l'>pythag {home_abbr}</div>"
-            f"<div class='v'>{val}</div></div>")
-
-
-def _market_html(o, py, away_abbr, home_abbr, built_short, fav=None):
+def _market_html(o, away_abbr, home_abbr, built_short, fav=None):
     o = o or {}
     def _mlcell(prefix, lab, cur, opn, mach=False):
         sub = f" <span class='mv'>← {_fmt_ml(opn)} open</span>" if opn is not None else ""
@@ -1987,20 +1904,12 @@ def _market_html(o, py, away_abbr, home_abbr, built_short, fav=None):
                 f"<div class='v'>{_fmt_ml(cur)}{sub}</div></div>")
     tot = f"o/u {o['total']:g}" if o.get("total") is not None else "—"
     ph = f"{o['p_home'] * 100:.1f}%" if o.get("p_home") is not None else "—"
-    # F5 devig is conditional on a decided half (DK F5 ties push).
-    ph5 = f"{o['f5_p_home'] * 100:.1f}%" if o.get("f5_p_home") is not None else "—"
     return (
         "<div class='market'>"
         + _mlcell("DK ML", away_abbr, o.get("away_ml"), o.get("open_away_ml"))
         + _mlcell("DK ML", home_abbr, o.get("home_ml"), o.get("open_home_ml"))
-        + _mlcell("DK F5", away_abbr, o.get("f5_away_ml"), o.get("f5_open_away_ml"))
-        + _mlcell("DK F5", home_abbr, o.get("f5_home_ml"), o.get("f5_open_home_ml"))
         + f"<div class='mcell'><div class='l'>Total</div><div class='v'>{tot}</div></div>"
         + f"<div class='mcell'><div class='l'>Implied {home_abbr} (devig)</div><div class='v'>{ph}</div></div>"
-        # pythag control + the conditional-F5 devig are methodology, not a pick:
-        # analyst-only so the casual strip stays a clean price row.
-        + _pyth_cell(py, home_abbr)
-        + f"<div class='mcell mach'><div class='l'>F5 impl {home_abbr} (devig · cond.)</div><div class='v'>{ph5}</div></div>"
         + f"<div class='mcell note mach'><div class='l'>Market</div><div class='v'>as of build {built_short}</div></div>"
         + _verdict_html(fav, o, away_abbr, home_abbr)
         + "</div>")
@@ -2062,7 +1971,7 @@ def cmb_card(g, built_short, strength_scale=None):
         + f"{_consensus_html(away_abbr, home_abbr, a, h)}"
         "</div>"
         + (read_html or "")
-        + _market_html(g.get('odds'), g.get('pythag'), away_abbr, home_abbr, built_short, fav)
+        + _market_html(g.get('odds'), away_abbr, home_abbr, built_short, fav)
         + f"<div class='sides'>{_side_html(away_abbr, a, g['league_baseline'])}"
         + f"{_side_html(home_abbr, h, g['league_baseline'])}</div>"
         + "</article>")
@@ -2097,8 +2006,7 @@ def build_combined(games, built_short, strength_scale=None):
 def _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
                           opp_hitters_df=None, detail_df=None, lg_ops=None,
                           slate_df=None, lineup_df=None,
-                          league_baseline=None, odds=None, last10=None,
-                          pythag=None):
+                          league_baseline=None, odds=None, last10=None):
     last10 = last10 or {}
 
     def _l10(team_id):
@@ -2114,7 +2022,7 @@ def _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
             throws[(pr["game_pk"], pr["Name"])] = pr.get("throws")
             recent_era[(pr["game_pk"], pr["Name"])] = (
                 _f(pr.get("ERA_L5")), int(pr.get("ERA_L5_GS") or 0),
-                _f(pr.get("ERA_SEASON")))
+                _f(pr.get("ERA_SEASON")), _f(pr.get("xERA")))
     pl_map = _pl_lookup(pl_df)
     slate_map = {}
     if slate_df is not None and not getattr(slate_df, "empty", True):
@@ -2156,9 +2064,8 @@ def _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
                      opp=r["opp_team"], opp_abbr=_abbr(r["opp_team"]),
                      pit_xw=_f(r.get("pit_xwOBA")), pit_k=_f(r.get("pit_K%")),
                      pit_bb=_f(r.get("pit_BB%")),
-                     era_l5=recent_era.get((gpk, r["pitcher"]), (None, 0, None))[0],
-                     era_l5_gs=recent_era.get((gpk, r["pitcher"]), (None, 0, None))[1],
-                     era_season=recent_era.get((gpk, r["pitcher"]), (None, 0, None))[2],
+                     era_season=recent_era.get((gpk, r["pitcher"]), (None, 0, None, None))[2],
+                     xera=recent_era.get((gpk, r["pitcher"]), (None, 0, None, None))[3],
                      opp_xw=_f(r.get("opp_xwOBA")),
                      xw_edge=_f(r.get("edge_xwOBA")),
                      # Display percentiles (0-100). pit_xwOBA is already shrunk
@@ -2209,7 +2116,6 @@ def _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
             time_pt=_game_time_pt(srow.get("game_datetime_utc")) if srow is not None else "",
             venue=str(srow.get("venue") or "") if srow is not None else "",
             odds=(odds or {}).get(gpk),
-            pythag=(pythag or {}).get(gpk),
             league_baseline={**(league_baseline or {}), "OPS": lg_ops_f},
         ))
 
@@ -2280,10 +2186,9 @@ def _legend_guide():
         "record is built to test.</span>"
         "<span class='wide'>Moneylines are DraftKings prices pulled from ESPN at build time; "
         "cards are ordered by first pitch. Turn on <b>Analyst mode</b> (top right) to reveal "
-        "the model's raw inputs: regressed xwOBA/xOPS, the platoon lens and ◆ lefty/righty "
-        "markers, edge-vs-league bars, each starter's full line, each lean's Δxw and its rank, "
-        "and the naive pythag control (a benchmark, never a pick — watch whether the leans "
-        "beat it).</span>"
+        "the model's raw inputs: regressed xwOBA, ◆ lefty/righty platoon-advantage markers, "
+        "each starter's full line (xwOBA-allowed, K−BB%, and xERA vs season ERA), and each "
+        "lean's Δxw and its rank.</span>"
         "</div></div>")
 
 
@@ -2297,7 +2202,6 @@ CSS = r"""/* ============================================================
   --cool:52,116,168;            /* steel  -- pitcher-favorable  */
   --lean:176,124,16;            /* amber  -- lean pill / links  */
   --amberbg:246,196,86;
-  --ctrl:96,110,150;            /* slate  -- pythag control / benchmark */
   --chip-fg:#1b1e25;
   --mono:ui-monospace,"SF Mono","Cascadia Mono",Menlo,Consolas,monospace;
   --sans:system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;
@@ -2308,7 +2212,6 @@ CSS = r"""/* ============================================================
   --bg:#0f1418; --surface:#171d24; --surface-2:#131920; --ink:#e7ecef;
   --muted:#96a2ad; --faint:#5f6c78; --line:#242e38; --line-2:#1c242c;
   --warm:236,122,72; --cool:96,158,208; --lean:244,196,96; --amberbg:244,196,96;
-  --ctrl:140,154,196;
   --chip-fg:#e7ecef;
   --shadow:0 1px 2px rgba(0,0,0,.45),0 14px 32px -22px rgba(0,0,0,.8);
 }}
@@ -2316,7 +2219,6 @@ html[data-theme="dark"]{
   --bg:#0f1418; --surface:#171d24; --surface-2:#131920; --ink:#e7ecef;
   --muted:#96a2ad; --faint:#5f6c78; --line:#242e38; --line-2:#1c242c;
   --warm:236,122,72; --cool:96,158,208; --lean:244,196,96; --amberbg:244,196,96;
-  --ctrl:140,154,196;
   --chip-fg:#e7ecef;
   --shadow:0 1px 2px rgba(0,0,0,.45),0 14px 32px -22px rgba(0,0,0,.8);
 }
@@ -2394,12 +2296,6 @@ body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 var(--sans);
 .mcell .v{font:500 13px/1.4 var(--mono);font-variant-numeric:tabular-nums}
 .mcell .v .mv{color:var(--faint);font-size:11px}
 .mcell.note .v{color:var(--faint);font-size:11px;padding-top:3px}
-/* Pythagorean CONTROL cell: a slate left-rule and muted delta/badge mark it as
-   a benchmark, deliberately unlike the amber lean pill so it never reads as a pick. */
-.mcell.ctrl{border-left:3px solid rgb(var(--ctrl));background:rgba(var(--ctrl),.06)}
-.mcell.ctrl .l{color:rgb(var(--ctrl))}
-.mcell.ctrl .cd{color:var(--muted);font-size:11px;margin-left:5px;font-variant-numeric:tabular-nums}
-.mcell.ctrl .cg{color:var(--faint);font-size:10px;margin-left:5px;letter-spacing:.03em}
 
 /* ---------- two sides ---------- */
 .sides{display:grid;grid-template-columns:1fr 1fr}
@@ -2465,10 +2361,6 @@ td.na{color:var(--faint)}
 tr.low td{color:var(--muted)}
 
 td.bar{width:86px;padding:4px 8px 4px 2px}
-.eb{position:relative;height:9px;background:linear-gradient(var(--line-2),var(--line-2)) no-repeat center/1px 100%}
-.eb i{position:absolute;top:1px;bottom:1px;border-radius:1px}
-.eb i.w{background:rgba(var(--warm),.85);left:50%}
-.eb i.c{background:rgba(var(--cool),.85);right:50%}
 
 @media (max-width:540px){
   .gamehead{gap:6px 10px}
@@ -2732,9 +2624,6 @@ def records_strip_html():
         inner = "<span class='muted'>no graded games yet</span>"
     else:
         bits = [f"xwOBA full {_rec_txt(g['xw_full'])}"]
-        ov = g[g["ops_valid"] == True]                                # noqa: E712
-        if len(ov):
-            bits.append(f"platoon F5 {_rec_txt(ov['ops_f5'])}")
         # xwOBA vs-market (z / flat ROI) — mirrors the grades-page core card;
         # market columns are absent until the first market run.
         if "close_p_home" in g.columns and g["close_p_home"].notna().any():
@@ -2772,19 +2661,6 @@ def _lean_ml_cell(r, lean_col):
     return _fmt_ml_cell(r.get("close_home_ml") if lean == r.get("home") else r.get("close_away_ml"))
 
 
-def _pl_f5_ml_cell(r):
-    """F5 closing ML of the platoon lean's side; muted when the platoon lean
-    itself renders muted (unreliable splits), '—' when lean or market absent."""
-    lean = r.get("ops_lean")
-    if not isinstance(lean, str) or not lean:
-        return "<span class='muted'>—</span>"
-    cell = _fmt_ml_cell(r.get("f5_close_home_ml") if lean == r.get("home")
-                        else r.get("f5_close_away_ml"))
-    ops_valid = bool(r["ops_valid"]) if pd.notna(r["ops_valid"]) else False
-    if not ops_valid and not cell.startswith("<span"):
-        cell = f"<span class='muted'>{cell}</span>"
-    return cell
-
 def _lean_cell(lean, delta, muted=False):
     if not isinstance(lean, str) or not lean:
         return "<span class='muted'>—</span>"
@@ -2793,17 +2669,13 @@ def _lean_cell(lean, delta, muted=False):
     return f"<span class='muted'>{txt}</span>" if muted else txt
 
 
-def _grades_row(r, show_ml=False, show_f5_ml=False):
+def _grades_row(r, show_ml=False):
     status = str(r["status"])
     fa, fh = pd.to_numeric(r["full_away"], errors="coerce"), pd.to_numeric(r["full_home"], errors="coerce")
-    f5a, f5h = pd.to_numeric(r["f5_away"], errors="coerce"), pd.to_numeric(r["f5_home"], errors="coerce")
     if status != "graded":
         final = f"<span class='st {status}'>{_esc(status)}</span>"
-        f5 = "<span class='muted'>—</span>"
     else:
         final = f"{int(fa)}–{int(fh)}" if pd.notna(fa) and pd.notna(fh) else "<span class='muted'>—</span>"
-        f5 = f"{int(f5a)}–{int(f5h)}" if pd.notna(f5a) and pd.notna(f5h) else "<span class='muted'>—</span>"
-    ops_valid = bool(r["ops_valid"]) if pd.notna(r["ops_valid"]) else False
     # Muted marker when the accepted snapshot locked with a fully projected
     # lineup on either side (lineup_status_* audit columns; NaN on legacy rows).
     proj_mark = ""
@@ -2816,18 +2688,10 @@ def _grades_row(r, show_ml=False, show_f5_ml=False):
         (f"{_esc(r['away'])} <span class='muted'>@</span> {_esc(r['home'])}{proj_mark}"
          f"<br><span class='sp'>{_esc(r.get('away_sp') or '—')} v {_esc(r.get('home_sp') or '—')}</span>"),
         _lean_cell(r["xw_lean"], r["xw_delta"]),
-        _lean_cell(r["ops_lean"] if ops_valid else None, r["ops_delta"]) if ops_valid
-        else _lean_cell(r["ops_lean"], r["ops_delta"], muted=True),
     ]
     if show_ml:
         cells += [_lean_ml_cell(r, "xw_lean")]
-    if show_f5_ml:
-        cells += [_pl_f5_ml_cell(r)]
-    cells += [
-        final, f5,
-        _wlt_badge(r["xw_full"]),
-        _wlt_badge(r["ops_f5"]),
-    ]
+    cells += [final, _wlt_badge(r["xw_full"])]
     cls = " class='void'" if status == "void" else ""
     return f"<tr{cls}>" + "".join(f"<td>{c}</td>" for c in cells) + "</tr>"
 
@@ -2863,9 +2727,6 @@ def render_grades_html(built_txt):
     else:
         chip("Graded", str(len(g)), f"{n_pend} pending")
         b, p = _rec_parts(g["xw_full"]); chip("xwOBA · full", b, p)
-        ov = g[g["ops_valid"] == True]                                # noqa: E712
-        if len(ov):
-            b, p = _rec_parts(ov["ops_f5"]); chip("Platoon · F5", b, p)
         # vs-market scoreboard (closing DK MLs attached by grade_leans.py via
         # market_backfill; columns absent until the first market run).
         if "close_p_home" in g.columns and g["close_p_home"].notna().any():
@@ -2879,30 +2740,17 @@ def render_grades_html(built_txt):
             if m:
                 chip("xwOBA · vs mkt", f"{m['w']}-{m['n'] - m['w']}",
                      f"z {m['z']:+.2f} · {m['roi_units']:+.2f}u flat")
-            m5 = mkt.get("platoon_f5")
-            if m5:
-                chip("Platoon · vs F5 mkt", f"{m5['w']}-{m5['n'] - m5['w']}",
-                     f"z {m5['z']:+.2f} · {m5['roi_units']:+.2f}u flat")
         notes.append("xwOBA graded full-game vs devigged DK closing ML (ESPN capture); "
-                     "z and flat ROI are the primary metrics. Platoon graded vs the "
-                     "devigged DK F5 closing ML from the same capture (ties push), "
-                     "reliable-split games only.")
+                     "z and flat ROI are the primary metrics.")
         summary = ("<div class='gr-summary'>" + "".join(chips) + "</div>"
                    + (f"<div class='gr-note'>{' · '.join(notes)}</div>" if notes else ""))
 
     show_ml = "close_home_ml" in led.columns and led["close_home_ml"].notna().any()
-    # F5 close column degrades cleanly on pre-market ledgers, same gate
-    # pattern as the full-game "xw ML" column.
-    show_f5_ml = ("f5_close_home_ml" in led.columns
-                  and "f5_close_away_ml" in led.columns
-                  and (led["f5_close_home_ml"].notna().any()
-                       or led["f5_close_away_ml"].notna().any()))
-    heads = (["Date", "Game", "xwOBA lean", "Platoon lean"]
+    heads = (["Date", "Game", "xwOBA lean"]
              + (["xw ML"] if show_ml else [])
-             + (["pl F5 ML"] if show_f5_ml else [])
-             + ["Final", "F5", "xw F", "pl F5"])
+             + ["Final", "xw F"])
     led = led.sort_values(["game_date", "game_pk"], ascending=[False, True])
-    rows = "".join(_grades_row(r, show_ml, show_f5_ml) for _, r in led.iterrows())
+    rows = "".join(_grades_row(r, show_ml) for _, r in led.iterrows())
     table = ("<div class='gr-tablewrap'><table class='gr'><thead><tr>"
              + "".join(f"<th>{h}</th>" for h in heads)
              + f"</tr></thead><tbody>{rows}</tbody></table></div>")
@@ -2912,14 +2760,12 @@ def render_grades_html(built_txt):
 def render_combined_html(xw_df, pl_df, pitcher_rows_df, built_txt,
                          opp_hitters_df=None, detail_df=None, lg_ops=None,
                          slate_df=None, lineup_df=None,
-                         league_baseline=None, odds=None, last10=None,
-                         pythag=None):
+                         league_baseline=None, odds=None, last10=None):
     games = _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
                                   opp_hitters_df=opp_hitters_df, detail_df=detail_df,
                                   lg_ops=lg_ops, slate_df=slate_df, lineup_df=lineup_df,
-                                  league_baseline=league_baseline, odds=odds, last10=last10,
-                                  pythag=pythag)
-    head = _legend_head("MLB matchup leans — xwOBA + platoon OPS", built_txt)
+                                  league_baseline=league_baseline, odds=odds, last10=last10)
+    head = _legend_head("MLB matchup leans — Statcast xwOBA", built_txt)
     # Cards lead; the how-to-read guide and the record strip sit below them.
     footer = _legend_guide() + records_strip_html()
     if not games:
@@ -3073,21 +2919,13 @@ def main():
         log(f"last-10 records skipped: {e!r}")
         last10 = {}
 
-    log("Loading Pythagorean control slate (best-effort, display-only) ...")
-    try:
-        pythag = load_pythag_slate(SLATE_DATE)
-    except Exception as e:  # noqa: BLE001
-        log(f"pythag control slate skipped: {e!r}")
-        pythag = {}
-
     log("Rendering index.html ...")
     html = render_combined_html(
         matchup_df, matchup_platoon_df, pitcher_rows_df, built_txt,
         opp_hitters_df=opp_hitters_df, detail_df=platoon_detail_df,
         lg_ops=league_ops_overall, slate_df=data["slate_df"],
         lineup_df=data["lineup_projection_df"],
-        league_baseline=data["league_baseline"], odds=odds, last10=last10,
-        pythag=pythag)
+        league_baseline=data["league_baseline"], odds=odds, last10=last10)
     with open(out_path, "w") as f:
         f.write(html)
     log(f"Wrote {out_path} ({len(html):,} bytes, {len(matchup_df)} matchup rows)")
