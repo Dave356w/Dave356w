@@ -116,7 +116,11 @@ class RenderTests(unittest.TestCase):
         html = b.cmb_card(g, "9:00 AM PT", None)
         self.assertIn("Δxw", html)
         self.assertIn("<span class='mach'>", html)
-        self.assertIn("consensus mach", html)
+        self.assertIn("spstats mach", html)
+        # The redundant pct-lean suffix and the secondary xwOBA consensus line
+        # were removed; the lean pill's Δxw is the single readout.
+        self.assertNotIn("pct lean", html)
+        self.assertNotIn("xwOBA →", html)
 
     def test_pitcher_card_shows_xera_not_removed_lenses(self):
         g, _ = self._cards()
