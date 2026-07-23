@@ -663,5 +663,40 @@ class XwobaShrinkageTests(unittest.TestCase):
         self.assertLess(agg.loc[0, "opp_xwOBA"], raw.loc[0, "opp_xwOBA"])
 
 
+class MarketContextRecordsTests(unittest.TestCase):
+    COLS = ["status", "xw_lean", "xw_full", "home", "away", "close_p_home"]
+
+    def _led(self, rows):
+        return pd.DataFrame(rows, columns=self.COLS)
+
+    def test_buckets_by_lean_side_and_market_agreement(self):
+        rows = [
+            # away lean, away is the market favorite (ph<.5) -> agree: W W L
+            ("graded", "NYY", "W", "TB", "NYY", 0.40),
+            ("graded", "NYY", "W", "TB", "NYY", 0.45),
+            ("graded", "NYY", "L", "TB", "NYY", 0.48),
+            # away lean, home favored (ph>=.5) -> disagree (away underdog): L
+            ("graded", "NYY", "L", "TB", "NYY", 0.60),
+            # home lean, home favored -> agree: W
+            ("graded", "TB", "W", "TB", "NYY", 0.55),
+            # ignored: not graded, and graded-without-market
+            ("pending", "TB", None, "TB", "NYY", 0.55),
+            ("graded", "TB", "W", "TB", "NYY", float("nan")),
+        ]
+        with mock.patch.object(build_site, "load_ledger_df", return_value=self._led(rows)), \
+                mock.patch.object(build_site, "VERDICT_CONTEXT_MIN", 1):
+            ctx = build_site.market_context_records()
+        self.assertEqual(ctx[("away", "agree")], "2-1")
+        self.assertEqual(ctx[("away", "disagree")], "0-1")
+        self.assertEqual(ctx[("home", "agree")], "1-0")
+        self.assertNotIn(("home", "disagree"), ctx)
+
+    def test_thin_bucket_is_omitted(self):
+        rows = [("graded", "NYY", "W", "TB", "NYY", 0.40)]  # 1 game < default min
+        with mock.patch.object(build_site, "load_ledger_df", return_value=self._led(rows)):
+            ctx = build_site.market_context_records()
+        self.assertEqual(ctx, {})
+
+
 if __name__ == "__main__":
     unittest.main()
