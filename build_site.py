@@ -1802,22 +1802,33 @@ def _market_fav(odds, away_abbr, home_abbr):
     return None
 
 
-def _verdict_html(fav, odds, away_abbr, home_abbr):
+def _verdict_html(fav, odds, away_abbr, home_abbr, ctx=None):
     """Model-vs-market verdict chip. Highlights the disagreement case (model on
-    the underdog) -- the only bettable signal -- and stays muted on agreement."""
+    the underdog) -- the only bettable signal -- and stays muted on agreement.
+    `ctx` is market_context_records(): where available it tails each verdict
+    with the xwOBA lean's historical record in this exact spot (lean side ×
+    agree/disagree), else falls back to prose."""
+    ctx = ctx or {}
     mkt = _market_fav(odds, away_abbr, home_abbr)
     if fav is None or mkt is None:
         return ("<div class='mcell verdict'><div class='l'>Model vs market</div>"
                 "<div class='vt'>No market yet.</div></div>")
+    side = "home" if fav == home_abbr else "away"
     if fav == mkt:
+        rec = ctx.get((side, "agree"))
+        tail = (f"When the model leans the {side} favorite: <b>{rec}</b> in the ledger."
+                if rec else "No edge on the line here.")
         return ("<div class='mcell verdict'><div class='l'>Model vs market</div>"
                 f"<div class='vt'>Model agrees with the market — {_esc(fav)} favored. "
-                "No edge on the line here.</div></div>")
+                f"{tail}</div></div>")
     price = (odds.get("home_ml") if fav == home_abbr else odds.get("away_ml"))
     px = f" ({_fmt_ml(price)})" if price is not None else ""
+    rec = ctx.get((side, "disagree"))
+    tail = (f"when the model leans the {side} underdog: <b>{rec}</b> in the ledger."
+            if rec else "the spot the record is built to test.")
     return ("<div class='mcell verdict edge'><div class='l'>Model vs market · disagree</div>"
             f"<div class='vt'>Model leans the underdog <b>{_esc(fav)}{px}</b> against the "
-            f"market's {_esc(mkt)} — the spot the record is built to test.</div></div>")
+            f"market's {_esc(mkt)} — {tail}</div></div>")
 
 
 def _hitter_row_html(i, hr):
@@ -1927,7 +1938,7 @@ def _consensus_html(away_abbr, home_abbr, a, h):
     return (f"<div class='consensus mach'>{xw_txt}</div>")
 
 
-def _market_html(o, away_abbr, home_abbr, built_short, fav=None):
+def _market_html(o, away_abbr, home_abbr, built_short, fav=None, ctx=None):
     o = o or {}
     def _mlcell(prefix, lab, cur, opn, mach=False):
         sub = f" <span class='mv'>← {_fmt_ml(opn)} open</span>" if opn is not None else ""
@@ -1943,7 +1954,7 @@ def _market_html(o, away_abbr, home_abbr, built_short, fav=None):
         + f"<div class='mcell'><div class='l'>Total</div><div class='v'>{tot}</div></div>"
         + f"<div class='mcell'><div class='l'>Implied {home_abbr} (devig)</div><div class='v'>{ph}</div></div>"
         + f"<div class='mcell note mach'><div class='l'>Market</div><div class='v'>as of build {built_short}</div></div>"
-        + _verdict_html(fav, o, away_abbr, home_abbr)
+        + _verdict_html(fav, o, away_abbr, home_abbr, ctx)
         + "</div>")
 
 
@@ -1952,7 +1963,7 @@ def _l10_span(rec):
     return f"<span class='l10' title='last 10 games'>{_esc(rec)}</span>" if rec else ""
 
 
-def cmb_card(g, built_short, strength_scale=None):
+def cmb_card(g, built_short, strength_scale=None, ctx=None):
     if g.get("unavailable"):
         game_no = f" <span class='game-no'>{_esc(g['game_label'])}</span>" if g.get("game_label") else ""
         when = " · ".join(x for x in (g.get("time_pt"), g.get("venue")) if x)
@@ -2003,7 +2014,7 @@ def cmb_card(g, built_short, strength_scale=None):
         + f"{_consensus_html(away_abbr, home_abbr, a, h)}"
         "</div>"
         + (read_html or "")
-        + _market_html(g.get('odds'), away_abbr, home_abbr, built_short, fav)
+        + _market_html(g.get('odds'), away_abbr, home_abbr, built_short, fav, ctx)
         + f"<div class='sides'>{_side_html(away_abbr, a, g['league_baseline'])}"
         + f"{_side_html(home_abbr, h, g['league_baseline'])}</div>"
         + "</article>")
@@ -2028,10 +2039,10 @@ def _game_order_key(game):
     )
 
 
-def build_combined(games, built_short, strength_scale=None):
+def build_combined(games, built_short, strength_scale=None, ctx=None):
     cards = sorted(games, key=_game_order_key)
     return ("<div class='grid'>"
-            + "".join(cmb_card(g, built_short, strength_scale) for g in cards)
+            + "".join(cmb_card(g, built_short, strength_scale, ctx) for g in cards)
             + "</div>")
 
 
@@ -2595,6 +2606,42 @@ def _display_grades(led):
     return led[led["status"] == "graded"]
 
 
+# Minimum graded games in a (lean side × agree/disagree) bucket before its
+# record is trusted enough to headline the verdict; thinner buckets keep prose.
+VERDICT_CONTEXT_MIN = 10
+
+
+def market_context_records():
+    """(lean_side, relation) -> 'W-L[-T]' for graded xwOBA full-game leans.
+
+    lean_side is 'home'/'away' (the side the model leaned); relation is
+    'agree'/'disagree' vs the market favorite, read from the devigged closing
+    home probability (`close_p_home` >= .5 -> home favored). Powers the
+    Model-vs-market verdict's context record. Display-only and best-effort: an
+    absent ledger/market column returns {}, and a bucket thinner than
+    VERDICT_CONTEXT_MIN decisions is omitted so the verdict keeps its prose."""
+    led = load_ledger_df()
+    if led is None:
+        return {}
+    g = _display_grades(led)
+    if g.empty or "close_p_home" not in g.columns:
+        return {}
+    ph = pd.to_numeric(g["close_p_home"], errors="coerce")
+    lean, grade = g["xw_lean"], g["xw_full"]
+    graded = ph.notna() & grade.isin(["W", "L", "T"])
+    out = {}
+    for side in ("home", "away"):
+        side_is_lean = lean.eq(g["home"] if side == "home" else g["away"])
+        mkt_is_lean = (ph >= 0.5) if side == "home" else (ph < 0.5)
+        for rel in ("agree", "disagree"):
+            rel_ok = mkt_is_lean if rel == "agree" else ~mkt_is_lean
+            sub = grade[graded & side_is_lean & rel_ok]
+            w, l, t = int((sub == "W").sum()), int((sub == "L").sum()), int((sub == "T").sum())
+            if w + l + t >= VERDICT_CONTEXT_MIN:
+                out[(side, rel)] = f"{w}-{l}" + (f"-{t}" if t else "")
+    return out
+
+
 # --- lean strength label (ranks a lean's size vs the ledger) ----------------
 # Point-1 of the casual redesign: turn the raw |Δxw| (".024", ".123") into a
 # word by ranking it against the historical spread of lean magnitudes. Prefers
@@ -2791,7 +2838,8 @@ def render_combined_html(xw_df, pl_df, pitcher_rows_df, built_txt,
         return html_document(inner, built_txt)
     built_short = built_txt.split("·")[0].strip()
     strength_scale = lean_strength_scale()
-    body = head + build_combined(games, built_short, strength_scale) + footer
+    ctx = market_context_records()
+    body = head + build_combined(games, built_short, strength_scale, ctx) + footer
     return html_document(body, built_txt)
 
 

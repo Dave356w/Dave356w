@@ -135,6 +135,23 @@ class RenderTests(unittest.TestCase):
         self.assertIn("verdict edge", dis)
         self.assertIn("underdog", dis)
 
+    def test_verdict_shows_context_record_when_available(self):
+        # ctx = market_context_records(): (lean side, agree/disagree) -> 'W-L'.
+        ctx = {("home", "agree"): "30-27", ("away", "disagree"): "27-30"}
+        # Agree: model favors the home side, which is also the market favorite.
+        agree = b._verdict_html("ARI", dict(p_home=.62), "LAD", "ARI", ctx)
+        self.assertIn("home favorite", agree)
+        self.assertIn("30-27", agree)
+        self.assertNotIn("No edge on the line", agree)
+        # Disagree: model leans the away underdog against a home market favorite.
+        dis = b._verdict_html("LAD", dict(p_home=.62, away_ml=140), "LAD", "ARI", ctx)
+        self.assertIn("away underdog", dis)
+        self.assertIn("27-30", dis)
+        self.assertNotIn("record is built to test", dis)
+        # Missing bucket -> prose fallback (no fabricated record).
+        fb = b._verdict_html("ARI", dict(p_home=.62), "LAD", "ARI", {})
+        self.assertIn("No edge on the line", fb)
+
     def test_no_lean_pill_when_edge_missing(self):
         g, _ = self._cards()
         g["away"]["xw_edge"] = None
