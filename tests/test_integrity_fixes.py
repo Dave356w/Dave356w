@@ -201,12 +201,20 @@ class LedgerLockTests(unittest.TestCase):
             # away starter is an opener, home starter is not.
             xw.loc[xw["side"] == "away", "opener"] = True
             xw.loc[xw["side"] == "home", "opener"] = False
+            xw.loc[xw["side"] == "away", "opener_reason"] = "reliever_spot_start"
+            xw.loc[xw["side"] == "away", "opener_confidence"] = "medium"
+            xw.loc[xw["side"] == "away", "pitching_basis"] = "team_staff"
+            xw.loc[xw["side"] == "home", "pitching_basis"] = "probable_starter"
             xw.to_csv(os.path.join(td, "leans_2026-07-20_xw.csv"), index=False)
             ledger = pd.DataFrame(columns=grade_leans.LEDGER_COLS + grade_leans.AUDIT_COLS)
             with mock.patch.object(grade_leans, "DATA_DIR", td):
                 out = grade_leans.ingest(ledger)
             self.assertEqual(bool(out.iloc[0]["opener_away"]), True)
             self.assertEqual(bool(out.iloc[0]["opener_home"]), False)
+            self.assertEqual(out.iloc[0]["opener_reason_away"], "reliever_spot_start")
+            self.assertEqual(out.iloc[0]["opener_confidence_away"], "medium")
+            self.assertEqual(out.iloc[0]["pitching_basis_away"], "team_staff")
+            self.assertEqual(out.iloc[0]["pitching_basis_home"], "probable_starter")
 
     def test_legacy_dump_without_opener_column_stays_nan(self):
         with tempfile.TemporaryDirectory() as td:
@@ -222,6 +230,9 @@ class LedgerLockTests(unittest.TestCase):
                 out = grade_leans.ingest(ledger)
             self.assertTrue(pd.isna(out.iloc[0]["opener_away"]))
             self.assertTrue(pd.isna(out.iloc[0]["opener_home"]))
+            self.assertTrue(pd.isna(out.iloc[0]["opener_reason_away"]))
+            self.assertTrue(pd.isna(out.iloc[0]["opener_confidence_home"]))
+            self.assertTrue(pd.isna(out.iloc[0]["pitching_basis_away"]))
 
 
 class SlateCompletenessTests(unittest.TestCase):
@@ -316,7 +327,13 @@ class RecentStarterEraTests(unittest.TestCase):
                 mock.patch.object(build_site.time, "sleep"):
             result = build_site.load_recent_start_era([123])
         # 89 outs over 5 starts -> avg_ip 5.93; ERA excludes relief + current day.
-        self.assertEqual(result[123], {"era": 3.03, "starts": 5, "avg_ip": 5.93})
+        self.assertEqual(
+            {k: result[123][k] for k in ("era", "starts", "avg_ip")},
+            {"era": 3.03, "starts": 5, "avg_ip": 5.93},
+        )
+        self.assertEqual(result[123]["appearances"], 7)
+        self.assertEqual(result[123]["recent_starts"], 6)
+        self.assertEqual(result[123]["stretched_appearances"], 5)
 
     def test_avg_ip_flags_opener_from_short_starts(self):
         # Three ~1-inning "starts" (opener pattern) -> avg_ip well below 3.
@@ -333,6 +350,46 @@ class RecentStarterEraTests(unittest.TestCase):
             result = build_site.load_recent_start_era([55])
         self.assertLess(result[55]["avg_ip"], build_site.OPENER_MAX_AVG_IP)
         self.assertEqual(build_site.opener_pids(result), {55})
+
+    def test_kyle_hart_reliever_profile_flags_first_spot_start(self):
+        # Regression for 2026-07-23: Hart had one prior official start, so the
+        # old two-start rule missed him despite an unmistakable relief workload.
+        rows = [
+            ("2026-07-20", "1.0", 0, 0, 20),
+            ("2026-07-17", "0.1", 0, 0, 14),
+            ("2026-07-12", "1.0", 0, 0, 16),
+            ("2026-07-08", "2.0", 0, 0, 37),
+            ("2026-07-04", "2.0", 0, 0, 31),
+            ("2026-07-01", "2.0", 0, 0, 52),
+            ("2026-06-29", "0.2", 0, 0, 12),
+            ("2026-06-27", "2.0", 1, 1, 36),
+            ("2026-06-23", "2.0", 0, 0, 45),
+            ("2026-06-21", "1.0", 0, 0, 11),
+            # Same-day result must not influence pregame classification.
+            ("2026-07-23", "1.0", 0, 1, 18),
+        ]
+        response = {"stats": [{"splits": [
+            {"date": date, "game": {"gamePk": i + 1},
+             "stat": {"inningsPitched": ip, "earnedRuns": er,
+                      "gamesStarted": gs, "numberOfPitches": pitches}}
+            for i, (date, ip, er, gs, pitches) in enumerate(rows)
+        ]}]}
+        with mock.patch.object(build_site, "SLATE_DATE", "2026-07-23"), \
+                mock.patch.object(build_site, "_get_json", return_value=response), \
+                mock.patch.object(build_site.time, "sleep"):
+            result = build_site.load_recent_start_era([606996])
+
+        profile = result[606996]
+        self.assertEqual(profile["starts"], 1)
+        self.assertEqual(profile["recent_starts"], 1)
+        self.assertEqual(profile["relief_share"], .9)
+        self.assertLessEqual(profile["median_ip"], 2.0)
+        self.assertLessEqual(profile["p80_pitches"], 55.0)
+        self.assertEqual(profile["pitch_count_appearances"], 10)
+        self.assertEqual(
+            build_site.opener_classifications(result)[606996],
+            {"reason": "reliever_spot_start", "confidence": "medium"},
+        )
 
     def test_league_era_uses_earned_runs_and_baseball_innings(self):
         response = {"stats": [{"splits": [
@@ -459,6 +516,17 @@ class OpenerFallbackTests(unittest.TestCase):
             4: {"avg_ip": np.nan, "starts": 0},  # no starts
         }
         self.assertEqual(build_site.opener_pids(era), {1})
+
+    def test_reliever_role_rejects_recent_starter_length_work(self):
+        profile = {
+            10: {
+                "avg_ip": 2.0, "starts": 1, "appearances": 10,
+                "recent_starts": 1, "relief_share": .9, "median_ip": 1.1,
+                "p80_pitches": 42.0, "pitch_count_appearances": 10,
+                "stretched_appearances": 1,
+            },
+        }
+        self.assertEqual(build_site.opener_classifications(profile), {})
 
     def test_team_pitching_aggregate_is_bf_weighted(self):
         pitcher_stat = {

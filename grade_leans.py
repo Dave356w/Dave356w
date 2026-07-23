@@ -135,9 +135,13 @@ AUDIT_COLS = [
     "snapshot_utc", "scheduled_start_utc", "lock_status",
     "lineup_status_away", "lineup_status_home",
     "lineup_posted_away", "lineup_posted_home",
-    # True when that side's starter got the opener staff-aggregate fallback
-    # (build_site.OPENER_FALLBACK). NaN on legacy rows; never backfilled.
+    # True when that side's starter got the opener staff-aggregate fallback,
+    # plus the classification evidence and actual pitching input used.
+    # NaN on legacy rows; never backfilled.
     "opener_away", "opener_home",
+    "opener_reason_away", "opener_reason_home",
+    "opener_confidence_away", "opener_confidence_home",
+    "pitching_basis_away", "pitching_basis_home",
 ]
 MODEL_FIELDS = [
     "game_date","away","home","away_sp","home_sp","model_tag",
@@ -148,6 +152,9 @@ MODEL_FIELDS = [
     "lineup_status_away","lineup_status_home",
     "lineup_posted_away","lineup_posted_home",
     "opener_away","opener_home",
+    "opener_reason_away","opener_reason_home",
+    "opener_confidence_away","opener_confidence_home",
+    "pitching_basis_away","pitching_basis_home",
 ]
 
 def load_ledger():
@@ -169,7 +176,10 @@ def load_ledger():
         # no AGREE/DIVERGE row yet reloads it as float64).
         for c in ("xw_full", "xw_f5", "ops_full", "ops_f5", "consensus",
                   "lineup_status_away", "lineup_status_home",
-                  "opener_away", "opener_home"):
+                  "opener_away", "opener_home",
+                  "opener_reason_away", "opener_reason_home",
+                  "opener_confidence_away", "opener_confidence_home",
+                  "pitching_basis_away", "pitching_basis_home"):
             led[c] = led[c].astype(object)
         return led
     return pd.DataFrame(columns=LEDGER_COLS + AUDIT_COLS)
@@ -254,6 +264,12 @@ def rows_from_dump(xw_df, pl_df):
             lineup_posted_home=a.get("lineup_posted_home", np.nan),
             opener_away=_optbool(a.get("opener")),
             opener_home=_optbool(h.get("opener")),
+            opener_reason_away=a.get("opener_reason", np.nan),
+            opener_reason_home=h.get("opener_reason", np.nan),
+            opener_confidence_away=a.get("opener_confidence", np.nan),
+            opener_confidence_home=h.get("opener_confidence", np.nan),
+            pitching_basis_away=a.get("pitching_basis", np.nan),
+            pitching_basis_home=h.get("pitching_basis", np.nan),
             status="pending", full_away=np.nan, full_home=np.nan,
             f5_away=np.nan, f5_home=np.nan,
             xw_full=None, xw_f5=None, ops_full=None, ops_f5=None,
