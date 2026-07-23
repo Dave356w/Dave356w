@@ -690,6 +690,39 @@ def fetch_all(slate_date):
         log(f"  xwOBA shrink: prior={prior} | K_bat={k_bat:.0f} ({note_b}) "
             f"| K_pit={k_pit:.0f} ({note_p})")
 
+        # Display-only percentile reference distributions (qualified regulars),
+        # stashed on league_baseline like the K's so the render layer can rank a
+        # player's shrunk xwOBA without re-fetching the leaderboards. Team-games
+        # is estimated once from the batter pool and shared by both qualifiers,
+        # since pitchers accrue BF at a different per-game rate than hitters.
+        g = _est_team_games(pd.to_numeric(batter_cust.get("pa"), errors="coerce")) if batter_cust is not None else None
+        qual_bat = PCTILE_QUAL_BAT * g if g else None
+        qual_pit = PCTILE_QUAL_PIT * g if g else None
+        ref_bat, qb = build_pctile_ref(batter_cust, prior, k_bat, qual_bat)
+        ref_pit, qp = build_pctile_ref(pitcher_cust, prior, k_pit, qual_pit)
+        league_baseline["_pctile_ref_bat"] = ref_bat
+        league_baseline["_pctile_ref_pit"] = ref_pit
+        # K-BB% reference (pitchers), raw: K-BB stabilizes fast and the model
+        # does not shrink it, so it is ranked at face value over the same
+        # qualified pool.
+        ref_kbb = None
+        pcols = set(getattr(pitcher_cust, "columns", []))
+        if pitcher_cust is not None and {"k_percent", "bb_percent"} <= pcols:
+            kk = pd.to_numeric(pitcher_cust["k_percent"], errors="coerce")
+            bbp = pd.to_numeric(pitcher_cust["bb_percent"], errors="coerce")
+            pap = pd.to_numeric(pitcher_cust.get("pa"), errors="coerce")
+            msk = kk.notna() & bbp.notna()
+            if qual_pit and pap is not None:
+                msk_q = msk & (pap >= qual_pit)
+                if int(msk_q.sum()) >= PCTILE_MIN_POOL:
+                    msk = msk_q
+            ref_kbb = build_pctile_ref_raw((kk - bbp)[msk])
+        league_baseline["_pctile_ref_kbb"] = ref_kbb
+        log(f"  pctile refs: G~{g and round(g)} | bat n="
+            f"{0 if ref_bat is None else ref_bat.size} (qual~{qb and round(qb)}) | pit n="
+            f"{0 if ref_pit is None else ref_pit.size} (qual~{qp and round(qp)}) | kbb n="
+            f"{0 if ref_kbb is None else ref_kbb.size}")
+
     log("Resolving lineups (gf -> posted/partial-fill/projected) ...")
     lineups, proj_flags, lineup_ids, prob_ids = {}, [], set(), set()
     for _, g in slate_df.iterrows():
@@ -970,6 +1003,87 @@ def estimate_shrink_k(pairs, prior, default, band):
     if not np.isfinite(k) or k <= 0:
         return default, "fallback:bad_k"
     return float(min(max(k, lo), hi)), ("ok" if lo <= k <= hi else f"clamped_from_{k:.0f}")
+
+
+# --- percentile display scale (casual redesign) -----------------------------
+# Display-only. Ranks a player's *shrunk* xwOBA against a reference population
+# of qualified regulars so the casual card can show a 0-100 Statcast-style
+# percentile instead of a raw decimal. It reuses the model's shrink K/prior, so
+# the bars are the same regressed values the lean is built on -- it never feeds
+# back into the lean, MODEL_TAG, or the ledger.
+#
+# Reference = Savant's qualifier (2.1 PA per team-game for batters, 1.25 for
+# pitchers); games played is estimated from the leaderboard's own PA spread so
+# the cut scales through the season without an extra fetch. Non-qualified
+# players (call-ups, platoon bats) are still *scored against* that reference by
+# their shrunk value -- they land near league, filling the projected-lineup
+# coverage gap a hard in/out qualifier would leave blank.
+PCTILE_QUAL_BAT = 2.1      # PA per team-game
+PCTILE_QUAL_PIT = 1.25     # BF per team-game
+PCTILE_PA_PER_GAME = 4.3   # ~ an everyday player's PA/team-game, to back out games
+PCTILE_MIN_POOL = 20       # need a real population for a stable scale
+
+
+def _est_team_games(pa_series):
+    """Estimate team games played from a leaderboard's PA spread: an everyday
+    player's PA (~p99) ≈ PCTILE_PA_PER_GAME × games. Robust to a lone outlier."""
+    pa = pd.to_numeric(pd.Series(pa_series), errors="coerce").dropna()
+    if pa.empty:
+        return None
+    g = float(pa.quantile(0.99)) / PCTILE_PA_PER_GAME
+    return g if np.isfinite(g) and g > 0 else None
+
+
+def build_pctile_ref(cust, prior, k, qual_pa):
+    """Sorted array of shrunk xwOBA for qualified regulars in a custom
+    leaderboard. `qual_pa` is an absolute PA/BF threshold (caller derives it
+    from team-games so batters and pitchers share one games estimate). Returns
+    (sorted_array | None, qual_pa | None); falls back to the whole (min=1) pool
+    if qualifying leaves too few for a stable scale."""
+    cols = getattr(cust, "columns", [])
+    if cust is None or "xwoba" not in cols or "pa" not in cols:
+        return None, None
+    xw = pd.to_numeric(cust["xwoba"], errors="coerce")
+    pa = pd.to_numeric(cust["pa"], errors="coerce")
+    base = xw.notna() & pa.notna() & (pa > 0)
+    m = (base & (pa >= qual_pa)) if qual_pa else base
+    if int(m.sum()) < PCTILE_MIN_POOL:      # qualifier too strict this early -> pool everyone
+        m, qual_pa = base, None
+    if int(m.sum()) < PCTILE_MIN_POOL:
+        return None, None
+    arr = np.sort(pd.to_numeric(shrink_xwoba(xw[m], pa[m], prior, k), errors="coerce")
+                  .dropna().to_numpy())
+    return (arr if arr.size else None), qual_pa
+
+
+def build_pctile_ref_raw(series, min_n=PCTILE_MIN_POOL):
+    """Sorted array of an already-final metric (e.g. K-BB%) for ranking without
+    shrinkage. None when the pool is too thin."""
+    v = pd.to_numeric(pd.Series(series), errors="coerce").dropna()
+    return np.sort(v.to_numpy()) if len(v) >= min_n else None
+
+
+def pctile_rank(value, pa, ref_arr, prior, k, invert=False):
+    """Percentile (0-100) of a player's *shrunk* xwOBA within ref_arr. Set
+    invert for pitchers (low xwOBA-against = high percentile). None when
+    unavailable."""
+    if ref_arr is None or getattr(ref_arr, "size", 0) == 0 or value is None or pd.isna(value):
+        return None
+    s = _shrink_one(value, pa, prior, k)
+    if s is None or not np.isfinite(s):
+        return None
+    frac = float(np.searchsorted(ref_arr, s, side="right")) / ref_arr.size
+    pct = 100.0 * (1.0 - frac if invert else frac)
+    return max(0.0, min(100.0, pct))
+
+
+def pctile_rank_raw(value, ref_arr, invert=False):
+    """Percentile of an already-final value (no shrink) within ref_arr."""
+    if ref_arr is None or getattr(ref_arr, "size", 0) == 0 or value is None or pd.isna(value):
+        return None
+    frac = float(np.searchsorted(ref_arr, float(value), side="right")) / ref_arr.size
+    pct = 100.0 * (1.0 - frac if invert else frac)
+    return max(0.0, min(100.0, pct))
 
 
 def segment_pitcher_blocks(df, rate_cols):
@@ -1558,11 +1672,15 @@ def _pl_lookup(pl_df):
     return out
 
 
-def _hitters_for(opp_hitters_df, detail_df, gpk, fp, lg_ops):
+def _hitters_for(opp_hitters_df, detail_df, gpk, fp, lg_ops,
+                 ref_bat=None, prior=None, k_bat=None):
     """Batting-order rows for the lineup this SP faces. Row order in
     opp_hitters_df IS lineup order -- never sort. Detail (platoon) join is by
     (game_pk, faced_pitcher, batter name); a hitter with no vs-hand data keeps
-    the xwOBA cell and renders em-dashes for the platoon columns."""
+    the xwOBA cell and renders em-dashes for the platoon columns.
+
+    Each row also carries xw_pctile: the hitter's season xwOBA, shrunk by his
+    PA and ranked against the qualified-regular reference (display-only)."""
     rows = []
     if opp_hitters_df is None or getattr(opp_hitters_df, "empty", True):
         return rows
@@ -1579,10 +1697,12 @@ def _hitters_for(opp_hitters_df, detail_df, gpk, fp, lg_ops):
         mx = _f(d["mx_ops"]) if d is not None else None
         edge = (mx - lg_ops) if (mx is not None and lg_ops is not None
                                  and pd.notna(lg_ops)) else None
+        xw_raw = _f(r.get("xwOBA"))
         rows.append(dict(
             name=r["Name"], pos=str(r.get("Pos.") or ""),
             bats=(str(r.get("bats") or ""))[:1].upper(),
-            xw=_f(r.get("xwOBA")),
+            xw=xw_raw,
+            xw_pctile=pctile_rank(xw_raw, _f(r.get("PA")), ref_bat, prior, k_bat),
             adv=bool(d["platoon_adv"]) if d is not None else False,
             ops=_f(d["ops_vs_hand"]) if d is not None else None,
             pa=int(d["split_pa"] or 0) if d is not None else 0,
@@ -1592,36 +1712,143 @@ def _hitters_for(opp_hitters_df, detail_df, gpk, fp, lg_ops):
     return rows
 
 
-def _hitter_row_html(i, hr, lg_xw=None):
+def _last(name):
+    """Last token of a name, for compact spotlight pills."""
+    parts = str(name or "").split()
+    return parts[-1] if parts else str(name or "")
+
+
+def _tier_word(pctile):
+    """(label, css-class) plain-word starter quality from an xwOBA-against
+    percentile. Class picks the accent: elite=steel, below=ember, else neutral."""
+    if pctile is None:
+        return None, ""
+    if pctile >= 75:
+        return "elite", "elite"
+    if pctile >= 45:
+        return "solid", "solid"
+    return "below avg", "below"
+
+
+def _pct_bar(pctile, kind):
+    """Percentile slider (0-100). kind 'h' (hitter, ember) or 'p' (pitcher,
+    steel). Fill length is the percentile; hue carries whose favor it is."""
+    if pctile is None:
+        return "<span class='sl na'></span><span class='pn'>—</span>"
+    w = max(0.0, min(100.0, float(pctile)))
+    return (f"<span class='sl {kind}'><i style='width:{w:.0f}%'></i></span>"
+            f"<span class='pn'>{round(w)}</span>")
+
+
+def _spotlight_html(hitters, n=3, thresh=70):
+    """Top bats in a lineup by xwOBA percentile -- the 'highlight the leaders'
+    ask, on a quality stat. Shows up to n at/above thresh; empty otherwise."""
+    ranked = sorted((h for h in hitters if h.get("xw_pctile") is not None),
+                    key=lambda h: h["xw_pctile"], reverse=True)
+    top = [h for h in ranked[:n] if h["xw_pctile"] >= thresh]
+    if not top:
+        return ""
+    pills = "".join(f"<span class='pill'>{_esc(_last(h['name']))} "
+                    f"<b>{round(h['xw_pctile'])}</b></span>" for h in top)
+    return f"<div class='spot'><span class='sl-lab'>Standouts</span>{pills}</div>"
+
+
+def _grade_word(edge):
+    """Qualitative grade of an offense's xwOBA edge vs league, for the read."""
+    if edge is None:
+        return None, ""
+    if edge >= 0.020:
+        return "well above average", "warmtx"
+    if edge >= 0.006:
+        return "above average", "warmtx"
+    if edge > -0.006:
+        return "about average", ""
+    if edge > -0.020:
+        return "below average", "cooltx"
+    return "well below average", "cooltx"
+
+
+def _read_sentence(away_abbr, home_abbr, a, h, fav, strength_word):
+    """One plain-language line under the header explaining the lean. a = away
+    SP row, so a['xw_edge'] is the HOME offense edge and h -> AWAY offense."""
+    home_edge, away_edge = a.get("xw_edge"), h.get("xw_edge")
+    if home_edge is None or away_edge is None or fav is None:
+        return ""
+    # The away offense faces the HOME starter (h['p']); the home offense faces
+    # the AWAY starter (a['p']). Edges were resolved to offenses above.
+    ga, ca = _grade_word(away_edge)
+    gh, ch = _grade_word(home_edge)
+    aw = f"<b class='{ca}'>{ga}</b>" if ca else f"<b>{ga}</b>"
+    hw = f"<b class='{ch}'>{gh}</b>" if ch else f"<b>{gh}</b>"
+    return (f"<p class='read'>{_esc(away_abbr)}'s bats grade {aw} against "
+            f"{_esc(_last(h['p']))}; {_esc(home_abbr)}'s grade {hw} against "
+            f"{_esc(_last(a['p']))} — a <b>{strength_word or 'lean'}</b> "
+            f"lean to {_esc(fav)}.</p>")
+
+
+def _market_fav(odds, away_abbr, home_abbr):
+    """Market favorite abbr from devigged home prob, else raw MLs. None if unknown."""
+    if not odds:
+        return None
+    ph = odds.get("p_home")
+    if ph is not None and pd.notna(ph):
+        return home_abbr if ph >= 0.5 else away_abbr
+    hm, am = odds.get("home_ml"), odds.get("away_ml")
+    if hm is not None and am is not None:
+        return home_abbr if float(hm) < float(am) else away_abbr
+    return None
+
+
+def _verdict_html(fav, odds, away_abbr, home_abbr):
+    """Model-vs-market verdict chip. Highlights the disagreement case (model on
+    the underdog) -- the only bettable signal -- and stays muted on agreement."""
+    mkt = _market_fav(odds, away_abbr, home_abbr)
+    if fav is None or mkt is None:
+        return ("<div class='mcell verdict'><div class='l'>Model vs market</div>"
+                "<div class='vt'>No market yet.</div></div>")
+    if fav == mkt:
+        return ("<div class='mcell verdict'><div class='l'>Model vs market</div>"
+                f"<div class='vt'>Model agrees with the market — {_esc(fav)} favored. "
+                "No edge on the line here.</div></div>")
+    price = (odds.get("home_ml") if fav == home_abbr else odds.get("away_ml"))
+    px = f" ({_fmt_ml(price)})" if price is not None else ""
+    return ("<div class='mcell verdict edge'><div class='l'>Model vs market · disagree</div>"
+            f"<div class='vt'>Model leans the underdog <b>{_esc(fav)}{px}</b> against the "
+            f"market's {_esc(mkt)} — the spot the record is built to test.</div></div>")
+
+
+def _hitter_row_html(i, hr):
+    """One batting-order row. Casual: name + Statcast percentile bar. Analyst
+    (mach cells): raw xwOBA, the vs-hand xOPS, the edge-vs-league bar, and the
+    ◆ platoon-advantage marker."""
     nm = _esc(hr["name"])
     b = f"<span class='b'>{hr['bats']}</span>" if hr["bats"] else ""
-    adv = "<span class='adv' title='platoon advantage vs this SP'>◆</span>" if hr["adv"] else ""
+    adv = ("<span class='adv mach' title='platoon advantage vs this SP'>◆</span>"
+           if hr["adv"] else "")
+    bar = _pct_bar(hr.get("xw_pctile"), "h")
+    xw_c = f"<td class='r mach'>{f3(hr['xw'])}</td>"
     if hr["ops"] is None:
-        ops_cell = "<td class='na'>—</td>"
+        ops_c = "<td class='r mach na'>—</td>"
     else:
         if hr["pa"] > 0:
             src = f"<span class='pa'>({hr['pa']})</span>"
-            low = " <span class='flag mute'>low PA</span>" if hr["low"] else ""
+            low = " <span class='flag mute'>low</span>" if hr["low"] else ""
         else:
             src, low = "<span class='pa'>(prior)</span>", ""
-        ops_cell = f"<td>{f3(hr['ops'])} {src}{low}</td>"
+        ops_c = f"<td class='r mach'>{f3(hr['ops'])} {src}{low}</td>"
     if hr["edge"] is None:
-        bar = "<div class='eb'></div>"
+        eb = "<td class='mach'><div class='eb'></div></td>"
     else:
         w = clamp(abs(hr["edge"]) / HITTER_EDGE_DOMAIN, 0, 1) * 50
         cls = "w" if hr["edge"] >= 0 else "c"
-        bar = (f"<div class='eb' title='xOPS edge vs league {sgn3(hr['edge'])}'>"
-               f"<i class='{cls}' style='width:{w:.0f}%'></i></div>")
-    lowcls = " class='low'" if (hr["ops"] is not None and (hr["pa"] == 0 or hr["low"])) else ""
-    xw_st = heat_style(hr["xw"], lg_xw, HEAT_DOMAINS["xwOBA_bat"])
-    xw_td = f"<td style='{xw_st}'>{f3(hr['xw'])}</td>" if xw_st else f"<td>{f3(hr['xw'])}</td>"
-    return (f"<tr{lowcls}><td class='ord'>{i}</td>"
-            f"<td class='n'>{nm}{b}{adv}</td><td class='pos'>{_esc(hr['pos'])}</td>"
-            f"{xw_td}{ops_cell}"
-            f"<td class='bar'>{bar}</td></tr>")
+        eb = (f"<td class='mach'><div class='eb' title='xOPS edge vs league {sgn3(hr['edge'])}'>"
+              f"<i class='{cls}' style='width:{w:.0f}%'></i></div></td>")
+    return (f"<tr><td class='ord'>{i}</td>"
+            f"<td class='nm' title='{nm}'>{nm}{adv}{b}</td><td class='pos'>{_esc(hr['pos'])}</td>"
+            f"<td class='pct r'>{bar}</td>{xw_c}{ops_c}{eb}</tr>")
 
 
-def _lineup_details(side_d, lg_xw=None):
+def _lineup_details(side_d):
     st = side_d["lu_status"]
     st_lab = {"posted": "posted", "partial_filled": "partial", "projected": "projected"}.get(st, st or "—")
     st_cls = {"posted": "posted", "partial_filled": "partial", "projected": "projected"}.get(st, "projected")
@@ -1632,17 +1859,18 @@ def _lineup_details(side_d, lg_xw=None):
         parts.append(f"xOPS {f3(side_d['pl_mx'])}")
     summ = " · ".join(parts) if parts else ""
     hand = side_d["t"] if side_d["t"] in ("L", "R") else "?"
-    head = (f"<tr><th></th><th class='n'>Hitter</th><th></th><th>xwOBA</th>"
-            f"<th>vs-{hand} OPS</th><th>edge</th></tr>")
-    body = "".join(_hitter_row_html(i + 1, hr, lg_xw) for i, hr in enumerate(side_d["hitters"]))
+    head = ("<tr><th></th><th class='nm'>Hitter</th><th>Pos</th><th class='r'>xwOBA %ile</th>"
+            "<th class='r mach'>xwOBA</th>"
+            f"<th class='r mach'>vs-{hand} xOPS</th><th class='r mach'>edge</th></tr>")
+    body = "".join(_hitter_row_html(i + 1, hr) for i, hr in enumerate(side_d["hitters"]))
     if not body:
-        body = "<tr><td class='na' colspan='6'>lineup unavailable</td></tr>"
+        body = "<tr><td class='na' colspan='7'>lineup unavailable</td></tr>"
     return (
         "<details class='lineup' open>"
         "<summary><span class='chev'>▶</span>"
         f"<span class='tl'>{_esc(side_d['opp_abbr'])} lineup</span>"
         f"<span class='st {st_cls}'>{st_lab}</span>"
-        f"<span class='lw'>{summ}</span></summary>"
+        f"<span class='lw mach'>{summ}</span></summary>"
         f"<div class='lu-scroll'><table class='lu'>{head}{body}</table></div></details>")
 
 
@@ -1653,7 +1881,7 @@ def _sp_stat_cell(lab, val, fmt, sub=None, heat=""):
             f"<div class='v'>{fmt(val)}</div>{s}</div>")
 
 
-def _side_html(label, d, league_baseline):
+def _side_html(sp_abbr, d, league_baseline):
     badge = f"<span class='hand'>{d['t']}HP</span>" if d["t"] in ("L", "R") else ""
     opener = ("<span class='flag warn' title='Opener: the club's batters-faced-"
               "weighted staff aggregate is shown in place of this starter's own "
@@ -1693,17 +1921,24 @@ def _side_html(label, d, league_baseline):
     pl_bits = f3(None) if not d["has_pl"] else sgn3(d["pl_edge"])
     pl_col = edge_color(d["pl_edge"]) if (d["has_pl"] and d["pl_reliable"]) else "var(--faint)"
     pl_flag = "" if (not d["has_pl"] or d["pl_reliable"]) else " <span class='flag mute'>prior-driven</span>"
+    tier_lab, tier_cls = _tier_word(d.get("pit_xw_pctile"))
+    tier = f"<span class='tier {tier_cls}'>{tier_lab}</span>" if tier_lab else ""
+    bars = (f"<div class='spct'><span class='lab'>xwOBA</span>{_pct_bar(d.get('pit_xw_pctile'), 'p')}</div>"
+            f"<div class='spct'><span class='lab'>K − BB%</span>{_pct_bar(d.get('kbb_pctile'), 'p')}</div>")
     return (
         f"<section class='side'>"
-        f"<div class='sp'><div class='who'><span class='nm'>{_esc(d['p'])}</span>{badge}{opener}{thin}</div>"
-        f"<div class='role'>{label} SP · faces {_esc(d['opp_abbr'])} lineup · {comp}{padv}</div>"
-        f"<div class='spstats'>{stats}</div></div>"
-        f"<div class='agg'>"
+        f"<div class='matchlab'>{_esc(sp_abbr)} starter → {_esc(d['opp_abbr'])} bats</div>"
+        f"<div class='sp'><div class='who'><span class='nm'>{_esc(d['p'])}</span>{badge}{tier}{opener}{thin}</div>"
+        f"<div class='role'>faces the {_esc(d['opp_abbr'])} lineup<span class='mach'> · {comp}{padv}</span></div>"
+        f"<div class='sp-bars'>{bars}</div>"
+        f"<div class='spstats mach'>{stats}</div>"
+        f"<div class='agg mach'>"
         f"<div class='e' style='color:{edge_color(d['xw_edge'])}'>"
         f"<span>xw edge (drives lean)</span>{sgn3(d['xw_edge'])}</div>"
         f"<div class='e' style='color:{pl_col}'><span>xOPS edge</span>{pl_bits}{pl_flag}</div>"
         f"</div>"
-        f"{_lineup_details(d, lg['xwOBA'])}"
+        f"{_spotlight_html(d['hitters'])}"
+        f"{_lineup_details(d)}"
         f"</section>")
 
 
@@ -1727,7 +1962,7 @@ def _consensus_html(away_abbr, home_abbr, a, h):
     # The AGREE/DIVERGE tag was removed: the xwOBA and platoon-OPS lenses share
     # the same lineup-vs-starter inputs, so their agreement is not independent
     # confirmation. The two per-lens readouts remain.
-    return (f"<div class='consensus'>{xw_txt}<span class='dot'>·</span>{pl_txt}</div>")
+    return (f"<div class='consensus mach'>{xw_txt}<span class='dot'>·</span>{pl_txt}</div>")
 
 
 def _pyth_cell(py, home_abbr):
@@ -1739,15 +1974,16 @@ def _pyth_cell(py, home_abbr):
     py = py or {}
     ph = py.get("p_home")
     val = "—" if ph is None else f"{ph * 100:.1f}%"
-    return (f"<div class='mcell ctrl'><div class='l'>pythag {home_abbr}</div>"
+    return (f"<div class='mcell ctrl mach'><div class='l'>pythag {home_abbr}</div>"
             f"<div class='v'>{val}</div></div>")
 
 
-def _market_html(o, py, away_abbr, home_abbr, built_short):
+def _market_html(o, py, away_abbr, home_abbr, built_short, fav=None):
     o = o or {}
-    def _mlcell(prefix, lab, cur, opn):
+    def _mlcell(prefix, lab, cur, opn, mach=False):
         sub = f" <span class='mv'>← {_fmt_ml(opn)} open</span>" if opn is not None else ""
-        return (f"<div class='mcell'><div class='l'>{prefix} · {lab}</div>"
+        cls = "mcell mach" if mach else "mcell"
+        return (f"<div class='{cls}'><div class='l'>{prefix} · {lab}</div>"
                 f"<div class='v'>{_fmt_ml(cur)}{sub}</div></div>")
     tot = f"o/u {o['total']:g}" if o.get("total") is not None else "—"
     ph = f"{o['p_home'] * 100:.1f}%" if o.get("p_home") is not None else "—"
@@ -1761,9 +1997,12 @@ def _market_html(o, py, away_abbr, home_abbr, built_short):
         + _mlcell("DK F5", home_abbr, o.get("f5_home_ml"), o.get("f5_open_home_ml"))
         + f"<div class='mcell'><div class='l'>Total</div><div class='v'>{tot}</div></div>"
         + f"<div class='mcell'><div class='l'>Implied {home_abbr} (devig)</div><div class='v'>{ph}</div></div>"
+        # pythag control + the conditional-F5 devig are methodology, not a pick:
+        # analyst-only so the casual strip stays a clean price row.
         + _pyth_cell(py, home_abbr)
-        + f"<div class='mcell'><div class='l'>F5 impl {home_abbr} (devig · cond.)</div><div class='v'>{ph5}</div></div>"
-        + f"<div class='mcell note'><div class='l'>Market</div><div class='v'>as of build {built_short}</div></div>"
+        + f"<div class='mcell mach'><div class='l'>F5 impl {home_abbr} (devig · cond.)</div><div class='v'>{ph5}</div></div>"
+        + f"<div class='mcell note mach'><div class='l'>Market</div><div class='v'>as of build {built_short}</div></div>"
+        + _verdict_html(fav, o, away_abbr, home_abbr)
         + "</div>")
 
 
@@ -1772,7 +2011,7 @@ def _l10_span(rec):
     return f"<span class='l10' title='last 10 games'>{_esc(rec)}</span>" if rec else ""
 
 
-def cmb_card(g, built_short):
+def cmb_card(g, built_short, strength_scale=None):
     if g.get("unavailable"):
         game_no = f" <span class='game-no'>{_esc(g['game_label'])}</span>" if g.get("game_label") else ""
         when = " · ".join(x for x in (g.get("time_pt"), g.get("venue")) if x)
@@ -1792,20 +2031,25 @@ def cmb_card(g, built_short):
 
     a, h = g["away"], g["home"]
     away_abbr, home_abbr = g["away_abbr"], g["home_abbr"]
-    # a = away SP -> his xw_edge is the HOME offense edge (same as before).
-    # When either side's edge is missing there is no defined lean: render a
-    # neutral "no lean" pill (no favorite, no Δ) rather than substituting 0.0,
-    # which would fabricate a tie/favorite. Card position is unchanged.
+    # a = away SP -> his xw_edge is the HOME offense edge. When either edge is
+    # missing there is no defined lean: neutral "no lean" pill (no favorite),
+    # never a fabricated 0.0 tie. The strength word ranks |Δxw| against the
+    # ledger's lean-magnitude history (display-only).
+    fav = strength_word = read_html = None
     if a["xw_edge"] is not None and h["xw_edge"] is not None:
         home_off, away_off = a["xw_edge"], h["xw_edge"]
         delta = abs(home_off - away_off)
         fav = home_abbr if home_off >= away_off else away_abbr
-        lean_html = (f"<span class='lean'><span class='lk'>lean</span>"
+        strength_word, strength_pct = lean_strength(delta, strength_scale)
+        rank = f" · {round(strength_pct)}th-pct lean" if strength_pct is not None else ""
+        lean_html = (f"<span class='lean {strength_word or ''}'><span class='lk'>lean</span>"
                      f"<span class='lt'>{fav}</span>"
-                     f"<span class='ld'>Δxw {delta:.3f}</span></span>")
+                     f"<span class='ls'>{strength_word or 'lean'}"
+                     f"<span class='mach'> · Δxw {delta:.3f}{rank}</span></span></span>")
+        read_html = _read_sentence(away_abbr, home_abbr, a, h, fav, strength_word)
     else:
         lean_html = ("<span class='lean nolean'><span class='lk'>lean</span>"
-                     "<span class='lt'>—</span><span class='ld'>no lean</span></span>")
+                     "<span class='lt'>—</span><span class='ls'>no lean</span></span>")
     when = " · ".join(x for x in (g.get("time_pt"), g.get("venue")) if x)
     game_no = f" <span class='game-no'>{_esc(g['game_label'])}</span>" if g.get("game_label") else ""
     return (
@@ -1817,10 +2061,11 @@ def cmb_card(g, built_short):
         + lean_html
         + f"{_consensus_html(away_abbr, home_abbr, a, h)}"
         "</div>"
-        f"{_market_html(g.get('odds'), g.get('pythag'), away_abbr, home_abbr, built_short)}"
-        f"<div class='sides'>{_side_html('AWAY', a, g['league_baseline'])}"
-        f"{_side_html('HOME', h, g['league_baseline'])}</div>"
-        "</article>")
+        + (read_html or "")
+        + _market_html(g.get('odds'), g.get('pythag'), away_abbr, home_abbr, built_short, fav)
+        + f"<div class='sides'>{_side_html(away_abbr, a, g['league_baseline'])}"
+        + f"{_side_html(home_abbr, h, g['league_baseline'])}</div>"
+        + "</article>")
 
 
 def _game_order_key(game):
@@ -1842,9 +2087,11 @@ def _game_order_key(game):
     )
 
 
-def build_combined(games, built_short):
+def build_combined(games, built_short, strength_scale=None):
     cards = sorted(games, key=_game_order_key)
-    return "<div class='grid'>" + "".join(cmb_card(g, built_short) for g in cards) + "</div>"
+    return ("<div class='grid'>"
+            + "".join(cmb_card(g, built_short, strength_scale) for g in cards)
+            + "</div>")
 
 
 def _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
@@ -1880,6 +2127,16 @@ def _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
                                     "home": s.get("home_lineup_status")}
     lg_ops_f = _f(lg_ops)
 
+    # Percentile reference distributions + shrink constants (stashed on
+    # league_baseline in fetch_all). Missing on pre-market/degraded builds ->
+    # every pctile_rank returns None and the bars fall back to em-dashes.
+    _lb0 = league_baseline or {}
+    _prior = _f(_lb0.get("xwOBA"))
+    _k_bat = _lb0.get("_xwOBA_K_bat")   # pitcher pctile ranks an already-shrunk value
+    _ref_bat = _lb0.get("_pctile_ref_bat")
+    _ref_pit = _lb0.get("_pctile_ref_pit")
+    _ref_kbb = _lb0.get("_pctile_ref_kbb")
+
     games = []
     for gpk, gg in xw_df.groupby("game_pk", sort=False):
         a, h = _rows_by_side(gg)
@@ -1904,13 +2161,22 @@ def _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
                      era_season=recent_era.get((gpk, r["pitcher"]), (None, 0, None))[2],
                      opp_xw=_f(r.get("opp_xwOBA")),
                      xw_edge=_f(r.get("edge_xwOBA")),
+                     # Display percentiles (0-100). pit_xwOBA is already shrunk
+                     # in build_matchup, so it is ranked directly (invert: low
+                     # xwOBA-against = high pct); K-BB% is ranked raw.
+                     pit_xw_pctile=pctile_rank_raw(_f(r.get("pit_xwOBA")), _ref_pit, invert=True),
+                     kbb_pctile=pctile_rank_raw(
+                         (_f(r.get("pit_K%")) - _f(r.get("pit_BB%")))
+                         if (_f(r.get("pit_K%")) is not None and _f(r.get("pit_BB%")) is not None)
+                         else None, _ref_kbb),
                      lu_status=(lu_map.get(gpk) or {}).get(opp_lu_side),
                      is_opener=bool(r.get("opener")),
                      has_pl=False, R=0, L=0, S=0, padv=0, pl_fl={},
                      pl_sp=None, pl_sp_raw=None, pl_mx=None, pl_edge=None,
                      pl_reliable=False,
                      hitters=_hitters_for(opp_hitters_df, detail_df,
-                                          gpk, r["pitcher"], lg_ops_f))
+                                          gpk, r["pitcher"], lg_ops_f,
+                                          _ref_bat, _prior, _k_bat))
             pr = pl_map.get((gpk, side))
             if pr is not None:
                 fl = {}
@@ -1989,58 +2255,35 @@ def _legend_head(model_label, built_txt):
 def _legend_guide():
     return (
         "<div class='legend'>"
-        "<div class='lg-lead'><b>How to read a card:</b> each one sets a team's "
-        "projected lineup against the other team's starting pitcher, both ways. The "
-        "<b>lean</b> points to the side the models favor — a bigger tilt means a "
-        "stronger lean. Everything here is an estimate of matchup strength from "
-        "season data, not a prediction of the final score.</div>"
+        "<div class='lg-lead'><b>How to read a card:</b> the <b>lean</b> names the side the "
+        "model favors and how strongly — <b>slight / clear / strong</b>, ranked against every "
+        "graded lean to date. The one-line read explains the tilt. Everything here is an "
+        "estimate of matchup strength from season data, not a prediction of the final "
+        "score.</div>"
         "<div class='lg-keys'>"
-        "<span class='k'><i class='sw warm'></i>warmer = better for hitters</span>"
-        "<span class='k'><i class='sw cool'></i>cooler = better for the pitcher</span>"
-        "<span class='k'><i class='sw lean'></i>lean / net tilt (xwOBA)</span>"
-        "<span class='k'>◆ lineup has the lefty/righty edge vs the starter</span>"
+        "<span class='k'><i class='sw warm'></i>warmer / longer bar = better for hitters</span>"
+        "<span class='k'><i class='sw cool'></i>cooler / longer bar = better for the pitcher</span>"
+        "<span class='k'><b>xwOBA %ile</b> where a bat or arm ranks league-wide (0–100)</span>"
         "</div>"
         "<div class='lg-notes'>"
-        "<span><b>xwOBA</b> This lineup's overall hitting quality this season (expected "
-        "on-base value per plate appearance). Hitters we've seen little of are pulled "
-        "toward the league average, then each is weighted by the plate appearances his "
-        "spot in the order usually gets. This column is the raw lineup input on its own — "
-        "the starter is folded in separately, at <b>xw edge</b>.</span>"
-        "<span><b>xwOBA agn</b> Today's starter's own xwOBA allowed this season, pulled "
-        "toward league average by how many batters he's faced. Lower is better for the "
-        "pitcher — and it feeds directly into the lean below.</span>"
-        "<span><b>xw edge → lean</b> What actually drives the xwOBA lean: the lineup's "
-        "xwOBA and the starter's xwOBA-against are matched head-to-head (about lineup × "
-        "starter ÷ league), so a tough starter pulls the tilt toward the pitcher and a "
-        "weak one toward the offense.</span>"
-        "<span><b>xOPS</b> The matchup number: how this lineup projects to hit against "
-        "<i>today's starter specifically</i>, built from each hitter's and the pitcher's "
-        "lefty/righty splits and weighted by expected same-hand at-bats.</span>"
-        "<span><b>SP OPS alwd*</b> How much hitting today's starter has typically given up, "
-        "measured against the exact lefty/righty mix he'll face tonight. Lower is better "
-        "for the pitcher.</span>"
-        "<span><b>K-BB%</b> Strikeout rate minus walk rate — the most reliable single read "
-        "on a starter's skill (it ignores defense and luck). Higher favors the pitcher.</span>"
-        f"<span><b>ERA · L{RECENT_STARTS}</b> Earned runs allowed per 9 innings over the "
-        f"starter's last few outings (up to {RECENT_STARTS}; the label shows the real count "
-        "when fewer), with his season ERA alongside for trend. Context only — a handful of "
-        "starts is mostly noise.</span>"
-        "<span><b>opener · team staff</b> When a starter is an opener (his recent "
-        "outings average under three innings), his own line covers too few batters to "
-        "mean much, so the pitcher stats shown are his club's batters-faced-weighted "
-        "staff aggregate instead. The platoon read abstains on these.</span>"
-        "<span><b>Edge bars</b> For each hitter, how far his matchup projection (xOPS) sits "
-        "above or below a league-average bat.</span>"
-        "<span><b>Shading</b> Cells tint ember when the number favors hitters and steel when "
-        "it favors the pitcher; the deeper the tint, the further from the league average.</span>"
-        "<span><b>pythag</b> A benchmark, not a pick. A deliberately "
-        "naive Pythagorean win probability for the home team, built only from each "
-        "club's runs scored and allowed so far this season (plus a league home-field "
-        "adjustment) — no lineups, no starter, no market. It's here as a simple "
-        "baseline for the lineup-based leans. Never bet the control; watch whether "
-        "the leans beat it.</span>"
-        "<span class='wide'>Moneylines are DraftKings prices pulled from ESPN at build time. "
-        "Cards are listed in chronological order, earliest first pitch first.</span>"
+        "<span><b>Statcast percentile</b> Each hitter and starter shows a 0–100 rank of "
+        "expected quality (xwOBA) against qualified regulars. Rare-sample players are "
+        "regressed toward league, so a hot week doesn't masquerade as elite; a call-up we've "
+        "barely seen lands near the middle rather than at an extreme.</span>"
+        "<span><b>Standouts</b> A lineup's top bats by percentile — the names carrying the "
+        "matchup.</span>"
+        "<span><b>Starter quality</b> The starter's xwOBA-allowed and K−BB% percentiles "
+        "(higher = better), with a one-word tier — elite / solid / below avg — summarizing "
+        "the xwOBA rank.</span>"
+        "<span><b>Model vs market</b> Whether the lean agrees with the DraftKings favorite. "
+        "Agreeing means no edge on the line; a lean on the <i>underdog</i> is the spot the "
+        "record is built to test.</span>"
+        "<span class='wide'>Moneylines are DraftKings prices pulled from ESPN at build time; "
+        "cards are ordered by first pitch. Turn on <b>Analyst mode</b> (top right) to reveal "
+        "the model's raw inputs: regressed xwOBA/xOPS, the platoon lens and ◆ lefty/righty "
+        "markers, edge-vs-league bars, each starter's full line, each lean's Δxw and its rank, "
+        "and the naive pythag control (a benchmark, never a pick — watch whether the leans "
+        "beat it).</span>"
         "</div></div>")
 
 
@@ -2239,6 +2482,74 @@ td.bar{width:86px;padding:4px 8px 4px 2px}
   .spstats{overflow-x:auto;-webkit-overflow-scrolling:touch}
   .stat{min-width:88px}
 }
+
+/* ============================================================
+   Casual redesign: percentile bars, plain-language read, verdict,
+   and the Analyst-mode machinery toggle.
+   ============================================================ */
+.matchlab{font:600 9.5px/1.4 var(--sans);letter-spacing:.1em;text-transform:uppercase;
+  color:var(--faint);margin-bottom:6px}
+.read{margin:0;padding:12px 16px;font:500 13.5px/1.5 var(--sans);color:var(--ink);
+  border-bottom:1px solid var(--line-2)}
+.read b{font-weight:700}
+.read .warmtx{color:rgba(var(--warm),1)} .read .cooltx{color:rgba(var(--cool),1)}
+
+.lean .ls{font:600 11px/1 var(--sans);letter-spacing:.02em;color:var(--muted);text-transform:uppercase}
+.lean .ls .mach{color:var(--faint);font-family:var(--mono);text-transform:none;font-weight:500}
+.lean.slight{border-color:rgba(var(--amberbg),.35);background:rgba(var(--amberbg),.09)}
+.lean.strong{border-color:rgba(var(--amberbg),.75);background:rgba(var(--amberbg),.24)}
+
+/* percentile slider (fill length = percentile; hue = whose favor) */
+.sl{display:inline-block;width:88px;height:9px;border-radius:3px;background:var(--surface-2);
+  border:1px solid var(--line-2);vertical-align:middle;overflow:hidden;position:relative}
+.sl i{display:block;height:100%;border-radius:3px 0 0 3px}
+.sl.h i{background:rgba(var(--warm),.85)} .sl.p i{background:rgba(var(--cool),.85)}
+.pn{font:600 11px/1 var(--mono);margin-left:8px;font-variant-numeric:tabular-nums;color:var(--muted)}
+
+/* starter percentile bars + quality tier */
+.sp-bars{margin-top:9px}
+.spct{display:flex;align-items:center;gap:9px;margin-top:6px}
+.spct .lab{font:600 9.5px/1.4 var(--sans);letter-spacing:.06em;text-transform:uppercase;
+  color:var(--muted);min-width:64px}
+.tier{font:600 9.5px/1.4 var(--sans);letter-spacing:.06em;text-transform:uppercase;border-radius:3px;padding:1px 6px}
+.tier.elite{color:rgba(var(--cool),1);border:1px solid rgba(var(--cool),.5);background:rgba(var(--cool),.10)}
+.tier.solid{color:var(--muted);border:1px solid var(--line)}
+.tier.below{color:rgba(var(--warm),1);border:1px solid rgba(var(--warm),.5);background:rgba(var(--warm),.08)}
+
+/* spotlight (top bats by percentile) */
+.spot{display:flex;flex-wrap:wrap;align-items:baseline;gap:5px 8px;margin:12px 0 2px}
+.spot .sl-lab{font:600 9.5px/1.4 var(--sans);letter-spacing:.1em;text-transform:uppercase;color:var(--faint)}
+.spot .pill{font:600 11px/1.3 var(--mono);color:var(--ink);background:var(--surface-2);
+  border:1px solid var(--line-2);border-radius:20px;padding:2px 9px;font-variant-numeric:tabular-nums}
+.spot .pill b{color:rgba(var(--warm),1)}
+
+/* model-vs-market verdict chip */
+.verdict{margin-left:auto;border-right:0;display:flex;flex-direction:column;justify-content:center;
+  min-width:210px;max-width:340px;border-left:3px solid var(--line)}
+.verdict .l{color:var(--muted)} .verdict .vt{font:600 12px/1.4 var(--sans);color:var(--muted);margin-top:2px}
+.verdict.edge{border-left-color:rgba(var(--lean),1);background:rgba(var(--amberbg),.10)}
+.verdict.edge .l{color:rgba(var(--lean),1)} .verdict.edge .vt{color:var(--ink)}
+
+/* hitter row: percentile column + name cell */
+td.pct{width:150px;white-space:nowrap}
+table.lu td.nm,table.lu th.nm,table.lu td.pos{text-align:left}
+td.nm{font:400 12.5px/1.4 var(--sans);max-width:170px;overflow:hidden;text-overflow:ellipsis}
+td.nm .b{font:400 9px/1 var(--mono);color:var(--muted);margin-left:4px}
+td.nm .adv{color:rgba(var(--warm),1);font-size:10px;margin-left:2px}
+
+/* Analyst machinery: hidden until Analyst mode is on */
+.mach{display:none}
+html.an-on .mach{display:block}
+html.an-on span.mach{display:inline}
+html.an-on td.mach,html.an-on th.mach{display:table-cell}
+html.an-on tr.mach{display:table-row}
+.theme.on{border-color:rgba(var(--lean),.6);background:rgba(var(--amberbg),.16);color:rgba(var(--lean),1)}
+
+@media (max-width:540px){
+  td.nm{max-width:none}
+  .verdict{margin-left:0;min-width:0;max-width:none;border-left:0;
+    border-top:1px solid var(--line-2);width:100%}
+}
 """
 
 CSS_GRADES = r"""
@@ -2293,6 +2604,18 @@ THEME_JS = r"""
     apply(n);try{localStorage.setItem(KEY,n);}catch(e){}
   });}
 })();
+(function(){
+  var b=document.getElementById('analystBtn');
+  if(!b){return;}
+  var on=false;
+  b.addEventListener('click',function(){
+    on=!on;
+    document.documentElement.classList.toggle('an-on',on);
+    b.classList.toggle('on',on);
+    b.setAttribute('aria-pressed',on?'true':'false');
+    b.textContent='Analyst mode: '+(on?'on':'off');
+  });
+})();
 """
 
 
@@ -2306,7 +2629,9 @@ def html_document(body, built_txt, title=None):
         f"<style>{CSS}{CSS_GRADES}</style></head><body>"
         f"<div class='mx-wrap'>"
         "<div class='topbar'><div class='brand'>MLB matchup leans</div>"
-        "<button id='themeBtn' class='theme' type='button'>Theme: auto</button></div>"
+        "<div style='display:flex;gap:8px'>"
+        "<button id='analystBtn' class='theme' type='button' aria-pressed='false'>Analyst mode: off</button>"
+        "<button id='themeBtn' class='theme' type='button'>Theme: auto</button></div></div>"
         f"{body}</div>"
         f"<script>{THEME_JS}</script>"
         "</body></html>")
@@ -2359,6 +2684,43 @@ def _display_grades(led):
     incremental lineage, so the displayed record combines them into a single
     record per market (audit slicing still lives in _record_grades)."""
     return led[led["status"] == "graded"]
+
+
+# --- lean strength label (ranks a lean's size vs the ledger) ----------------
+# Point-1 of the casual redesign: turn the raw |Δxw| (".024", ".123") into a
+# word by ranking it against the historical spread of lean magnitudes. Prefers
+# the current RECORD_TAGS family; falls back to all graded rows, then to fixed
+# cutoffs. Display-only -- the lean math, MODEL_TAG, and ledger are untouched.
+LEAN_STRENGTH_FALLBACK = (0.021, 0.060)   # slight < ~p33 <= clear < ~p80 <= strong
+LEAN_STRENGTH_MIN = 30
+
+
+def lean_strength_scale():
+    """Sorted |xw_net| from graded ledger rows, for ranking a lean's size."""
+    led = load_ledger_df()
+    if led is None or "xw_net" not in led.columns or "status" not in led.columns:
+        return None
+    graded = led[led["status"] == "graded"]
+    fam = (graded[graded["model_tag"].isin(RECORD_TAGS)]
+           if "model_tag" in graded.columns else graded)
+    use = fam if len(fam) >= 60 else graded
+    arr = np.sort(pd.to_numeric(use["xw_net"], errors="coerce").abs().dropna().to_numpy())
+    return arr if arr.size >= LEAN_STRENGTH_MIN else None
+
+
+def lean_strength(delta, scale):
+    """(label, pctile|None) for a lean magnitude |Δxw|. Ranks against `scale`
+    (sorted |xw_net| history); fixed p33/p80 cutoffs when the ledger is thin."""
+    if delta is None or pd.isna(delta):
+        return None, None
+    delta = abs(float(delta))
+    if scale is not None and getattr(scale, "size", 0) >= LEAN_STRENGTH_MIN:
+        pct = 100.0 * float(np.searchsorted(scale, delta, side="right")) / scale.size
+        c1, c2 = float(np.quantile(scale, 1 / 3)), float(np.quantile(scale, 0.80))
+    else:
+        pct, (c1, c2) = None, LEAN_STRENGTH_FALLBACK
+    lab = "slight" if delta < c1 else ("clear" if delta < c2 else "strong")
+    return lab, pct
 
 
 def records_strip_html():
@@ -2565,7 +2927,8 @@ def render_combined_html(xw_df, pl_df, pitcher_rows_df, built_txt,
                        "probables/lineups not posted. Check back closer to first pitch.</div></div>" + footer
         return html_document(inner, built_txt)
     built_short = built_txt.split("·")[0].strip()
-    body = head + build_combined(games, built_short) + footer
+    strength_scale = lean_strength_scale()
+    body = head + build_combined(games, built_short, strength_scale) + footer
     return html_document(body, built_txt)
 
 
