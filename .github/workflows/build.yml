@@ -95,6 +95,13 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      # A prior autostash conflict was accidentally staged into the daily
+      # dumps and ledger as literal <<<<<<< / ======= / >>>>>>> rows. Fail
+      # early with the exact file and line instead of letting pandas encounter
+      # the marker as a game_pk during grading.
+      - name: Validate committed CSV data
+        run: python validate_data_files.py
+
       # Grade BEFORE the build: ingest any committed lean dumps and grade
       # pending games via StatsAPI linescores, so the records strip and
       # grades.html the build renders reflect last night's results in the
@@ -126,20 +133,19 @@ jobs:
         run: python build_site.py --grades-only
 
       # The ledger persists by being committed. Pushes made with the default
-      # GITHUB_TOKEN don't retrigger this workflow, so no recursion. The
-      # rebase absorbs any commit that landed on main mid-run. Stage data/
-      # BEFORE the rebase: untracked lean CSVs would otherwise abort the
-      # rebase when a mid-run commit already carries the same files, and a
-      # failed commit loses this build's snapshots (stale locks). Autostash
-      # re-applies the stash unstaged, so re-add after the pull too.
+      # GITHUB_TOKEN don't retrigger this workflow, so no recursion. Commit
+      # generated data before rebasing onto any main commit that landed during
+      # the run. If the rebase conflicts, Git stops before push; no autostash
+      # can leave conflict-marker text behind to be blindly staged.
       - name: Commit ledger
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/
-          git pull --rebase --autostash origin main
+          python validate_data_files.py
           git add data/
           git diff --cached --quiet || git commit -m "ledger $(date -u +%FT%H:%MZ)"
+          git pull --rebase origin main
+          python validate_data_files.py
           git push
 
       - name: Upload Pages artifact
