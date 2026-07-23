@@ -1926,18 +1926,6 @@ def _side_html(sp_abbr, d, league_baseline):
         f"</section>")
 
 
-def _consensus_html(away_abbr, home_abbr, a, h):
-    xw_home, xw_away = h["xw_edge"], a["xw_edge"]
-    have_xw = xw_home is not None and xw_away is not None
-    xw_fav = home_abbr if (have_xw and a["xw_edge"] >= h["xw_edge"]) else away_abbr
-    # NOTE: a = away SP row; a's xw_edge is the HOME offense's edge, and vice
-    # versa -- identical convention to the previous _consensus().
-    xw_d = abs(a["xw_edge"] - h["xw_edge"]) if have_xw else None
-    xw_txt = (f"xwOBA → <b>{xw_fav}</b> Δ{xw_d:.3f}" if xw_d is not None
-              else "xwOBA → <span class='muted'>—</span>")
-    return (f"<div class='consensus mach'>{xw_txt}</div>")
-
-
 def _market_html(o, away_abbr, home_abbr, built_short, fav=None, ctx=None):
     o = o or {}
     def _mlcell(prefix, lab, cur, opn, mach=False):
@@ -1992,12 +1980,11 @@ def cmb_card(g, built_short, strength_scale=None, ctx=None):
         home_off, away_off = a["xw_edge"], h["xw_edge"]
         delta = abs(home_off - away_off)
         fav = home_abbr if home_off >= away_off else away_abbr
-        strength_word, strength_pct = lean_strength(delta, strength_scale)
-        rank = f" · {round(strength_pct)}th-pct lean" if strength_pct is not None else ""
+        strength_word, _ = lean_strength(delta, strength_scale)
         lean_html = (f"<span class='lean {strength_word or ''}'><span class='lk'>lean</span>"
                      f"<span class='lt'>{fav}</span>"
                      f"<span class='ls'>{strength_word or 'lean'}"
-                     f"<span class='mach'> · Δxw {delta:.3f}{rank}</span></span></span>")
+                     f"<span class='mach'> · Δxw {delta:.3f}</span></span></span>")
         read_html = _read_sentence(away_abbr, home_abbr, a, h, fav, strength_word)
     else:
         lean_html = ("<span class='lean nolean'><span class='lk'>lean</span>"
@@ -2011,8 +1998,7 @@ def cmb_card(g, built_short, strength_scale=None, ctx=None):
         f"<span class='at'>@</span> {home_abbr}{_l10_span(g.get('home_l10'))}{game_no}</span>"
         + (f"<span class='when'>{_esc(when)}</span>" if when else "")
         + lean_html
-        + f"{_consensus_html(away_abbr, home_abbr, a, h)}"
-        "</div>"
+        + "</div>"
         + (read_html or "")
         + _market_html(g.get('odds'), away_abbr, home_abbr, built_short, fav, ctx)
         + f"<div class='sides'>{_side_html(away_abbr, a, g['league_baseline'])}"
@@ -2324,11 +2310,6 @@ body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 var(--sans);
 .card-note{display:flex;flex-direction:column;gap:4px;padding:14px 16px 16px;color:var(--muted)}
 .card-note b{color:var(--ink);font-size:13px}.card-note span{font-size:12px}
 .lean .ld{font:500 12px/1 var(--mono);color:var(--muted);font-variant-numeric:tabular-nums}
-.consensus{width:100%;font:600 12px/1.4 var(--mono);color:var(--muted);
-  display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center;font-variant-numeric:tabular-nums}
-.consensus b{color:var(--ink);font-weight:600}
-.consensus .muted{color:var(--faint);font-weight:500}
-.consensus .dot{color:var(--faint)}
 
 /* ---------- market strip ---------- */
 .market{display:flex;flex-wrap:wrap;border-bottom:1px solid var(--line-2);background:var(--surface-2)}
