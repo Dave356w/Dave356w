@@ -2,5 +2,5 @@ no graded games yet.
 model-family history (never pooled into the current-family fit):
   v2/v3   n=189  xw full 110-79  (0.582)  F5 89-75-25  (0.543)
   v4      n= 14  xw full 8-6  (0.571)  F5 6-7-1  (0.462)
-  v5      n= 31  xw full 19-12  (0.613)  F5 17-6-8  (0.739)
+  v5      n= 32  xw full 20-12  (0.625)  F5 17-7-8  (0.708)
   xw+plat_consol_v1 n=  1  xw full 0-1  (0.000)  F5 0-0-1
