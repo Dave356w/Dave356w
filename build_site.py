@@ -212,11 +212,7 @@ def get_slate(slate_date, sport_id=1):
 
 def load_stat_lookups(player_type):
     """player_type in {'batter','pitcher'} -> (stat dict, bbprofile dict, custom df)."""
-    # xERA is a pitcher-only expected stat; request it only for pitchers so the
-    # batter leaderboard isn't asked for a column it doesn't carry. A leaderboard
-    # that omits it (unavailable selection) simply drops the column and the card
-    # cell degrades to an em-dash, like any other missing stat.
-    sel = ",".join(STATCAST_SELECTIONS + (["xera"] if player_type == "pitcher" else []))
+    sel = ",".join(STATCAST_SELECTIONS)
     cust = cached_csv(
         f"https://baseballsavant.mlb.com/leaderboard/custom?year={SEASON}"
         f"&type={player_type}&min=1&selections={sel}&csv=true",
@@ -228,7 +224,7 @@ def load_stat_lookups(player_type):
 
     REN_STAT = {"xwoba": "xwOBA", "xba": "xBA", "xslg": "xSLG", "exit_velocity_avg": "EV",
                 "launch_angle_avg": "LA°", "hard_hit_percent": "Hard Hit%",
-                "k_percent": "K%", "bb_percent": "BB%", "pa": "PA", "xera": "xERA"}
+                "k_percent": "K%", "bb_percent": "BB%", "pa": "PA"}
     stat = {}
     for _, r in cust.iterrows():
         pid = int(r["player_id"])
@@ -244,6 +240,41 @@ def load_stat_lookups(player_type):
         stat.setdefault(pid, {})
         stat[pid]["BBE"] = r.get("bbe")
     return stat, bbprofile, cust
+
+
+def load_pitcher_xera():
+    """player_id -> Statcast xERA (expected ERA), cached once per ET day.
+
+    xERA lives on Savant's *expected_statistics* leaderboard, not the custom
+    board, so it needs its own CSV. `min=1` (not the default `min=q`) keeps
+    non-qualified probables in. Strictly best-effort and display-only: any fetch
+    failure or a missing/renamed column yields an empty map and the card's xERA
+    cell renders an em-dash — a Savant outage never fails the build here."""
+    try:
+        df = cached_csv(
+            "https://baseballsavant.mlb.com/leaderboard/expected_statistics"
+            f"?type=pitcher&year={SEASON}&position=&team=&filterType=bip&min=1&csv=true",
+            "xstats_pitcher")
+    except Exception as e:  # noqa: BLE001
+        log(f"  xERA leaderboard unavailable ({e!r}) -> em-dashes")
+        return {}
+    # Export labels the expected-ERA column `xera`; tolerate the `est_era`
+    # variant used elsewhere on the expected-stats board.
+    col = next((c for c in ("xera", "est_era") if c in df.columns), None)
+    if col is None:
+        log(f"  xERA column absent from expected-stats board (cols={list(df.columns)[:12]}...) -> em-dashes")
+        return {}
+    out = {}
+    for _, r in df.iterrows():
+        try:
+            pid = int(r["player_id"])
+        except (TypeError, ValueError):
+            continue
+        v = _f(r.get(col))
+        if v is not None:
+            out[pid] = v
+    log(f"  xERA leaderboard: {len(out)} pitchers (col '{col}')")
+    return out
 
 
 def load_people(ids):
@@ -840,10 +871,11 @@ def fetch_all(slate_date):
                         or {}).get("era", np.nan))
             if r.get("Pos.") == "P" and pd.notna(r.get("player_id")) else np.nan,
             axis=1)
-        # Statcast xERA (expected ERA) from the pitcher custom leaderboard, shown
-        # against season ERA on the card. NaN wherever the leaderboard omits it.
+        # Statcast xERA (expected ERA) from the expected-statistics leaderboard,
+        # shown against season ERA on the card. NaN wherever it's unavailable.
+        xera_map = load_pitcher_xera()
         pitchers_df["xERA"] = pitchers_df.apply(
-            lambda r: _f((pitcher_stat.get(int(r["player_id"]), {}) or {}).get("xERA"))
+            lambda r: xera_map.get(int(r["player_id"]), np.nan)
             if r.get("Pos.") == "P" and pd.notna(r.get("player_id")) else np.nan,
             axis=1)
 
