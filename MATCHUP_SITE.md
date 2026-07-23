@@ -124,9 +124,8 @@ bullpen xwOBA, expected innings, relief-pool size/BF, opener classification,
 and pitching basis for audit.
 
 This is a prediction-math change, so v6 starts a new `RECORD_TAGS` family.
-The v2/v3, v4, and v5 rows remain immutable in the ledger; the grades page and
-Actions report show family history separately while the current-family fit
-uses v6 only.
+The v2/v3, v4, and v5 rows remain immutable in the ledger; the Actions report
+shows family history separately while the current-family fit uses v6 only.
 
 ## Files
 
@@ -198,13 +197,14 @@ Actions**. After that the workflow deploys on each scheduled run (and on manual
 
 Grades are also rendered into the site: the main page shows a **records
 strip** for the complete model lineage, linking to the ledger.
-**`grades.html`** preserves that combined headline, adds a family-by-family
-history table (v2/v3, v4, v5, v6, with separate vs-market results), and shows
-the full ledger table with a model-family column — every game's xwOBA lean,
-closing ML, final score, and full-game W/L/T grade, pending and void rows
-included. Both render purely from `data/mlb_lean_ledger.csv`; grading runs
-before the build in CI (with a second pass after it to ingest the day's fresh
-dumps), so the page reflects last night's results in the same run.
+**`grades.html`** preserves that combined headline and shows every game's
+xwOBA lean, closing ML, final score, and full-game W/L/T grade, with pending
+and void rows included. The public page intentionally omits model-family
+history and per-row model labels; those remain available in the underlying
+ledger and Actions report. Both pages render purely from
+`data/mlb_lean_ledger.csv`; grading runs before the build in CI (with a second
+pass after it to ingest the day's fresh dumps), so the page reflects last
+night's results in the same run.
 
 The platoon-OPS lens and first-5-innings (F5) results are still computed and
 recorded in the ledger for auditing (`grade_leans.py` grades both), but the
