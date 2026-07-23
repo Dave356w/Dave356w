@@ -30,6 +30,7 @@
 #   - index.html carries a "built HH:MM ET" line beside the slate date.
 # ============================================================
 
+import base64
 import io
 import os
 import re
@@ -68,6 +69,13 @@ LINEUP_SLOT_PA = {1: 4.61, 2: 4.50, 3: 4.39, 4: 4.29, 5: 4.18,
 USE_SLOT_PA_WEIGHTS = True
 CACHE_DIR = os.environ.get("CACHE_DIR", ".")
 OUT_DIR = os.environ.get("OUT_DIR", "public")
+# Team cap logos are keyed by the same StatsAPI team id the slate already
+# carries. They live on MLB's static CDN (not in the API payload), so the build
+# fetches the on-light / on-dark cap SVGs once per run and inlines them as data
+# URIs -- keeping the page fully self-contained. Any fetch miss degrades to the
+# text abbreviation, so the CDN being unreachable never breaks the build.
+USE_TEAM_LOGOS = os.environ.get("USE_TEAM_LOGOS", "1") != "0"
+LOGO_CDN = "https://www.mlbstatic.com/team-logos"
 DATA_DIR = os.environ.get("DATA_DIR", "data")            # grading ledger home
 LEDGER_PATH = os.path.join(DATA_DIR, "mlb_lean_ledger.csv")
 MODEL_TAG = os.environ.get("MODEL_TAG", "xw+plat_consol_v6")  # keep in sync with grade_leans.py
@@ -204,6 +212,82 @@ def cached_csv(url, cache_name, tries=4):
                 break
             time.sleep(0.8 * (2 ** k))
     raise last
+
+
+_team_logo_cache = {}
+_logo_cdn_down = False   # tripped once a fetch exhausts retries; skips further
+                         # network so an unreachable CDN can't stall the build
+
+
+def _fetch_logo_svg(url, cache_name, tries=2):
+    """Fetch one SVG logo, cached to CACHE_DIR (cap marks are effectively
+    static). Returns the raw SVG text, or None on any failure / non-SVG body so
+    the caller can fall back to the text abbreviation. A cached file is always
+    served; once the CDN is known-unreachable this run, uncached teams skip the
+    network entirely rather than each re-paying the retry budget."""
+    global _logo_cdn_down
+    path = os.path.join(CACHE_DIR, f"logo_{cache_name}.svg")
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return f.read() or None
+        except Exception:  # noqa: BLE001
+            pass
+    if _logo_cdn_down:
+        return None
+    last = None
+    for k in range(tries):
+        try:
+            r = session.get(url, timeout=15)
+            r.raise_for_status()
+            text = r.text
+            if "<svg" not in text.lower():
+                return None
+            try:
+                os.makedirs(CACHE_DIR, exist_ok=True)
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(text)
+            except Exception:  # noqa: BLE001
+                pass
+            return text
+        except Exception as e:  # noqa: BLE001
+            last = e
+            if k == tries - 1:
+                break
+            time.sleep(0.4 * (2 ** k))
+    _logo_cdn_down = True
+    log(f"  team logo fetch failed ({cache_name}); disabling logo fetch this run: {last!r}")
+    return None
+
+
+def _svg_data_uri(svg_text):
+    b64 = base64.b64encode(svg_text.encode("utf-8")).decode("ascii")
+    return f"data:image/svg+xml;base64,{b64}"
+
+
+def team_logo_uris(team_id):
+    """(<light-bg data-uri>, <dark-bg data-uri>) cap logos for a team, or
+    (None, None) when unavailable. Both cap variants share the StatsAPI team id;
+    each is fetched once per build and memoized, then embedded so the page stays
+    self-contained. If only one variant resolves it is used for both; if neither
+    does the card keeps its text abbreviation."""
+    if not USE_TEAM_LOGOS or team_id is None:
+        return None, None
+    try:
+        tid = int(team_id)
+    except (TypeError, ValueError):
+        return None, None
+    if tid in _team_logo_cache:
+        return _team_logo_cache[tid]
+    light = _fetch_logo_svg(f"{LOGO_CDN}/team-cap-on-light/{tid}.svg", f"cap_light_{tid}")
+    dark = _fetch_logo_svg(f"{LOGO_CDN}/team-cap-on-dark/{tid}.svg", f"cap_dark_{tid}")
+    if not light and not dark:
+        _team_logo_cache[tid] = (None, None)
+        return None, None
+    light, dark = (light or dark), (dark or light)
+    uris = (_svg_data_uri(light), _svg_data_uri(dark))
+    _team_logo_cache[tid] = uris
+    return uris
 
 
 def get_slate(slate_date, sport_id=1):
@@ -2106,9 +2190,16 @@ def _hitters_for(opp_hitters_df, detail_df, gpk, fp, lg_ops,
     return rows
 
 
+_NAME_SUFFIXES = {"jr", "sr", "ii", "iii", "iv"}
+
+
 def _last(name):
-    """Last token of a name, for compact spotlight pills."""
+    """Surname for compact spotlight pills: the last name token, skipping a
+    trailing generational suffix so 'Fernando Tatis Jr.' -> 'Tatis' and
+    'Michael Harris II' -> 'Harris' rather than 'Jr.'/'II'."""
     parts = str(name or "").split()
+    while len(parts) > 1 and parts[-1].lower().strip(".") in _NAME_SUFFIXES:
+        parts = parts[:-1]
     return parts[-1] if parts else str(name or "")
 
 
@@ -2345,6 +2436,58 @@ def _l10_span(rec):
     return f"<span class='l10' title='last 10 games'>{_esc(rec)}</span>" if rec else ""
 
 
+def _logo_assets(games):
+    """Resolve cap logos for every team on the slate.
+
+    Returns ({team_id: (light_uri, dark_uri)}, <style-block>). Each data URI is
+    emitted exactly once as a per-team CSS custom property (`--lgl`/`--lgd`); a
+    single pair of theme-scoped rules switches the visible variant, mirroring the
+    same prefers-color-scheme / data-theme selectors the palette vars use so the
+    logo tracks the manual Theme toggle. Teams whose fetch missed are omitted and
+    their cards keep the text abbreviation."""
+    ids = set()
+    for g in games:
+        for k in ("away_team_id", "home_team_id"):
+            v = g.get(k)
+            if v is not None and pd.notna(v):
+                try:
+                    ids.add(int(v))
+                except (TypeError, ValueError):
+                    continue
+    assets = {}
+    for tid in sorted(ids):
+        lt, dk = team_logo_uris(tid)
+        if lt and dk:
+            assets[tid] = (lt, dk)
+    if not assets:
+        return assets, ""
+    base = (".clogo{display:inline-block;width:1.05em;height:1.05em;flex:none;"
+            "vertical-align:-.16em;margin-right:.30em;background-size:contain;"
+            "background-repeat:no-repeat;background-position:center;"
+            "background-image:var(--lgl)}")
+    per_team = "".join(
+        f'.t{tid}{{--lgl:url("{lt}");--lgd:url("{dk}")}}'
+        for tid, (lt, dk) in assets.items())
+    dark = ('@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) '
+            '.clogo{background-image:var(--lgd)}}'
+            'html[data-theme="dark"] .clogo{background-image:var(--lgd)}')
+    return assets, f"<style>{base}{per_team}{dark}</style>"
+
+
+def _club_logo(team_id, ctx):
+    """Decorative cap-logo chip for a team abbr, or '' when the logo did not
+    resolve (keeping the text abbreviation as the sole label). aria-hidden since
+    the adjacent abbreviation already names the team."""
+    ids = (ctx or {}).get("logo_ids")
+    if not ids or team_id is None or (isinstance(team_id, float) and pd.isna(team_id)):
+        return ""
+    try:
+        tid = int(team_id)
+    except (TypeError, ValueError):
+        return ""
+    return f"<span class='clogo t{tid}' aria-hidden='true'></span>" if tid in ids else ""
+
+
 def cmb_card(g, built_short, strength_scale=None, ctx=None):
     if g.get("unavailable"):
         game_no = f" <span class='game-no'>{_esc(g['game_label'])}</span>" if g.get("game_label") else ""
@@ -2355,8 +2498,8 @@ def cmb_card(g, built_short, strength_scale=None, ctx=None):
         return (
             "<article class='card unavailable'>"
             "<div class='gamehead'>"
-            f"<span class='teams'>{g['away_abbr']}{_l10_span(g.get('away_l10'))} "
-            f"<span class='at'>@</span> {g['home_abbr']}{_l10_span(g.get('home_l10'))}{game_no}</span>"
+            f"<span class='teams'>{_club_logo(g.get('away_team_id'), ctx)}{g['away_abbr']}{_l10_span(g.get('away_l10'))} "
+            f"<span class='at'>@</span> {_club_logo(g.get('home_team_id'), ctx)}{g['home_abbr']}{_l10_span(g.get('home_l10'))}{game_no}</span>"
             + (f"<span class='when'>{_esc(when)}</span>" if when else "")
             + "</div>"
             "<div class='card-note'><b>Awaiting paired probable pitchers</b>"
@@ -2388,8 +2531,8 @@ def cmb_card(g, built_short, strength_scale=None, ctx=None):
     return (
         "<article class='card'>"
         "<div class='gamehead'>"
-        f"<span class='teams'>{away_abbr}{_l10_span(g.get('away_l10'))} "
-        f"<span class='at'>@</span> {home_abbr}{_l10_span(g.get('home_l10'))}{game_no}</span>"
+        f"<span class='teams'>{_club_logo(g.get('away_team_id'), ctx)}{away_abbr}{_l10_span(g.get('away_l10'))} "
+        f"<span class='at'>@</span> {_club_logo(g.get('home_team_id'), ctx)}{home_abbr}{_l10_span(g.get('home_l10'))}{game_no}</span>"
         + (f"<span class='when'>{_esc(when)}</span>" if when else "")
         + lean_html
         + "</div>"
@@ -2538,6 +2681,8 @@ def _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
         games.append(dict(
             away=mk(a), home=mk(h),
             away_abbr=away_abbr, home_abbr=home_abbr,
+            away_team_id=(srow.get("away_team_id") if srow is not None else None),
+            home_team_id=(srow.get("home_team_id") if srow is not None else None),
             away_l10=_l10(srow.get("away_team_id")) if srow is not None else None,
             home_l10=_l10(srow.get("home_team_id")) if srow is not None else None,
             game_pk=gpk, game_number=game_number, game_label=game_label,
@@ -2565,6 +2710,8 @@ def _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
                 game_datetime_utc=srow.get("game_datetime_utc"),
                 away_abbr=srow.get("away_abbrev") or _abbr(srow.get("away_team")),
                 home_abbr=srow.get("home_abbrev") or _abbr(srow.get("home_team")),
+                away_team_id=srow.get("away_team_id"),
+                home_team_id=srow.get("home_team_id"),
                 away_l10=_l10(srow.get("away_team_id")),
                 home_l10=_l10(srow.get("home_team_id")),
                 time_pt=_game_time_pt(srow.get("game_datetime_utc")),
@@ -3220,8 +3367,9 @@ def render_combined_html(xw_df, pl_df, pitcher_rows_df, built_txt,
         return html_document(inner, built_txt)
     built_short = built_txt.split("·")[0].strip()
     strength_scale = lean_strength_scale()
-    ctx = market_context_records()
-    body = head + build_combined(games, built_short, strength_scale, ctx) + footer
+    logo_assets, logo_css = _logo_assets(games)
+    ctx = {**(market_context_records() or {}), "logo_ids": set(logo_assets)}
+    body = logo_css + head + build_combined(games, built_short, strength_scale, ctx) + footer
     return html_document(body, built_txt)
 
 

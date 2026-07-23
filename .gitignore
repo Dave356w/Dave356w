@@ -5,6 +5,9 @@ public/
 .savant_cache/
 savant_cache_*.csv
 
+# team cap-logo cache (inlined into the page at build; re-fetchable, not tracked)
+logo_cap_*.svg
+
 # python
 __pycache__/
 *.pyc
