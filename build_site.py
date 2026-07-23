@@ -98,19 +98,28 @@ FULL_LEAGUE_PLATOON_BASELINES = True
 MIN_LEAGUE_BASELINE_PA = 1
 RECENT_STARTS = 5
 
-# Opener fallback. A probable pitcher whose recent starts average fewer than
-# OPENER_MAX_AVG_IP innings is an "opener": his own Statcast line reflects a
-# handful of batters and is not representative of the innings his club will
-# actually pitch. For those games the xwOBA lean substitutes a batters-faced-
-# weighted aggregate of the club's rostered pitching staff (built from the
-# custom leaderboard the build already fetches) for the opener's own numbers.
+# Opener fallback. A probable pitcher is treated as an opener when either his
+# recent starts are repeatedly short or his recent usage is overwhelmingly
+# short relief work. The latter catches relievers named for a one-off start
+# before they have accumulated two official starts. For those games the xwOBA
+# lean substitutes a batters-faced-weighted aggregate of the club's rostered
+# pitching staff (built from the custom leaderboard the build already fetches)
+# for the opener's own numbers.
 # The platoon lens is left alone -- an opener's tiny vL/vR split already fails
 # the reliability gate, so that lens abstains on its own. Each affected side is
-# flagged (card badge + ledger opener_* columns) so these games stay auditable.
+# flagged with its detection reason and pitching basis so it stays auditable.
 OPENER_FALLBACK = True
 OPENER_MAX_AVG_IP = 3.0     # avg IP/start below this => treat probable as an opener
 OPENER_MIN_STARTS = 2       # need a repeated pattern, not one rain-shortened start
 OPENER_MIN_STAFF = 3        # team aggregate needs at least this many staff pitchers
+OPENER_ROLE_APPEARANCES = 10
+OPENER_ROLE_MIN_APPEARANCES = 5
+OPENER_ROLE_MAX_STARTS = 1
+OPENER_ROLE_MIN_RELIEF_SHARE = 0.70
+OPENER_ROLE_MAX_MEDIAN_IP = 2.0
+OPENER_ROLE_MAX_P80_PITCHES = 55.0
+OPENER_STRETCHED_MIN_IP = 4.0
+OPENER_STRETCHED_MIN_PITCHES = 65
 
 
 def slate_date_now():
@@ -350,7 +359,7 @@ def _innings_to_outs(value):
 
 
 def load_recent_start_era(ids, limit=RECENT_STARTS):
-    """Aggregate each probable pitcher's ERA over starts before this slate."""
+    """Build pre-slate recent-start and recent-role profiles for probables."""
     out = {}
     for pid in sorted({int(i) for i in ids if pd.notna(i)}):
         try:
@@ -362,12 +371,10 @@ def load_recent_start_era(ids, limit=RECENT_STARTS):
             log(f"  recent-start ERA unavailable for {pid}: {e!r}")
             continue
 
-        starts = []
+        appearances = []
         for blk in data.get("stats", []):
             for sk in blk.get("splits", []):
                 st = sk.get("stat", {}) or {}
-                if int(st.get("gamesStarted") or 0) < 1:
-                    continue
                 # Never let the current slate's start leak into a pregame metric.
                 game_date = str(sk.get("date") or
                                 (sk.get("game", {}) or {}).get("gameDate") or "")[:10]
@@ -378,18 +385,52 @@ def load_recent_start_era(ids, limit=RECENT_STARTS):
                 except (TypeError, ValueError):
                     continue
                 game_pk = (sk.get("game", {}) or {}).get("gamePk") or 0
-                starts.append((game_date, int(game_pk),
-                               _innings_to_outs(st.get("inningsPitched")), er))
+                try:
+                    pitches = float(st.get("numberOfPitches"))
+                except (TypeError, ValueError):
+                    pitches = np.nan
+                appearances.append({
+                    "date": game_date,
+                    "game_pk": int(game_pk),
+                    "outs": _innings_to_outs(st.get("inningsPitched")),
+                    "earned_runs": er,
+                    "is_start": int(st.get("gamesStarted") or 0) >= 1,
+                    "pitches": pitches,
+                })
 
-        recent = sorted(starts, key=lambda x: (x[0], x[1]), reverse=True)[:limit]
-        outs = sum(x[2] for x in recent)
-        earned_runs = sum(x[3] for x in recent)
+        appearances.sort(key=lambda x: (x["date"], x["game_pk"]), reverse=True)
+        starts = [a for a in appearances if a["is_start"]][:limit]
+        outs = sum(a["outs"] for a in starts)
+        earned_runs = sum(a["earned_runs"] for a in starts)
+        role_apps = appearances[:OPENER_ROLE_APPEARANCES]
+        pitch_counts = [a["pitches"] for a in role_apps if pd.notna(a["pitches"])]
+        recent_starts = sum(a["is_start"] for a in role_apps)
+        stretched = sum(
+            a["outs"] >= int(OPENER_STRETCHED_MIN_IP * 3)
+            or (pd.notna(a["pitches"]) and a["pitches"] >= OPENER_STRETCHED_MIN_PITCHES)
+            for a in role_apps
+        )
         out[pid] = {
             "era": round(earned_runs * 27.0 / outs, 2) if outs > 0 else np.nan,
-            "starts": len(recent),
+            "starts": len(starts),
             # Average innings per recent start -- the opener signal. Openers are
             # credited a game started but pitch ~1 inning, so this runs low.
-            "avg_ip": round(outs / 3.0 / len(recent), 2) if recent else np.nan,
+            "avg_ip": round(outs / 3.0 / len(starts), 2) if starts else np.nan,
+            # The last ten appearances describe the pitcher's current role. A
+            # short-relief profile lets us recognize a newly named opener even
+            # when he has only one prior official start.
+            "appearances": len(role_apps),
+            "recent_starts": recent_starts,
+            "relief_share": round(
+                (len(role_apps) - recent_starts) / len(role_apps), 2
+            ) if role_apps else np.nan,
+            "median_ip": round(
+                float(np.median([a["outs"] for a in role_apps])) / 3.0, 2
+            ) if role_apps else np.nan,
+            "p80_pitches": round(float(np.percentile(pitch_counts, 80)), 1)
+            if pitch_counts else np.nan,
+            "pitch_count_appearances": len(pitch_counts),
+            "stretched_appearances": stretched,
         }
         time.sleep(REQUEST_DELAY)
     return out
@@ -557,18 +598,59 @@ def team_pitching_aggregate(team_id, pitcher_stat, pitcher_bb):
     return stat, bb
 
 
+def opener_classifications(recent_start_era, max_avg_ip=OPENER_MAX_AVG_IP,
+                           min_starts=OPENER_MIN_STARTS):
+    """Classify probable pitchers whose pre-slate workload indicates an opener.
+
+    Repeated short starts are high-confidence evidence. A short-relief role is
+    a medium-confidence inference used for relievers making a first/second
+    spot start. Recent starter-length work suppresses that inference.
+    """
+    out = {}
+    for pid, m in (recent_start_era or {}).items():
+        m = m or {}
+        if int(m.get("stretched_appearances") or 0) > 0:
+            continue
+        ip = (m or {}).get("avg_ip")
+        if (ip is not None and pd.notna(ip) and ip < max_avg_ip
+                and int(m.get("starts") or 0) >= min_starts):
+            out[int(pid)] = {
+                "reason": "repeated_short_starts",
+                "confidence": "high",
+            }
+            continue
+
+        relief_share = m.get("relief_share")
+        median_ip = m.get("median_ip")
+        p80_pitches = m.get("p80_pitches")
+        if (
+            int(m.get("appearances") or 0) >= OPENER_ROLE_MIN_APPEARANCES
+            and int(m.get("recent_starts") or 0) <= OPENER_ROLE_MAX_STARTS
+            and relief_share is not None
+            and pd.notna(relief_share)
+            and relief_share >= OPENER_ROLE_MIN_RELIEF_SHARE
+            and median_ip is not None
+            and pd.notna(median_ip)
+            and median_ip <= OPENER_ROLE_MAX_MEDIAN_IP
+            and p80_pitches is not None
+            and pd.notna(p80_pitches)
+            and p80_pitches <= OPENER_ROLE_MAX_P80_PITCHES
+            and int(m.get("pitch_count_appearances") or 0)
+            >= OPENER_ROLE_MIN_APPEARANCES
+        ):
+            out[int(pid)] = {
+                "reason": "reliever_spot_start",
+                "confidence": "medium",
+            }
+    return out
+
+
 def opener_pids(recent_start_era, max_avg_ip=OPENER_MAX_AVG_IP,
                 min_starts=OPENER_MIN_STARTS):
-    """Probable-pitcher ids whose recent starts average below the opener IP
-    threshold over at least min_starts starts."""
-    out = set()
-    for pid, m in (recent_start_era or {}).items():
-        ip = (m or {}).get("avg_ip")
-        if ip is None or (isinstance(ip, float) and np.isnan(ip)):
-            continue
-        if ip < max_avg_ip and int((m or {}).get("starts") or 0) >= min_starts:
-            out.add(int(pid))
-    return out
+    """Backward-compatible set of probable-pitcher ids classified as openers."""
+    return set(opener_classifications(
+        recent_start_era, max_avg_ip=max_avg_ip, min_starts=min_starts
+    ))
 
 
 def _meta(row):
@@ -798,8 +880,9 @@ def fetch_all(slate_date):
     # Opener fallback: swap each opener's own Statcast pitching line for his
     # club's batters-faced-weighted staff aggregate, in place in the lookup
     # dicts so the whole matchup pipeline downstream uses the staff numbers
-    # without further plumbing. opener_sides drives the card badge + ledger flag.
+    # without further plumbing. opener_meta drives the badge and audit fields.
     opener_sides = set()
+    opener_meta = {}
     if OPENER_FALLBACK:
         pid_team, pid_sides = {}, {}
         for _, g in slate_df.iterrows():
@@ -810,7 +893,8 @@ def fetch_all(slate_date):
                     pid_team[int(pid)] = int(tid)
                     pid_sides.setdefault(int(pid), []).append((int(g["game_pk"]), side))
         team_agg = {}
-        for pid in opener_pids(recent_start_era):
+        classifications = opener_classifications(recent_start_era)
+        for pid, classification in classifications.items():
             tid = pid_team.get(pid)
             if tid is None:
                 continue
@@ -827,9 +911,15 @@ def fetch_all(slate_date):
                 continue
             pitcher_stat[pid] = st_agg
             pitcher_bb[pid] = bb_agg
-            opener_sides.update(pid_sides.get(pid, []))
-            log(f"  opener fallback: pid={pid} avg_ip="
-                f"{recent_start_era[pid].get('avg_ip')} -> team {tid} staff "
+            for side_key in pid_sides.get(pid, []):
+                opener_sides.add(side_key)
+                opener_meta[side_key] = {
+                    "reason": classification["reason"],
+                    "confidence": classification["confidence"],
+                    "pitching_basis": "team_staff",
+                }
+            log(f"  opener fallback: pid={pid} reason={classification['reason']} "
+                f"avg_ip={recent_start_era[pid].get('avg_ip')} -> team {tid} staff "
                 f"xwOBA {st_agg.get('xwOBA')} (n_bf {st_agg.get('PA'):.0f})")
 
     try:
@@ -899,6 +989,7 @@ def fetch_all(slate_date):
         "people_league_hitters": people_league_hitters,
         "lineup_projection_df": lineup_projection_df,
         "opener_sides": opener_sides,
+        "opener_meta": opener_meta,
     }
 
 
@@ -2898,10 +2989,22 @@ def main():
     # the card can badge it and the ledger can slice these games out later
     # (the metric swap itself already happened upstream in fetch_all).
     opener_sides = data.get("opener_sides") or set()
+    opener_meta = data.get("opener_meta") or {}
     if matchup_df is not None and not matchup_df.empty:
-        matchup_df["opener"] = [
-            (int(gpk), side) in opener_sides
+        side_keys = [
+            (int(gpk), side)
             for gpk, side in zip(matchup_df["game_pk"], matchup_df["side"])
+        ]
+        matchup_df["opener"] = [key in opener_sides for key in side_keys]
+        matchup_df["opener_reason"] = [
+            (opener_meta.get(key) or {}).get("reason") for key in side_keys
+        ]
+        matchup_df["opener_confidence"] = [
+            (opener_meta.get(key) or {}).get("confidence") for key in side_keys
+        ]
+        matchup_df["pitching_basis"] = [
+            (opener_meta.get(key) or {}).get("pitching_basis", "probable_starter")
+            for key in side_keys
         ]
 
     if matchup_df is None or matchup_df.empty:
