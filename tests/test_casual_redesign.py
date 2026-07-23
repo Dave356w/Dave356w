@@ -127,6 +127,13 @@ class RenderTests(unittest.TestCase):
         html = b.cmb_card(g, "9:00 AM PT", None)
         self.assertIn("xERA", html)                 # xERA cell present
         self.assertIn("season 3.6", html)           # ...vs season ERA
+        # The generic .mach display hook must not stack the three starter
+        # stat cells; its flex override belongs later in the cascade.
+        self.assertIn(".spstats.mach{display:flex}", b.CSS)
+        self.assertGreater(b.CSS.index(".spstats.mach{display:flex}"),
+                           b.CSS.index(".mach{display:block}"))
+        self.assertNotIn("xw edge (drives lean)", html.lower())
+        self.assertNotIn("class='agg mach'", html)
         self.assertNotIn("OPS alwd", html)          # xOPS-against removed
         self.assertNotIn("xOPS edge", html)         # xOPS edge removed
         self.assertNotIn("pythag", html)            # pythag control removed

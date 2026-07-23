@@ -1917,10 +1917,6 @@ def _side_html(sp_abbr, d, league_baseline):
         f"<div class='role'>faces the {_esc(d['opp_abbr'])} lineup<span class='mach'> · {comp}{padv}</span></div>"
         f"<div class='sp-bars'>{bars}</div>"
         f"<div class='spstats mach'>{stats}</div>"
-        f"<div class='agg mach'>"
-        f"<div class='e' style='color:{edge_color(d['xw_edge'])}'>"
-        f"<span>xw edge (drives lean)</span>{sgn3(d['xw_edge'])}</div>"
-        f"</div>"
         f"{_spotlight_html(d['hitters'])}"
         f"{_lineup_details(d)}"
         f"</section>")
@@ -2345,11 +2341,6 @@ body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 var(--sans);
 .flag.warn{color:rgba(var(--warm),1);border-color:rgba(var(--warm),.45)}
 .flag.mute{color:var(--faint)}
 
-/* side aggregate edges */
-.agg{display:flex;gap:14px;margin-top:9px;align-items:baseline;flex-wrap:wrap}
-.agg .e{font:600 13px/1.3 var(--mono);font-variant-numeric:tabular-nums}
-.agg .e span{font:600 9px/1 var(--sans);letter-spacing:.12em;text-transform:uppercase;color:var(--faint);margin-right:6px}
-
 /* ---------- lineup: order rail + shared-axis edge bars ---------- */
 details.lineup{margin-top:11px;border-top:1px solid var(--line-2)}
 details.lineup summary{cursor:pointer;list-style:none;display:flex;align-items:baseline;gap:8px;
@@ -2458,6 +2449,10 @@ td.nm .adv{color:rgba(var(--warm),1);font-size:10px;margin-left:2px}
 span.mach{display:inline}
 td.mach,th.mach{display:table-cell}
 tr.mach{display:table-row}
+/* Keep the three starter stat cells in one horizontal strip. This specific
+   flex rule must follow .mach so the generic display:block hook cannot stack
+   xwOBA-against, K-BB%, and xERA vertically. */
+.spstats.mach{display:flex}
 
 @media (max-width:540px){
   td.nm{max-width:none}
