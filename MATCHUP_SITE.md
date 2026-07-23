@@ -70,7 +70,7 @@ Model version `xw+plat_consol_v5` adds xwOBA shrinkage on top of v4:
   untouched. This changes the prediction math, so v5 starts a new `RECORD_TAGS`
   family and its games never mix with v4 or v2/v3.
 
-### Opener fallback (v5, `OPENER_FALLBACK`)
+### Historical opener fallback (v5)
 
 A probable pitcher whose recent starts average fewer than `OPENER_MAX_AVG_IP`
 innings (over at least `OPENER_MIN_STARTS` starts) is treated as an **opener**:
@@ -85,12 +85,48 @@ total batters faced as its sample size, so the xwOBA shrinkage step barely pulls
 it toward league. If too few staff pitchers appear in the leaderboard
 (`OPENER_MIN_STAFF`) the fallback is skipped and the opener's own line is kept.
 
-The platoon lens is deliberately left untouched — an opener's tiny vL/vR split
+The platoon lens was deliberately left untouched — an opener's tiny vL/vR split
 already fails the reliability gate, so that lens abstains on its own. Openers
-are rare, so this refinement stays inside the `xw+plat_consol_v5` family rather
-than starting a new one; every affected side is flagged (a card badge and the
-ledger `opener_away` / `opener_home` columns) so opener games can be sliced out
-of the record if that mixing ever needs auditing.
+were rare, so this refinement stayed inside the `xw+plat_consol_v5` family;
+every affected side was flagged in the ledger.
+
+### Full-game pitching blend (v6)
+
+Model version `xw+plat_consol_v6` replaces the starter-only xwOBA pitching
+input—and v5's opener-only whole-staff substitution—with one consistent
+nine-inning construction for every side:
+
+1. Estimate the probable pitcher's expected innings from pre-slate game logs.
+   A normal starter blends his last-five start average with his season
+   IP/start; sparse histories regress toward `SP_IP_PRIOR`. An opener uses the
+   short-start or recent-relief workload that caused his classification.
+2. Build a **role-filtered bullpen pool** from the active roster plus one
+   season pitching-role call per club. Pitchers qualify when no more than 35%
+   of their appearances were starts and they average no more than 3.0 IP per
+   appearance. This removes regular rotation starters while retaining long or
+   bulk relievers in the pooled estimate.
+3. Shrink every included reliever's Savant xwOBA independently by BF, then
+   average those talents using estimated relief BF
+   (`season BF × (1 − start share)`).
+4. Complete nine innings:
+   `P_game = (E[IP_SP]·SP_xwOBA + (9−E[IP_SP])·RP_xwOBA) / 9`.
+
+v6 deliberately does **not** identify or assign innings to a specific bulk
+follower; long/bulk arms contribute only through the bullpen pool. When a
+normal side lacks a trustworthy relief pool, it degrades visibly to the
+probable starter's value. For an opener only, v5's whole-staff aggregate
+remains an audited emergency fallback so one inning is never treated as nine.
+
+The starter card continues to show the probable pitcher's own shrunk xwOBA,
+K−BB%, and xERA. The lean uses the blended xwOBA and the card states the
+expected-IP + bullpen basis. Dumps and the ledger preserve the starter xwOBA,
+bullpen xwOBA, expected innings, relief-pool size/BF, opener classification,
+and pitching basis for audit.
+
+This is a prediction-math change, so v6 starts a new `RECORD_TAGS` family.
+The v2/v3, v4, and v5 rows remain immutable in the ledger; the grades page and
+Actions report show family history separately while the current-family fit
+uses v6 only.
 
 ## Files
 
@@ -161,13 +197,14 @@ Actions**. After that the workflow deploys on each scheduled run (and on manual
 ## Grading ledger
 
 Grades are also rendered into the site: the main page shows a **records
-strip** (the headline xwOBA full-game record for the configured `RECORD_TAGS`
-model family, linking to the ledger), and **`grades.html`** shows summary
-chips plus the full ledger table — every game's xwOBA lean, closing ML, final
-score, and full-game W/L/T grade, pending and void rows included. Both render
-purely from `data/mlb_lean_ledger.csv`; grading runs before the build in CI
-(with a second pass after it to ingest the day's fresh dumps), so the page
-reflects last night's results in the same run.
+strip** for the complete model lineage, linking to the ledger.
+**`grades.html`** preserves that combined headline, adds a family-by-family
+history table (v2/v3, v4, v5, v6, with separate vs-market results), and shows
+the full ledger table with a model-family column — every game's xwOBA lean,
+closing ML, final score, and full-game W/L/T grade, pending and void rows
+included. Both render purely from `data/mlb_lean_ledger.csv`; grading runs
+before the build in CI (with a second pass after it to ingest the day's fresh
+dumps), so the page reflects last night's results in the same run.
 
 The platoon-OPS lens and first-5-innings (F5) results are still computed and
 recorded in the ledger for auditing (`grade_leans.py` grades both), but the
@@ -191,10 +228,11 @@ Every CI run, `grade_leans.py`:
   columns and retries next run. A market outage never fails the grading run.
   `grades.html` then shows each lean's closing ML and a vs-market scoreboard
   (record vs market-expected wins → z, flat-stake ROI).
-- **Reports** records to the Actions log and `data/ledger_report.txt`
-  (overall, reliable-only platoon subset, |Δ| terciles, DIVERGE head-to-head,
-  and — once 120 graded F5 decisions accumulate across the configured
-  `RECORD_TAGS` model family — an SP-vs-lineup logit weight fit).
+- **Reports** the current `RECORD_TAGS` family to the Actions log and
+  `data/ledger_report.txt` (overall, reliable-only platoon subset, |Δ|
+  terciles, DIVERGE head-to-head, and — once 120 graded F5 decisions
+  accumulate — a pitching-vs-lineup logit weight fit), followed by immutable
+  record lines for every historical model family.
 
 The ledger persists by being committed: the workflow's `Commit ledger` step
 pushes `data/` back to `main` on each run (the `contents: write` permission).

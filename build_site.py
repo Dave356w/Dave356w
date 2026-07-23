@@ -70,7 +70,7 @@ CACHE_DIR = os.environ.get("CACHE_DIR", ".")
 OUT_DIR = os.environ.get("OUT_DIR", "public")
 DATA_DIR = os.environ.get("DATA_DIR", "data")            # grading ledger home
 LEDGER_PATH = os.path.join(DATA_DIR, "mlb_lean_ledger.csv")
-MODEL_TAG = os.environ.get("MODEL_TAG", "xw+plat_consol_v5")  # keep in sync with grade_leans.py
+MODEL_TAG = os.environ.get("MODEL_TAG", "xw+plat_consol_v6")  # keep in sync with grade_leans.py
 _RECORD_FAMILIES = {
     # v3 changed only ledger locking/identity; its prediction math is v2.
     "xw+plat_consol_v3": ("xw+plat_consol_v2", "xw+plat_consol_v3"),
@@ -79,11 +79,20 @@ _RECORD_FAMILIES = {
     # fresh record family and never mixes with v2/v3 in the ledger or weight fit.
     # v5 adds empirical-Bayes xwOBA shrinkage (batters + starter) on top of v4;
     # another prediction-math change, so it starts its own family again.
+    # v6 replaces the starter-only pitching input with a nine-inning blend of
+    # expected starter workload and a role-filtered bullpen aggregate. It is a
+    # new prediction family; older tags remain in the ledger and UI history.
 }
 RECORD_TAGS = tuple(
     t.strip() for t in os.environ.get(
         "RECORD_TAGS", ",".join(_RECORD_FAMILIES.get(MODEL_TAG, (MODEL_TAG,)))
     ).split(",") if t.strip()
+)
+MODEL_FAMILY_TAGS = (
+    ("v2/v3", ("xw+plat_consol_v2", "xw+plat_consol_v3")),
+    ("v4", ("xw+plat_consol_v4",)),
+    ("v5", ("xw+plat_consol_v5",)),
+    ("v6", ("xw+plat_consol_v6",)),
 )
 
 STATCAST_SELECTIONS = ["pa", "k_percent", "bb_percent", "xwoba", "xba", "xslg",
@@ -98,13 +107,20 @@ FULL_LEAGUE_PLATOON_BASELINES = True
 MIN_LEAGUE_BASELINE_PA = 1
 RECENT_STARTS = 5
 
-# Opener fallback. A probable pitcher is treated as an opener when either his
+# Full-game pitching blend. A probable pitcher is treated as an opener when either his
 # recent starts are repeatedly short or his recent usage is overwhelmingly
 # short relief work. The latter catches relievers named for a one-off start
-# before they have accumulated two official starts. For those games the xwOBA
-# lean substitutes a batters-faced-weighted aggregate of the club's rostered
-# pitching staff (built from the custom leaderboard the build already fetches)
-# for the opener's own numbers.
+# before they have accumulated two official starts. v6 estimates the probable
+# pitcher's innings, then fills the balance of nine innings with a filtered
+# bullpen aggregate. Long/bulk relievers remain in the bullpen pool, but the
+# model deliberately does not guess which individual bulk arm will follow.
+#
+# The bullpen pool uses season role stats to exclude rotation starters:
+# <=35% of appearances started and <=3.0 IP per appearance. Each included
+# reliever's xwOBA is shrunk independently before the pool is weighted by his
+# estimated relief batters faced. If the role endpoint is unavailable, a
+# normal starter stays starter-only; an opener may use the legacy whole-staff
+# aggregate as an explicitly audited last resort.
 # The platoon lens is left alone -- an opener's tiny vL/vR split already fails
 # the reliability gate, so that lens abstains on its own. Each affected side is
 # flagged with its detection reason and pitching basis so it stays auditable.
@@ -120,6 +136,15 @@ OPENER_ROLE_MAX_MEDIAN_IP = 2.0
 OPENER_ROLE_MAX_P80_PITCHES = 55.0
 OPENER_STRETCHED_MIN_IP = 4.0
 OPENER_STRETCHED_MIN_PITCHES = 65
+GAME_INNINGS = 9.0
+SP_IP_PRIOR = 5.2
+SP_IP_PRIOR_STARTS = 3.0
+SP_IP_MIN = 3.0
+SP_IP_MAX = 7.0
+OPENER_IP_DEFAULT = 1.5
+OPENER_IP_MIN = 1.0 / 3.0
+RP_MAX_START_SHARE = 0.35
+RP_MAX_IP_PER_APPEARANCE = 3.0
 
 
 def slate_date_now():
@@ -399,9 +424,11 @@ def load_recent_start_era(ids, limit=RECENT_STARTS):
                 })
 
         appearances.sort(key=lambda x: (x["date"], x["game_pk"]), reverse=True)
-        starts = [a for a in appearances if a["is_start"]][:limit]
+        all_starts = [a for a in appearances if a["is_start"]]
+        starts = all_starts[:limit]
         outs = sum(a["outs"] for a in starts)
         earned_runs = sum(a["earned_runs"] for a in starts)
+        season_start_outs = sum(a["outs"] for a in all_starts)
         role_apps = appearances[:OPENER_ROLE_APPEARANCES]
         pitch_counts = [a["pitches"] for a in role_apps if pd.notna(a["pitches"])]
         recent_starts = sum(a["is_start"] for a in role_apps)
@@ -416,6 +443,10 @@ def load_recent_start_era(ids, limit=RECENT_STARTS):
             # Average innings per recent start -- the opener signal. Openers are
             # credited a game started but pitch ~1 inning, so this runs low.
             "avg_ip": round(outs / 3.0 / len(starts), 2) if starts else np.nan,
+            "season_starts": len(all_starts),
+            "season_avg_ip": round(
+                season_start_outs / 3.0 / len(all_starts), 2
+            ) if all_starts else np.nan,
             # The last ten appearances describe the pitcher's current role. A
             # short-relief profile lets us recognize a newly named opener even
             # when he has only one prior official start.
@@ -537,6 +568,7 @@ STAT_COLS = ["BBE", "LA°", "EV", "Hard Hit%", "xwOBA", "xBA", "xSLG", "K%", "BB
 BB_COLS = ["GB%", "FB%", "LD%", "PU%", "Pull%", "Straight%", "Oppo%"]
 
 _pitcher_roster_cache = {}
+_team_pitcher_role_cache = {}
 
 
 def pitcher_roster(team_id):
@@ -550,6 +582,82 @@ def pitcher_roster(team_id):
            if (r.get("position", {}) or {}).get("abbreviation") == "P"]
     _pitcher_roster_cache[team_id] = ids
     return ids
+
+
+def load_team_pitcher_roles(team_id):
+    """Season-to-date workload roles for one club in a single StatsAPI call.
+
+    Returns active/used pitchers keyed by player id with appearances, starts,
+    start share, innings per appearance, and batters faced. These fields are
+    used only to separate the rotation from the relief pool; no specific bulk
+    follower is projected.
+    """
+    team_id = int(team_id)
+    if team_id in _team_pitcher_role_cache:
+        return _team_pitcher_role_cache[team_id]
+    data = _get_json("https://statsapi.mlb.com/api/v1/stats", {
+        "stats": "season",
+        "group": "pitching",
+        "season": SEASON,
+        "sportIds": SPORT_ID,
+        "teamId": team_id,
+        "gameType": "R",
+        "playerPool": "ALL",
+        "limit": 1000,
+    })
+    out = {}
+    for blk in data.get("stats", []):
+        for sk in blk.get("splits", []):
+            who = sk.get("player") or sk.get("person") or {}
+            pid = who.get("id")
+            if pid is None:
+                continue
+            st = sk.get("stat", {}) or {}
+            try:
+                apps = int(st.get("gamesPitched") or st.get("gamesPlayed") or 0)
+                starts = int(st.get("gamesStarted") or 0)
+                bf = float(st.get("battersFaced") or 0)
+            except (TypeError, ValueError):
+                continue
+            outs = _innings_to_outs(st.get("inningsPitched"))
+            out[int(pid)] = {
+                "appearances": apps,
+                "starts": starts,
+                "start_share": starts / apps if apps > 0 else np.nan,
+                "avg_ip_per_appearance": outs / 3.0 / apps if apps > 0 else np.nan,
+                "batters_faced": bf,
+            }
+    _team_pitcher_role_cache[team_id] = out
+    return out
+
+
+def relief_pitcher_ids(team_id, role_stats, probable_pid=None):
+    """Active-roster pitchers whose season workload is primarily relief.
+
+    The loose three-inning ceiling intentionally keeps long/bulk relievers in
+    the pooled estimate. It excludes rotation arms, and the current probable
+    is removed so his starter/opener innings are not counted twice.
+    """
+    probable_pid = int(probable_pid) if probable_pid is not None else None
+    out = []
+    for pid in pitcher_roster(team_id):
+        if pid == probable_pid:
+            continue
+        role = (role_stats or {}).get(pid) or {}
+        apps = int(role.get("appearances") or 0)
+        share = role.get("start_share")
+        avg_ip = role.get("avg_ip_per_appearance")
+        if (
+            apps > 0
+            and share is not None
+            and pd.notna(share)
+            and float(share) <= RP_MAX_START_SHARE
+            and avg_ip is not None
+            and pd.notna(avg_ip)
+            and float(avg_ip) <= RP_MAX_IP_PER_APPEARANCE
+        ):
+            out.append(pid)
+    return out
 
 
 def team_pitching_aggregate(team_id, pitcher_stat, pitcher_bb):
@@ -596,6 +704,183 @@ def team_pitching_aggregate(team_id, pitcher_stat, pitcher_bb):
             den += w
         bb[col] = round(num / den, 3) if den else np.nan
     return stat, bb
+
+
+def bullpen_xwoba_aggregate(team_id, probable_pid, pitcher_stat, role_stats,
+                            prior, shrink_k):
+    """Role-filtered bullpen xwOBA with per-pitcher empirical-Bayes shrinkage.
+
+    Talent is shrunk by each pitcher's Savant BF before aggregation. Usage
+    weights approximate relief BF as season BF × (1 - start share), preventing
+    a swingman's starter work from receiving full bullpen weight.
+    """
+    weighted = []
+    for pid in relief_pitcher_ids(team_id, role_stats, probable_pid):
+        stat = pitcher_stat.get(pid) or {}
+        bf = _f(stat.get("PA"))
+        xw = _f(stat.get("xwOBA"))
+        role = (role_stats or {}).get(pid) or {}
+        share = _f(role.get("start_share"))
+        role_bf = _f(role.get("batters_faced"))
+        if bf is None or bf <= 0 or xw is None:
+            continue
+        relief_share = max(0.0, 1.0 - (share or 0.0))
+        # Role BF is team-specific, whereas Savant PA follows the pitcher
+        # across trades. Use team BF for expected club usage when available;
+        # retain Savant PA only as the talent-shrinkage sample size.
+        usage_bf = (role_bf if role_bf is not None and role_bf > 0 else bf) * relief_share
+        if usage_bf <= 0:
+            continue
+        shrunk = _shrink_one(xw, bf, prior, shrink_k)
+        if shrunk is not None and pd.notna(shrunk):
+            weighted.append((pid, usage_bf, float(shrunk)))
+    if len(weighted) < OPENER_MIN_STAFF:
+        return None
+    total_bf = sum(w for _, w, _ in weighted)
+    return {
+        "xwOBA": sum(w * x for _, w, x in weighted) / total_bf,
+        "pitcher_count": len(weighted),
+        "relief_bf": total_bf,
+        "pitcher_ids": tuple(pid for pid, _, _ in weighted),
+    }
+
+
+def expected_pitcher_ip(profile, classification=None):
+    """Pregame expected workload from pre-slate starts/current role.
+
+    Normal starters blend the last-five start average with their season start
+    average (or a fixed league prior when unavailable). Openers use the signal
+    that classified them: repeated short starts use start IP, while a reliever
+    spot start uses median recent appearance length. Values are bounded to
+    plausible role ranges and never use the current slate appearance.
+    """
+    profile = profile or {}
+    classification = classification or {}
+
+    def finite(value):
+        try:
+            value = float(value)
+            return value if np.isfinite(value) else None
+        except (TypeError, ValueError):
+            return None
+
+    recent = finite(profile.get("avg_ip"))
+    season = finite(profile.get("season_avg_ip"))
+    if classification:
+        if classification.get("reason") == "repeated_short_starts":
+            estimate = recent
+        else:
+            estimate = finite(profile.get("median_ip"))
+            if estimate is None:
+                estimate = recent
+        estimate = OPENER_IP_DEFAULT if estimate is None else estimate
+        return round(float(np.clip(estimate, OPENER_IP_MIN, OPENER_MAX_AVG_IP)), 2)
+
+    prior = season if season is not None else SP_IP_PRIOR
+    n_recent = int(profile.get("starts") or 0)
+    if recent is None or n_recent <= 0:
+        estimate = prior
+    else:
+        estimate = (
+            n_recent * recent + SP_IP_PRIOR_STARTS * prior
+        ) / (n_recent + SP_IP_PRIOR_STARTS)
+    return round(float(np.clip(estimate, SP_IP_MIN, SP_IP_MAX)), 2)
+
+
+def build_pitching_plans(slate_df, recent_profiles, pitcher_stat, pitcher_bb,
+                         league_baseline):
+    """Expected-IP + pooled-relief plan for every probable-pitcher side."""
+    plans = {}
+    classifications = opener_classifications(recent_profiles)
+    prior = _f((league_baseline or {}).get("xwOBA"))
+    shrink_k = (league_baseline or {}).get("_xwOBA_K_pit")
+    roles_by_team = {}
+    bullpen_by_pair = {}
+
+    for _, g in slate_df.iterrows():
+        for side in ("away", "home"):
+            pid = g.get(f"{side}_probable_pitcher_id")
+            tid = g.get(f"{side}_team_id")
+            if pd.isna(pid) or pd.isna(tid):
+                continue
+            pid, tid = int(pid), int(tid)
+            classification = classifications.get(pid)
+            expected_ip = expected_pitcher_ip(
+                (recent_profiles or {}).get(pid), classification
+            )
+
+            if tid not in roles_by_team:
+                try:
+                    roles_by_team[tid] = load_team_pitcher_roles(tid)
+                except Exception as e:  # noqa: BLE001
+                    log(f"  bullpen roles unavailable for team {tid}: {e!r}")
+                    roles_by_team[tid] = None
+            pair = (tid, pid)
+            if pair not in bullpen_by_pair:
+                try:
+                    bullpen_by_pair[pair] = bullpen_xwoba_aggregate(
+                        tid, pid, pitcher_stat, roles_by_team.get(tid), prior, shrink_k
+                    )
+                except Exception as e:  # noqa: BLE001
+                    log(f"  bullpen aggregate failed for team {tid}: {e!r}")
+                    bullpen_by_pair[pair] = None
+            bullpen = bullpen_by_pair[pair]
+            basis = "starter_bullpen_blend"
+
+            # A thin/missing role pool is allowed to degrade for a normal
+            # starter. For an opener, preserve the older whole-staff estimate
+            # as a visible last resort rather than treating one inning as nine.
+            if bullpen is None and classification:
+                try:
+                    legacy_stat, _ = team_pitching_aggregate(
+                        tid, pitcher_stat, pitcher_bb
+                    )
+                except Exception as e:  # noqa: BLE001
+                    log(f"  opener emergency staff aggregate failed for team {tid}: {e!r}")
+                    legacy_stat = None
+                if legacy_stat is not None:
+                    legacy_xw = _shrink_one(
+                        _f(legacy_stat.get("xwOBA")),
+                        _f(legacy_stat.get("PA")),
+                        prior,
+                        shrink_k,
+                    )
+                    if legacy_xw is not None and pd.notna(legacy_xw):
+                        bullpen = {
+                            "xwOBA": legacy_xw,
+                            "pitcher_count": np.nan,
+                            "relief_bf": _f(legacy_stat.get("PA")),
+                        }
+                        basis = "opener_team_staff_fallback"
+
+            if bullpen is None:
+                basis = "probable_starter_no_bullpen"
+            elif classification and basis != "opener_team_staff_fallback":
+                basis = "opener_bullpen_blend"
+
+            key = (int(g["game_pk"]), side)
+            plans[key] = {
+                "opener": bool(classification),
+                "opener_reason": (classification or {}).get("reason"),
+                "opener_confidence": (classification or {}).get("confidence"),
+                "pitching_basis": basis,
+                "expected_sp_ip": expected_ip,
+                "bullpen_xwOBA": None if bullpen is None else bullpen.get("xwOBA"),
+                "bullpen_pitchers": None if bullpen is None else bullpen.get("pitcher_count"),
+                "bullpen_relief_bf": None if bullpen is None else bullpen.get("relief_bf"),
+            }
+            if bullpen is not None:
+                log(
+                    f"  pitching blend: pid={pid} team={tid} basis={basis} "
+                    f"exp_ip={expected_ip:.2f} rp_xwOBA={bullpen.get('xwOBA'):.3f} "
+                    f"(n_rp={bullpen.get('pitcher_count')})"
+                )
+            else:
+                log(
+                    f"  pitching blend unavailable: pid={pid} team={tid}; "
+                    "keeping probable-starter xwOBA"
+                )
+    return plans
 
 
 def opener_classifications(recent_start_era, max_avg_ip=OPENER_MAX_AVG_IP,
@@ -877,50 +1162,12 @@ def fetch_all(slate_date):
     log(f"Loading probable-pitcher ERA over the last {RECENT_STARTS} starts ...")
     recent_start_era = load_recent_start_era(prob_ids)
 
-    # Opener fallback: swap each opener's own Statcast pitching line for his
-    # club's batters-faced-weighted staff aggregate, in place in the lookup
-    # dicts so the whole matchup pipeline downstream uses the staff numbers
-    # without further plumbing. opener_meta drives the badge and audit fields.
-    opener_sides = set()
-    opener_meta = {}
-    if OPENER_FALLBACK:
-        pid_team, pid_sides = {}, {}
-        for _, g in slate_df.iterrows():
-            for side in ("away", "home"):
-                pid = g.get(f"{side}_probable_pitcher_id")
-                tid = g.get(f"{side}_team_id")
-                if pd.notna(pid) and pd.notna(tid):
-                    pid_team[int(pid)] = int(tid)
-                    pid_sides.setdefault(int(pid), []).append((int(g["game_pk"]), side))
-        team_agg = {}
-        classifications = opener_classifications(recent_start_era)
-        for pid, classification in classifications.items():
-            tid = pid_team.get(pid)
-            if tid is None:
-                continue
-            if tid not in team_agg:
-                try:
-                    team_agg[tid] = team_pitching_aggregate(tid, pitcher_stat, pitcher_bb)
-                except Exception as e:  # noqa: BLE001
-                    log(f"  opener aggregate failed for team {tid}: {e!r}")
-                    team_agg[tid] = (None, None)
-            st_agg, bb_agg = team_agg[tid]
-            if st_agg is None:
-                log(f"  opener pid={pid}: team {tid} staff too thin in leaderboard; "
-                    "keeping own line")
-                continue
-            pitcher_stat[pid] = st_agg
-            pitcher_bb[pid] = bb_agg
-            for side_key in pid_sides.get(pid, []):
-                opener_sides.add(side_key)
-                opener_meta[side_key] = {
-                    "reason": classification["reason"],
-                    "confidence": classification["confidence"],
-                    "pitching_basis": "team_staff",
-                }
-            log(f"  opener fallback: pid={pid} reason={classification['reason']} "
-                f"avg_ip={recent_start_era[pid].get('avg_ip')} -> team {tid} staff "
-                f"xwOBA {st_agg.get('xwOBA')} (n_bf {st_agg.get('PA'):.0f})")
+    # v6 pitching plans are applied after the starter's own xwOBA has been
+    # shrunk in build_matchup. This keeps the starter card intact while the
+    # lean uses a full-game starter/opener + bullpen blend.
+    pitching_plans = build_pitching_plans(
+        slate_df, recent_start_era, pitcher_stat, pitcher_bb, league_baseline
+    )
 
     try:
         league_baseline["ERA"] = load_league_era()
@@ -988,8 +1235,7 @@ def fetch_all(slate_date):
         "player_splits_hit_league": player_splits_hit_league,
         "people_league_hitters": people_league_hitters,
         "lineup_projection_df": lineup_projection_df,
-        "opener_sides": opener_sides,
-        "opener_meta": opener_meta,
+        "pitching_plans": pitching_plans,
     }
 
 
@@ -1001,7 +1247,7 @@ WEIGHT_COL = "BBE"
 USE_WEIGHTED = True
 ADD_STATS = {"EV", "LA°"}
 
-# --- xwOBA empirical-Bayes shrinkage (v5) ----------------------------------
+# --- xwOBA empirical-Bayes shrinkage (v5+, retained in v6) -----------------
 # Season xwOBA (each hitter) and xwOBA-allowed (the starter) are regressed
 # toward the league xwOBA baseline by sample size before they drive the lean:
 #     x* = (n*x + K*prior) / (n + K)
@@ -1330,6 +1576,67 @@ def build_xwoba_matchup(pitchers_df, league_baseline):
     matchup_df = build_matchup(pitcher_rows_df, opp_lineup_agg_df, STATCAST_RATE_COLS, league_baseline,
                                shrink_prior=prior, shrink_k=k_pit)
     return matchup_df, pitcher_rows_df, opp_hitters_df
+
+
+def apply_pitching_plans(matchup_df, pitching_plans, league_baseline):
+    """Apply v6's nine-inning pitching blend to the xwOBA lean input.
+
+    `build_matchup` has already shrunk the probable pitcher's xwOBA. The card
+    keeps that value in `starter_xwOBA`; `pit_xwOBA` becomes the full-game
+    expected pitching value used by matchup_value and the ledger.
+    """
+    if matchup_df is None or matchup_df.empty:
+        return matchup_df
+    out = matchup_df.copy()
+    for col, default in (
+        ("starter_xwOBA", np.nan),
+        ("bullpen_xwOBA", np.nan),
+        ("expected_sp_ip", np.nan),
+        ("bullpen_pitchers", np.nan),
+        ("bullpen_relief_bf", np.nan),
+        ("opener", False),
+        ("opener_reason", None),
+        ("opener_confidence", None),
+        ("pitching_basis", "probable_starter_no_bullpen"),
+    ):
+        out[col] = default
+
+    league = _f((league_baseline or {}).get("xwOBA"))
+    for idx, row in out.iterrows():
+        key = (int(row["game_pk"]), row["side"])
+        plan = (pitching_plans or {}).get(key) or {}
+        starter = _f(row.get("pit_xwOBA"))
+        bullpen = _f(plan.get("bullpen_xwOBA"))
+        expected_ip = _f(plan.get("expected_sp_ip"))
+
+        out.at[idx, "starter_xwOBA"] = starter
+        out.at[idx, "bullpen_xwOBA"] = bullpen
+        out.at[idx, "expected_sp_ip"] = expected_ip
+        out.at[idx, "bullpen_pitchers"] = plan.get("bullpen_pitchers")
+        out.at[idx, "bullpen_relief_bf"] = plan.get("bullpen_relief_bf")
+        out.at[idx, "opener"] = bool(plan.get("opener"))
+        out.at[idx, "opener_reason"] = plan.get("opener_reason")
+        out.at[idx, "opener_confidence"] = plan.get("opener_confidence")
+        out.at[idx, "pitching_basis"] = plan.get(
+            "pitching_basis", "probable_starter_no_bullpen"
+        )
+
+        if starter is None or bullpen is None or expected_ip is None:
+            continue
+        sp_ip = float(np.clip(expected_ip, 0.0, GAME_INNINGS))
+        blended = (sp_ip * starter + (GAME_INNINGS - sp_ip) * bullpen) / GAME_INNINGS
+        blended = round(blended, 3)
+        out.at[idx, "pit_xwOBA"] = blended
+
+        batter = _f(row.get("opp_xwOBA"))
+        mx = matchup_value(batter, blended, "xwOBA", league)
+        out.at[idx, "mx_xwOBA"] = round(mx, 3) if pd.notna(mx) else np.nan
+        out.at[idx, "edge_xwOBA"] = (
+            round(mx - league, 3)
+            if pd.notna(mx) and league is not None
+            else np.nan
+        )
+    return out
 
 
 # ============================================================
@@ -1967,10 +2274,10 @@ def _sp_stat_cell(lab, val, fmt, sub=None, heat=""):
 
 def _side_html(sp_abbr, d, league_baseline):
     badge = f"<span class='hand'>{d['t']}HP</span>" if d["t"] in ("L", "R") else ""
-    opener = ("<span class='flag warn' title='Opener: the club's batters-faced-"
-              "weighted staff aggregate is shown in place of this starter's own "
-              "Statcast line, since he faces only a handful of batters.'>opener · "
-              "team staff</span>") if d.get("is_opener") else ""
+    opener = ("<span class='flag warn' title='Opener: the model estimates this "
+              "pitcher’s workload, then assigns the remaining innings to the "
+              "role-filtered team bullpen. No specific bulk follower is "
+              "projected.'>opener · bullpen blend</span>") if d.get("is_opener") else ""
     thin = (f"<span class='flag warn'>thin hand split {d['pl_fl']['thin']} BF</span>"
             if "thin" in d["pl_fl"] else "")
     comp = (f"{d['R']}R/{d['L']}L" + (f"/{d['S']}S" if d["S"] else "")) if d["has_pl"] else "—"
@@ -2001,11 +2308,18 @@ def _side_html(sp_abbr, d, league_baseline):
     tier = f"<span class='tier {tier_cls}'>{tier_lab}</span>" if tier_lab else ""
     bars = (f"<div class='spct'><span class='lab'>xwOBA</span>{_pct_bar(d.get('pit_xw_pctile'), 'p')}</div>"
             f"<div class='spct'><span class='lab'>K − BB%</span>{_pct_bar(d.get('kbb_pctile'), 'p')}</div>")
+    exp_ip = _f(d.get("expected_sp_ip"))
+    pitching_note = (
+        f" · model {exp_ip:.1f} IP + bullpen"
+        if exp_ip is not None and "bullpen_blend" in str(d.get("pitching_basis") or "")
+        else ""
+    )
     return (
         f"<section class='side'>"
         f"<div class='matchlab'>{_esc(sp_abbr)} starter → {_esc(d['opp_abbr'])} bats</div>"
         f"<div class='sp'><div class='who'><span class='nm'>{_esc(d['p'])}</span>{badge}{tier}{opener}{thin}</div>"
-        f"<div class='role'>faces the {_esc(d['opp_abbr'])} lineup<span class='mach'> · {comp}{padv}</span></div>"
+        f"<div class='role'>faces the {_esc(d['opp_abbr'])} lineup"
+        f"<span class='mach'> · {comp}{padv}{pitching_note}</span></div>"
         f"<div class='sp-bars'>{bars}</div>"
         f"<div class='spstats mach'>{stats}</div>"
         f"{_spotlight_html(d['hitters'])}"
@@ -2176,9 +2490,12 @@ def _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
             side = r["side"]
             t = throws.get((gpk, r["pitcher"]), "")
             opp_lu_side = "home" if side == "away" else "away"
+            starter_xw = _f(r.get("starter_xwOBA"))
+            if starter_xw is None:
+                starter_xw = _f(r.get("pit_xwOBA"))
             d = dict(p=r["pitcher"], t=t if t in ("L", "R") else "",
                      opp=r["opp_team"], opp_abbr=_abbr(r["opp_team"]),
-                     pit_xw=_f(r.get("pit_xwOBA")), pit_k=_f(r.get("pit_K%")),
+                     pit_xw=starter_xw, pit_k=_f(r.get("pit_K%")),
                      pit_bb=_f(r.get("pit_BB%")),
                      era_season=recent_era.get((gpk, r["pitcher"]), (None, 0, None, None))[2],
                      xera=recent_era.get((gpk, r["pitcher"]), (None, 0, None, None))[3],
@@ -2187,13 +2504,16 @@ def _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
                      # Display percentiles (0-100). pit_xwOBA is already shrunk
                      # in build_matchup, so it is ranked directly (invert: low
                      # xwOBA-against = high pct); K-BB% is ranked raw.
-                     pit_xw_pctile=pctile_rank_raw(_f(r.get("pit_xwOBA")), _ref_pit, invert=True),
+                     pit_xw_pctile=pctile_rank_raw(starter_xw, _ref_pit, invert=True),
                      kbb_pctile=pctile_rank_raw(
                          (_f(r.get("pit_K%")) - _f(r.get("pit_BB%")))
                          if (_f(r.get("pit_K%")) is not None and _f(r.get("pit_BB%")) is not None)
                          else None, _ref_kbb),
                      lu_status=(lu_map.get(gpk) or {}).get(opp_lu_side),
                      is_opener=bool(r.get("opener")),
+                     expected_sp_ip=_f(r.get("expected_sp_ip")),
+                     bullpen_xw=_f(r.get("bullpen_xwOBA")),
+                     pitching_basis=r.get("pitching_basis"),
                      has_pl=False, R=0, L=0, S=0, padv=0, pl_fl={},
                      pl_sp=None, pl_sp_raw=None, pl_mx=None, pl_edge=None,
                      pl_reliable=False,
@@ -2301,9 +2621,11 @@ def _legend_guide():
         "Agreeing means no edge on the line; a lean on the <i>underdog</i> is the spot the "
         "record is built to test.</span>"
         "<span class='wide'>Moneylines are DraftKings prices pulled from ESPN at build time; "
-        "cards are ordered by first pitch. Each card also shows the model's raw inputs: "
-        "regressed xwOBA, ◆ lefty/righty platoon-advantage markers, each starter's full line "
-        "(xwOBA-allowed, K−BB%, and xERA vs season ERA), and each lean's Δxw and its rank.</span>"
+        "cards are ordered by first pitch. The lean blends each probable pitcher's expected "
+        "innings with a role-filtered bullpen for the balance of nine; the card states that "
+        "workload while its three pitcher stats remain the starter's own line. Other inputs "
+        "include regressed lineup xwOBA, ◆ lefty/righty platoon-advantage markers, and each "
+        "lean's Δxw and its rank.</span>"
         "</div></div>")
 
 
@@ -2673,6 +2995,22 @@ def _display_grades(led):
     return led[led["status"] == "graded"]
 
 
+def _model_family_grades(led):
+    """Ordered graded history by prediction-math family, including unknown tags."""
+    graded = _display_grades(led)
+    out, covered = [], set()
+    for label, tags in MODEL_FAMILY_TAGS:
+        fam = graded[graded["model_tag"].isin(tags)]
+        covered.update(tags)
+        if not fam.empty:
+            out.append((label, fam))
+    for tag in sorted(set(graded["model_tag"].dropna().astype(str)) - covered):
+        fam = graded[graded["model_tag"].astype(str) == tag]
+        if not fam.empty:
+            out.append((tag, fam))
+    return out
+
+
 # Minimum graded games in a (lean side × agree/disagree) bucket before its
 # record is trusted enough to headline the verdict; thinner buckets keep prose.
 VERDICT_CONTEXT_MIN = 10
@@ -2760,7 +3098,7 @@ def records_strip_html():
         if "close_p_home" in g.columns and g["close_p_home"].notna().any():
             try:
                 from market_backfill import vs_market_summary
-                m = vs_market_summary(g).get("xwOBA")
+                m = vs_market_summary(g, verbose=False).get("xwOBA")
             except Exception as e:  # noqa: BLE001
                 log(f"vs-market strip degraded: {e!r}")
                 m = None
@@ -2769,6 +3107,40 @@ def records_strip_html():
         inner = " <span class='muted'>·</span> ".join(bits)
     return ("<div class='gradestrip'><span class='lab'>Record</span>"
             f"<span>{inner}</span><a href='grades.html'>full ledger →</a></div>")
+
+
+def model_family_history_html(led):
+    """Compact family-by-family history without pooling incompatible math."""
+    rows = []
+    for label, fam in _model_family_grades(led):
+        rec = _rec_txt(fam["xw_full"])
+        market = "—"
+        if "close_p_home" in fam.columns and fam["close_p_home"].notna().any():
+            try:
+                from market_backfill import vs_market_summary
+                m = vs_market_summary(fam, verbose=False).get("xwOBA")
+            except Exception as e:  # noqa: BLE001
+                log(f"family vs-market summary degraded ({label}): {e!r}")
+                m = None
+            if m:
+                market = f"z {m['z']:+.2f} · {m['roi_units']:+.2f}u"
+        rows.append(
+            "<tr>"
+            f"<td>{_esc(label)}</td><td>{len(fam)}</td>"
+            f"<td>{_esc(rec)}</td><td>{_esc(market)}</td>"
+            "</tr>"
+        )
+    if not rows:
+        return ""
+    return (
+        "<div class='gr-note'>Model-family history · prediction-math families "
+        "are reported separately below and remain preserved in the ledger.</div>"
+        "<div class='gr-tablewrap'><table class='gr'><thead><tr>"
+        "<th>Family</th><th>Graded</th><th>xwOBA full</th><th>vs market</th>"
+        "</tr></thead><tbody>"
+        + "".join(rows)
+        + "</tbody></table></div>"
+    )
 
 
 def _wlt_badge(v):
@@ -2800,7 +3172,7 @@ def _lean_cell(lean, delta, muted=False):
     return f"<span class='muted'>{txt}</span>" if muted else txt
 
 
-def _grades_row(r, show_ml=False):
+def _grades_row(r, show_ml=False, show_model=False):
     status = str(r["status"])
     fa, fh = pd.to_numeric(r["full_away"], errors="coerce"), pd.to_numeric(r["full_home"], errors="coerce")
     if status != "graded":
@@ -2823,6 +3195,13 @@ def _grades_row(r, show_ml=False):
     if show_ml:
         cells += [_lean_ml_cell(r, "xw_lean")]
     cells += [final, _wlt_badge(r["xw_full"])]
+    if show_model:
+        tag = str(r.get("model_tag") or "")
+        label = next(
+            (name for name, tags in MODEL_FAMILY_TAGS if tag in tags),
+            tag.replace("xw+plat_consol_", ""),
+        )
+        cells += [_esc(label)]
     cls = " class='void'" if status == "void" else ""
     return f"<tr{cls}>" + "".join(f"<td>{c}</td>" for c in cells) + "</tr>"
 
@@ -2863,7 +3242,7 @@ def render_grades_html(built_txt):
         if "close_p_home" in g.columns and g["close_p_home"].notna().any():
             try:
                 from market_backfill import vs_market_summary
-                mkt = vs_market_summary(g)
+                mkt = vs_market_summary(g, verbose=False)
             except Exception as e:  # noqa: BLE001
                 log(f"vs-market summary degraded: {e!r}")
                 mkt = {}
@@ -2877,15 +3256,22 @@ def render_grades_html(built_txt):
                    + (f"<div class='gr-note'>{' · '.join(notes)}</div>" if notes else ""))
 
     show_ml = "close_home_ml" in led.columns and led["close_home_ml"].notna().any()
+    show_model = "model_tag" in led.columns and led["model_tag"].nunique(dropna=True) > 1
     heads = (["Date", "Game", "xwOBA lean"]
              + (["xw ML"] if show_ml else [])
-             + ["Final", "xw F"])
+             + ["Final", "xw F"]
+             + (["Model"] if show_model else []))
     led = led.sort_values(["game_date", "game_pk"], ascending=[False, True])
-    rows = "".join(_grades_row(r, show_ml) for _, r in led.iterrows())
+    rows = "".join(_grades_row(r, show_ml, show_model) for _, r in led.iterrows())
     table = ("<div class='gr-tablewrap'><table class='gr'><thead><tr>"
              + "".join(f"<th>{h}</th>" for h in heads)
              + f"</tr></thead><tbody>{rows}</tbody></table></div>")
-    return html_document(back + head + summary + table, built_txt, title="MLB lean grades")
+    family_history = model_family_history_html(led)
+    return html_document(
+        back + head + summary + family_history + table,
+        built_txt,
+        title="MLB lean grades",
+    )
 
 
 def render_combined_html(xw_df, pl_df, pitcher_rows_df, built_txt,
@@ -2984,28 +3370,9 @@ def main():
     log("Building xwOBA matchup ...")
     matchup_df, pitcher_rows_df, opp_hitters_df = build_xwoba_matchup(
         data["pitchers_df"], data["league_baseline"])
-
-    # Flag each side whose starter got the opener staff-aggregate fallback, so
-    # the card can badge it and the ledger can slice these games out later
-    # (the metric swap itself already happened upstream in fetch_all).
-    opener_sides = data.get("opener_sides") or set()
-    opener_meta = data.get("opener_meta") or {}
-    if matchup_df is not None and not matchup_df.empty:
-        side_keys = [
-            (int(gpk), side)
-            for gpk, side in zip(matchup_df["game_pk"], matchup_df["side"])
-        ]
-        matchup_df["opener"] = [key in opener_sides for key in side_keys]
-        matchup_df["opener_reason"] = [
-            (opener_meta.get(key) or {}).get("reason") for key in side_keys
-        ]
-        matchup_df["opener_confidence"] = [
-            (opener_meta.get(key) or {}).get("confidence") for key in side_keys
-        ]
-        matchup_df["pitching_basis"] = [
-            (opener_meta.get(key) or {}).get("pitching_basis", "probable_starter")
-            for key in side_keys
-        ]
+    matchup_df = apply_pitching_plans(
+        matchup_df, data.get("pitching_plans"), data["league_baseline"]
+    )
 
     if matchup_df is None or matchup_df.empty:
         # Probables/lineups not posted yet. Render a valid "check back" page
