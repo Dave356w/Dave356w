@@ -57,7 +57,7 @@ from market_backfill import MARKET_COLS, attach_market
 DATA_DIR    = os.environ.get("DATA_DIR", "data")
 LEDGER_PATH = os.path.join(DATA_DIR, "mlb_lean_ledger.csv")
 REPORT_PATH = os.path.join(DATA_DIR, "ledger_report.txt")
-MODEL_TAG   = os.environ.get("MODEL_TAG", "xw+plat_consol_v5")
+MODEL_TAG   = os.environ.get("MODEL_TAG", "xw+plat_consol_v6")
 _RECORD_FAMILIES = {
     # v3 changed only ledger locking/identity; its prediction math is v2.
     "xw+plat_consol_v3": ("xw+plat_consol_v2", "xw+plat_consol_v3"),
@@ -66,11 +66,19 @@ _RECORD_FAMILIES = {
     # fresh record family and never mixes with v2/v3 in the ledger or weight fit.
     # v5 adds empirical-Bayes xwOBA shrinkage (batters + starter) on top of v4;
     # another prediction-math change, so it starts its own family again.
+    # v6 uses expected starter innings plus a role-filtered bullpen aggregate;
+    # it starts a new family while all prior tags remain in ledger history.
 }
 RECORD_TAGS = tuple(
     t.strip() for t in os.environ.get(
         "RECORD_TAGS", ",".join(_RECORD_FAMILIES.get(MODEL_TAG, (MODEL_TAG,)))
     ).split(",") if t.strip()
+)
+MODEL_FAMILY_TAGS = (
+    ("v2/v3", ("xw+plat_consol_v2", "xw+plat_consol_v3")),
+    ("v4", ("xw+plat_consol_v4",)),
+    ("v5", ("xw+plat_consol_v5",)),
+    ("v6", ("xw+plat_consol_v6",)),
 )
 N_FIT_MIN   = 120
 _FINAL  = {"Final", "Game Over", "Completed Early"}
@@ -135,13 +143,20 @@ AUDIT_COLS = [
     "snapshot_utc", "scheduled_start_utc", "lock_status",
     "lineup_status_away", "lineup_status_home",
     "lineup_posted_away", "lineup_posted_home",
-    # True when that side's starter got the opener staff-aggregate fallback,
-    # plus the classification evidence and actual pitching input used.
+    # True when that side's probable was classified as an opener, plus the
+    # classification evidence and actual pitching input used.
     # NaN on legacy rows; never backfilled.
     "opener_away", "opener_home",
     "opener_reason_away", "opener_reason_home",
     "opener_confidence_away", "opener_confidence_home",
     "pitching_basis_away", "pitching_basis_home",
+    # v6 workload/blend audit. The P_* fields above hold the actual model
+    # pitching input; these preserve its starter and bullpen components.
+    "starter_xwoba_away", "starter_xwoba_home",
+    "bullpen_xwoba_away", "bullpen_xwoba_home",
+    "expected_sp_ip_away", "expected_sp_ip_home",
+    "bullpen_pitchers_away", "bullpen_pitchers_home",
+    "bullpen_relief_bf_away", "bullpen_relief_bf_home",
 ]
 MODEL_FIELDS = [
     "game_date","away","home","away_sp","home_sp","model_tag",
@@ -155,6 +170,11 @@ MODEL_FIELDS = [
     "opener_reason_away","opener_reason_home",
     "opener_confidence_away","opener_confidence_home",
     "pitching_basis_away","pitching_basis_home",
+    "starter_xwoba_away","starter_xwoba_home",
+    "bullpen_xwoba_away","bullpen_xwoba_home",
+    "expected_sp_ip_away","expected_sp_ip_home",
+    "bullpen_pitchers_away","bullpen_pitchers_home",
+    "bullpen_relief_bf_away","bullpen_relief_bf_home",
 ]
 
 def load_ledger():
@@ -270,6 +290,16 @@ def rows_from_dump(xw_df, pl_df):
             opener_confidence_home=h.get("opener_confidence", np.nan),
             pitching_basis_away=a.get("pitching_basis", np.nan),
             pitching_basis_home=h.get("pitching_basis", np.nan),
+            starter_xwoba_away=a.get("starter_xwOBA", np.nan),
+            starter_xwoba_home=h.get("starter_xwOBA", np.nan),
+            bullpen_xwoba_away=a.get("bullpen_xwOBA", np.nan),
+            bullpen_xwoba_home=h.get("bullpen_xwOBA", np.nan),
+            expected_sp_ip_away=a.get("expected_sp_ip", np.nan),
+            expected_sp_ip_home=h.get("expected_sp_ip", np.nan),
+            bullpen_pitchers_away=a.get("bullpen_pitchers", np.nan),
+            bullpen_pitchers_home=h.get("bullpen_pitchers", np.nan),
+            bullpen_relief_bf_away=a.get("bullpen_relief_bf", np.nan),
+            bullpen_relief_bf_home=h.get("bullpen_relief_bf", np.nan),
             status="pending", full_away=np.nan, full_home=np.nan,
             f5_away=np.nan, f5_home=np.nan,
             xw_full=None, xw_f5=None, ops_full=None, ops_f5=None,
@@ -394,6 +424,22 @@ def _record_grades(led):
     """Graded rows whose tags share the current prediction methodology."""
     return led[(led["status"] == "graded") & (led["model_tag"].isin(RECORD_TAGS))].copy()
 
+
+def _model_family_grades(led):
+    graded = led[led["status"] == "graded"]
+    out, covered = [], set()
+    for label, tags in MODEL_FAMILY_TAGS:
+        fam = graded[graded["model_tag"].isin(tags)]
+        covered.update(tags)
+        if not fam.empty:
+            out.append((label, fam))
+    for tag in sorted(set(graded["model_tag"].dropna().astype(str)) - covered):
+        fam = graded[graded["model_tag"].astype(str) == tag]
+        if not fam.empty:
+            out.append((tag, fam))
+    return out
+
+
 def report(led):
     lines = []
     say = lines.append
@@ -434,6 +480,14 @@ def report(led):
             say(f"  b_lineup={b[1]:+.3f}±{se[1]:.3f}  b_sp={b[2]:+.3f}±{se[2]:.3f}  HFA={b[0]:+.3f}")
             say(f"  implied w = b_sp/b_lineup = {ratio:+.2f}  "
                 "(symmetric matchup ratio ⇒ ≈ +1.00)")
+    families = _model_family_grades(led)
+    if families:
+        say("model-family history (never pooled into the current-family fit):")
+        for label, fam in families:
+            say(
+                f"  {label:7} n={len(fam):3}  "
+                f"xw full {_rec(fam['xw_full'])}  F5 {_rec(fam['xw_f5'])}"
+            )
     txt = "\n".join(lines)
     print("=" * 60); print(txt); print("=" * 60)
     with open(REPORT_PATH, "w") as f:

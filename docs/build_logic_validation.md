@@ -1,5 +1,10 @@
 # Build-logic validation — MLB matchup-lean model
 
+> Historical validation note: this review covers the starter-only v5
+> prediction math as of 2026-07-21. v6 retains the verified shrinkage and
+> lineup math but starts a new record family because it replaces the pitching
+> input with an expected-IP starter/bullpen blend; see `MATCHUP_SITE.md`.
+
 **Date:** 2026-07-21
 **Scope:** Statistical soundness and robustness of the daily matchup-lean build
 logic in this repo (`build_site.py`, `grade_leans.py`, `market_backfill.py`)

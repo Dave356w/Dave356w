@@ -58,13 +58,14 @@ jobs:
       # and start a new RECORD_TAGS family so incompatible results and weight
       # fits never mix. Audit-only tags may remain in one family. Job-level so
       # grade_leans.py and build_site.py see the same configuration.
-      # v5 adds empirical-Bayes xwOBA shrinkage (each hitter and the starter are
-      # regressed toward the league xwOBA baseline by sample size) on top of v4's
-      # slot-PA weighting. Another prediction-math change, so it starts a fresh
-      # record family; v5 games never mix with v4 or the v2/v3 season-volume
-      # results in the headline records or the weight fit.
-      MODEL_TAG: xw+plat_consol_v5
-      RECORD_TAGS: xw+plat_consol_v5
+      # v6 retains v5 empirical-Bayes shrinkage and adds a full-game pitching
+      # input: expected probable-pitcher IP plus a role-filtered, independently
+      # shrunk bullpen aggregate for the balance of nine innings. A specific
+      # bulk follower is never projected. This changes prediction math, so v6
+      # starts a fresh record family; all older families remain in ledger/UI
+      # history but never mix into v6's weight fit or current-family report.
+      MODEL_TAG: xw+plat_consol_v6
+      RECORD_TAGS: xw+plat_consol_v6
     steps:
       - uses: actions/checkout@v4
 

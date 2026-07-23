@@ -305,7 +305,7 @@ def attach_market(df, col=COL, verbose=True):
 
 
 # --------------------------------------------------------------- analysis ---
-def vs_market_summary(df, col=COL):
+def vs_market_summary(df, col=COL, verbose=True):
     """Vs-market scoreboard for both models. Returns dict for grades.html chips."""
     d = df[df["close_p_home"].notna()].copy()
     d["winner"] = np.where(d[col["home_runs"]] > d[col["away_runs"]],
@@ -334,8 +334,10 @@ def vs_market_summary(df, col=COL):
                           z=round(float(z), 2), roi_units=round(float(pnl), 2),
                           fav_agree=round(float(fav_agree), 3),
                           fav_baseline=f"{fav_w}-{n - fav_w}")
-        print(f"{label}: {w}-{n - w} | market-expected {exp:.1f}W -> z {z:+.2f} | "
-              f"ROI {pnl:+.2f}u | agrees w/ fav {fav_agree:.0%} | fav baseline {fav_w}-{n - fav_w}")
+        if verbose:
+            print(f"{label}: {w}-{n - w} | market-expected {exp:.1f}W -> z {z:+.2f} | "
+                  f"ROI {pnl:+.2f}u | agrees w/ fav {fav_agree:.0%} | "
+                  f"fav baseline {fav_w}-{n - fav_w}")
 
     # Platoon lean vs the F5 close -- the market this lean actually targets.
     # DK F5 ties push, so ties are excluded and the devigged close_p is the
@@ -363,6 +365,7 @@ def vs_market_summary(df, col=COL):
         out["platoon_f5"] = dict(n=n, w=w, exp=round(exp, 1),
                                  z=round(float(z), 2), roi_units=round(pnl, 2),
                                  pushes=pushes)
-        print(f"platoon vs F5 close: {w}-{n - w} ({pushes} push) | "
-              f"market-expected {exp:.1f}W -> z {z:+.2f} | ROI {pnl:+.2f}u")
+        if verbose:
+            print(f"platoon vs F5 close: {w}-{n - w} ({pushes} push) | "
+                  f"market-expected {exp:.1f}W -> z {z:+.2f} | ROI {pnl:+.2f}u")
     return out
