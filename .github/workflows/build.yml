@@ -62,7 +62,7 @@ jobs:
       # input: expected probable-pitcher IP plus a role-filtered, independently
       # shrunk bullpen aggregate for the balance of nine innings. A specific
       # bulk follower is never projected. This changes prediction math, so v6
-      # starts a fresh record family; all older families remain in ledger/UI
+      # starts a fresh record family; all older families remain in ledger/report
       # history but never mix into v6's weight fit or current-family report.
       MODEL_TAG: xw+plat_consol_v6
       RECORD_TAGS: xw+plat_consol_v6

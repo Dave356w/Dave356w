@@ -81,20 +81,13 @@ _RECORD_FAMILIES = {
     # another prediction-math change, so it starts its own family again.
     # v6 replaces the starter-only pitching input with a nine-inning blend of
     # expected starter workload and a role-filtered bullpen aggregate. It is a
-    # new prediction family; older tags remain in the ledger and UI history.
+    # new prediction family; older tags remain in the ledger history.
 }
 RECORD_TAGS = tuple(
     t.strip() for t in os.environ.get(
         "RECORD_TAGS", ",".join(_RECORD_FAMILIES.get(MODEL_TAG, (MODEL_TAG,)))
     ).split(",") if t.strip()
 )
-MODEL_FAMILY_TAGS = (
-    ("v2/v3", ("xw+plat_consol_v2", "xw+plat_consol_v3")),
-    ("v4", ("xw+plat_consol_v4",)),
-    ("v5", ("xw+plat_consol_v5",)),
-    ("v6", ("xw+plat_consol_v6",)),
-)
-
 STATCAST_SELECTIONS = ["pa", "k_percent", "bb_percent", "xwoba", "xba", "xslg",
                        "exit_velocity_avg", "launch_angle_avg", "hard_hit_percent"]
 
@@ -2995,22 +2988,6 @@ def _display_grades(led):
     return led[led["status"] == "graded"]
 
 
-def _model_family_grades(led):
-    """Ordered graded history by prediction-math family, including unknown tags."""
-    graded = _display_grades(led)
-    out, covered = [], set()
-    for label, tags in MODEL_FAMILY_TAGS:
-        fam = graded[graded["model_tag"].isin(tags)]
-        covered.update(tags)
-        if not fam.empty:
-            out.append((label, fam))
-    for tag in sorted(set(graded["model_tag"].dropna().astype(str)) - covered):
-        fam = graded[graded["model_tag"].astype(str) == tag]
-        if not fam.empty:
-            out.append((tag, fam))
-    return out
-
-
 # Minimum graded games in a (lean side × agree/disagree) bucket before its
 # record is trusted enough to headline the verdict; thinner buckets keep prose.
 VERDICT_CONTEXT_MIN = 10
@@ -3109,40 +3086,6 @@ def records_strip_html():
             f"<span>{inner}</span><a href='grades.html'>full ledger →</a></div>")
 
 
-def model_family_history_html(led):
-    """Compact family-by-family history without pooling incompatible math."""
-    rows = []
-    for label, fam in _model_family_grades(led):
-        rec = _rec_txt(fam["xw_full"])
-        market = "—"
-        if "close_p_home" in fam.columns and fam["close_p_home"].notna().any():
-            try:
-                from market_backfill import vs_market_summary
-                m = vs_market_summary(fam, verbose=False).get("xwOBA")
-            except Exception as e:  # noqa: BLE001
-                log(f"family vs-market summary degraded ({label}): {e!r}")
-                m = None
-            if m:
-                market = f"z {m['z']:+.2f} · {m['roi_units']:+.2f}u"
-        rows.append(
-            "<tr>"
-            f"<td>{_esc(label)}</td><td>{len(fam)}</td>"
-            f"<td>{_esc(rec)}</td><td>{_esc(market)}</td>"
-            "</tr>"
-        )
-    if not rows:
-        return ""
-    return (
-        "<div class='gr-note'>Model-family history · prediction-math families "
-        "are reported separately below and remain preserved in the ledger.</div>"
-        "<div class='gr-tablewrap'><table class='gr'><thead><tr>"
-        "<th>Family</th><th>Graded</th><th>xwOBA full</th><th>vs market</th>"
-        "</tr></thead><tbody>"
-        + "".join(rows)
-        + "</tbody></table></div>"
-    )
-
-
 def _wlt_badge(v):
     if isinstance(v, str) and v in ("W", "L", "T"):
         return f"<span class='wlt {v}'>{v}</span>"
@@ -3172,7 +3115,7 @@ def _lean_cell(lean, delta, muted=False):
     return f"<span class='muted'>{txt}</span>" if muted else txt
 
 
-def _grades_row(r, show_ml=False, show_model=False):
+def _grades_row(r, show_ml=False):
     status = str(r["status"])
     fa, fh = pd.to_numeric(r["full_away"], errors="coerce"), pd.to_numeric(r["full_home"], errors="coerce")
     if status != "graded":
@@ -3195,13 +3138,6 @@ def _grades_row(r, show_ml=False, show_model=False):
     if show_ml:
         cells += [_lean_ml_cell(r, "xw_lean")]
     cells += [final, _wlt_badge(r["xw_full"])]
-    if show_model:
-        tag = str(r.get("model_tag") or "")
-        label = next(
-            (name for name, tags in MODEL_FAMILY_TAGS if tag in tags),
-            tag.replace("xw+plat_consol_", ""),
-        )
-        cells += [_esc(label)]
     cls = " class='void'" if status == "void" else ""
     return f"<tr{cls}>" + "".join(f"<td>{c}</td>" for c in cells) + "</tr>"
 
@@ -3256,22 +3192,15 @@ def render_grades_html(built_txt):
                    + (f"<div class='gr-note'>{' · '.join(notes)}</div>" if notes else ""))
 
     show_ml = "close_home_ml" in led.columns and led["close_home_ml"].notna().any()
-    show_model = "model_tag" in led.columns and led["model_tag"].nunique(dropna=True) > 1
     heads = (["Date", "Game", "xwOBA lean"]
              + (["xw ML"] if show_ml else [])
-             + ["Final", "xw F"]
-             + (["Model"] if show_model else []))
+             + ["Final", "xw F"])
     led = led.sort_values(["game_date", "game_pk"], ascending=[False, True])
-    rows = "".join(_grades_row(r, show_ml, show_model) for _, r in led.iterrows())
+    rows = "".join(_grades_row(r, show_ml) for _, r in led.iterrows())
     table = ("<div class='gr-tablewrap'><table class='gr'><thead><tr>"
              + "".join(f"<th>{h}</th>" for h in heads)
              + f"</tr></thead><tbody>{rows}</tbody></table></div>")
-    family_history = model_family_history_html(led)
-    return html_document(
-        back + head + summary + family_history + table,
-        built_txt,
-        title="MLB lean grades",
-    )
+    return html_document(back + head + summary + table, built_txt, title="MLB lean grades")
 
 
 def render_combined_html(xw_df, pl_df, pitcher_rows_df, built_txt,

@@ -53,7 +53,7 @@ class LedgerLockTests(unittest.TestCase):
         with mock.patch.object(build_site, "RECORD_TAGS", ("xw+plat_consol_v6",)):
             self.assertEqual(set(build_site._record_grades(ledger)["game_pk"]), {7})
         self.assertEqual(
-            [label for label, _ in build_site._model_family_grades(ledger)],
+            [label for label, _ in grade_leans._model_family_grades(ledger)],
             ["v2/v3", "v4", "v5", "v6", "xw+plat_consol_v1"],
         )
 
@@ -72,7 +72,7 @@ class LedgerLockTests(unittest.TestCase):
             self.assertEqual(ledger.at[0, "close_home_ml"], -120)
             self.assertAlmostEqual(ledger.at[0, "close_p_home"], .54545)
 
-    def test_grades_page_preserves_family_history_and_row_labels(self):
+    def test_grades_page_omits_family_history_and_model_column(self):
         ledger = pd.DataFrame([
             dict(game_pk=1, game_date="2026-07-20", away="A", home="B",
                  away_sp="P1", home_sp="P2", status="graded",
@@ -83,14 +83,13 @@ class LedgerLockTests(unittest.TestCase):
                  model_tag="xw+plat_consol_v6", xw_lean="D", xw_delta=.02,
                  xw_full="L", xw_f5="L", full_away=5, full_home=3),
         ])
-        history = build_site.model_family_history_html(ledger)
-        self.assertIn("Model-family history", history)
-        self.assertIn("<td>v5</td>", history)
-        self.assertIn("<td>v6</td>", history)
-        self.assertIn("1-0 (1.000)", history)
-        self.assertIn("0-1 (0.000)", history)
-        row = build_site._grades_row(ledger.iloc[1], show_model=True)
-        self.assertIn("<td>v6</td>", row)
+        with mock.patch.object(build_site, "load_ledger_df", return_value=ledger):
+            page = build_site.render_grades_html("test build")
+        self.assertNotIn("Model-family history", page)
+        self.assertNotIn("<th>Family</th>", page)
+        self.assertNotIn("<th>Model</th>", page)
+        self.assertNotIn("<td>v5</td>", page)
+        self.assertNotIn("<td>v6</td>", page)
 
     def test_snapshot_lock_status(self):
         self.assertEqual(
