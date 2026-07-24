@@ -3,6 +3,7 @@ plain-language read, the model-vs-market verdict, and the always-shown model
 machinery.
 
 All display-only -- these guard the render layer, not the lean math."""
+import re
 import unittest
 
 import numpy as np
@@ -120,7 +121,7 @@ class RenderTests(unittest.TestCase):
 
     def test_casual_card_structure(self):
         g, _ = self._cards()
-        html = b.cmb_card(g, "9:00 AM PT", None)
+        html = b.cmb_card(g, None)
         self.assertIn("class='sl h'", html)          # hitter percentile bar
         self.assertIn("class='sl p'", html)          # starter percentile bar
         self.assertIn("Standouts", html)
@@ -132,7 +133,7 @@ class RenderTests(unittest.TestCase):
     def test_read_names_the_opposing_starter(self):
         # away offense faces the HOME starter; home offense the AWAY starter.
         g, _ = self._cards()
-        read = b.cmb_card(g, "9:00 AM PT", None).split("class='read'")[1].split("</p>")[0]
+        read = b.cmb_card(g, None).split("class='read'")[1].split("</p>")[0]
         self.assertIn("LAD's bats grade", read)
         self.assertIn("against Gallen", read)       # LAD faces home SP Gallen
         self.assertIn("against Glasnow", read)      # ARI faces away SP Glasnow
@@ -141,18 +142,17 @@ class RenderTests(unittest.TestCase):
         # The model machinery (formerly gated behind an Analyst toggle) is now
         # always part of the card; the .mach classes remain as layout hooks.
         g, _ = self._cards()
-        html = b.cmb_card(g, "9:00 AM PT", None)
-        self.assertIn("Δxw", html)
+        html = b.cmb_card(g, None)
         self.assertIn("<span class='mach'>", html)
         self.assertIn("spstats mach", html)
         # The redundant pct-lean suffix and the secondary xwOBA consensus line
-        # were removed; the lean pill's Δxw is the single readout.
+        # were removed; the strength word is the card's single lean readout.
         self.assertNotIn("pct lean", html)
         self.assertNotIn("xwOBA →", html)
 
     def test_pitcher_card_shows_xera_not_removed_lenses(self):
         g, _ = self._cards()
-        html = b.cmb_card(g, "9:00 AM PT", None)
+        html = b.cmb_card(g, None)
         self.assertIn("xERA", html)                 # xERA cell present
         self.assertIn("season 3.6", html)           # ...vs season ERA
         # The generic .mach display hook must not stack the three starter
@@ -169,8 +169,8 @@ class RenderTests(unittest.TestCase):
 
     def test_verdict_agree_and_disagree(self):
         g_agree, g_dis = self._cards()
-        self.assertIn("agrees with the market", b.cmb_card(g_agree, "x", None))
-        dis = b.cmb_card(g_dis, "x", None)
+        self.assertIn("agrees with the market", b.cmb_card(g_agree, None))
+        dis = b.cmb_card(g_dis, None)
         self.assertIn("verdict edge", dis)
         self.assertIn("underdog", dis)
 
@@ -194,24 +194,192 @@ class RenderTests(unittest.TestCase):
     def test_no_lean_pill_when_edge_missing(self):
         g, _ = self._cards()
         g["away"]["xw_edge"] = None
-        self.assertIn("no lean", b.cmb_card(g, "x", None))
+        self.assertIn("no lean", b.cmb_card(g, None))
 
     def test_exact_zero_delta_is_neutral_not_home(self):
         g, _ = self._cards()
         g["away"]["xw_edge"] = .012345
         g["home"]["xw_edge"] = .012345
-        html = b.cmb_card(g, "x", None)
+        html = b.cmb_card(g, None)
         self.assertIn("no lean", html)
-        self.assertIn("Δxw 0.000", html)
         self.assertNotIn("<span class='lt'>ARI</span>", html)
+        self.assertNotIn("<span class='lt'>LAD</span>", html)
 
-    def test_nonzero_sub_display_delta_is_not_rendered_as_zero(self):
+    def test_nonzero_sub_display_delta_still_names_a_favorite(self):
+        # A delta too small to have printed at three decimals is still a lean:
+        # the pill must name the side, not collapse to the neutral "no lean".
         g, _ = self._cards()
         g["away"]["xw_edge"] = .01234567891
         g["home"]["xw_edge"] = .01234567890
-        html = b.cmb_card(g, "x", None)
-        self.assertIn("Δxw &lt;0.001", html)
+        html = b.cmb_card(g, None)
         self.assertNotIn("no lean", html)
+        self.assertIn("<span class='lt'>ARI</span>", html)
+
+
+class LeanPillTests(unittest.TestCase):
+    """The pill shows the ledger-ranked strength word only. |Δxw| itself lives
+    in the ledger (xw_net / xw_delta, written on every row), so it is relocated
+    rather than discarded -- the card is not the record."""
+
+    def _card(self, **over):
+        r = RenderTests()
+        g, _ = r._cards()
+        for k, v in over.items():
+            g[k[:4]]["xw_edge"] = v
+        return b.cmb_card(g, None)
+
+    def test_pill_keeps_strength_word_without_the_number(self):
+        html = self._card()
+        self.assertIn("<span class='ls'>strong</span>", html)
+        self.assertIn("class='lean strong'", html)
+        self.assertNotIn("Δxw", html)
+        self.assertNotIn("<span class='mach'> · Δ", html)
+
+    def test_neutral_pill_carries_no_number_either(self):
+        html = self._card(away=None)
+        self.assertIn("<span class='ls'>no lean</span>", html)
+        self.assertNotIn("Δxw", html)
+
+    def test_delta_styling_hook_is_gone_from_css(self):
+        # .ld styled the removed delta readout; .lean .ls .mach styled its
+        # mono suffix. Neither has markup left to hook.
+        self.assertNotIn(".lean .ld{", b.CSS)
+        self.assertNotIn(".lean .ls .mach{", b.CSS)
+
+
+def _mobile_rules():
+    """{selector: {prop: value}} for the single max-width:540px block.
+
+    There must be exactly one such block and it must be last in the sheet:
+    media queries add no specificity, so a phone rule declared above its
+    desktop counterpart loses the cascade. `.sl` and `td.pct` were silently
+    dead that way before this block was consolidated."""
+    blocks = b.CSS.split("@media (max-width:540px){")
+    assert len(blocks) == 2, f"expected 1 phone block, found {len(blocks) - 1}"
+    body = blocks[1].split("\n}")[0]
+    body = re.sub(r"/\*.*?\*/", "", body, flags=re.S)
+    rules = {}
+    for sel, decls in re.findall(r"([^{}]+)\{([^{}]*)\}", body):
+        props = {}
+        for d in decls.split(";"):
+            if ":" in d:
+                k, _, v = d.partition(":")
+                props[k.strip()] = v.strip()
+        rules[sel.strip()] = props
+    return rules
+
+
+class MobileLayoutTests(unittest.TestCase):
+    """Responsive rules the mobile card depends on. These assert the CSS
+    contract, not pixel output -- the render itself was measured in a headless
+    Chromium at 320/360/390/414/540px, where the lineup table went from
+    136-206px of horizontal overflow to 0 at every phone width."""
+
+    def _html(self):
+        r = RenderTests()
+        g, _ = r._cards()
+        return b.cmb_card(g, None)
+
+    def test_four_odds_cells_share_one_unwrapped_row(self):
+        html = self._html()
+        odds = html.split("<div class='modds'>")[1].split("</div><div class='verdict")[0]
+        self.assertEqual(odds.count("<div class='mcell'>"), 4)
+        # One flex row that never wraps; cells shrink together instead.
+        self.assertIn(".modds{display:flex}", b.CSS)
+        self.assertNotIn("flex-wrap:wrap", b.CSS.split(".modds{")[1].split("}")[0])
+        self.assertIn(".mcell{flex:1 1 0;min-width:0", b.CSS)
+        # The old mobile rule broke the row into 45%-wide pairs.
+        self.assertNotIn("flex:1 1 45%", b.CSS)
+
+    def test_verdict_is_its_own_full_width_row(self):
+        html = self._html()
+        # Verdict sits outside .modds, as a sibling row under it.
+        self.assertIn("</div><div class='verdict", html)
+        self.assertNotIn("mcell verdict", html)
+        # ...at every width: no margin-left:auto / max-width squeeze left over.
+        verdict_css = b.CSS.split("\n.verdict{")[1].split("}")[0]
+        self.assertNotIn("margin-left:auto", verdict_css)
+        self.assertNotIn("max-width", verdict_css)
+
+    def test_no_per_card_build_stamp(self):
+        html = self._html()
+        self.assertNotIn("as of build", html)
+        self.assertNotIn("mcell note", html)
+        # The page header still carries the build time exactly once.
+        self.assertIn("built 9:00 AM PT", b._legend_head("MLB matchup leans", "9:00 AM PT"))
+
+    def test_lineups_open_by_default(self):
+        html = self._html()
+        self.assertEqual(html.count("<details class='lineup' open>"), 2)
+        self.assertNotIn("<details class='lineup'>", html)
+
+    def test_lineup_table_has_no_mobile_scroll_floor(self):
+        # A 460px min-width forced horizontal scroll inside a ~314px card.
+        self.assertNotIn("min-width:460px", b.CSS)
+        m = _mobile_rules()
+        self.assertEqual(m["table.lu th,table.lu td"]["padding"], "4px 3px")
+        # The bar shrinks so the name column has room to fit on one line.
+        self.assertLess(int(m[".sl"]["width"].rstrip("px")), 88)
+        # The name is the one elastic column: it wraps rather than truncating,
+        # and the selector must outrank `table.lu td`'s nowrap (0,1,2).
+        nm = m["table.lu td.nm,table.lu td.n"]
+        self.assertEqual(nm["white-space"], "normal")
+        self.assertEqual(nm["max-width"], "none")
+
+    def test_mobile_trims_card_padding(self):
+        m = _mobile_rules()
+        # Each phone padding must be tighter than the desktop rule it overrides.
+        for sel, desktop_first in ((".gamehead", 12), (".side", 12),
+                                   (".read", 12), (".mcell", 7)):
+            pad = m[sel]["padding"].split()
+            self.assertLessEqual(int(pad[0].rstrip("px")), desktop_first,
+                                 f"{sel} vertical padding not reduced")
+            self.assertLess(int(pad[1].rstrip("px")), 16,
+                            f"{sel} horizontal padding not reduced")
+
+    def test_gamehead_wraps_teams_then_time_and_lean(self):
+        m = _mobile_rules()
+        self.assertEqual(m[".teams"]["flex"], "1 1 100%")     # teams own a line
+        self.assertEqual(m[".lean"]["margin-left"], "auto")   # lean right of time
+        # The old rule pinned the lean hard-left under the teams.
+        self.assertNotIn(".lean{margin-left:0}", b.CSS)
+
+
+class StarterBlockTests(unittest.TestCase):
+    """`.sp` was left unclosed, nesting the spotlight and the lineup table
+    inside the starter block. `.sp .nm` (0,2,0) then outranked `table.lu td`
+    (0,1,2) and every hitter name rendered at the starter's 16px/700 instead
+    of the table's 12.5px/400 -- which is what made the rows tall enough to
+    need horizontal scroll."""
+
+    def _side(self):
+        r = RenderTests()
+        g, _ = r._cards()
+        return b.cmb_card(g, None).split("<section class='side'>")[1] \
+                                 .split("</section>")[0]
+
+    def test_div_tags_balance_inside_each_side(self):
+        side = self._side()
+        self.assertEqual(len(re.findall(r"<div\b", side)),
+                         len(re.findall(r"</div>", side)))
+
+    def test_lineup_is_not_nested_inside_the_starter_block(self):
+        side = self._side()
+        # Everything from `.sp` up to the lineup must close out, so the
+        # <details> opens as a sibling of `.sp` rather than a descendant.
+        head = side[side.index("<div class='sp'>"):side.index("<details class='lineup'")]
+        self.assertEqual(len(re.findall(r"<div\b", head)),
+                         len(re.findall(r"</div>", head)),
+                         "div.sp still open where the lineup begins")
+
+    def test_starter_name_rule_stays_scoped_to_the_starter(self):
+        # The 16px/700 rule is the starter's alone; the hitter cell keeps its
+        # own smaller sans face. That rule has to be qualified -- a bare
+        # `td.nm` (0,1,1) loses to `table.lu td`'s mono (0,1,2), which is what
+        # closing div.sp exposed.
+        self.assertIn(".sp .nm{font:700 16px/1.2 var(--sans)}", b.CSS)
+        self.assertIn("table.lu td.nm{font:400 12.5px/1.4 var(--sans)", b.CSS)
+        self.assertNotIn("\ntd.nm{font:", b.CSS)
 
 
 if __name__ == "__main__":

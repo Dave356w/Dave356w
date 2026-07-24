@@ -2420,22 +2420,23 @@ def _market_fav(odds, away_abbr, home_abbr):
 
 
 def _verdict_html(fav, odds, away_abbr, home_abbr, ctx=None):
-    """Model-vs-market verdict chip. Highlights the disagreement case (model on
+    """Model-vs-market verdict row. Highlights the disagreement case (model on
     the underdog) -- the only bettable signal -- and stays muted on agreement.
     `ctx` is market_context_records(): where available it tails each verdict
     with the xwOBA lean's historical record in this exact spot (lean side ×
-    agree/disagree), else falls back to prose."""
+    agree/disagree), else falls back to prose. Rendered as its own full-width
+    row under the odds so the prose never squeezes the four market numbers."""
     ctx = ctx or {}
     mkt = _market_fav(odds, away_abbr, home_abbr)
     if fav is None or mkt is None:
-        return ("<div class='mcell verdict'><div class='l'>Model vs market</div>"
+        return ("<div class='verdict'><div class='l'>Model vs market</div>"
                 "<div class='vt'>No market yet.</div></div>")
     side = "home" if fav == home_abbr else "away"
     if fav == mkt:
         rec = ctx.get((side, "agree"))
         tail = (f"When the model leans the {side} favorite: <b>{rec}</b> in the ledger."
                 if rec else "No edge on the line here.")
-        return ("<div class='mcell verdict'><div class='l'>Model vs market</div>"
+        return ("<div class='verdict'><div class='l'>Model vs market</div>"
                 f"<div class='vt'>Model agrees with the market — {_esc(fav)} favored. "
                 f"{tail}</div></div>")
     price = (odds.get("home_ml") if fav == home_abbr else odds.get("away_ml"))
@@ -2443,7 +2444,7 @@ def _verdict_html(fav, odds, away_abbr, home_abbr, ctx=None):
     rec = ctx.get((side, "disagree"))
     tail = (f"when the model leans the {side} underdog: <b>{rec}</b> in the ledger."
             if rec else "the spot the record is built to test.")
-    return ("<div class='mcell verdict edge'><div class='l'>Model vs market · disagree</div>"
+    return ("<div class='verdict edge'><div class='l'>Model vs market · disagree</div>"
             f"<div class='vt'>Model leans the underdog <b>{_esc(fav)}{px}</b> against the "
             f"market's {_esc(mkt)} — {tail}</div></div>")
 
@@ -2543,28 +2544,35 @@ def _side_html(sp_abbr, d, league_baseline):
         f"<div class='role'>faces the {_esc(d['opp_abbr'])} lineup"
         f"<span class='mach'> · {comp}{padv}{pitching_note}</span></div>"
         f"<div class='sp-bars'>{bars}</div>"
-        f"<div class='spstats mach'>{stats}</div>"
+        # `.sp` closes here. It was previously left open, which nested the
+        # spotlight and the whole lineup table inside the starter block and let
+        # `.sp .nm` (0,2,0) outrank `table.lu td` (0,1,2) -- every hitter name
+        # rendered at the starter's 16px/700 instead of the table's 12.5px/400.
+        f"<div class='spstats mach'>{stats}</div></div>"
         f"{_spotlight_html(d['hitters'])}"
         f"{_lineup_details(d)}"
         f"</section>")
 
 
-def _market_html(o, away_abbr, home_abbr, built_short, fav=None, ctx=None):
+def _market_html(o, away_abbr, home_abbr, fav=None, ctx=None):
+    """Odds strip: the four market numbers share one horizontal row at every
+    width (`.modds`), with the verdict on its own full-width row beneath. No
+    per-card build stamp -- the page header carries the build time once, and
+    every card on the page is built from the same fetch."""
     o = o or {}
-    def _mlcell(prefix, lab, cur, opn, mach=False):
+    def _mlcell(prefix, lab, cur, opn):
         sub = f" <span class='mv'>← {_fmt_ml(opn)} open</span>" if opn is not None else ""
-        cls = "mcell mach" if mach else "mcell"
-        return (f"<div class='{cls}'><div class='l'>{prefix} · {lab}</div>"
+        return (f"<div class='mcell'><div class='l'>{prefix} · {lab}</div>"
                 f"<div class='v'>{_fmt_ml(cur)}{sub}</div></div>")
     tot = f"o/u {o['total']:g}" if o.get("total") is not None else "—"
     ph = f"{o['p_home'] * 100:.1f}%" if o.get("p_home") is not None else "—"
     return (
-        "<div class='market'>"
+        "<div class='market'><div class='modds'>"
         + _mlcell("DK ML", away_abbr, o.get("away_ml"), o.get("open_away_ml"))
         + _mlcell("DK ML", home_abbr, o.get("home_ml"), o.get("open_home_ml"))
         + f"<div class='mcell'><div class='l'>Total</div><div class='v'>{tot}</div></div>"
         + f"<div class='mcell'><div class='l'>Implied {home_abbr} (devig)</div><div class='v'>{ph}</div></div>"
-        + f"<div class='mcell note mach'><div class='l'>Market</div><div class='v'>as of build {built_short}</div></div>"
+        + "</div>"
         + _verdict_html(fav, o, away_abbr, home_abbr, ctx)
         + "</div>")
 
@@ -2626,7 +2634,14 @@ def _club_logo(team_id, ctx):
     return f"<span class='clogo t{tid}' aria-hidden='true'></span>" if tid in ids else ""
 
 
-def cmb_card(g, built_short, strength_scale=None, ctx=None):
+# Neutral pill: no favorite named. Shared by the exact-tie case and the
+# missing-edge case -- both mean "the model has no side here", and neither
+# may render as a 0.0 tie on some team.
+NO_LEAN_PILL = ("<span class='lean nolean'><span class='lk'>lean</span>"
+                "<span class='lt'>—</span><span class='ls'>no lean</span></span>")
+
+
+def cmb_card(g, strength_scale=None, ctx=None):
     if g.get("unavailable"):
         game_no = f" <span class='game-no'>{_esc(g['game_label'])}</span>" if g.get("game_label") else ""
         when = " · ".join(x for x in (g.get("time_pt"), g.get("venue")) if x)
@@ -2649,27 +2664,23 @@ def cmb_card(g, built_short, strength_scale=None, ctx=None):
     # a = away SP -> his xw_edge is the HOME offense edge. When either edge is
     # missing there is no defined lean: neutral "no lean" pill (no favorite),
     # never a fabricated 0.0 tie. The strength word ranks |Δxw| against the
-    # ledger's lean-magnitude history (display-only).
+    # ledger's lean-magnitude history (display-only). The pill carries that word
+    # alone -- |Δxw| itself is a ledger column (xw_net / xw_delta, written on
+    # every row), so dropping it from the card moves the number rather than
+    # deleting it.
     fav = strength_word = read_html = None
+    lean_html = NO_LEAN_PILL
     if a["xw_edge"] is not None and h["xw_edge"] is not None:
         home_off, away_off = a["xw_edge"], h["xw_edge"]
         net = home_off - away_off
-        if net == 0:
-            lean_html = ("<span class='lean nolean'><span class='lk'>lean</span>"
-                         "<span class='lt'>—</span><span class='ls'>no lean"
-                         "<span class='mach'> · Δxw 0.000</span></span></span>")
-        else:
+        if net != 0:
             delta = abs(net)
             fav = home_abbr if net > 0 else away_abbr
             strength_word, _ = lean_strength(delta, strength_scale)
             lean_html = (f"<span class='lean {strength_word or ''}'><span class='lk'>lean</span>"
                          f"<span class='lt'>{fav}</span>"
-                         f"<span class='ls'>{strength_word or 'lean'}"
-                         f"<span class='mach'> · Δxw {delta3(delta)}</span></span></span>")
+                         f"<span class='ls'>{strength_word or 'lean'}</span></span>")
             read_html = _read_sentence(away_abbr, home_abbr, a, h, fav, strength_word)
-    else:
-        lean_html = ("<span class='lean nolean'><span class='lk'>lean</span>"
-                     "<span class='lt'>—</span><span class='ls'>no lean</span></span>")
     when = " · ".join(x for x in (g.get("time_pt"), g.get("venue")) if x)
     game_no = f" <span class='game-no'>{_esc(g['game_label'])}</span>" if g.get("game_label") else ""
     return (
@@ -2681,7 +2692,7 @@ def cmb_card(g, built_short, strength_scale=None, ctx=None):
         + lean_html
         + "</div>"
         + (read_html or "")
-        + _market_html(g.get('odds'), away_abbr, home_abbr, built_short, fav, ctx)
+        + _market_html(g.get('odds'), away_abbr, home_abbr, fav, ctx)
         + f"<div class='sides'>{_side_html(away_abbr, a, g['league_baseline'])}"
         + f"{_side_html(home_abbr, h, g['league_baseline'])}</div>"
         + "</article>")
@@ -2706,10 +2717,10 @@ def _game_order_key(game):
     )
 
 
-def build_combined(games, built_short, strength_scale=None, ctx=None):
+def build_combined(games, strength_scale=None, ctx=None):
     cards = sorted(games, key=_game_order_key)
     return ("<div class='grid'>"
-            + "".join(cmb_card(g, built_short, strength_scale, ctx) for g in cards)
+            + "".join(cmb_card(g, strength_scale, ctx) for g in cards)
             + "</div>")
 
 
@@ -2991,19 +3002,22 @@ body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 var(--sans);
 .lean .lk{font:600 10px/1 var(--sans);letter-spacing:.14em;text-transform:uppercase;color:rgba(var(--lean),1)}
 .lean .lt{font:800 15px/1 var(--sans)}
 .lean.nolean{border-color:var(--line);background:var(--surface-2)}
-.lean.nolean .lk,.lean.nolean .lt,.lean.nolean .ld{color:var(--muted)}
+.lean.nolean .lk,.lean.nolean .lt{color:var(--muted)}
 .card-note{display:flex;flex-direction:column;gap:4px;padding:14px 16px 16px;color:var(--muted)}
 .card-note b{color:var(--ink);font-size:13px}.card-note span{font-size:12px}
-.lean .ld{font:500 12px/1 var(--mono);color:var(--muted);font-variant-numeric:tabular-nums}
 
 /* ---------- market strip ---------- */
-.market{display:flex;flex-wrap:wrap;border-bottom:1px solid var(--line-2);background:var(--surface-2)}
-.mcell{padding:7px 16px;border-right:1px solid var(--line-2);min-width:110px}
-.mcell:last-child{border-right:0;margin-left:auto;min-width:0}
-.mcell .l{font:600 9px/1.4 var(--sans);letter-spacing:.14em;text-transform:uppercase;color:var(--faint)}
+/* Two stacked rows: the four odds numbers, then the verdict. .modds never
+   wraps -- the cells share the width evenly and shrink together, so the strip
+   reads as one horizontal line of numbers at phone widths too. */
+.market{border-bottom:1px solid var(--line-2);background:var(--surface-2)}
+.modds{display:flex}
+.mcell{flex:1 1 0;min-width:0;padding:7px 16px;border-right:1px solid var(--line-2)}
+.mcell:last-child{border-right:0}
+.mcell .l,.verdict .l{font:600 9px/1.4 var(--sans);letter-spacing:.14em;
+  text-transform:uppercase;color:var(--faint)}
 .mcell .v{font:500 13px/1.4 var(--mono);font-variant-numeric:tabular-nums}
 .mcell .v .mv{color:var(--faint);font-size:11px}
-.mcell.note .v{color:var(--faint);font-size:11px;padding-top:3px}
 
 /* ---------- two sides ---------- */
 .sides{display:grid;grid-template-columns:1fr 1fr}
@@ -3065,19 +3079,6 @@ tr.low td{color:var(--muted)}
 
 td.bar{width:86px;padding:4px 8px 4px 2px}
 
-@media (max-width:540px){
-  .gamehead{gap:6px 10px}
-  .teams{font-size:19px}
-  .lean{margin-left:0}
-  .mcell{min-width:0;flex:1 1 45%}
-  .lg-notes{grid-template-columns:1fr}
-  .lg-notes .wide{grid-column:auto}
-  td.n{max-width:none}
-  table.lu{min-width:460px}
-  .spstats{overflow-x:auto;-webkit-overflow-scrolling:touch}
-  .stat{min-width:88px}
-}
-
 /* ============================================================
    Card layer: percentile bars, plain-language read, verdict, and the
    full model machinery (always shown).
@@ -3090,7 +3091,6 @@ td.bar{width:86px;padding:4px 8px 4px 2px}
 .read .warmtx{color:rgba(var(--warm),1)} .read .cooltx{color:rgba(var(--cool),1)}
 
 .lean .ls{font:600 11px/1 var(--sans);letter-spacing:.02em;color:var(--muted);text-transform:uppercase}
-.lean .ls .mach{color:var(--faint);font-family:var(--mono);text-transform:none;font-weight:500}
 .lean.slight{border-color:rgba(var(--amberbg),.35);background:rgba(var(--amberbg),.09)}
 .lean.strong{border-color:rgba(var(--amberbg),.75);background:rgba(var(--amberbg),.24)}
 
@@ -3118,9 +3118,9 @@ td.bar{width:86px;padding:4px 8px 4px 2px}
   border:1px solid var(--line-2);border-radius:20px;padding:2px 9px;font-variant-numeric:tabular-nums}
 .spot .pill b{color:rgba(var(--warm),1)}
 
-/* model-vs-market verdict chip */
-.verdict{margin-left:auto;border-right:0;display:flex;flex-direction:column;justify-content:center;
-  min-width:210px;max-width:340px;border-left:3px solid var(--line)}
+/* model-vs-market verdict — its own full-width row beneath the odds, at every
+   width. The prose grows downward instead of stealing width from the numbers. */
+.verdict{padding:7px 16px;border-top:1px solid var(--line-2);border-left:3px solid var(--line)}
 .verdict .l{color:var(--muted)} .verdict .vt{font:600 12px/1.4 var(--sans);color:var(--muted);margin-top:2px}
 .verdict.edge{border-left-color:rgba(var(--lean),1);background:rgba(var(--amberbg),.10)}
 .verdict.edge .l{color:rgba(var(--lean),1)} .verdict.edge .vt{color:var(--ink)}
@@ -3128,7 +3128,10 @@ td.bar{width:86px;padding:4px 8px 4px 2px}
 /* hitter row: percentile column + name cell */
 td.pct{width:150px;white-space:nowrap}
 table.lu td.nm,table.lu th.nm,table.lu td.pos{text-align:left}
-td.nm{font:400 12.5px/1.4 var(--sans);max-width:170px;overflow:hidden;text-overflow:ellipsis}
+/* Qualified so it outranks `table.lu td`'s mono face (0,1,2): hitter names are
+   sans, the numbers around them stay mono. A bare `td.nm` never won this. */
+table.lu td.nm{font:400 12.5px/1.4 var(--sans);max-width:170px;
+  overflow:hidden;text-overflow:ellipsis}
 td.nm .b{font:400 9px/1 var(--mono);color:var(--muted);margin-left:4px}
 td.nm .adv{color:rgba(var(--warm),1);font-size:10px;margin-left:2px}
 
@@ -3143,10 +3146,46 @@ tr.mach{display:table-row}
    xwOBA-against, K-BB%, and xERA vertically. */
 .spstats.mach{display:flex}
 
+/* ============================================================
+   Phone layout (single breakpoint, last in the cascade)
+   ------------------------------------------------------------
+   One block, deliberately placed after every base rule: media queries add no
+   specificity, so a mobile override declared earlier than its desktop
+   counterpart silently loses (.sl and td.pct did exactly that). Keep new
+   phone rules here.
+   ============================================================ */
 @media (max-width:540px){
-  td.nm{max-width:none}
-  .verdict{margin-left:0;min-width:0;max-width:none;border-left:0;
-    border-top:1px solid var(--line-2);width:100%}
+  /* Tighter chrome: the card gutters, not the content, give up the width. */
+  body{padding:14px 10px 44px}
+  .gamehead{gap:5px 9px;padding:10px 12px 9px}
+  /* Teams take their own line; time and lean share the next one, lean right. */
+  .teams{flex:1 1 100%;font-size:19px}
+  .when{font-size:11.5px}
+  .lean{margin-left:auto;padding:3px 9px}
+  .read{padding:10px 12px}
+  .side{padding:10px 12px 12px}
+  .mcell{padding:6px 7px}
+  .mcell .l{font-size:8px;letter-spacing:.04em}
+  .mcell .v{font-size:12px}
+  .mcell .v .mv{display:block;font-size:9.5px}
+  .verdict{padding:7px 12px}
+  .lg-notes{grid-template-columns:1fr}
+  .lg-notes .wide{grid-column:auto}
+  .spstats{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  .stat{min-width:88px}
+  /* Lineup fits inside the card instead of scrolling: trim the gutters, shrink
+     the percentile bar, and let the name -- the one elastic column -- wrap
+     instead of truncating. Every column the desktop card shows is kept. */
+  table.lu th,table.lu td{padding:4px 3px}
+  /* `table.lu td` is (0,1,2); a bare `td.nm` is (0,1,1) and loses the
+     white-space battle no matter where it sits. Match the qualifier. */
+  table.lu th{white-space:normal}
+  table.lu td.nm,table.lu td.n{max-width:none;white-space:normal}
+  td.ord,table.lu th:first-child{width:18px;padding-left:0}
+  td.pct{width:auto}
+  td.pos{font-size:9.5px}
+  .sl{width:46px}
+  .pn{margin-left:5px;font-size:10px}
 }
 """
 
@@ -3511,11 +3550,10 @@ def render_combined_html(xw_df, pl_df, pitcher_rows_df, built_txt,
         inner = head + "<div class='legend'><div class='lg-title'>No paired probables yet — " \
                        "probables/lineups not posted. Check back closer to first pitch.</div></div>" + footer
         return html_document(inner, built_txt)
-    built_short = built_txt.split("·")[0].strip()
     strength_scale = lean_strength_scale()
     logo_assets, logo_css = _logo_assets(games)
     ctx = {**(market_context_records() or {}), "logo_ids": set(logo_assets)}
-    body = logo_css + head + build_combined(games, built_short, strength_scale, ctx) + footer
+    body = logo_css + head + build_combined(games, strength_scale, ctx) + footer
     return html_document(body, built_txt)
 
 
