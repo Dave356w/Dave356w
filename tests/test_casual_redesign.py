@@ -196,6 +196,23 @@ class RenderTests(unittest.TestCase):
         g["away"]["xw_edge"] = None
         self.assertIn("no lean", b.cmb_card(g, "x", None))
 
+    def test_exact_zero_delta_is_neutral_not_home(self):
+        g, _ = self._cards()
+        g["away"]["xw_edge"] = .012345
+        g["home"]["xw_edge"] = .012345
+        html = b.cmb_card(g, "x", None)
+        self.assertIn("no lean", html)
+        self.assertIn("Δxw 0.000", html)
+        self.assertNotIn("<span class='lt'>ARI</span>", html)
+
+    def test_nonzero_sub_display_delta_is_not_rendered_as_zero(self):
+        g, _ = self._cards()
+        g["away"]["xw_edge"] = .01234567891
+        g["home"]["xw_edge"] = .01234567890
+        html = b.cmb_card(g, "x", None)
+        self.assertIn("Δxw &lt;0.001", html)
+        self.assertNotIn("no lean", html)
+
 
 if __name__ == "__main__":
     unittest.main()

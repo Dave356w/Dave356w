@@ -142,7 +142,30 @@ uses the PA-weighted pool mean, and the unweighted dispersion uses the
 unweighted pool mean. The estimator no longer consumes the shrinkage target;
 `sigma²`, `tau²`, and `K = sigma²/tau²` are properties of the player pool.
 The league xwOBA remains the target when each resulting player estimate is
-shrunk. This changes both prediction math and `|xw_net|` units, so v7 starts
+shrunk.
+
+The same v7 draft also removes two downstream discretization artifacts:
+
+- **Full precision through the decision.** League anchors, player/team
+  aggregates, workload estimates, matchup values, and xwOBA/OPS edges retain
+  their floating-point precision through lean selection. Three-decimal card
+  formatting happens only for display; dumps and ledger model fields retain
+  full precision. A nonzero delta too small for the card's three-place display
+  is shown as `<0.001`, never as `0.000`.
+- **A zero is an abstention.** An exact zero xwOBA or OPS delta produces no
+  lean; it is not assigned to the home team. Its consensus is `NA` and grading
+  leaves that lens blank.
+
+Posted lineups are authoritative even when a call-up is absent from the season
+Savant leaderboard. The player remains in his posted batting-order slot and
+receives the active team's PA-weighted xwOBA as a transparent fallback
+(`xwOBA_team_backfill`); because that value is already a team aggregate, it is
+not run through player-level shrinkage again. Per-side backfill counts are
+carried from `lineup_resolution_audit.csv` into the lean dump and ledger audit
+columns. Other available player data, including StatsAPI bio and handedness
+splits, continues through the normal path.
+
+Together these changes alter prediction math and `|xw_net|` units, so v7 starts
 new `RECORD_TAGS` and `SCALE_TAGS` families without rewriting older rows.
 
 ## Files

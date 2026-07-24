@@ -57,6 +57,9 @@ REQUEST_DELAY = 0.25
 
 # Column carrying a hitter's 1-9 batting-order slot through the pipeline.
 BATTING_ORDER_COL = "batting_order"
+# True only for a posted hitter who is absent from the season Savant
+# leaderboard and therefore carries the active team's PA-weighted xwOBA.
+XWOBA_TEAM_BACKFILL_COL = "xwOBA_team_backfill"
 # Expected plate appearances per game by batting-order slot. A lineup turns over
 # from the top, so the leadoff man bats ~4.6 times while the 9-hole bats ~3.8 --
 # roughly a 22% spread in in-game exposure across the order. We weight lineup
@@ -539,24 +542,29 @@ def load_recent_start_era(ids, limit=RECENT_STARTS):
             "starts": len(starts),
             # Average innings per recent start -- the opener signal. Openers are
             # credited a game started but pitch ~1 inning, so this runs low.
-            "avg_ip": round(outs / 3.0 / len(starts), 2) if starts else np.nan,
+            "avg_ip": (outs / 3.0 / len(starts)) if starts else np.nan,
             "season_starts": len(all_starts),
-            "season_avg_ip": round(
-                season_start_outs / 3.0 / len(all_starts), 2
-            ) if all_starts else np.nan,
+            "season_avg_ip": (
+                season_start_outs / 3.0 / len(all_starts)
+                if all_starts else np.nan
+            ),
             # The last ten appearances describe the pitcher's current role. A
             # short-relief profile lets us recognize a newly named opener even
             # when he has only one prior official start.
             "appearances": len(role_apps),
             "recent_starts": recent_starts,
-            "relief_share": round(
-                (len(role_apps) - recent_starts) / len(role_apps), 2
-            ) if role_apps else np.nan,
-            "median_ip": round(
-                float(np.median([a["outs"] for a in role_apps])) / 3.0, 2
-            ) if role_apps else np.nan,
-            "p80_pitches": round(float(np.percentile(pitch_counts, 80)), 1)
-            if pitch_counts else np.nan,
+            "relief_share": (
+                (len(role_apps) - recent_starts) / len(role_apps)
+                if role_apps else np.nan
+            ),
+            "median_ip": (
+                float(np.median([a["outs"] for a in role_apps])) / 3.0
+                if role_apps else np.nan
+            ),
+            "p80_pitches": (
+                float(np.percentile(pitch_counts, 80))
+                if pitch_counts else np.nan
+            ),
             "pitch_count_appearances": len(pitch_counts),
             "stretched_appearances": stretched,
         }
@@ -618,15 +626,36 @@ def roster_lineup(team_id, batter_stat):
                   key=lambda i: (batter_stat[i].get("PA") or 0), reverse=True)
 
 
+def team_batter_xwoba(team_id, batter_stat, league_fallback=np.nan):
+    """PA-weighted xwOBA for Savant-listed active hitters on one team.
+
+    Used only when a posted hitter is absent from the Savant leaderboard.
+    The league prior is a last resort when no rostered hitter has a usable
+    xwOBA/PA pair.
+    """
+    vals, weights = [], []
+    for pid in roster_lineup(team_id, batter_stat):
+        stat = batter_stat.get(pid) or {}
+        xw = pd.to_numeric(stat.get("xwOBA"), errors="coerce")
+        pa = pd.to_numeric(stat.get("PA"), errors="coerce")
+        if pd.notna(xw) and pd.notna(pa) and float(pa) > 0:
+            vals.append(float(xw))
+            weights.append(float(pa))
+    if vals:
+        return float(np.average(vals, weights=weights))
+    fallback = pd.to_numeric(league_fallback, errors="coerce")
+    return float(fallback) if pd.notna(fallback) else np.nan
+
+
 def fill_lineup_from_roster(team_id, posted_ids, batter_stat, target_size=LINEUP_SIZE):
-    """Keep valid posted hitters in order; fill only missing slots by roster PA."""
+    """Keep posted hitters in order; fill only missing slots by roster PA."""
     resolved, seen = [], set()
     for pid in posted_ids or []:
         try:
             pid = int(pid)
         except Exception:
             continue
-        if pid in batter_stat and pid not in seen:
+        if pid not in seen:
             resolved.append(pid); seen.add(pid)
         if len(resolved) >= target_size:
             return resolved[:target_size]
@@ -638,26 +667,55 @@ def fill_lineup_from_roster(team_id, posted_ids, batter_stat, target_size=LINEUP
     return resolved[:target_size]
 
 
-def resolve_lineup(game_pk, side, team_id, batter_stat, return_meta=False):
-    """posted (>=9 valid) / partial_filled (1-8 kept, rest filled) / projected (0)."""
+def resolve_lineup(game_pk, side, team_id, batter_stat, return_meta=False,
+                   league_xwoba=np.nan):
+    """Resolve the posted order first, then fill only genuinely open slots.
+
+    A posted player missing from the season Savant leaderboard is retained and
+    assigned the active team's PA-weighted xwOBA. That team aggregate is marked
+    so the downstream player-level shrinkage step does not shrink it again.
+    """
     away_ids, home_ids = gf_lineups(game_pk)
     raw = away_ids if side == "away" else home_ids
-    valid_posted, seen = [], set()
+    posted, seen = [], set()
     for pid in raw:
         try:
             pid = int(pid)
         except Exception:
             continue
-        if pid in batter_stat and pid not in seen:
-            valid_posted.append(pid); seen.add(pid)
-    resolved = fill_lineup_from_roster(team_id, valid_posted, batter_stat, LINEUP_SIZE)
-    posted_count = min(len(valid_posted), LINEUP_SIZE)
+        if pid not in seen:
+            posted.append(pid); seen.add(pid)
+        if len(posted) >= LINEUP_SIZE:
+            break
+
+    missing, backfilled = [], []
+    for pid in posted:
+        stat = batter_stat.get(pid) or {}
+        if bool(stat.get(XWOBA_TEAM_BACKFILL_COL)):
+            backfilled.append(pid)
+        elif pd.isna(pd.to_numeric(stat.get("xwOBA"), errors="coerce")):
+            missing.append(pid)
+            backfilled.append(pid)
+    if missing:
+        team_xwoba = team_batter_xwoba(team_id, batter_stat, league_xwoba)
+        for pid in missing:
+            batter_stat[pid] = {
+                **(batter_stat.get(pid) or {}),
+                "xwOBA": team_xwoba,
+                "PA": 0.0,
+                "BBE": 0.0,
+                XWOBA_TEAM_BACKFILL_COL: True,
+            }
+
+    resolved = fill_lineup_from_roster(team_id, posted, batter_stat, LINEUP_SIZE)
+    posted_count = min(len(posted), LINEUP_SIZE)
     filled_count = max(0, len(resolved) - posted_count)
     status = ("posted" if posted_count >= LINEUP_SIZE
               else "partial_filled" if posted_count > 0 else "projected")
     meta = {"status": status, "projected": status != "posted",
             "posted_count": int(posted_count), "filled_count": int(filled_count),
-            "resolved_count": int(len(resolved))}
+            "resolved_count": int(len(resolved)),
+            "savant_backfill_count": int(len(backfilled))}
     return (resolved, meta) if return_meta else (resolved, meta["projected"])
 
 
@@ -781,7 +839,7 @@ def team_pitching_aggregate(team_id, pitcher_stat, pitcher_bb):
                 continue
             num += v * pa
             den += pa
-        stat[col] = round(num / den, 3) if den else np.nan
+        stat[col] = (num / den) if den else np.nan
     # Large batters-faced total => the shrinkage step barely pulls the staff
     # xwOBA toward league, which is what we want for a full-staff sample.
     stat["PA"] = float(sum(pa for _, pa in weighted))
@@ -799,7 +857,7 @@ def team_pitching_aggregate(team_id, pitcher_stat, pitcher_bb):
                 continue
             num += v * w
             den += w
-        bb[col] = round(num / den, 3) if den else np.nan
+        bb[col] = (num / den) if den else np.nan
     return stat, bb
 
 
@@ -871,7 +929,7 @@ def expected_pitcher_ip(profile, classification=None):
             if estimate is None:
                 estimate = recent
         estimate = OPENER_IP_DEFAULT if estimate is None else estimate
-        return round(float(np.clip(estimate, OPENER_IP_MIN, OPENER_MAX_AVG_IP)), 2)
+        return float(np.clip(estimate, OPENER_IP_MIN, OPENER_MAX_AVG_IP))
 
     prior = season if season is not None else SP_IP_PRIOR
     n_recent = int(profile.get("starts") or 0)
@@ -881,7 +939,7 @@ def expected_pitcher_ip(profile, classification=None):
         estimate = (
             n_recent * recent + SP_IP_PRIOR_STARTS * prior
         ) / (n_recent + SP_IP_PRIOR_STARTS)
-    return round(float(np.clip(estimate, SP_IP_MIN, SP_IP_MAX)), 2)
+    return float(np.clip(estimate, SP_IP_MIN, SP_IP_MAX))
 
 
 def build_pitching_plans(slate_df, recent_profiles, pitcher_stat, pitcher_bb,
@@ -1065,6 +1123,7 @@ def build_tables(slate, lineups, batter_stat, pitcher_stat, batter_bb, pitcher_b
             if table == "stat":
                 pit_rows.append({**base, "table_type": "pitchers", "Pos.": "P",
                                  **{c: src.get(c) for c in STAT_COLS}, "PA": src.get("PA"),
+                                 XWOBA_TEAM_BACKFILL_COL: False,
                                  "player_id": pid, "bats": bio.get("bats"),
                                  "throws": bio.get("throws")})
             else:
@@ -1086,8 +1145,12 @@ def build_tables(slate, lineups, batter_stat, pitcher_stat, batter_bb, pitcher_b
                 base = {**meta, "table_index": tidx, "Name": nm,
                         BATTING_ORDER_COL: slot, "sp_side": sp_side, "is_sp": False}
                 if table == "stat":
+                    backfill_value = src.get(XWOBA_TEAM_BACKFILL_COL)
                     pit_rows.append({**base, "table_type": "pitchers", "Pos.": pos,
                                      **{c: src.get(c) for c in STAT_COLS}, "PA": src.get("PA"),
+                                     XWOBA_TEAM_BACKFILL_COL:
+                                         (bool(backfill_value)
+                                          if pd.notna(backfill_value) else False),
                                      "player_id": pid, "bats": bio.get("bats"),
                                      "throws": bio.get("throws")})
                 else:
@@ -1109,7 +1172,8 @@ def build_tables(slate, lineups, batter_stat, pitcher_stat, batter_bb, pitcher_b
     pdf = pd.DataFrame(pit_rows)
     if not pdf.empty:
         pdf = pdf[META + ["Pos.", BATTING_ORDER_COL] + STAT_COLS
-                  + ["PA", "player_id", "bats", "throws", "sp_side", "is_sp"]]
+                  + ["PA", XWOBA_TEAM_BACKFILL_COL, "player_id", "bats", "throws",
+                     "sp_side", "is_sp"]]
     bdf = pd.DataFrame(bb_rows)
     if not bdf.empty:
         bdf = bdf[META + ["Pos.", BATTING_ORDER_COL] + BB_COLS
@@ -1126,7 +1190,9 @@ def compute_league_baseline(batter_cust):
         if raw in batter_cust.columns:
             v = pd.to_numeric(batter_cust[raw], errors="coerce")
             m = v.notna() & _w.notna() & (_w > 0)
-            league_baseline[disp] = round(float(np.average(v[m], weights=_w[m])), 3) if m.any() else np.nan
+            league_baseline[disp] = (
+                float(np.average(v[m], weights=_w[m])) if m.any() else np.nan
+            )
     return league_baseline
 
 
@@ -1165,7 +1231,9 @@ def fetch_all(slate_date):
             w = (batter_stat.get(pid, {}) or {}).get("BBE")
             if pd.notna(v) and pd.notna(w) and float(w) > 0:
                 vals.append(float(v)); wts.append(float(w))
-        league_baseline[c] = round(float(np.average(vals, weights=wts)), 3) if vals else np.nan
+        league_baseline[c] = (
+            float(np.average(vals, weights=wts)) if vals else np.nan
+        )
     log("  league baselines:", {k: league_baseline.get(k) for k in
         ["xwOBA", "Hard Hit%", "K%", "EV", "GB%", "FB%", "Pull%"]})
 
@@ -1225,8 +1293,14 @@ def fetch_all(slate_date):
     log("Resolving lineups (gf -> posted/partial-fill/projected) ...")
     lineups, proj_flags, lineup_ids, prob_ids = {}, [], set(), set()
     for _, g in slate_df.iterrows():
-        al, ai = resolve_lineup(g["game_pk"], "away", g["away_team_id"], batter_stat, return_meta=True)
-        hl, hi = resolve_lineup(g["game_pk"], "home", g["home_team_id"], batter_stat, return_meta=True)
+        al, ai = resolve_lineup(
+            g["game_pk"], "away", g["away_team_id"], batter_stat,
+            league_xwoba=league_baseline.get("xwOBA"), return_meta=True
+        )
+        hl, hi = resolve_lineup(
+            g["game_pk"], "home", g["home_team_id"], batter_stat,
+            league_xwoba=league_baseline.get("xwOBA"), return_meta=True
+        )
         lineups[g["game_pk"]] = (al, hl)
         proj_flags.append({
             "game_pk": g["game_pk"],
@@ -1240,6 +1314,8 @@ def fetch_all(slate_date):
             "home_filled_count": hi["filled_count"],
             "away_resolved_count": ai["resolved_count"],
             "home_resolved_count": hi["resolved_count"],
+            "away_savant_backfill_count": ai["savant_backfill_count"],
+            "home_savant_backfill_count": hi["savant_backfill_count"],
         })
         lineup_ids.update(al); lineup_ids.update(hl)
         for c in ("away_probable_pitcher_id", "home_probable_pitcher_id"):
@@ -1317,8 +1393,11 @@ def fetch_all(slate_date):
                              lineup_projection_df["home_lineup_status"].rename("status")],
                             ignore_index=True) if not lineup_projection_df.empty else pd.Series(dtype=str)
     n_proj = int(lineup_projection_df[["away_lineup_projected", "home_lineup_projected"]].sum().sum())
+    n_backfill = int(lineup_projection_df[
+        ["away_savant_backfill_count", "home_savant_backfill_count"]
+    ].sum().sum())
     log(f"lineup sources: {side_status.value_counts().to_dict()} of {2 * len(slate_df)} sides; "
-        f"projected_or_partial={n_proj}")
+        f"projected_or_partial={n_proj}; savant_backfills={n_backfill}")
 
     return {
         "empty": False,
@@ -1614,13 +1693,28 @@ def aggregate_lineup(H, rate_cols, weighted=True, shrink_prior=None, shrink_k=No
                 continue
             # Regress each hitter's xwOBA toward the league prior by their PA
             # BEFORE compositing, so a small-sample bat can't swing the lineup
-            # number; other columns pass through raw.
+            # number; other columns pass through raw. A posted Savant-missing
+            # hitter already carries a team aggregate, so keep that final value
+            # instead of applying player-level shrinkage a second time.
             if c == XWOBA_SHRINK_COL and shrink_prior is not None and "PA" in g.columns:
                 vals = shrink_xwoba(g[c], g["PA"], shrink_prior, shrink_k)
+                if XWOBA_TEAM_BACKFILL_COL in g.columns:
+                    backfilled = (
+                        pd.Series(g[XWOBA_TEAM_BACKFILL_COL])
+                        .reset_index(drop=True)
+                        .fillna(False)
+                        .astype(bool)
+                    )
+                    raw_vals = pd.to_numeric(
+                        pd.Series(g[c]).reset_index(drop=True), errors="coerce"
+                    )
+                    vals = vals.where(~backfilled, raw_vals)
             else:
                 vals = pd.to_numeric(pd.Series(g[c]).reset_index(drop=True), errors="coerce")
-            rec[f"opp_{c}_mean"] = round(float(vals.mean(skipna=True)), 3) if vals.notna().any() else np.nan
-            rec[f"opp_{c}_wmean"] = round(wmean(vals, w), 3)
+            rec[f"opp_{c}_mean"] = (
+                float(vals.mean(skipna=True)) if vals.notna().any() else np.nan
+            )
+            rec[f"opp_{c}_wmean"] = wmean(vals, w)
             rec[f"opp_{c}"] = rec[f"opp_{c}_wmean"] if weighted else rec[f"opp_{c}_mean"]
         out.append(rec)
     return pd.DataFrame(out)
@@ -1654,13 +1748,13 @@ def build_matchup(P, agg, rate_cols, league_baseline, shrink_prior=None, shrink_
                                  shrink_prior, shrink_k)
             ov = a.get(f"opp_{c}")
             L = league_baseline.get(c, np.nan)
-            rec[f"pit_{c}"] = round(float(pv), 3) if pd.notna(pv) else np.nan
+            rec[f"pit_{c}"] = float(pv) if pd.notna(pv) else np.nan
             rec[f"opp_{c}"] = ov
             rec[f"lg_{c}"] = L
             M = matchup_value(float(pv) if pd.notna(pv) else np.nan,
                               float(ov) if pd.notna(ov) else np.nan, c, L)
-            rec[f"mx_{c}"] = round(M, 3) if pd.notna(M) else np.nan
-            rec[f"edge_{c}"] = round(M - L, 3) if pd.notna(M) and pd.notna(L) else np.nan
+            rec[f"mx_{c}"] = float(M) if pd.notna(M) else np.nan
+            rec[f"edge_{c}"] = float(M - L) if pd.notna(M) and pd.notna(L) else np.nan
         rows.append(rec)
     df = pd.DataFrame(rows)
     return df.sort_values(["game_pk", "side"]).reset_index(drop=True)
@@ -1725,14 +1819,13 @@ def apply_pitching_plans(matchup_df, pitching_plans, league_baseline):
             continue
         sp_ip = float(np.clip(expected_ip, 0.0, GAME_INNINGS))
         blended = (sp_ip * starter + (GAME_INNINGS - sp_ip) * bullpen) / GAME_INNINGS
-        blended = round(blended, 3)
         out.at[idx, "pit_xwOBA"] = blended
 
         batter = _f(row.get("opp_xwOBA"))
         mx = matchup_value(batter, blended, "xwOBA", league)
-        out.at[idx, "mx_xwOBA"] = round(mx, 3) if pd.notna(mx) else np.nan
+        out.at[idx, "mx_xwOBA"] = float(mx) if pd.notna(mx) else np.nan
         out.at[idx, "edge_xwOBA"] = (
-            round(mx - league, 3)
+            float(mx - league)
             if pd.notna(mx) and league is not None
             else np.nan
         )
@@ -1811,9 +1904,10 @@ def build_platoon_matchup(pitcher_rows_df, opp_hitters_df, people,
         for k, v in buckets.items():
             if v:
                 o = np.array([x[0] for x in v]); w = np.array([x[1] for x in v], float)
-                Lc[k] = round(float(np.average(o, weights=w)), 3)
-        overall = round(float(np.average([x[0] for x in allv],
-                        weights=[x[1] for x in allv])), 3) if allv else np.nan
+                Lc[k] = float(np.average(o, weights=w))
+        overall = (float(np.average([x[0] for x in allv],
+                                    weights=[x[1] for x in allv]))
+                   if allv else np.nan)
         return Lc, overall
 
     league_ops_cell, league_ops_overall = _compute_league_ops_cells()
@@ -1844,9 +1938,10 @@ def build_platoon_matchup(pitcher_rows_df, opp_hitters_df, people,
             BATTING_ORDER_COL: h.get(BATTING_ORDER_COL),
             "pitcher_throws": T, "batter": h["Name"], "bats": bats or "?",
             "eff_stand": eff_stand, "platoon_adv": eff_stand != T,
-            "ops_vs_hand_raw": B_raw, "ops_vs_hand": round(B, 3) if pd.notna(B) else np.nan,
-            "pit_ops_allowed_raw": P_raw, "pit_ops_allowed": round(P, 3) if pd.notna(P) else np.nan,
-            "lg_cell": L, "mx_ops": round(Mi, 3) if pd.notna(Mi) else np.nan,
+            "ops_vs_hand_raw": B_raw, "ops_vs_hand": float(B) if pd.notna(B) else np.nan,
+            "pit_ops_allowed_raw": P_raw,
+            "pit_ops_allowed": float(P) if pd.notna(P) else np.nan,
+            "lg_cell": L, "mx_ops": float(Mi) if pd.notna(Mi) else np.nan,
             "split_pa": pa_b, "pit_split_bf": bf_p,
             "low_sample": pa_b < MIN_SPLIT_PA,
             "pit_low_sample": bf_p < MIN_PITCHER_SPLIT_BF,
@@ -1895,12 +1990,12 @@ def build_platoon_matchup(pitcher_rows_df, opp_hitters_df, people,
             "n_low_sample": int(g["low_sample"].sum()),
             "pit_min_split_bf": pit_min_bf, "pit_low_sample": pit_low,
             "reliable": (not pit_low) and (int(g["low_sample"].sum()) <= 4),
-            "opp_OPS_raw": round(opp_ops_raw, 3) if pd.notna(opp_ops_raw) else np.nan,
-            "opp_OPS_vs_hand": round(opp_ops, 3) if pd.notna(opp_ops) else np.nan,
-            "pit_OPS_raw": round(pit_ops_raw, 3) if pd.notna(pit_ops_raw) else np.nan,
-            "pit_OPS_allowed": round(pit_ops, 3) if pd.notna(pit_ops) else np.nan,
-            "mx_OPS": round(mx_ops, 3) if pd.notna(mx_ops) else np.nan,
-            "edge_OPS": round(edge, 3) if pd.notna(edge) else np.nan,
+            "opp_OPS_raw": float(opp_ops_raw) if pd.notna(opp_ops_raw) else np.nan,
+            "opp_OPS_vs_hand": float(opp_ops) if pd.notna(opp_ops) else np.nan,
+            "pit_OPS_raw": float(pit_ops_raw) if pd.notna(pit_ops_raw) else np.nan,
+            "pit_OPS_allowed": float(pit_ops) if pd.notna(pit_ops) else np.nan,
+            "mx_OPS": float(mx_ops) if pd.notna(mx_ops) else np.nan,
+            "edge_OPS": float(edge) if pd.notna(edge) else np.nan,
         })
     matchup_platoon_df = (pd.DataFrame(plat_rows)
                           .sort_values(["game_pk", "side"]).reset_index(drop=True))
@@ -2112,6 +2207,16 @@ def f3(v):
     return "—" if v is None else f"{v:.3f}".lstrip("0") if 0 < abs(v) < 1 else f"{v:.3f}"
 
 
+def delta3(v):
+    """Three-place delta display without rendering a nonzero value as zero."""
+    if v is None or pd.isna(v):
+        return "—"
+    value = abs(float(v))
+    if value > 0 and f"{value:.3f}" == "0.000":
+        return "&lt;0.001"
+    return f"{value:.3f}"
+
+
 def f2(v):
     return "—" if v is None else f"{v:.2f}"
 
@@ -2199,11 +2304,18 @@ def _hitters_for(opp_hitters_df, detail_df, gpk, fp, lg_ops,
         edge = (mx - lg_ops) if (mx is not None and lg_ops is not None
                                  and pd.notna(lg_ops)) else None
         xw_raw = _f(r.get("xwOBA"))
+        backfill_value = r.get(XWOBA_TEAM_BACKFILL_COL)
+        team_backfill = bool(backfill_value) if pd.notna(backfill_value) else False
         rows.append(dict(
             name=r["Name"], pos=str(r.get("Pos.") or ""),
             bats=(str(r.get("bats") or ""))[:1].upper(),
             xw=xw_raw,
-            xw_pctile=pctile_rank(xw_raw, _f(r.get("PA")), ref_bat, prior, k_bat),
+            xw_team_backfill=team_backfill,
+            xw_pctile=(
+                pctile_rank_raw(xw_raw, ref_bat)
+                if team_backfill
+                else pctile_rank(xw_raw, _f(r.get("PA")), ref_bat, prior, k_bat)
+            ),
             adv=bool(d["platoon_adv"]) if d is not None else False,
             ops=_f(d["ops_vs_hand"]) if d is not None else None,
             pa=int(d["split_pa"] or 0) if d is not None else 0,
@@ -2344,7 +2456,10 @@ def _hitter_row_html(i, hr):
     adv = ("<span class='adv mach' title='platoon advantage vs this SP'>◆</span>"
            if hr["adv"] else "")
     bar = _pct_bar(hr.get("xw_pctile"), "h")
-    xw_c = f"<td class='r mach'>{f3(hr['xw'])}</td>"
+    backfill = bool(hr.get("xw_team_backfill"))
+    xw_title = " title='team-average backfill: player absent from Savant'" if backfill else ""
+    xw_mark = "<span class='pa'>*</span>" if backfill else ""
+    xw_c = f"<td class='r mach'{xw_title}>{f3(hr['xw'])}{xw_mark}</td>"
     return (f"<tr><td class='ord'>{i}</td>"
             f"<td class='nm' title='{nm}'>{nm}{adv}{b}</td><td class='pos'>{_esc(hr['pos'])}</td>"
             f"<td class='pct r'>{bar}</td>{xw_c}</tr>")
@@ -2538,14 +2653,20 @@ def cmb_card(g, built_short, strength_scale=None, ctx=None):
     fav = strength_word = read_html = None
     if a["xw_edge"] is not None and h["xw_edge"] is not None:
         home_off, away_off = a["xw_edge"], h["xw_edge"]
-        delta = abs(home_off - away_off)
-        fav = home_abbr if home_off >= away_off else away_abbr
-        strength_word, _ = lean_strength(delta, strength_scale)
-        lean_html = (f"<span class='lean {strength_word or ''}'><span class='lk'>lean</span>"
-                     f"<span class='lt'>{fav}</span>"
-                     f"<span class='ls'>{strength_word or 'lean'}"
-                     f"<span class='mach'> · Δxw {delta:.3f}</span></span></span>")
-        read_html = _read_sentence(away_abbr, home_abbr, a, h, fav, strength_word)
+        net = home_off - away_off
+        if net == 0:
+            lean_html = ("<span class='lean nolean'><span class='lk'>lean</span>"
+                         "<span class='lt'>—</span><span class='ls'>no lean"
+                         "<span class='mach'> · Δxw 0.000</span></span></span>")
+        else:
+            delta = abs(net)
+            fav = home_abbr if net > 0 else away_abbr
+            strength_word, _ = lean_strength(delta, strength_scale)
+            lean_html = (f"<span class='lean {strength_word or ''}'><span class='lk'>lean</span>"
+                         f"<span class='lt'>{fav}</span>"
+                         f"<span class='ls'>{strength_word or 'lean'}"
+                         f"<span class='mach'> · Δxw {delta3(delta)}</span></span></span>")
+            read_html = _read_sentence(away_abbr, home_abbr, a, h, fav, strength_word)
     else:
         lean_html = ("<span class='lean nolean'><span class='lk'>lean</span>"
                      "<span class='lt'>—</span><span class='ls'>no lean</span></span>")
@@ -3281,7 +3402,9 @@ def _lean_cell(lean, delta, muted=False):
     if not isinstance(lean, str) or not lean:
         return "<span class='muted'>—</span>"
     d = pd.to_numeric(delta, errors="coerce")
-    txt = _esc(lean) + (f" <span class='muted'>Δ{d:.3f}</span>" if pd.notna(d) else "")
+    txt = _esc(lean) + (
+        f" <span class='muted'>Δ{delta3(d)}</span>" if pd.notna(d) else ""
+    )
     return f"<span class='muted'>{txt}</span>" if muted else txt
 
 
@@ -3414,11 +3537,16 @@ def _lineup_status_columns(lineup_df):
     if lineup_df is None or lineup_df.empty:
         return {}
     idx = lineup_df.set_index("game_pk")
+    missing = pd.Series(np.nan, index=idx.index)
     return {
         "lineup_status_away": idx["away_lineup_status"],
         "lineup_status_home": idx["home_lineup_status"],
         "lineup_posted_away": idx["away_posted_count"],
         "lineup_posted_home": idx["home_posted_count"],
+        "lineup_savant_backfill_away":
+            idx.get("away_savant_backfill_count", missing),
+        "lineup_savant_backfill_home":
+            idx.get("home_savant_backfill_count", missing),
     }
 
 
