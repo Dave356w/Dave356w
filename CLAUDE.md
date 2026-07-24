@@ -33,18 +33,12 @@ prediction math. Two separate tag families gate two different questions:
   compatibility. Governs `_record_grades()` and the weight fit.
 - `SCALE_TAGS` — do these rows measure `xw_net` on the same scale? Units
   compatibility. Governs `lean_strength_scale()` only.
-  - _Status: not yet implemented in the source. `SCALE_TAGS` appears nowhere in
-    the tree; `lean_strength_scale()` (`build_site.py`) currently reuses
-    `RECORD_TAGS`. So scale-ranking is **not** protected against the v4→v5
-    shrinkage halving described below — when `RECORD_TAGS` narrows to a single
-    new family with fewer than 60 graded rows, the scale falls back to all
-    graded rows and mixes the pre/post-v5 units. Treat the bullet above as the
-    intended split, not current behaviour._
 
 These are different equivalence relations and can disagree. v6 is a new
 prediction family (bullpen blend) but inherits v5's empirical-Bayes shrinkage,
 so it shares v5's delta units. Pre-v5 tags do not: shrinkage halved the scale
-(median `|xw_net|` .036 → .018).
+(median `|xw_net|` .036 → .018). v7 changes the shrinkage estimator and starts
+new record and scale families.
 
 When you bump `MODEL_TAG`, decide both questions explicitly in the PR body.
 Silence defaults to a new record family and inherited units — which is wrong
@@ -55,9 +49,10 @@ text: no bump. Anything that moves a lean, a delta, or a grade: bump.
 
 ## Anti-patterns with instances in this repo
 
-- **Threshold cliffs.** `use = fam if len(fam) >= 60 else pooled` switches
-  discontinuously — every label in the build flipped the day the counter
-  crossed. If a selector has a hard `>= N`, ask what happens on the build where
+- **Threshold cliffs.** The old
+  `use = fam if len(fam) >= 60 else pooled` scale selector switched
+  discontinuously and mixed incompatible units. `SCALE_TAGS` now removes that
+  branch. If a selector has a hard `>= N`, ask what happens on the build where
   it trips. Degrade continuously or don't degrade.
 - **Constants frozen from data.** `LEAN_STRENGTH_FALLBACK` was a literal copy of
   the pooled p33/p80 at the time it was written, and stayed there through two

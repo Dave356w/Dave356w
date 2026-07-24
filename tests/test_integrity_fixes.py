@@ -796,19 +796,36 @@ class XwobaShrinkageTests(unittest.TestCase):
     def test_mom_k_recovers_planted_ratio(self):
         # Plant tau^2 and sigma^2, synthesize a pool, recover K = sigma^2/tau^2.
         rng = np.random.default_rng(0)
-        prior, tau, sigma = 0.317, 0.030, 0.5
+        centre, tau, sigma = 0.299, 0.030, 0.5
         n = rng.integers(30, 650, size=1200).astype(float)
-        theta = rng.normal(prior, tau, size=1200)          # true talent
+        theta = rng.normal(centre, tau, size=1200)         # true talent
         x = rng.normal(theta, sigma / np.sqrt(n))          # observed, noisier at low n
-        k, note = build_site.estimate_shrink_k(list(zip(x, n)), prior,
-                                               build_site.K_BAT_DEFAULT, (10.0, 5000.0))
+        k, note = build_site.estimate_shrink_k(
+            list(zip(x, n)), build_site.K_BAT_DEFAULT, (10.0, 5000.0)
+        )
         planted = sigma ** 2 / tau ** 2                    # ~278
         self.assertEqual(note, "ok")
         self.assertLess(abs(k - planted) / planted, 0.35)  # within ~35% of truth
 
+    def test_mom_k_is_translation_invariant(self):
+        # K describes pool dispersion, not the shrinkage target or xwOBA level.
+        # Shifting every observed rate must leave the estimate unchanged.
+        rng = np.random.default_rng(4)
+        n = rng.integers(20, 650, size=1000).astype(float)
+        theta = rng.normal(0.298, 0.028, size=1000)
+        x = rng.normal(theta, 0.45 / np.sqrt(n))
+        args = (build_site.K_BAT_DEFAULT, (10.0, 5000.0))
+        k1, note1 = build_site.estimate_shrink_k(list(zip(x, n)), *args)
+        k2, note2 = build_site.estimate_shrink_k(list(zip(x + 0.025, n)), *args)
+        self.assertEqual((note1, note2), ("ok", "ok"))
+        self.assertAlmostEqual(k1, k2, places=10)
+
     def test_mom_k_falls_back_on_thin_pool(self):
-        k, note = build_site.estimate_shrink_k([(0.4, 100), (0.3, 200)], 0.317,
-                                               build_site.K_PIT_DEFAULT, build_site.K_PIT_BAND)
+        k, note = build_site.estimate_shrink_k(
+            [(0.4, 100), (0.3, 200)],
+            build_site.K_PIT_DEFAULT,
+            build_site.K_PIT_BAND,
+        )
         self.assertEqual(k, build_site.K_PIT_DEFAULT)
         self.assertTrue(note.startswith("fallback"))
 

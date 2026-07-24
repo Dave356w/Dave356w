@@ -127,6 +127,24 @@ This is a prediction-math change, so v6 starts a new `RECORD_TAGS` family.
 The v2/v3, v4, and v5 rows remain immutable in the ledger; the Actions report
 shows family history separately while the current-family fit uses v6 only.
 
+### Centre-matched shrinkage moments (v7)
+
+Model version `xw+plat_consol_v7` keeps v6's full-game pitching blend and
+corrects the method-of-moments estimate of xwOBA shrinkage `K`. The league
+xwOBA used later as the shrinkage target is PA-weighted, but the old estimator
+centred both its PA-weighted and unweighted dispersions on that target. In a
+player pool whose low-PA members have a different unweighted centre, the
+unweighted moment therefore included a between-centre offset and overstated
+the sampling component.
+
+v7 centres each moment on its own population mean: the PA-weighted dispersion
+uses the PA-weighted pool mean, and the unweighted dispersion uses the
+unweighted pool mean. The estimator no longer consumes the shrinkage target;
+`sigma²`, `tau²`, and `K = sigma²/tau²` are properties of the player pool.
+The league xwOBA remains the target when each resulting player estimate is
+shrunk. This changes both prediction math and `|xw_net|` units, so v7 starts
+new `RECORD_TAGS` and `SCALE_TAGS` families without rewriting older rows.
+
 ## Files
 
 | Path | Purpose |
@@ -160,6 +178,8 @@ Environment variables:
 - `MODEL_TAG` — row-level model/audit lineage for newly captured predictions.
 - `RECORD_TAGS` — comma-separated tags whose unchanged prediction math should
   be summarized as one continuous performance family.
+- `SCALE_TAGS` — comma-separated tags whose `|xw_net|` values use compatible
+  units for lean-strength ranking; independent of `RECORD_TAGS`.
 
 ## Unattended-run behaviour
 
