@@ -2402,7 +2402,7 @@ def _read_sentence(away_abbr, home_abbr, a, h, fav, strength_word):
     hw = f"<b class='{ch}'>{gh}</b>" if ch else f"<b>{gh}</b>"
     return (f"<p class='read'>{_esc(away_abbr)}'s bats grade {aw} against "
             f"{_esc(_last(h['p']))}; {_esc(home_abbr)}'s grade {hw} against "
-            f"{_esc(_last(a['p']))} — a <b>{strength_word or 'lean'}</b> "
+            f"{_esc(_last(a['p']))}. That is a <b>{strength_word or 'lean'}</b> "
             f"lean to {_esc(fav)}.</p>")
 
 
@@ -2437,16 +2437,16 @@ def _verdict_html(fav, odds, away_abbr, home_abbr, ctx=None):
         tail = (f"When the model leans the {side} favorite: <b>{rec}</b> in the ledger."
                 if rec else "No edge on the line here.")
         return ("<div class='verdict'><div class='l'>Model vs market</div>"
-                f"<div class='vt'>Model agrees with the market — {_esc(fav)} favored. "
+                f"<div class='vt'>Model agrees with the market: {_esc(fav)} favored. "
                 f"{tail}</div></div>")
     price = (odds.get("home_ml") if fav == home_abbr else odds.get("away_ml"))
     px = f" ({_fmt_ml(price)})" if price is not None else ""
     rec = ctx.get((side, "disagree"))
-    tail = (f"when the model leans the {side} underdog: <b>{rec}</b> in the ledger."
-            if rec else "the spot the record is built to test.")
+    tail = (f"When the model leans the {side} underdog: <b>{rec}</b> in the ledger."
+            if rec else "This is the spot the record is built to test.")
     return ("<div class='verdict edge'><div class='l'>Model vs market · disagree</div>"
             f"<div class='vt'>Model leans the underdog <b>{_esc(fav)}{px}</b> against the "
-            f"market's {_esc(mkt)} — {tail}</div></div>")
+            f"market's {_esc(mkt)}. {tail}</div></div>")
 
 
 def _hitter_row_html(i, hr):
@@ -2893,7 +2893,7 @@ def _legend_guide():
     return (
         "<div class='legend'>"
         "<div class='lg-lead'><b>How to read a card:</b> the <b>lean</b> names the model's "
-        "favored side and its strength — <b>slight / clear / strong</b>, ranked against every "
+        "favored side and its strength: <b>slight / clear / strong</b>, ranked against every "
         "graded lean to date. Matchup-strength estimates from season data, not score "
         "predictions.</div>"
         "<div class='lg-keys'>"
@@ -2907,7 +2907,7 @@ def _legend_guide():
         "<span><b>Standouts</b> a lineup's top bats by percentile.</span>"
         "<span><b>Starter quality</b> xwOBA-allowed and K−BB% percentiles (higher = better), "
         "tiered elite / solid / below avg.</span>"
-        "<span><b>Model vs market</b> whether the lean agrees with the DraftKings favorite — a "
+        "<span><b>Model vs market</b> whether the lean agrees with the DraftKings favorite. A "
         "lean on the <i>underdog</i> is the spot the record tests.</span>"
         "<span class='wide'>DK moneylines via ESPN at build time; cards ordered by first "
         "pitch. The lean blends the starter's expected innings with a role-filtered bullpen "
@@ -2930,7 +2930,18 @@ CSS = r"""/* ============================================================
   --mono:ui-monospace,"SF Mono","Cascadia Mono",Menlo,Consolas,monospace;
   --sans:system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;
   --shadow:0 1px 2px rgba(16,18,29,.05),0 10px 26px -20px rgba(16,18,29,.28);
+  /* Corner-radius scale -- three tiers, no raw px radii anywhere else.
+     --r      containers: things that hold other content (card, stat strip,
+              table wrapper, chip, button)
+     --r-s    inline marks: badges, flags, status tags, percentile bars,
+              legend swatches -- anything sitting inside a line of text
+     --r-pill true pills: fully-rounded ends, used only where the shape is
+              the point
+     tests/test_casual_redesign.py enforces this; add a tier here rather
+     than a one-off px value at the call site. */
   --r:6px;
+  --r-s:3px;
+  --r-pill:999px;
 }
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
   --bg:#0f1418; --surface:#171d24; --surface-2:#131920; --ink:#e7ecef;
@@ -2956,7 +2967,7 @@ body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 var(--sans);
   border-bottom:2px solid var(--ink);padding-bottom:10px;margin-bottom:12px}
 .brand{font:800 16px/1 var(--sans);letter-spacing:.13em;text-transform:uppercase}
 .theme{appearance:none;border:1px solid var(--line);background:var(--surface);color:var(--muted);
-  font:600 12px/1 var(--sans);padding:7px 11px;border-radius:6px;cursor:pointer}
+  font:600 12px/1 var(--sans);padding:7px 11px;border-radius:var(--r);cursor:pointer}
 .theme:hover{color:var(--ink)}
 .theme:focus-visible{outline:2px solid rgba(var(--lean),1);outline-offset:2px}
 
@@ -2972,12 +2983,12 @@ body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 var(--sans);
 .lg-notes b{color:var(--muted);font-weight:700}
 .lg-notes i{font-style:normal;color:var(--muted)}
 .lg-notes .wide{grid-column:1/-1}
-.sw{width:11px;height:11px;border-radius:2px;display:inline-block}
+.sw{width:11px;height:11px;border-radius:var(--r-s);display:inline-block}
 .sw.warm{background:rgba(var(--warm),.85)} .sw.cool{background:rgba(var(--cool),.85)}
 .sw.lean{background:rgba(var(--amberbg),.6)} .sw.grey{background:var(--line);border:1px solid var(--faint)}
 
 /* chips kept for grades.html summary */
-.chip{flex:1 1 64px;min-width:60px;border:1px solid var(--line-2);border-radius:6px;
+.chip{flex:1 1 64px;min-width:60px;border:1px solid var(--line-2);border-radius:var(--r);
   padding:6px 7px 5px;text-align:center;background:transparent}
 .chip .lab{font:600 9px/1 var(--sans);text-transform:uppercase;letter-spacing:.07em;color:var(--muted)}
 .chip .val{font:600 16px/1.15 var(--mono);color:var(--chip-fg);font-variant-numeric:tabular-nums;margin-top:2px}
@@ -2998,7 +3009,7 @@ body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 var(--sans);
 .when{font:400 12px/1.3 var(--sans);color:var(--muted)}
 .lean{margin-left:auto;display:flex;align-items:baseline;gap:7px;
   border:1px solid rgba(var(--amberbg),.55);background:rgba(var(--amberbg),.14);
-  border-radius:4px;padding:4px 10px}
+  border-radius:var(--r-s);padding:4px 10px}
 .lean .lk{font:600 10px/1 var(--sans);letter-spacing:.14em;text-transform:uppercase;color:rgba(var(--lean),1)}
 .lean .lt{font:800 15px/1 var(--sans)}
 .lean.nolean{border-color:var(--line);background:var(--surface-2)}
@@ -3031,16 +3042,16 @@ body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 var(--sans);
 /* SP block */
 .sp .who{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
 .sp .nm{font:700 16px/1.2 var(--sans)}
-.hand{font:500 10px/1.4 var(--mono);color:var(--muted);border:1px solid var(--line);border-radius:3px;padding:0 4px}
+.hand{font:500 10px/1.4 var(--mono);color:var(--muted);border:1px solid var(--line);border-radius:var(--r-s);padding:0 4px}
 .sp .role{font-size:11px;color:var(--faint);margin-top:1px}
-.spstats{display:flex;margin-top:8px;border:1px solid var(--line-2);border-radius:4px;overflow:hidden}
+.spstats{display:flex;margin-top:8px;border:1px solid var(--line-2);border-radius:var(--r);overflow:hidden}
 .stat{flex:1;padding:6px 8px 5px;border-right:1px solid var(--line-2);min-width:0}
 .stat:last-child{border-right:0}
 .stat .l{font:600 9px/1.4 var(--sans);letter-spacing:.1em;text-transform:uppercase;color:var(--faint);white-space:nowrap}
 .stat .v{font:500 14px/1.3 var(--mono);font-variant-numeric:tabular-nums}
 .stat .s{font:400 10px/1.3 var(--mono);color:var(--faint)}
 .flag{font:600 9px/1.4 var(--sans);letter-spacing:.06em;color:var(--muted);
-  border:1px solid var(--line);border-radius:3px;padding:0 4px;margin-left:5px;white-space:nowrap}
+  border:1px solid var(--line);border-radius:var(--r-s);padding:0 4px;margin-left:5px;white-space:nowrap}
 .flag.warn{color:rgba(var(--warm),1);border-color:rgba(var(--warm),.45)}
 .flag.mute{color:var(--faint)}
 
@@ -3051,7 +3062,7 @@ details.lineup summary{cursor:pointer;list-style:none;display:flex;align-items:b
 details.lineup summary::-webkit-details-marker{display:none}
 details.lineup summary:focus-visible{outline:2px solid rgba(var(--lean),1);outline-offset:2px}
 summary .tl{font:700 11px/1.4 var(--sans);letter-spacing:.12em;text-transform:uppercase}
-summary .st{font:600 10px/1.4 var(--sans);letter-spacing:.08em;border-radius:3px;padding:1px 6px}
+summary .st{font:600 10px/1.4 var(--sans);letter-spacing:.08em;border-radius:var(--r-s);padding:1px 6px}
 summary .st.posted{color:rgba(var(--cool),1);border:1px solid rgba(var(--cool),.45)}
 summary .st.partial{color:rgba(var(--lean),1);border:1px solid rgba(var(--amberbg),.5)}
 summary .st.projected{color:var(--faint);border:1px solid var(--line)}
@@ -3095,9 +3106,9 @@ td.bar{width:86px;padding:4px 8px 4px 2px}
 .lean.strong{border-color:rgba(var(--amberbg),.75);background:rgba(var(--amberbg),.24)}
 
 /* percentile slider (fill length = percentile; hue = whose favor) */
-.sl{display:inline-block;width:88px;height:9px;border-radius:3px;background:var(--surface-2);
+.sl{display:inline-block;width:88px;height:9px;border-radius:var(--r-s);background:var(--surface-2);
   border:1px solid var(--line-2);vertical-align:middle;overflow:hidden;position:relative}
-.sl i{display:block;height:100%;border-radius:3px 0 0 3px}
+.sl i{display:block;height:100%;border-radius:var(--r-s) 0 0 var(--r-s)}
 .sl.h i{background:rgba(var(--warm),.85)} .sl.p i{background:rgba(var(--cool),.85)}
 .pn{font:600 11px/1 var(--mono);margin-left:8px;font-variant-numeric:tabular-nums;color:var(--muted)}
 
@@ -3106,7 +3117,7 @@ td.bar{width:86px;padding:4px 8px 4px 2px}
 .spct{display:flex;align-items:center;gap:9px;margin-top:6px}
 .spct .lab{font:600 9.5px/1.4 var(--sans);letter-spacing:.06em;text-transform:uppercase;
   color:var(--muted);min-width:64px}
-.tier{font:600 9.5px/1.4 var(--sans);letter-spacing:.06em;text-transform:uppercase;border-radius:3px;padding:1px 6px}
+.tier{font:600 9.5px/1.4 var(--sans);letter-spacing:.06em;text-transform:uppercase;border-radius:var(--r-s);padding:1px 6px}
 .tier.elite{color:rgba(var(--cool),1);border:1px solid rgba(var(--cool),.5);background:rgba(var(--cool),.10)}
 .tier.solid{color:var(--muted);border:1px solid var(--line)}
 .tier.below{color:rgba(var(--warm),1);border:1px solid rgba(var(--warm),.5);background:rgba(var(--warm),.08)}
@@ -3115,7 +3126,7 @@ td.bar{width:86px;padding:4px 8px 4px 2px}
 .spot{display:flex;flex-wrap:wrap;align-items:baseline;gap:5px 8px;margin:12px 0 2px}
 .spot .sl-lab{font:600 9.5px/1.4 var(--sans);letter-spacing:.1em;text-transform:uppercase;color:var(--faint)}
 .spot .pill{font:600 11px/1.3 var(--mono);color:var(--ink);background:var(--surface-2);
-  border:1px solid var(--line-2);border-radius:20px;padding:2px 9px;font-variant-numeric:tabular-nums}
+  border:1px solid var(--line-2);border-radius:var(--r-pill);padding:2px 9px;font-variant-numeric:tabular-nums}
 .spot .pill b{color:rgba(var(--warm),1)}
 
 /* model-vs-market verdict — its own full-width row beneath the odds, at every
@@ -3216,7 +3227,7 @@ table.gr tr:last-child td{border-bottom:none}
 table.gr tr.void{opacity:.5}
 table.gr .sp{font:400 11px/1.3 var(--mono);color:var(--muted)}
 .wlt{display:inline-block;min-width:16px;text-align:center;font:700 11px/1 var(--mono);
-  padding:3px 6px;border-radius:6px}
+  padding:3px 6px;border-radius:var(--r-s)}
 .wlt.W{color:rgba(var(--cool),1);background:rgba(var(--cool),.12);border:1px solid rgba(var(--cool),.3)}
 .wlt.L{color:rgba(var(--warm),1);background:rgba(var(--warm),.12);border:1px solid rgba(var(--warm),.3)}
 .wlt.T{color:var(--muted);background:var(--surface-2);border:1px solid var(--line)}
@@ -3245,7 +3256,7 @@ THEME_JS = r"""
 
 
 def html_document(body, built_txt, title=None):
-    title = title or f"MLB matchup leans — {SLATE_DATE}"
+    title = title or f"MLB matchup leans - {SLATE_DATE}"
     return (
         "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
