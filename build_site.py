@@ -2501,8 +2501,6 @@ def _side_html(sp_abbr, d, league_baseline):
               "pitcher’s workload, then assigns the remaining innings to the "
               "role-filtered team bullpen. No specific bulk follower is "
               "projected.'>opener · bullpen blend</span>") if d.get("is_opener") else ""
-    thin = (f"<span class='flag warn'>thin hand split {d['pl_fl']['thin']} BF</span>"
-            if "thin" in d["pl_fl"] else "")
     comp = (f"{d['R']}R/{d['L']}L" + (f"/{d['S']}S" if d["S"] else "")) if d["has_pl"] else "—"
     padv = f" · {d['padv']} plt-adv" if d["has_pl"] else ""
     lb = league_baseline or {}
@@ -2540,7 +2538,7 @@ def _side_html(sp_abbr, d, league_baseline):
     return (
         f"<section class='side'>"
         f"<div class='matchlab'>{_esc(sp_abbr)} starter → {_esc(d['opp_abbr'])} bats</div>"
-        f"<div class='sp'><div class='who'><span class='nm'>{_esc(d['p'])}</span>{badge}{tier}{opener}{thin}</div>"
+        f"<div class='sp'><div class='who'><span class='nm'>{_esc(d['p'])}</span>{badge}{tier}{opener}</div>"
         f"<div class='role'>faces the {_esc(d['opp_abbr'])} lineup"
         f"<span class='mach'> · {comp}{padv}{pitching_note}</span></div>"
         f"<div class='sp-bars'>{bars}</div>"
@@ -2805,7 +2803,7 @@ def _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
                      expected_sp_ip=_f(r.get("expected_sp_ip")),
                      bullpen_xw=_f(r.get("bullpen_xwOBA")),
                      pitching_basis=r.get("pitching_basis"),
-                     has_pl=False, R=0, L=0, S=0, padv=0, pl_fl={},
+                     has_pl=False, R=0, L=0, S=0, padv=0,
                      pl_sp=None, pl_sp_raw=None, pl_mx=None, pl_edge=None,
                      pl_reliable=False,
                      hitters=_hitters_for(opp_hitters_df, detail_df,
@@ -2813,11 +2811,6 @@ def _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
                                           _ref_bat, _prior, _k_bat))
             pr = pl_map.get((gpk, side))
             if pr is not None:
-                fl = {}
-                if bool(pr.get("pit_low_sample")) and int(pr.get("pit_min_split_bf") or 0) > 0:
-                    fl["thin"] = int(pr["pit_min_split_bf"])
-                if int(pr.get("n_low_sample") or 0) > 0:
-                    fl["lowpa"] = int(pr["n_low_sample"])
                 if not d["t"]:
                     pt_ = pr.get("throws"); d["t"] = pt_ if pt_ in ("L", "R") else ""
                 d.update(has_pl=True,
@@ -2825,7 +2818,7 @@ def _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
                          S=int(pr.get("n_SW") or 0), padv=int(pr.get("n_platoon_adv") or 0),
                          pl_sp=_f(pr.get("pit_OPS_allowed")), pl_sp_raw=_f(pr.get("pit_OPS_raw")),
                          pl_mx=_f(pr.get("mx_OPS")), pl_edge=_f(pr.get("edge_OPS")),
-                         pl_reliable=bool(pr.get("reliable")), pl_fl=fl)
+                         pl_reliable=bool(pr.get("reliable")))
             return d
 
         away_abbr = (srow.get("away_abbrev") if srow is not None else None) or _abbr(h["opp_team"])
