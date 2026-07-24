@@ -57,7 +57,7 @@ from market_backfill import MARKET_COLS, attach_market
 DATA_DIR    = os.environ.get("DATA_DIR", "data")
 LEDGER_PATH = os.path.join(DATA_DIR, "mlb_lean_ledger.csv")
 REPORT_PATH = os.path.join(DATA_DIR, "ledger_report.txt")
-MODEL_TAG   = os.environ.get("MODEL_TAG", "xw+plat_consol_v6")
+MODEL_TAG   = os.environ.get("MODEL_TAG", "xw+plat_consol_v7")
 _RECORD_FAMILIES = {
     # v3 changed only ledger locking/identity; its prediction math is v2.
     "xw+plat_consol_v3": ("xw+plat_consol_v2", "xw+plat_consol_v3"),
@@ -68,6 +68,8 @@ _RECORD_FAMILIES = {
     # another prediction-math change, so it starts its own family again.
     # v6 uses expected starter innings plus a role-filtered bullpen aggregate;
     # it starts a new family while all prior tags remain in ledger history.
+    # v7 centre-matches the moments used to estimate xwOBA shrinkage K and
+    # starts another prediction family.
 }
 RECORD_TAGS = tuple(
     t.strip() for t in os.environ.get(
@@ -79,6 +81,7 @@ MODEL_FAMILY_TAGS = (
     ("v4", ("xw+plat_consol_v4",)),
     ("v5", ("xw+plat_consol_v5",)),
     ("v6", ("xw+plat_consol_v6",)),
+    ("v7", ("xw+plat_consol_v7",)),
 )
 N_FIT_MIN   = 120
 _FINAL  = {"Final", "Game Over", "Completed Early"}

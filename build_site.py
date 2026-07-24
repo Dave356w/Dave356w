@@ -78,7 +78,7 @@ USE_TEAM_LOGOS = os.environ.get("USE_TEAM_LOGOS", "1") != "0"
 LOGO_CDN = "https://www.mlbstatic.com/team-logos"
 DATA_DIR = os.environ.get("DATA_DIR", "data")            # grading ledger home
 LEDGER_PATH = os.path.join(DATA_DIR, "mlb_lean_ledger.csv")
-MODEL_TAG = os.environ.get("MODEL_TAG", "xw+plat_consol_v6")  # keep in sync with grade_leans.py
+MODEL_TAG = os.environ.get("MODEL_TAG", "xw+plat_consol_v7")  # keep in sync with grade_leans.py
 _RECORD_FAMILIES = {
     # v3 changed only ledger locking/identity; its prediction math is v2.
     "xw+plat_consol_v3": ("xw+plat_consol_v2", "xw+plat_consol_v3"),
@@ -90,6 +90,8 @@ _RECORD_FAMILIES = {
     # v6 replaces the starter-only pitching input with a nine-inning blend of
     # expected starter workload and a role-filtered bullpen aggregate. It is a
     # new prediction family; older tags remain in the ledger history.
+    # v7 centre-matches the weighted and unweighted moments used to estimate
+    # xwOBA shrinkage K. It changes prediction math and starts another family.
 }
 RECORD_TAGS = tuple(
     t.strip() for t in os.environ.get(
@@ -100,12 +102,14 @@ RECORD_TAGS = tuple(
 # from RECORD_TAGS (win-loss compatibility) -- the two equivalence relations
 # disagree. v5 introduced empirical-Bayes shrinkage that halved the delta scale
 # (median |xw_net| .036 -> .018); v6 inherits v5's shrinkage, so v5 and v6 share
-# units even though v6 is a fresh RECORD family. Pre-v5 tags are on the older,
-# unshrunk scale. The default isolates any unlisted tag (never mixes scales);
-# list a tag here only to pool it with others that share its units.
+# units even though v6 is a fresh RECORD family. v7 changes the estimated K and
+# therefore starts its own scale family. Pre-v5 tags are on the older, unshrunk
+# scale. The default isolates any unlisted tag (never mixes scales); list a tag
+# here only to pool it with others that share its units.
 _SCALE_FAMILIES = {
     "xw+plat_consol_v5": ("xw+plat_consol_v5", "xw+plat_consol_v6"),
     "xw+plat_consol_v6": ("xw+plat_consol_v5", "xw+plat_consol_v6"),
+    "xw+plat_consol_v7": ("xw+plat_consol_v7",),
 }
 SCALE_TAGS = tuple(
     t.strip() for t in os.environ.get(
@@ -1178,8 +1182,8 @@ def fetch_all(slate_date):
             pa = pd.to_numeric(cust["pa"], errors="coerce")
             return list(zip(xw.tolist(), pa.tolist()))
 
-        k_bat, note_b = estimate_shrink_k(_xw_pa_pairs(batter_cust), prior, K_BAT_DEFAULT, K_BAT_BAND)
-        k_pit, note_p = estimate_shrink_k(_xw_pa_pairs(pitcher_cust), prior, K_PIT_DEFAULT, K_PIT_BAND)
+        k_bat, note_b = estimate_shrink_k(_xw_pa_pairs(batter_cust), K_BAT_DEFAULT, K_BAT_BAND)
+        k_pit, note_p = estimate_shrink_k(_xw_pa_pairs(pitcher_cust), K_PIT_DEFAULT, K_PIT_BAND)
         league_baseline["_xwOBA_K_bat"] = k_bat
         league_baseline["_xwOBA_K_pit"] = k_pit
         log(f"  xwOBA shrink: prior={prior} | K_bat={k_bat:.0f} ({note_b}) "
@@ -1340,25 +1344,28 @@ WEIGHT_COL = "BBE"
 USE_WEIGHTED = True
 ADD_STATS = {"EV", "LA°"}
 
-# --- xwOBA empirical-Bayes shrinkage (v5+, retained in v6) -----------------
+# --- xwOBA empirical-Bayes shrinkage (v5+, centre-matched in v7) -----------
 # Season xwOBA (each hitter) and xwOBA-allowed (the starter) are regressed
 # toward the league xwOBA baseline by sample size before they drive the lean:
 #     x* = (n*x + K*prior) / (n + K)
 # so a small-sample bat or a starter with few batters faced is pulled toward
-# league-average rather than taken at face value. Both sides share one prior
-# (the league xwOBA baseline). K is estimated by method of moments per player
-# pool each build: sampling noise scales as 1/n, so the gap between the
-# unweighted and the PA-weighted dispersion around the mean identifies the
-# within-PA (sigma^2) and between-player (tau^2) variance components, and
-# K = sigma^2 / tau^2 -- no fixed per-PA variance constant. The estimate is
-# clamped to a plausible PA band with a fixed fallback and logged each run, so
-# a degenerate pool cannot silently distort leans. Shrinkage touches only
+# league-average rather than taken at face value. Both sides share one shrinkage
+# target (the league xwOBA baseline). K is estimated by method of moments per
+# player pool each build: sampling noise scales as 1/n, so the gap between the
+# unweighted dispersion around the pool's unweighted mean and the PA-weighted
+# dispersion around its PA-weighted mean identifies the within-PA (sigma^2) and
+# between-player (tau^2) variance components. K = sigma^2 / tau^2 and is a
+# property of the pool, independent of the later shrinkage target. The estimate
+# is clamped to a plausible PA band with a fixed fallback and logged each run,
+# so a degenerate pool cannot silently distort leans. Shrinkage touches only
 # xwOBA (the lean stat); the other columns and the raw per-hitter card values
 # are untouched.
 USE_XWOBA_SHRINK = True
 XWOBA_SHRINK_COL = "xwOBA"
-K_BAT_DEFAULT, K_BAT_BAND = 130.0, (40.0, 500.0)
-K_PIT_DEFAULT, K_PIT_BAND = 600.0, (120.0, 1500.0)
+# Fallbacks re-frozen from the centre-matched 2026-07-24 qualifying pools:
+# 573 batters / 116,422 PA (K=172.4); 700 pitchers / 116,029 BF (K=314.5).
+K_BAT_DEFAULT, K_BAT_BAND = 175.0, (80.0, 400.0)
+K_PIT_DEFAULT, K_PIT_BAND = 315.0, (120.0, 1500.0)
 MIN_K_POOL_PA = 10        # drop 1-PA noise from the K-estimation pool
 MIN_K_POOL_N = 20         # need a real population to split the variance
 
@@ -1443,27 +1450,27 @@ def _shrink_one(x, n, prior, k):
     return (n * x + k * prior) / (n + k)
 
 
-def estimate_shrink_k(pairs, prior, default, band):
+def estimate_shrink_k(pairs, default, band):
     """Method-of-moments shrinkage constant K = sigma^2 / tau^2 over (rate, n) pairs.
 
-    Sampling variance scales as 1/n, so the unweighted dispersion (which lets
-    low-n players count fully) exceeds the n-weighted dispersion by exactly the
-    sampling component; that gap identifies sigma^2 (within-PA) and leaves
-    tau^2 (between-player talent). Returns (k, note); falls back to `default`
-    and clamps to `band` when the pool is thin or a component goes non-positive.
+    Sampling variance scales as 1/n, so the unweighted dispersion around the
+    unweighted mean (which lets low-n players count fully) exceeds the
+    n-weighted dispersion around the n-weighted mean by the sampling component.
+    That gap identifies sigma^2 (within-PA) and leaves tau^2 (PA-weighted
+    between-player talent). K is a property of the pool, not of the shrinkage
+    target used later. Returns (k, note); falls back to `default` and clamps to
+    `band` when the pool is thin or a component goes non-positive.
     """
     lo, hi = band
-    if prior is None or not np.isfinite(prior):
-        return default, "fallback:no_prior"
     x = np.array([p[0] for p in pairs], dtype=float)
     n = np.array([p[1] for p in pairs], dtype=float)
     m = np.isfinite(x) & np.isfinite(n) & (n >= MIN_K_POOL_PA)
     x, n = x[m], n[m]
     if len(x) < MIN_K_POOL_N or n.sum() <= 0:
         return default, "fallback:thin_pool"
-    d2 = (x - prior) ** 2
-    Vw = float(np.average(d2, weights=n))                 # PA-weighted dispersion
-    Vu = float(d2.mean())                                 # unweighted dispersion
+    mu_w = float(np.average(x, weights=n))
+    Vw = float(np.average((x - mu_w) ** 2, weights=n))    # PA-weighted talent variance
+    Vu = float(((x - x.mean()) ** 2).mean())              # unweighted, own centre
     coef = float((1.0 / n).mean() - 1.0 / n.mean())       # >= 0 by AM-HM; 0 iff all n equal
     if coef <= 0:
         return default, "fallback:equal_n"
