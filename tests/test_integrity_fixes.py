@@ -102,6 +102,37 @@ class LedgerLockTests(unittest.TestCase):
         )
         self.assertEqual(grade_leans._lock_status(None, None), "legacy_unverified")
 
+    def test_exact_zero_deltas_produce_no_lean(self):
+        xw = _dump_rows(
+            123, "2026-07-24", "2026-07-24T12:00:00Z",
+            "2026-07-24T19:00:00Z",
+        )
+        xw["edge_xwOBA"] = .0123456789
+        pl = pd.DataFrame([
+            dict(game_pk=123, side="away", edge_OPS=.023456789,
+                 reliable=True),
+            dict(game_pk=123, side="home", edge_OPS=.023456789,
+                 reliable=True),
+        ])
+        row = grade_leans.rows_from_dump(xw, pl)[0]
+        self.assertIsNone(row["xw_lean"])
+        self.assertIsNone(row["ops_lean"])
+        self.assertEqual(row["xw_delta"], 0)
+        self.assertEqual(row["ops_delta"], 0)
+        self.assertEqual(row["consensus"], "NA")
+
+    def test_sub_display_precision_delta_remains_a_decision(self):
+        xw = _dump_rows(
+            124, "2026-07-24", "2026-07-24T12:00:00Z",
+            "2026-07-24T19:00:00Z",
+        )
+        xw.loc[xw["side"] == "away", "edge_xwOBA"] = .01234567891
+        xw.loc[xw["side"] == "home", "edge_xwOBA"] = .01234567890
+        row = grade_leans.rows_from_dump(xw, None)[0]
+        self.assertEqual(row["xw_lean"], "HOM")
+        self.assertGreater(row["xw_net"], 0)
+        self.assertNotEqual(row["xw_delta"], 0)
+
     def test_rescheduled_date_gets_distinct_row(self):
         with tempfile.TemporaryDirectory() as td:
             xw = _dump_rows(
@@ -369,11 +400,10 @@ class RecentStarterEraTests(unittest.TestCase):
                 mock.patch.object(build_site, "_get_json", return_value=response), \
                 mock.patch.object(build_site.time, "sleep"):
             result = build_site.load_recent_start_era([123])
-        # 89 outs over 5 starts -> avg_ip 5.93; ERA excludes relief + current day.
-        self.assertEqual(
-            {k: result[123][k] for k in ("era", "starts", "avg_ip")},
-            {"era": 3.03, "starts": 5, "avg_ip": 5.93},
-        )
+        # 89 outs over 5 starts; ERA excludes relief + current day.
+        self.assertEqual(result[123]["era"], 3.03)
+        self.assertEqual(result[123]["starts"], 5)
+        self.assertAlmostEqual(result[123]["avg_ip"], 89 / 3 / 5)
         self.assertEqual(result[123]["appearances"], 7)
         self.assertEqual(result[123]["recent_starts"], 6)
         self.assertEqual(result[123]["stretched_appearances"], 5)
@@ -536,6 +566,7 @@ class LineupStatusDumpTests(unittest.TestCase):
         lu = pd.DataFrame([dict(
             game_pk=1, away_lineup_status="posted", home_lineup_status="projected",
             away_posted_count=9, home_posted_count=0,
+            away_savant_backfill_count=1, home_savant_backfill_count=0,
         )])
         frame = pd.DataFrame({"game_pk": [1, 1], "side": ["away", "home"]})
         for col, series in build_site._lineup_status_columns(lu).items():
@@ -544,10 +575,70 @@ class LineupStatusDumpTests(unittest.TestCase):
         self.assertEqual(list(frame["lineup_status_home"]), ["projected", "projected"])
         self.assertEqual(list(frame["lineup_posted_away"]), [9, 9])
         self.assertEqual(list(frame["lineup_posted_home"]), [0, 0])
+        self.assertEqual(list(frame["lineup_savant_backfill_away"]), [1, 1])
+        self.assertEqual(list(frame["lineup_savant_backfill_home"]), [0, 0])
+
+    def test_legacy_lineup_audit_without_backfill_counts_is_supported(self):
+        lu = pd.DataFrame([dict(
+            game_pk=1, away_lineup_status="posted", home_lineup_status="posted",
+            away_posted_count=9, home_posted_count=9,
+        )])
+        cols = build_site._lineup_status_columns(lu)
+        self.assertTrue(cols["lineup_savant_backfill_away"].isna().all())
+        self.assertTrue(cols["lineup_savant_backfill_home"].isna().all())
 
     def test_empty_or_missing_lineup_df_yields_no_columns(self):
         self.assertEqual(build_site._lineup_status_columns(pd.DataFrame()), {})
         self.assertEqual(build_site._lineup_status_columns(None), {})
+
+
+class PostedLineupBackfillTests(unittest.TestCase):
+    def test_posted_savant_missing_hitter_is_kept_with_team_average(self):
+        batter_stat = {
+            pid: {"xwOBA": .280 + pid / 1000, "PA": 100.0 * pid, "BBE": 50}
+            for pid in range(1, 10)
+        }
+        roster = list(range(1, 10))
+        expected = np.average(
+            [batter_stat[pid]["xwOBA"] for pid in roster],
+            weights=[batter_stat[pid]["PA"] for pid in roster],
+        )
+        with mock.patch.object(build_site, "gf_lineups",
+                               return_value=([999, 1], [])), \
+                mock.patch.object(build_site, "roster_lineup",
+                                  return_value=roster):
+            resolved, meta = build_site.resolve_lineup(
+                10, "away", 20, batter_stat,
+                league_xwoba=.317, return_meta=True,
+            )
+        self.assertEqual(resolved[:2], [999, 1])
+        self.assertEqual(len(resolved), 9)
+        self.assertEqual(meta["posted_count"], 2)
+        self.assertEqual(meta["filled_count"], 7)
+        self.assertEqual(meta["savant_backfill_count"], 1)
+        self.assertAlmostEqual(batter_stat[999]["xwOBA"], expected)
+        self.assertEqual(batter_stat[999]["PA"], 0)
+        self.assertTrue(
+            batter_stat[999][build_site.XWOBA_TEAM_BACKFILL_COL]
+        )
+
+    def test_team_backfill_bypasses_player_level_shrinkage(self):
+        H = pd.DataFrame([
+            dict(game_pk=1, faced_pitcher="SP", pitcher_side="away",
+                 batting_side="home", xwOBA=.340, PA=0, BBE=0,
+                 batting_order=1, xwOBA_team_backfill=True),
+            dict(game_pk=1, faced_pitcher="SP", pitcher_side="away",
+                 batting_side="home", xwOBA=.300, PA=600, BBE=200,
+                 batting_order=2, xwOBA_team_backfill=False),
+        ])
+        prior, k = .317, 175.0
+        out = build_site.aggregate_lineup(
+            H, ["xwOBA"], weighted=True, shrink_prior=prior, shrink_k=k
+        )
+        regular = (600 * .300 + k * prior) / (600 + k)
+        w1, w2 = build_site.LINEUP_SLOT_PA[1], build_site.LINEUP_SLOT_PA[2]
+        expected = (w1 * .340 + w2 * regular) / (w1 + w2)
+        self.assertAlmostEqual(out.loc[0, "opp_xwOBA"], expected)
 
 
 class OpenerFallbackTests(unittest.TestCase):
@@ -590,12 +681,12 @@ class OpenerFallbackTests(unittest.TestCase):
         }
         with mock.patch.object(build_site, "pitcher_roster", return_value=[10, 11, 12]):
             stat, bb = build_site.team_pitching_aggregate(1, pitcher_stat, pitcher_bb)
-        exp_xw = round((.300 * 400 + .360 * 100 + .320 * 250) / 750, 3)
-        self.assertEqual(stat["xwOBA"], exp_xw)
+        exp_xw = (.300 * 400 + .360 * 100 + .320 * 250) / 750
+        self.assertAlmostEqual(stat["xwOBA"], exp_xw)
         self.assertEqual(stat["PA"], 750.0)          # staff total BF -> minimal shrink
         self.assertEqual(stat["BBE"], 390.0)         # summed, not averaged
-        exp_gb = round((45.0 * 200 + 40.0 * 60 + 50.0 * 130) / 390, 3)
-        self.assertEqual(bb["GB%"], exp_gb)          # batted-ball rates weighted by BBE
+        exp_gb = (45.0 * 200 + 40.0 * 60 + 50.0 * 130) / 390
+        self.assertAlmostEqual(bb["GB%"], exp_gb)    # batted-ball rates weighted by BBE
 
     def test_team_aggregate_none_when_staff_too_thin(self):
         pitcher_stat = {10: {"xwOBA": .300, "PA": 400, "BBE": 200}}
@@ -658,7 +749,7 @@ class OpenerFallbackTests(unittest.TestCase):
     def test_expected_ip_uses_role_without_projecting_bulk_follower(self):
         normal = {"avg_ip": 5.8, "starts": 5, "season_avg_ip": 5.5}
         expected = (5 * 5.8 + 3 * 5.5) / 8
-        self.assertAlmostEqual(build_site.expected_pitcher_ip(normal), round(expected, 2))
+        self.assertAlmostEqual(build_site.expected_pitcher_ip(normal), expected)
         short = {"avg_ip": 1.4, "starts": 3, "season_avg_ip": 1.4}
         self.assertEqual(
             build_site.expected_pitcher_ip(
@@ -688,11 +779,11 @@ class OpenerFallbackTests(unittest.TestCase):
             "opener": False,
         }}
         out = build_site.apply_pitching_plans(matchup, plans, {"xwOBA": .317})
-        expected_pitching = round((6 * .305 + 3 * .330) / 9, 3)
+        expected_pitching = (6 * .305 + 3 * .330) / 9
         expected_matchup = build_site.matchup_value(.325, expected_pitching, "xwOBA", .317)
         self.assertEqual(out.loc[0, "starter_xwOBA"], .305)
-        self.assertEqual(out.loc[0, "pit_xwOBA"], expected_pitching)
-        self.assertAlmostEqual(out.loc[0, "mx_xwOBA"], round(expected_matchup, 3))
+        self.assertAlmostEqual(out.loc[0, "pit_xwOBA"], expected_pitching)
+        self.assertAlmostEqual(out.loc[0, "mx_xwOBA"], expected_matchup)
         self.assertEqual(out.loc[0, "expected_sp_ip"], 6.0)
         self.assertEqual(out.loc[0, "bullpen_pitchers"], 7)
 
@@ -746,7 +837,7 @@ class BattingOrderSlotWeightingTests(unittest.TestCase):
         with mock.patch.object(build_site, "USE_SLOT_PA_WEIGHTS", True):
             out = build_site.aggregate_lineup(H, ["xwOBA"], weighted=True)
         expected = (4.61 * .400 + 3.76 * .300) / (4.61 + 3.76)
-        self.assertAlmostEqual(out.loc[0, "opp_xwOBA"], round(expected, 3))
+        self.assertAlmostEqual(out.loc[0, "opp_xwOBA"], expected)
         # Distinct from both the equal mean (.350) and the BBE mean (.320).
         self.assertNotAlmostEqual(out.loc[0, "opp_xwOBA"], .350)
         self.assertNotAlmostEqual(out.loc[0, "opp_xwOBA"], .320)
@@ -756,14 +847,14 @@ class BattingOrderSlotWeightingTests(unittest.TestCase):
         with mock.patch.object(build_site, "USE_SLOT_PA_WEIGHTS", False):
             out = build_site.aggregate_lineup(H, ["xwOBA"], weighted=True)
         expected = (100 * .400 + 400 * .300) / 500  # BBE-weighted == .320
-        self.assertAlmostEqual(out.loc[0, "opp_xwOBA"], round(expected, 3))
+        self.assertAlmostEqual(out.loc[0, "opp_xwOBA"], expected)
 
     def test_aggregate_lineup_falls_back_when_order_missing(self):
         H = self._lineup([(1, .400, 100), (9, .300, 400)]).drop(columns=["batting_order"])
         with mock.patch.object(build_site, "USE_SLOT_PA_WEIGHTS", True):
             out = build_site.aggregate_lineup(H, ["xwOBA"], weighted=True)
         expected = (100 * .400 + 400 * .300) / 500  # falls back to BBE == .320
-        self.assertAlmostEqual(out.loc[0, "opp_xwOBA"], round(expected, 3))
+        self.assertAlmostEqual(out.loc[0, "opp_xwOBA"], expected)
 
 
 class XwobaShrinkageTests(unittest.TestCase):
@@ -845,7 +936,7 @@ class XwobaShrinkageTests(unittest.TestCase):
         s1 = (15 * .500 + k * prior) / (15 + k)
         s2 = (550 * .300 + k * prior) / (550 + k)
         w1, w2 = build_site.LINEUP_SLOT_PA[1], build_site.LINEUP_SLOT_PA[2]
-        expected = round((w1 * s1 + w2 * s2) / (w1 + w2), 3)
+        expected = (w1 * s1 + w2 * s2) / (w1 + w2)
         self.assertAlmostEqual(agg.loc[0, "opp_xwOBA"], expected)
         # Without shrinkage the hot 15-PA bat would drag the composite higher.
         raw = build_site.aggregate_lineup(H, ["xwOBA"], weighted=True)

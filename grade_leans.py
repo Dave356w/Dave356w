@@ -138,14 +138,16 @@ LEDGER_COLS = [
     "xw_full","xw_f5","ops_full","ops_f5",
 ]
 # Audit-only columns. The lineup_* fields record each side's lineup
-# resolution (posted / partial_filled / projected + posted count) as of the
-# accepted snapshot, so lineup freshness at lock is auditable per row. They
-# are NaN on legacy rows dumped before the columns existed — intentionally
-# never backfilled — and instrumentation only: no effect on grading.
+# resolution (posted / partial_filled / projected + posted and Savant-backfill
+# counts) as of the accepted snapshot, so lineup freshness at lock is auditable
+# per row. They are NaN on legacy rows dumped before the columns existed —
+# intentionally never backfilled — and instrumentation only: no effect on
+# grading.
 AUDIT_COLS = [
     "snapshot_utc", "scheduled_start_utc", "lock_status",
     "lineup_status_away", "lineup_status_home",
     "lineup_posted_away", "lineup_posted_home",
+    "lineup_savant_backfill_away", "lineup_savant_backfill_home",
     # True when that side's probable was classified as an opener, plus the
     # classification evidence and actual pitching input used.
     # NaN on legacy rows; never backfilled.
@@ -169,6 +171,7 @@ MODEL_FIELDS = [
     "snapshot_utc","scheduled_start_utc","lock_status",
     "lineup_status_away","lineup_status_home",
     "lineup_posted_away","lineup_posted_home",
+    "lineup_savant_backfill_away","lineup_savant_backfill_home",
     "opener_away","opener_home",
     "opener_reason_away","opener_reason_home",
     "opener_confidence_away","opener_confidence_home",
@@ -256,10 +259,22 @@ def rows_from_dump(xw_df, pl_df):
             eh, ea = _fx(pa.get("edge_OPS")), _fx(ph.get("edge_OPS"))
             if eh is not None and ea is not None:
                 ops_net, ops_delta = eh - ea, abs(eh - ea)
-                ops_lean  = home_team if eh >= ea else away_team
+                ops_lean = (
+                    None if ops_net == 0
+                    else home_team if ops_net > 0
+                    else away_team
+                )
                 ops_valid = bool(pa.get("reliable")) and bool(ph.get("reliable"))
-        xw_lean = home_team if xw_net >= 0 else away_team
-        consensus = "NA" if not ops_valid else ("AGREE" if ops_lean == xw_lean else "DIVERGE")
+        xw_lean = (
+            None if xw_net == 0
+            else home_team if xw_net > 0
+            else away_team
+        )
+        consensus = (
+            "NA"
+            if not ops_valid or xw_lean is None or ops_lean is None
+            else "AGREE" if ops_lean == xw_lean else "DIVERGE"
+        )
         snapshot_utc = a.get("snapshot_utc")
         scheduled_start_utc = a.get("scheduled_start_utc")
         if scheduled_start_utc is None or pd.isna(scheduled_start_utc):
@@ -274,10 +289,10 @@ def rows_from_dump(xw_df, pl_df):
             B_home=B_home, B_away=B_away, P_awaySP=P_aSP, P_homeSP=P_hSP,
             d_lineup=d_lu, d_sp=d_sp,
             home_off_edge=home_off, away_off_edge=away_off,
-            xw_net=round(xw_net, 4), xw_lean=xw_lean, xw_delta=round(abs(xw_net), 4),
-            ops_net=(round(ops_net, 4) if ops_net is not None else np.nan),
+            xw_net=float(xw_net), xw_lean=xw_lean, xw_delta=float(abs(xw_net)),
+            ops_net=(float(ops_net) if ops_net is not None else np.nan),
             ops_lean=ops_lean,
-            ops_delta=(round(ops_delta, 4) if ops_delta is not None else np.nan),
+            ops_delta=(float(ops_delta) if ops_delta is not None else np.nan),
             ops_valid=ops_valid, consensus=consensus,
             snapshot_utc=snapshot_utc, scheduled_start_utc=scheduled_start_utc,
             lock_status=lock_status,
@@ -285,6 +300,12 @@ def rows_from_dump(xw_df, pl_df):
             lineup_status_home=a.get("lineup_status_home", np.nan),
             lineup_posted_away=a.get("lineup_posted_away", np.nan),
             lineup_posted_home=a.get("lineup_posted_home", np.nan),
+            lineup_savant_backfill_away=a.get(
+                "lineup_savant_backfill_away", np.nan
+            ),
+            lineup_savant_backfill_home=a.get(
+                "lineup_savant_backfill_home", np.nan
+            ),
             opener_away=_optbool(a.get("opener")),
             opener_home=_optbool(h.get("opener")),
             opener_reason_away=a.get("opener_reason", np.nan),
