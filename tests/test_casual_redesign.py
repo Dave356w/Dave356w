@@ -382,5 +382,85 @@ class StarterBlockTests(unittest.TestCase):
         self.assertNotIn("\ntd.nm{font:", b.CSS)
 
 
+class ShapeScaleTests(unittest.TestCase):
+    """One documented corner-radius scale, mechanically enforced.
+
+    The card had four undocumented radii (2/3/4/6/20px) chosen per-element.
+    A mixed scale is only defensible with a written rule, so the rule is the
+    token set and this test is the enforcement."""
+
+    TIERS = ("var(--r)", "var(--r-s)", "var(--r-pill)")
+
+    def test_scale_tokens_defined(self):
+        for tok, val in (("--r", "6px"), ("--r-s", "3px"), ("--r-pill", "999px")):
+            self.assertIn(f"{tok}:{val};", b.CSS + ";")
+
+    def test_no_raw_pixel_radii(self):
+        # Every border-radius resolves through a tier. A new one-off px value
+        # is the failure this catches.
+        raw = [d for d in re.findall(r"border-radius:([^;}]+)", b.CSS)
+               if not all(part in self.TIERS or part == "0"
+                          for part in d.split())]
+        self.assertEqual(raw, [], f"raw px radii outside the scale: {raw}")
+
+    def test_every_radius_is_used_and_tiered(self):
+        decls = re.findall(r"border-radius:([^;}]+)", b.CSS)
+        self.assertGreater(len(decls), 10)
+        # Each tier earns its place; an unused tier is a tier too many.
+        for tier in self.TIERS:
+            self.assertTrue(any(tier in d for d in decls), f"{tier} unused")
+
+    def test_containers_and_inline_marks_do_not_swap_tiers(self):
+        # Spot-check the two ends of the scale so a future edit cannot
+        # quietly give a badge a container radius.
+        self.assertIn(".card{background:var(--surface);border:1px solid var(--line);"
+                      "border-radius:var(--r)", b.CSS)
+        self.assertIn("border-radius:var(--r-s);padding:1px 6px}", b.CSS)
+
+
+class CardCopyTests(unittest.TestCase):
+    """Rendered prose carries no em-dash. The character survives only as the
+    'no value' placeholder, where the prescribed replacement (a hyphen) would
+    read as a minus sign next to signed moneylines like -185."""
+
+    def _card(self, **over):
+        r = RenderTests()
+        g, _ = r._cards()
+        g.update(over)
+        return b.cmb_card(g, None)
+
+    def _visible(self, html):
+        return re.sub(r"<[^>]+>", " ", html)
+
+    def _prose(self, html):
+        """Visible text with whole-cell placeholders removed, so what remains
+        is prose. A placeholder is an em-dash that IS the element's entire
+        content (`>—<`); anything else is a sentence connector."""
+        return self._visible(re.sub(r">\s*[—–]\s*<", "><", html))
+
+    def test_no_em_dash_in_card_prose(self):
+        prose = self._prose(self._card())
+        self.assertNotIn("—", prose)
+        self.assertNotIn("–", prose)          # en-dash separator, same ban
+        # Guard the guard: the stripper must not be hiding prose em-dashes.
+        self.assertIn("—", self._visible(self._card()))   # placeholder present
+
+    def test_verdict_and_read_use_sentence_punctuation(self):
+        html = self._card()
+        self.assertIn("Model agrees with the market:", html)
+        self.assertIn("That is a <b>", html)
+
+    def test_placeholder_em_dash_survives(self):
+        # No market and no lean: the em-dash is data, not prose.
+        g_html = self._card(odds={})
+        self.assertIn("<div class='v'>—</div>", g_html)
+        self.assertIn("<span class='lt'>—</span>",
+                      self._card(odds={}, away=dict(RenderTests()._cards()[0]["away"],
+                                                    xw_edge=None)))
+
+    def test_legend_prose_is_em_dash_free(self):
+        self.assertNotIn("—", self._visible(b._legend_guide()))
+
+
 if __name__ == "__main__":
     unittest.main()
