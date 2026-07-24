@@ -48,6 +48,34 @@ class LeanStrengthTests(unittest.TestCase):
     def test_none_delta(self):
         self.assertEqual(b.lean_strength(None, None), (None, None))
 
+    def _ledger(self, rows):
+        # rows: list of (model_tag, xw_net); all graded.
+        return pd.DataFrame([{"model_tag": t, "xw_net": v, "status": "graded"}
+                             for t, v in rows])
+
+    def test_scale_excludes_incompatible_units(self):
+        # 40 current-scale rows (small, shrunk deltas) + 200 pre-v5 rows (large
+        # deltas, 2x scale). The scale must rank against the current units only,
+        # never the mixed pool -- so its max stays on the shrunk scale.
+        rows = ([("xw+plat_consol_v6", 0.015)] * 40
+                + [("xw+plat_consol_v2", 0.040)] * 200)
+        from unittest import mock
+        with mock.patch.object(b, "load_ledger_df", return_value=self._ledger(rows)), \
+                mock.patch.object(b, "SCALE_TAGS", ("xw+plat_consol_v5", "xw+plat_consol_v6")):
+            scale = b.lean_strength_scale()
+        self.assertEqual(scale.size, 40)
+        self.assertLess(scale.max(), 0.02)
+
+    def test_scale_thin_pool_no_allgraded_fallback(self):
+        # Too few scale-compatible rows -> None (fixed cutoffs), NOT a fallback
+        # to the 200 incompatible pre-v5 rows.
+        rows = ([("xw+plat_consol_v6", 0.015)] * 10
+                + [("xw+plat_consol_v2", 0.040)] * 200)
+        from unittest import mock
+        with mock.patch.object(b, "load_ledger_df", return_value=self._ledger(rows)), \
+                mock.patch.object(b, "SCALE_TAGS", ("xw+plat_consol_v5", "xw+plat_consol_v6")):
+            self.assertIsNone(b.lean_strength_scale())
+
 
 class PercentileTests(unittest.TestCase):
     def setUp(self):

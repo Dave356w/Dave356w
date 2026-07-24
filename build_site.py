@@ -96,6 +96,22 @@ RECORD_TAGS = tuple(
         "RECORD_TAGS", ",".join(_RECORD_FAMILIES.get(MODEL_TAG, (MODEL_TAG,)))
     ).split(",") if t.strip()
 )
+# Scale-compatibility: which tags measure |xw_net| on the SAME units. Separate
+# from RECORD_TAGS (win-loss compatibility) -- the two equivalence relations
+# disagree. v5 introduced empirical-Bayes shrinkage that halved the delta scale
+# (median |xw_net| .036 -> .018); v6 inherits v5's shrinkage, so v5 and v6 share
+# units even though v6 is a fresh RECORD family. Pre-v5 tags are on the older,
+# unshrunk scale. The default isolates any unlisted tag (never mixes scales);
+# list a tag here only to pool it with others that share its units.
+_SCALE_FAMILIES = {
+    "xw+plat_consol_v5": ("xw+plat_consol_v5", "xw+plat_consol_v6"),
+    "xw+plat_consol_v6": ("xw+plat_consol_v5", "xw+plat_consol_v6"),
+}
+SCALE_TAGS = tuple(
+    t.strip() for t in os.environ.get(
+        "SCALE_TAGS", ",".join(_SCALE_FAMILIES.get(MODEL_TAG, (MODEL_TAG,)))
+    ).split(",") if t.strip()
+)
 STATCAST_SELECTIONS = ["pa", "k_percent", "bb_percent", "xwoba", "xba", "xslg",
                        "exit_velocity_avg", "launch_angle_avg", "hard_hit_percent"]
 
@@ -3165,23 +3181,31 @@ def market_context_records():
 
 # --- lean strength label (ranks a lean's size vs the ledger) ----------------
 # Point-1 of the casual redesign: turn the raw |Δxw| (".024", ".123") into a
-# word by ranking it against the historical spread of lean magnitudes. Prefers
-# the current RECORD_TAGS family; falls back to all graded rows, then to fixed
-# cutoffs. Display-only -- the lean math, MODEL_TAG, and ledger are untouched.
+# word by ranking it against the historical spread of lean magnitudes. Ranks
+# only against SCALE_TAGS rows (same |xw_net| units as the current model) --
+# never against the full graded pool, which mixes the pre/post-v5 scales.
+# Display-only -- the lean math, MODEL_TAG, and ledger are untouched.
+# Fallback cutoffs used only when the scale-compatible history is below
+# LEAN_STRENGTH_MIN. These are the pre-v5-scale p33/p80 (~2x the v5+ shrunk
+# scale); with 30+ v5+ rows the dynamic scale fires and these do not, but they
+# would over-label a brand-new v5+-scale family until it accrues 30 graded rows.
 LEAN_STRENGTH_FALLBACK = (0.021, 0.060)   # slight < ~p33 <= clear < ~p80 <= strong
 LEAN_STRENGTH_MIN = 30
 
 
 def lean_strength_scale():
-    """Sorted |xw_net| from graded ledger rows, for ranking a lean's size."""
+    """Sorted |xw_net| from graded ledger rows that share the current model's
+    delta scale (SCALE_TAGS), for ranking a lean's size. Never pools across a
+    scale change (v5's shrinkage halved the units), and does not fall back to
+    the full graded pool; returns None (-> fixed cutoffs) when the
+    scale-compatible history is below LEAN_STRENGTH_MIN."""
     led = load_ledger_df()
     if led is None or "xw_net" not in led.columns or "status" not in led.columns:
         return None
     graded = led[led["status"] == "graded"]
-    fam = (graded[graded["model_tag"].isin(RECORD_TAGS)]
-           if "model_tag" in graded.columns else graded)
-    use = fam if len(fam) >= 60 else graded
-    arr = np.sort(pd.to_numeric(use["xw_net"], errors="coerce").abs().dropna().to_numpy())
+    scaled = (graded[graded["model_tag"].isin(SCALE_TAGS)]
+              if "model_tag" in graded.columns else graded)
+    arr = np.sort(pd.to_numeric(scaled["xw_net"], errors="coerce").abs().dropna().to_numpy())
     return arr if arr.size >= LEAN_STRENGTH_MIN else None
 
 
