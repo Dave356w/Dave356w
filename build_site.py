@@ -3043,8 +3043,14 @@ body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 var(--sans);
 .stat .l{font:600 9px/1.4 var(--sans);letter-spacing:.1em;text-transform:uppercase;color:var(--faint);white-space:nowrap}
 .stat .v{font:500 14px/1.3 var(--mono);font-variant-numeric:tabular-nums}
 .stat .s{font:400 10px/1.3 var(--mono);color:var(--faint)}
-.flag{font:600 9px/1.4 var(--sans);letter-spacing:.06em;color:var(--muted);
-  border:1px solid var(--line);border-radius:var(--r-s);padding:0 4px;margin-left:5px;white-space:nowrap}
+/* Pills on the starter's `.who` line -- the tier word and the flags -- share
+   one type treatment so they read as one family. Size, tracking, case and box
+   metrics live here and nowhere else; every rule below adds colour only. The
+   `.tier` accents sit further down with the percentile bars. Spacing comes
+   from `.sp .who`'s 8px gap: no pill carries its own margin. */
+.tier,.flag{font:600 9.5px/1.4 var(--sans);letter-spacing:.06em;text-transform:uppercase;
+  border-radius:var(--r-s);padding:1px 6px;white-space:nowrap}
+.flag{color:var(--muted);border:1px solid var(--line)}
 .flag.warn{color:rgba(var(--warm),1);border-color:rgba(var(--warm),.45)}
 .flag.mute{color:var(--faint)}
 
@@ -3110,7 +3116,7 @@ td.bar{width:86px;padding:4px 8px 4px 2px}
 .spct{display:flex;align-items:center;gap:9px;margin-top:6px}
 .spct .lab{font:600 9.5px/1.4 var(--sans);letter-spacing:.06em;text-transform:uppercase;
   color:var(--muted);min-width:64px}
-.tier{font:600 9.5px/1.4 var(--sans);letter-spacing:.06em;text-transform:uppercase;border-radius:var(--r-s);padding:1px 6px}
+/* `.tier` type + box metrics are shared with `.flag` up in the SP block. */
 .tier.elite{color:rgba(var(--cool),1);border:1px solid rgba(var(--cool),.5);background:rgba(var(--cool),.10)}
 .tier.solid{color:var(--muted);border:1px solid var(--line)}
 .tier.below{color:rgba(var(--warm),1);border:1px solid rgba(var(--warm),.5);background:rgba(var(--warm),.08)}
