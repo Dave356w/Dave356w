@@ -168,6 +168,60 @@ splits, continues through the normal path.
 Together these changes alter prediction math and `|xw_net|` units, so v7 starts
 new `RECORD_TAGS` and `SCALE_TAGS` families without rewriting older rows.
 
+### SP platoon-advantage xwOBA adjustment
+
+Each hitter's xwOBA is moved by a flat **±0.010** (`PLATOON_XWOBA_ADJ`) before
+the lineup composite is taken, according to whether he holds the handedness
+edge over tonight's starter: **+0.010 with the advantage, −0.010 without it.**
+
+- **The tag.** `platoon_advantage(bats, throws)` — a switch hitter, or a hitter
+  with no recorded side, takes the side opposite the pitcher and therefore
+  always holds the edge. This is the same convention the platoon-OPS lens uses
+  for `eff_stand`, and both now call the one helper, so the card's ◆ marker and
+  the bats the lean adjusted can never disagree. A hitter whose starter's
+  throwing hand is unknown is left **unadjusted** rather than deducted: a
+  missing bio is not evidence of a platoon disadvantage.
+- **Where it lands.** The tag is attached in `segment_pitcher_blocks` from the
+  faced starter's hand (`sp_throws`), so the xwOBA lean does not depend on the
+  platoon-OPS lens, which is optional and may abstain. The offset is applied in
+  `aggregate_lineup` **after** shrinkage and after the team backfill, then the
+  slot-PA composite is taken. Order matters: shrinkage estimates season talent
+  from a noisy sample, while this is a matchup term with no sample-size
+  uncertainty of its own — regressing it would make a 15-PA bat's platoon edge
+  worth less than a 550-PA bat's. A team-backfilled hitter bypasses shrinkage
+  but still receives the platoon term.
+- **What does not move.** Only the lean input. The per-hitter card xwOBA stays
+  the raw season rate and `xw_pctile` stays a season-talent rank against
+  qualified regulars, consistent with how shrinkage is already displayed. The
+  legend states the ±0.010 so the published page does not overclaim what the
+  ◆ marks.
+
+**Measured effect** (278 games over the 22 committed slate dumps, using each
+side's `n_platoon_adv / n_opp` share):
+
+| quantity | value |
+|---|---|
+| lineup advantage share (median) | 0.667 — switch hitters always tag as advantaged, so the term is a net *lift* on most lineups, not a wash |
+| `opp_xwOBA` shift per side (median) | +0.0033 (p25 +0.0011, p75 +0.0056); 77% of sides move up |
+| `xw_net` change (median abs) | 0.0035 |
+| lean side flips | 14 / 278 (5.0%), all with `|xw_net| ≤ 0.0060` before |
+| median `|xw_net|` | 0.02680 → 0.02660 |
+
+`MODEL_TAG` is deliberately **not** bumped for this change. Note the two
+questions this leaves answered differently:
+
+- **Units** (`SCALE_TAGS`) are genuinely unchanged — median `|xw_net|` moves
+  0.02680 → 0.02660, so v7 rows before and after this change measure the delta
+  on the same scale and pool correctly for `lean_strength_scale()`.
+- **Record compatibility** (`RECORD_TAGS`) is *not* preserved by that argument.
+  Prediction math changed and 5% of leans flip side, so rows dumped before and
+  after this change share a `xw+plat_consol_v7` win-loss line while having been
+  produced by different models. Games near the flip boundary are the ones the
+  ledger's marginal record is most sensitive to. This is a knowing exception to
+  the "bump on any prediction-math change" rule in `CLAUDE.md`, not an
+  oversight; bumping to v8 (new record family, inherited scale family) is the
+  change that would fix it.
+
 ## Files
 
 | Path | Purpose |

@@ -1448,6 +1448,64 @@ K_PIT_DEFAULT, K_PIT_BAND = 315.0, (120.0, 1500.0)
 MIN_K_POOL_PA = 10        # drop 1-PA noise from the K-estimation pool
 MIN_K_POOL_N = 20         # need a real population to split the variance
 
+# --- SP platoon-advantage xwOBA adjustment ---------------------------------
+# Each hitter's shrunk xwOBA is moved by a flat +/- PLATOON_XWOBA_ADJ depending
+# on whether he holds the handedness edge over tonight's starter, then the
+# lineup composite is taken. The adjustment is applied AFTER shrinkage on
+# purpose: shrinkage estimates season talent from a noisy sample, while this is
+# a matchup term that carries no sample-size uncertainty of its own and must
+# not be regressed away for a low-PA bat. It is a fixed constant, not a value
+# read off the ledger, so no distribution shift can invalidate it.
+#
+# Every hitter is moved -- advantage bats up, non-advantage bats down -- so the
+# effect on a lineup composite is the slot-PA-weighted advantage share minus the
+# non-advantage share, not a uniform shift. A hitter whose starter's throwing
+# hand is unknown is left alone rather than deducted: an absent bio is not
+# evidence of a platoon disadvantage.
+PLATOON_XWOBA_ADJ = 0.010
+PLATOON_ADV_COL = "sp_platoon_adv"     # per-hitter tag carried from the SP block
+SP_THROWS_COL = "sp_throws"            # faced starter's hand, distinct from the hitter's own
+OPP = {"L": "R", "R": "L"}
+
+
+def effective_stand(bats, throws):
+    """Side a hitter effectively bats from against a starter throwing `throws`.
+
+    A switch hitter -- or a hitter with no recorded side -- takes the side
+    opposite the pitcher. Returns None when the starter's hand is unknown,
+    where the platoon question has no answer either way.
+    """
+    t = str(throws or "")[:1].upper()
+    if t not in ("L", "R"):
+        return None
+    b = str(bats or "")[:1].upper()
+    return b if b in ("L", "R") else OPP[t]
+
+
+def platoon_advantage(bats, throws):
+    """True when the hitter holds the platoon edge over this starter.
+
+    False when he does not, None when the starter's hand is unknown. Single
+    source of truth for the tag: it drives both the xwOBA adjustment and the
+    card's platoon marker, so the published page cannot disagree with the lean.
+    """
+    eff = effective_stand(bats, throws)
+    return None if eff is None else eff != str(throws or "")[:1].upper()
+
+
+def platoon_xwoba_offsets(g):
+    """Per-hitter xwOBA offsets from the SP platoon tag, as a Series.
+
+    +PLATOON_XWOBA_ADJ with the edge, -PLATOON_XWOBA_ADJ without it, 0 for an
+    untagged hitter. Returns None when the group carries no tag column at all,
+    which leaves the composite untouched.
+    """
+    if PLATOON_ADV_COL not in getattr(g, "columns", []):
+        return None
+    adv = pd.Series(g[PLATOON_ADV_COL]).reset_index(drop=True)
+    return (adv.map({True: PLATOON_XWOBA_ADJ, False: -PLATOON_XWOBA_ADJ})
+            .astype(float).fillna(0.0))
+
 
 def matchup_value(B, P, stat, L):
     if pd.isna(B) or pd.isna(P) or pd.isna(L):
@@ -1649,7 +1707,7 @@ def segment_pitcher_blocks(df, rate_cols):
 
     pitcher_rows, hitter_rows = [], []
     for _, g in df.groupby(["game_pk", "table_index"], sort=False):
-        cur_p = cur_side = None
+        cur_p = cur_side = cur_throws = None
         for _, r in g.iterrows():
             name = r.get("Name")
             # Structural detection: is_sp marks the probable-pitcher row and
@@ -1659,13 +1717,21 @@ def segment_pitcher_blocks(df, rate_cols):
             if bool(r.get("is_sp")):
                 cur_p = name
                 cur_side = r.get("sp_side")
+                cur_throws = r.get("throws")
                 pitcher_rows.append({**r.to_dict(), "pitcher_side": cur_side})
                 continue
             if cur_p is None:
                 continue
             bat_side = {"away": "home", "home": "away"}.get(cur_side)
+            # The starter's hand rides along under its own key -- the hitter row
+            # already carries a `throws` (his own). Tagging the platoon edge here
+            # rather than reading it off the platoon lens keeps the xwOBA lean
+            # independent of a lens that is optional and may abstain.
             hitter_rows.append({**r.to_dict(), "faced_pitcher": cur_p,
-                                "pitcher_side": cur_side, "batting_side": bat_side})
+                                "pitcher_side": cur_side, "batting_side": bat_side,
+                                SP_THROWS_COL: cur_throws,
+                                PLATOON_ADV_COL: platoon_advantage(r.get("bats"),
+                                                                   cur_throws)})
 
     P = pd.DataFrame(pitcher_rows)
     H = pd.DataFrame(hitter_rows)
@@ -1711,6 +1777,12 @@ def aggregate_lineup(H, rate_cols, weighted=True, shrink_prior=None, shrink_k=No
                     vals = vals.where(~backfilled, raw_vals)
             else:
                 vals = pd.to_numeric(pd.Series(g[c]).reset_index(drop=True), errors="coerce")
+            # Platoon term last, on the shrunk (or backfilled) value: it is a
+            # matchup fact about tonight, not a season rate to be regressed.
+            if c == XWOBA_SHRINK_COL:
+                offsets = platoon_xwoba_offsets(g)
+                if offsets is not None:
+                    vals = vals + offsets
             rec[f"opp_{c}_mean"] = (
                 float(vals.mean(skipna=True)) if vals.notna().any() else np.nan
             )
@@ -1840,7 +1912,8 @@ MIN_PITCHER_SPLIT_BF = 50
 K_BAT = 100
 K_PIT = 200
 K0 = 200
-OPP = {"L": "R", "R": "L"}
+# OPP / effective_stand / platoon_advantage live in CELL 4 -- one handedness
+# convention shared by the xwOBA adjustment and this lens.
 
 
 def build_platoon_matchup(pitcher_rows_df, opp_hitters_df, people,
@@ -1898,7 +1971,7 @@ def build_platoon_matchup(pitcher_rows_df, opp_hitters_df, people,
                 ops, pa = s.get("ops"), s.get("pa") or 0
                 if ops is None or (isinstance(ops, float) and np.isnan(ops)) or pa <= 0:
                     continue
-                eff = b if b in ("L", "R") else OPP[T]
+                eff = effective_stand(b, T)
                 buckets[(eff, T)].append((ops, pa)); allv.append((ops, pa))
         Lc = {}
         for k, v in buckets.items():
@@ -1921,7 +1994,7 @@ def build_platoon_matchup(pitcher_rows_df, opp_hitters_df, people,
         bats = (h.get("bats") or "")[:1].upper()
         pid = h.get("player_id")
         pid_p = _pitcher_attr(gpk, fp, "player_id")
-        eff_stand = bats if bats in ("L", "R") else OPP[T]
+        eff_stand = effective_stand(bats, T)
         L = league_ops_cell.get((eff_stand, T), league_ops_overall)
         Lo = league_ops_overall
         B_raw = _hit_split(pid, T).get("ops"); pa_b = _hit_split(pid, T).get("pa") or 0
@@ -1937,7 +2010,7 @@ def build_platoon_matchup(pitcher_rows_df, opp_hitters_df, people,
             "game_pk": gpk, "matchup": h.get("matchup"), "faced_pitcher": fp,
             BATTING_ORDER_COL: h.get(BATTING_ORDER_COL),
             "pitcher_throws": T, "batter": h["Name"], "bats": bats or "?",
-            "eff_stand": eff_stand, "platoon_adv": eff_stand != T,
+            "eff_stand": eff_stand, "platoon_adv": platoon_advantage(bats, T),
             "ops_vs_hand_raw": B_raw, "ops_vs_hand": float(B) if pd.notna(B) else np.nan,
             "pit_ops_allowed_raw": P_raw,
             "pit_ops_allowed": float(P) if pd.notna(P) else np.nan,
@@ -2286,7 +2359,11 @@ def _hitters_for(opp_hitters_df, detail_df, gpk, fp, lg_ops,
     the xwOBA cell and renders em-dashes for the platoon columns.
 
     Each row also carries xw_pctile: the hitter's season xwOBA, shrunk by his
-    PA and ranked against the qualified-regular reference (display-only)."""
+    PA and ranked against the qualified-regular reference (display-only).
+
+    The platoon marker reads the hitter row's own `sp_platoon_adv` tag -- the
+    same tag that moved his xwOBA in the lean -- so the card still marks the
+    adjusted bats on a build where the platoon-OPS lens abstained."""
     rows = []
     if opp_hitters_df is None or getattr(opp_hitters_df, "empty", True):
         return rows
@@ -2306,6 +2383,9 @@ def _hitters_for(opp_hitters_df, detail_df, gpk, fp, lg_ops,
         xw_raw = _f(r.get("xwOBA"))
         backfill_value = r.get(XWOBA_TEAM_BACKFILL_COL)
         team_backfill = bool(backfill_value) if pd.notna(backfill_value) else False
+        adv_tag = r.get(PLATOON_ADV_COL)
+        if adv_tag is None or not pd.notna(adv_tag):
+            adv_tag = d["platoon_adv"] if d is not None else None
         rows.append(dict(
             name=r["Name"], pos=str(r.get("Pos.") or ""),
             bats=(str(r.get("bats") or ""))[:1].upper(),
@@ -2316,7 +2396,7 @@ def _hitters_for(opp_hitters_df, detail_df, gpk, fp, lg_ops,
                 if team_backfill
                 else pctile_rank(xw_raw, _f(r.get("PA")), ref_bat, prior, k_bat)
             ),
-            adv=bool(d["platoon_adv"]) if d is not None else False,
+            adv=bool(adv_tag) if adv_tag is not None and pd.notna(adv_tag) else False,
             ops=_f(d["ops_vs_hand"]) if d is not None else None,
             pa=int(d["split_pa"] or 0) if d is not None else 0,
             low=bool(d["low_sample"]) if d is not None else False,
@@ -2905,7 +2985,9 @@ def _legend_guide():
         "<span class='wide'>DK moneylines via ESPN at build time; cards ordered by first "
         "pitch. The lean blends the starter's expected innings with a role-filtered bullpen "
         "for the rest of nine, though the three pitcher stats stay the starter's own line. "
-        "◆ marks a platoon advantage.</span>"
+        "◆ marks a platoon advantage over the starter: those bats enter the lineup "
+        "composite 0.010 xwOBA higher, the rest 0.010 lower. The per-hitter xwOBA "
+        "column stays the raw season rate.</span>"
         "</div></div>")
 
 
