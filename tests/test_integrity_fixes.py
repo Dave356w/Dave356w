@@ -943,6 +943,138 @@ class XwobaShrinkageTests(unittest.TestCase):
         self.assertLess(agg.loc[0, "opp_xwOBA"], raw.loc[0, "opp_xwOBA"])
 
 
+class PlatoonXwobaAdjustmentTests(unittest.TestCase):
+    ADJ = build_site.PLATOON_XWOBA_ADJ
+    ADV = build_site.PLATOON_ADV_COL
+
+    def test_tag_follows_handedness_convention(self):
+        self.assertTrue(build_site.platoon_advantage("L", "R"))
+        self.assertTrue(build_site.platoon_advantage("R", "L"))
+        self.assertFalse(build_site.platoon_advantage("R", "R"))
+        self.assertFalse(build_site.platoon_advantage("L", "L"))
+        # A switch hitter takes the opposite side, so he always holds the edge.
+        self.assertTrue(build_site.platoon_advantage("S", "R"))
+        self.assertTrue(build_site.platoon_advantage("S", "L"))
+        # So does a hitter with no recorded side -- same convention as the lens.
+        self.assertTrue(build_site.platoon_advantage(None, "L"))
+
+    def test_unknown_starter_hand_is_untagged_not_a_deduction(self):
+        # An absent bio is not evidence of a platoon disadvantage.
+        self.assertIsNone(build_site.platoon_advantage("R", None))
+        self.assertIsNone(build_site.platoon_advantage("R", ""))
+        self.assertIsNone(build_site.effective_stand("R", None))
+
+    def test_tag_matches_the_platoon_lens_tag(self):
+        # One convention drives both the xwOBA adjustment and the lens's
+        # platoon_adv column; they must never disagree about the same hitter.
+        for bats in ("L", "R", "S", None):
+            for throws in ("L", "R"):
+                eff = build_site.effective_stand(bats, throws)
+                self.assertEqual(build_site.platoon_advantage(bats, throws),
+                                 eff != throws)
+
+    @staticmethod
+    def _lineup(rows, tag=True):
+        # rows: (batting_order, xwOBA, PA, platoon_adv)
+        out = []
+        for (o, xw, pa, adv) in rows:
+            rec = dict(game_pk=1, faced_pitcher="SP", pitcher_side="away",
+                       batting_side="home", xwOBA=xw, PA=pa, BBE=50,
+                       batting_order=o)
+            if tag:
+                rec[build_site.PLATOON_ADV_COL] = adv
+            out.append(rec)
+        return pd.DataFrame(out)
+
+    def test_advantage_bats_up_and_the_rest_down_after_shrinkage(self):
+        prior, k = 0.317, 150.0
+        H = self._lineup([(1, 0.500, 15, True), (2, 0.300, 550, False)])
+        agg = build_site.aggregate_lineup(H, ["xwOBA"], weighted=True,
+                                          shrink_prior=prior, shrink_k=k)
+        # Shrink first, then move by the flat platoon term -- a 15-PA bat's
+        # advantage is worth the same 0.010 as a 550-PA bat's.
+        s1 = (15 * .500 + k * prior) / (15 + k) + self.ADJ
+        s2 = (550 * .300 + k * prior) / (550 + k) - self.ADJ
+        w1, w2 = build_site.LINEUP_SLOT_PA[1], build_site.LINEUP_SLOT_PA[2]
+        expected = (w1 * s1 + w2 * s2) / (w1 + w2)
+        self.assertAlmostEqual(agg.loc[0, "opp_xwOBA"], expected)
+
+    def test_all_advantage_lineup_shifts_composite_up_by_the_constant(self):
+        prior, k = 0.317, 150.0
+        rows = [(1, .340, 400, True), (2, .300, 500, True), (3, .280, 600, True)]
+        adv = build_site.aggregate_lineup(self._lineup(rows), ["xwOBA"],
+                                          weighted=True, shrink_prior=prior, shrink_k=k)
+        none = build_site.aggregate_lineup(
+            self._lineup([(o, x, p, False) for (o, x, p, _) in rows]), ["xwOBA"],
+            weighted=True, shrink_prior=prior, shrink_k=k)
+        self.assertAlmostEqual(adv.loc[0, "opp_xwOBA"] - none.loc[0, "opp_xwOBA"],
+                               2 * self.ADJ)
+
+    def test_untagged_hitter_is_left_alone(self):
+        prior, k = 0.317, 150.0
+        rows = [(1, .340, 400, None), (2, .300, 500, None)]
+        tagged = build_site.aggregate_lineup(self._lineup(rows), ["xwOBA"],
+                                             weighted=True, shrink_prior=prior, shrink_k=k)
+        untagged = build_site.aggregate_lineup(self._lineup(rows, tag=False), ["xwOBA"],
+                                               weighted=True, shrink_prior=prior, shrink_k=k)
+        self.assertAlmostEqual(tagged.loc[0, "opp_xwOBA"], untagged.loc[0, "opp_xwOBA"])
+
+    def test_team_backfilled_bat_still_gets_the_platoon_term(self):
+        # The backfill bypasses player-level shrinkage, not the matchup term.
+        H = pd.DataFrame([
+            dict(game_pk=1, faced_pitcher="SP", pitcher_side="away",
+                 batting_side="home", xwOBA=.340, PA=0, BBE=0, batting_order=1,
+                 xwOBA_team_backfill=True, **{self.ADV: True}),
+        ])
+        agg = build_site.aggregate_lineup(H, ["xwOBA"], weighted=True,
+                                          shrink_prior=.317, shrink_k=175.0)
+        self.assertAlmostEqual(agg.loc[0, "opp_xwOBA"], .340 + self.ADJ)
+
+    def test_only_xwoba_moves(self):
+        H = pd.DataFrame([
+            dict(game_pk=1, faced_pitcher="SP", pitcher_side="away",
+                 batting_side="home", xwOBA=.340, xSLG=.450, PA=400, BBE=50,
+                 batting_order=1, **{self.ADV: True}),
+        ])
+        agg = build_site.aggregate_lineup(H, ["xwOBA", "xSLG"], weighted=True)
+        self.assertAlmostEqual(agg.loc[0, "opp_xwOBA"], .340 + self.ADJ)
+        self.assertAlmostEqual(agg.loc[0, "opp_xSLG"], .450)
+
+    @staticmethod
+    def _block(sp_throws, bats):
+        # One SP block: the probable, then his opposing lineup.
+        meta = dict(game_pk=1, table_index=1, sp_side="away")
+        rows = [dict(meta, Name="SP", is_sp=True, throws=sp_throws, bats="R",
+                     xwOBA=.300, PA=500)]
+        for i, b in enumerate(bats, start=1):
+            # Hitters throw right regardless -- the tag must read the SP's hand.
+            rows.append(dict(meta, Name=f"H{i}", is_sp=False, throws="R", bats=b,
+                             xwOBA=.320, PA=400, batting_order=i))
+        return pd.DataFrame(rows)
+
+    def test_segment_tags_hitters_with_the_faced_starters_hand(self):
+        _, H = build_site.segment_pitcher_blocks(
+            self._block("L", ["L", "R", "S"]), ["xwOBA"])
+        self.assertEqual(list(H[build_site.SP_THROWS_COL]), ["L", "L", "L"])
+        # LHB vs LHP: no edge. RHB and switch vs LHP: edge.
+        self.assertEqual(list(H[self.ADV]), [False, True, True])
+
+    def test_segment_leaves_the_tag_null_when_the_starter_hand_is_missing(self):
+        _, H = build_site.segment_pitcher_blocks(
+            self._block(None, ["L", "R"]), ["xwOBA"])
+        self.assertTrue(all(v is None for v in H[self.ADV]))
+        agg = build_site.aggregate_lineup(H, ["xwOBA"], weighted=True)
+        self.assertAlmostEqual(agg.loc[0, "opp_xwOBA"], .320)
+
+    def test_card_marks_the_same_bats_the_lean_adjusted(self):
+        # The platoon-OPS lens is optional and can abstain; the card's marker
+        # must still come up for exactly the bats whose xwOBA moved.
+        _, H = build_site.segment_pitcher_blocks(
+            self._block("R", ["L", "R"]), ["xwOBA"])
+        hitters = build_site._hitters_for(H, pd.DataFrame(), 1, "SP", None)
+        self.assertEqual([h["adv"] for h in hitters], [True, False])
+
+
 class MarketContextRecordsTests(unittest.TestCase):
     COLS = ["status", "xw_lean", "xw_full", "home", "away", "close_p_home"]
 
