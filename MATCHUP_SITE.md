@@ -170,57 +170,88 @@ new `RECORD_TAGS` and `SCALE_TAGS` families without rewriting older rows.
 
 ### SP platoon-advantage xwOBA adjustment
 
-Each hitter's xwOBA is moved by a flat **±0.010** (`PLATOON_XWOBA_ADJ`) before
-the lineup composite is taken, according to whether he holds the handedness
-edge over tonight's starter: **+0.010 with the advantage, −0.010 without it.**
+A **one-sided** hitter's xwOBA is moved by a flat **±0.010**
+(`PLATOON_XWOBA_ADJ`) before the lineup composite is taken, according to whether
+he holds the handedness edge over tonight's starter: **+0.010 with the
+advantage, −0.010 without it.** A switch hitter is **not** moved.
 
-- **The tag.** `platoon_advantage(bats, throws)` — a switch hitter, or a hitter
-  with no recorded side, takes the side opposite the pitcher and therefore
-  always holds the edge. This is the same convention the platoon-OPS lens uses
-  for `eff_stand`, and both now call the one helper, so the card's ◆ marker and
-  the bats the lean adjusted can never disagree. A hitter whose starter's
-  throwing hand is unknown is left **unadjusted** rather than deducted: a
-  missing bio is not evidence of a platoon disadvantage.
-- **Where it lands.** The tag is attached in `segment_pitcher_blocks` from the
-  faced starter's hand (`sp_throws`), so the xwOBA lean does not depend on the
-  platoon-OPS lens, which is optional and may abstain. The offset is applied in
-  `aggregate_lineup` **after** shrinkage and after the team backfill, then the
-  slot-PA composite is taken. Order matters: shrinkage estimates season talent
-  from a noisy sample, while this is a matchup term with no sample-size
-  uncertainty of its own — regressing it would make a 15-PA bat's platoon edge
-  worth less than a 550-PA bat's. A team-backfilled hitter bypasses shrinkage
-  but still receives the platoon term.
-- **What does not move.** Only the lean input. The per-hitter card xwOBA stays
-  the raw season rate and `xw_pctile` stays a season-talent rank against
-  qualified regulars, consistent with how shrinkage is already displayed. The
-  legend states the ±0.010 so the published page does not overclaim what the
-  ◆ marks.
+Two separate questions, deliberately answered by two helpers:
 
-**Measured effect** (278 games over the 22 committed slate dumps, using each
-side's `n_platoon_adv / n_opp` share):
+- **Does he hold the edge?** `platoon_advantage(bats, throws)` — a switch
+  hitter, or a hitter with no recorded side, takes the side opposite the pitcher
+  and therefore always holds it. Same convention the platoon-OPS lens uses for
+  `eff_stand`; both call the one helper. This drives the card's ◆ marker and the
+  lens's `platoon_adv` / `n_platoon_adv` count.
+- **How far does his season xwOBA move?** `platoon_xwoba_offset(bats, throws)`.
+  The offset is a *deviation from the hitter's own season line*, and that line
+  is already a platoon blend weighted by his real exposure to each pitcher hand.
+  A switch hitter bats opposite the starter in essentially every PA, so his
+  season xwOBA already **is** his advantage-state number — adding 0.010 would
+  count the same edge twice. His offset is **0**, and he is still marked ◆. An
+  unrecorded bats side gets 0 for the same reason an unknown starter hand does:
+  no evidence either way is not evidence of a disadvantage.
 
-| quantity | value |
-|---|---|
-| lineup advantage share (median) | 0.667 — switch hitters always tag as advantaged, so the term is a net *lift* on most lineups, not a wash |
-| `opp_xwOBA` shift per side (median) | +0.0033 (p25 +0.0011, p75 +0.0056); 77% of sides move up |
-| `xw_net` change (median abs) | 0.0035 |
-| lean side flips | 14 / 278 (5.0%), all with `|xw_net| ≤ 0.0060` before |
-| median `|xw_net|` | 0.02680 → 0.02660 |
+**Where it lands.** The tag and the starter's hand (`sp_throws`) are attached in
+`segment_pitcher_blocks`, so the xwOBA lean does not depend on the platoon-OPS
+lens, which is optional and may abstain. The offset is applied in
+`aggregate_lineup` **after** shrinkage and after the team backfill, then the
+slot-PA composite is taken. Order matters: shrinkage estimates season talent
+from a noisy sample, while this is a matchup term with no sample-size
+uncertainty of its own — regressing it would make a 15-PA bat's platoon edge
+worth less than a 550-PA bat's. A team-backfilled hitter bypasses shrinkage but
+still receives the platoon term.
 
-`MODEL_TAG` is deliberately **not** bumped for this change. Note the two
-questions this leaves answered differently:
+**What does not move.** Only the lean input. The per-hitter card xwOBA stays the
+raw season rate and `xw_pctile` stays a season-talent rank against qualified
+regulars, consistent with how shrinkage is already displayed. The legend states
+both the ±0.010 and the switch-hitter exemption, so the page does not overclaim
+what ◆ means for the lean.
+
+**Known residual.** A one-sided hitter's season blend is not 50/50 either. Most
+starters are right-handed, so a LHB's season line is mostly measured *with* the
+advantage and a RHB's mostly *without*, which makes the true deviations
+asymmetric between the two rather than the ±one-constant used here. With `s` the
+hitter's season share of PAs in the advantage state and `g` his platoon gap, the
+centred form is `+(1−s)·g` with the edge and `−s·g` without it — the switch-hitter
+case is just `s ≈ 1`. Correcting the rest needs a magnitude for `g` and per-hitter
+exposure shares (available in `player_splits_hit`, but only via the lens this
+path was deliberately decoupled from), so it is not attempted. The flat constant
+stays deliberately simple.
+
+**Measured effect** (279 games over the committed slate dumps, using each side's
+`n_platoon_adv` / `n_SW` / `n_opp` counts):
+
+| quantity | switch bats moved | switch bats exempt (shipped) |
+|---|---|---|
+| lineup advantage share (median) | 0.667 | 0.556 |
+| `opp_xwOBA` shift per side (median) | +0.0033 | +0.0011 |
+| sides shifted up | 76.6% | 59.9% |
+| `xw_net` change vs no adjustment (median abs) | 0.00349 | 0.00330 |
+| lean flips vs no adjustment | 16 / 279 (5.7%) | 11 / 279 (3.9%) |
+| median `\|xw_net\|` (0.02672 unadjusted) | 0.02677 | 0.02642 |
+
+Switch hitters appear in 67.4% of lineups (mean 0.97 per side) and were 17.7% of
+all tagged-advantage bats, so exempting them removes a systematic upward bias
+rather than a rounding effect.
+
+`MODEL_TAG` is deliberately **not** bumped, for the original adjustment or for
+the switch-hitter exemption that followed it. Note the two questions this leaves
+answered differently:
 
 - **Units** (`SCALE_TAGS`) are genuinely unchanged — median `|xw_net|` moves
-  0.02680 → 0.02660, so v7 rows before and after this change measure the delta
+  0.02672 → 0.02642, so v7 rows before and after these changes measure the delta
   on the same scale and pool correctly for `lean_strength_scale()`.
 - **Record compatibility** (`RECORD_TAGS`) is *not* preserved by that argument.
-  Prediction math changed and 5% of leans flip side, so rows dumped before and
-  after this change share a `xw+plat_consol_v7` win-loss line while having been
-  produced by different models. Games near the flip boundary are the ones the
-  ledger's marginal record is most sensitive to. This is a knowing exception to
-  the "bump on any prediction-math change" rule in `CLAUDE.md`, not an
+  Prediction math changed twice inside `xw+plat_consol_v7`: the adjustment
+  itself flipped 5.7% of leans against no adjustment, and the switch-hitter
+  exemption flipped a further 3.9% against the shipped adjustment. Rows dumped
+  in each of those three periods share one v7 win-loss line while having been
+  produced by three different models, and the flips land on exactly the games
+  the ledger's marginal record is most sensitive to. This is a knowing exception
+  to the "bump on any prediction-math change" rule in `CLAUDE.md`, not an
   oversight; bumping to v8 (new record family, inherited scale family) is the
-  change that would fix it.
+  change that would fix it, and the case for doing so is now stronger than it
+  was for the first change alone.
 
 ## Files
 

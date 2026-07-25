@@ -1449,19 +1449,34 @@ MIN_K_POOL_PA = 10        # drop 1-PA noise from the K-estimation pool
 MIN_K_POOL_N = 20         # need a real population to split the variance
 
 # --- SP platoon-advantage xwOBA adjustment ---------------------------------
-# Each hitter's shrunk xwOBA is moved by a flat +/- PLATOON_XWOBA_ADJ depending
-# on whether he holds the handedness edge over tonight's starter, then the
-# lineup composite is taken. The adjustment is applied AFTER shrinkage on
-# purpose: shrinkage estimates season talent from a noisy sample, while this is
-# a matchup term that carries no sample-size uncertainty of its own and must
-# not be regressed away for a low-PA bat. It is a fixed constant, not a value
-# read off the ledger, so no distribution shift can invalidate it.
+# A one-sided hitter's shrunk xwOBA is moved by a flat +/- PLATOON_XWOBA_ADJ
+# depending on whether he holds the handedness edge over tonight's starter, then
+# the lineup composite is taken. Applied AFTER shrinkage on purpose: shrinkage
+# estimates season talent from a noisy sample, while this is a matchup term that
+# carries no sample-size uncertainty of its own and must not be regressed away
+# for a low-PA bat. It is a fixed constant, not a value read off the ledger, so
+# no distribution shift can invalidate it.
 #
-# Every hitter is moved -- advantage bats up, non-advantage bats down -- so the
-# effect on a lineup composite is the slot-PA-weighted advantage share minus the
-# non-advantage share, not a uniform shift. A hitter whose starter's throwing
-# hand is unknown is left alone rather than deducted: an absent bio is not
-# evidence of a platoon disadvantage.
+# The offset is a DEVIATION FROM THE HITTER'S OWN SEASON LINE, and that line is
+# already a platoon blend weighted by his real exposure to each pitcher hand.
+# So the offset only applies where the season line averages over both platoon
+# states:
+#
+#   * A switch hitter takes the opposite side in essentially every PA, so his
+#     season xwOBA IS his advantage-state number. He holds the edge -- the card
+#     still marks him and the platoon-OPS lens still counts him -- but adding
+#     PLATOON_XWOBA_ADJ on top would count it twice. His offset is 0.
+#   * A hitter with no recorded side gets 0 for the same reason the unknown-hand
+#     case does: no evidence either way, so no move.
+#   * A hitter whose starter's throwing hand is unknown gets 0. An absent bio is
+#     not evidence of a platoon disadvantage.
+#
+# Known residual: a one-sided hitter's season blend is not 50/50 either. Most
+# starters are right-handed, so a LHB's line is mostly measured WITH the
+# advantage and a RHB's mostly without, which makes the true deviations
+# asymmetric between the two rather than the +/- one constant used here. Fixing
+# that needs a platoon-gap magnitude and per-hitter exposure shares; it is not
+# attempted, and the flat constant stays deliberately simple.
 PLATOON_XWOBA_ADJ = 0.010
 PLATOON_ADV_COL = "sp_platoon_adv"     # per-hitter tag carried from the SP block
 SP_THROWS_COL = "sp_throws"            # faced starter's hand, distinct from the hitter's own
@@ -1485,26 +1500,42 @@ def effective_stand(bats, throws):
 def platoon_advantage(bats, throws):
     """True when the hitter holds the platoon edge over this starter.
 
-    False when he does not, None when the starter's hand is unknown. Single
-    source of truth for the tag: it drives both the xwOBA adjustment and the
-    card's platoon marker, so the published page cannot disagree with the lean.
+    False when he does not, None when the starter's hand is unknown. This is the
+    handedness fact -- a switch hitter holds the edge -- and it drives the card's
+    marker and the platoon-OPS lens. It is NOT the xwOBA offset: see
+    platoon_xwoba_offset for why holding the edge and being moved by it differ.
     """
     eff = effective_stand(bats, throws)
     return None if eff is None else eff != str(throws or "")[:1].upper()
 
 
-def platoon_xwoba_offsets(g):
-    """Per-hitter xwOBA offsets from the SP platoon tag, as a Series.
+def platoon_xwoba_offset(bats, throws):
+    """How far to move this hitter's season xwOBA for tonight's platoon state.
 
-    +PLATOON_XWOBA_ADJ with the edge, -PLATOON_XWOBA_ADJ without it, 0 for an
-    untagged hitter. Returns None when the group carries no tag column at all,
-    which leaves the composite untouched.
+    +PLATOON_XWOBA_ADJ with the edge, -PLATOON_XWOBA_ADJ without it -- but only
+    for a one-sided hitter, whose season line averages over both platoon states.
+    A switch hitter's season line is already his advantage-state number, so his
+    offset is 0; so is an unrecorded bats side or an unknown starter hand.
     """
-    if PLATOON_ADV_COL not in getattr(g, "columns", []):
+    adv = platoon_advantage(bats, throws)
+    if adv is None or str(bats or "")[:1].upper() not in ("L", "R"):
+        return 0.0
+    return PLATOON_XWOBA_ADJ if adv else -PLATOON_XWOBA_ADJ
+
+
+def platoon_xwoba_offsets(g):
+    """Per-hitter xwOBA offsets for a lineup group, as a positionally-indexed
+    Series (aligns with the reset-index value vectors wmean consumes).
+
+    Derived from `bats` and the faced starter's hand rather than from a stored
+    number, so the tag and the offset cannot drift apart. Returns None when the
+    group carries neither column, which leaves the composite untouched.
+    """
+    cols = getattr(g, "columns", [])
+    if "bats" not in cols or SP_THROWS_COL not in cols:
         return None
-    adv = pd.Series(g[PLATOON_ADV_COL]).reset_index(drop=True)
-    return (adv.map({True: PLATOON_XWOBA_ADJ, False: -PLATOON_XWOBA_ADJ})
-            .astype(float).fillna(0.0))
+    return pd.Series([platoon_xwoba_offset(b, t)
+                      for b, t in zip(g["bats"], g[SP_THROWS_COL])], dtype=float)
 
 
 def matchup_value(B, P, stat, L):
@@ -2985,9 +3016,11 @@ def _legend_guide():
         "<span class='wide'>DK moneylines via ESPN at build time; cards ordered by first "
         "pitch. The lean blends the starter's expected innings with a role-filtered bullpen "
         "for the rest of nine, though the three pitcher stats stay the starter's own line. "
-        "◆ marks a platoon advantage over the starter: those bats enter the lineup "
-        "composite 0.010 xwOBA higher, the rest 0.010 lower. The per-hitter xwOBA "
-        "column stays the raw season rate.</span>"
+        "◆ marks a platoon advantage over the starter. A one-sided hitter enters the "
+        "lineup composite 0.010 xwOBA higher with the advantage and 0.010 lower "
+        "without it; a switch hitter is left as-is, since he bats opposite the "
+        "starter nearly every time and his season line already reflects that. The "
+        "per-hitter xwOBA column stays the raw season rate.</span>"
         "</div></div>")
 
 
