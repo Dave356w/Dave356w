@@ -57,7 +57,7 @@ from market_backfill import MARKET_COLS, attach_market
 DATA_DIR    = os.environ.get("DATA_DIR", "data")
 LEDGER_PATH = os.path.join(DATA_DIR, "mlb_lean_ledger.csv")
 REPORT_PATH = os.path.join(DATA_DIR, "ledger_report.txt")
-MODEL_TAG   = os.environ.get("MODEL_TAG", "xw+plat_consol_v8")
+MODEL_TAG   = os.environ.get("MODEL_TAG", "xw+plat_consol_v9")
 _RECORD_FAMILIES = {
     # v3 changed only ledger locking/identity; its prediction math is v2.
     "xw+plat_consol_v3": ("xw+plat_consol_v2", "xw+plat_consol_v3"),
@@ -72,6 +72,8 @@ _RECORD_FAMILIES = {
     # starts another prediction family.
     # v8 fixes xwOBA shrinkage K at 100 for both batters and pitchers and
     # starts another prediction family.
+    # v9 applies starter platoon adjustments only to projected starter innings
+    # and uses the neutral lineup against the bullpen.
 }
 RECORD_TAGS = tuple(
     t.strip() for t in os.environ.get(
@@ -85,6 +87,7 @@ MODEL_FAMILY_TAGS = (
     ("v6", ("xw+plat_consol_v6",)),
     ("v7", ("xw+plat_consol_v7",)),
     ("v8", ("xw+plat_consol_v8",)),
+    ("v9", ("xw+plat_consol_v9",)),
 )
 N_FIT_MIN   = 120
 _FINAL  = {"Final", "Game Over", "Completed Early"}
@@ -165,6 +168,19 @@ AUDIT_COLS = [
     "expected_sp_ip_away", "expected_sp_ip_home",
     "bullpen_pitchers_away", "bullpen_pitchers_home",
     "bullpen_relief_bf_away", "bullpen_relief_bf_home",
+    # v9 sequential-phase audit. Suffixes identify the pitcher side; the
+    # opponent-lineup fields therefore describe the offense facing that side.
+    "opp_xwoba_neutral_away", "opp_xwoba_neutral_home",
+    "opp_xwoba_vs_sp_away", "opp_xwoba_vs_sp_home",
+    "platoon_delta_sp_away", "platoon_delta_sp_home",
+    "sp_share_away", "sp_share_home",
+    "bp_share_away", "bp_share_home",
+    "mx_xwoba_sp_away", "mx_xwoba_sp_home",
+    "edge_xwoba_sp_away", "edge_xwoba_sp_home",
+    "mx_xwoba_bp_away", "mx_xwoba_bp_home",
+    "edge_xwoba_bp_away", "edge_xwoba_bp_home",
+    "mx_xwoba_away", "mx_xwoba_home",
+    "edge_xwoba_away", "edge_xwoba_home",
 ]
 MODEL_FIELDS = [
     "game_date","away","home","away_sp","home_sp","model_tag",
@@ -184,6 +200,17 @@ MODEL_FIELDS = [
     "expected_sp_ip_away","expected_sp_ip_home",
     "bullpen_pitchers_away","bullpen_pitchers_home",
     "bullpen_relief_bf_away","bullpen_relief_bf_home",
+    "opp_xwoba_neutral_away","opp_xwoba_neutral_home",
+    "opp_xwoba_vs_sp_away","opp_xwoba_vs_sp_home",
+    "platoon_delta_sp_away","platoon_delta_sp_home",
+    "sp_share_away","sp_share_home",
+    "bp_share_away","bp_share_home",
+    "mx_xwoba_sp_away","mx_xwoba_sp_home",
+    "edge_xwoba_sp_away","edge_xwoba_sp_home",
+    "mx_xwoba_bp_away","mx_xwoba_bp_home",
+    "edge_xwoba_bp_away","edge_xwoba_bp_home",
+    "mx_xwoba_away","mx_xwoba_home",
+    "edge_xwoba_away","edge_xwoba_home",
 ]
 
 def load_ledger():
@@ -249,11 +276,24 @@ def rows_from_dump(xw_df, pl_df):
         if not len(a) or not len(h): continue
         a, h = a.iloc[0], h.iloc[0]
         home_team, away_team = _ab(a["opp_team"]), _ab(h["opp_team"])
-        B_home, P_aSP = _fx(a.get("opp_xwOBA")), _fx(a.get("pit_xwOBA"))
-        B_away, P_hSP = _fx(h.get("opp_xwOBA")), _fx(h.get("pit_xwOBA"))
+        B_home = _fx(a.get("opp_xwOBA_vs_sp"))
+        B_away = _fx(h.get("opp_xwOBA_vs_sp"))
+        if B_home is None:
+            B_home = _fx(a.get("opp_xwOBA"))
+        if B_away is None:
+            B_away = _fx(h.get("opp_xwOBA"))
+        P_aSP = _fx(a.get("starter_xwOBA"))
+        P_hSP = _fx(h.get("starter_xwOBA"))
+        if P_aSP is None:
+            P_aSP = _fx(a.get("pit_xwOBA"))
+        if P_hSP is None:
+            P_hSP = _fx(h.get("pit_xwOBA"))
         home_off, away_off = _fx(a.get("edge_xwOBA")), _fx(h.get("edge_xwOBA"))
-        if home_off is None or away_off is None: continue
-        xw_net = home_off - away_off
+        xw_net = (
+            home_off - away_off
+            if home_off is not None and away_off is not None
+            else None
+        )
         d_lu = (B_home - B_away) if None not in (B_home, B_away) else np.nan
         d_sp = (P_aSP - P_hSP)   if None not in (P_aSP, P_hSP)   else np.nan
         pa, ph = pl_map.get((gpk, "away")), pl_map.get((gpk, "home"))
@@ -269,7 +309,8 @@ def rows_from_dump(xw_df, pl_df):
                 )
                 ops_valid = bool(pa.get("reliable")) and bool(ph.get("reliable"))
         xw_lean = (
-            None if xw_net == 0
+            None
+            if xw_net is None or xw_net == 0
             else home_team if xw_net > 0
             else away_team
         )
@@ -292,7 +333,9 @@ def rows_from_dump(xw_df, pl_df):
             B_home=B_home, B_away=B_away, P_awaySP=P_aSP, P_homeSP=P_hSP,
             d_lineup=d_lu, d_sp=d_sp,
             home_off_edge=home_off, away_off_edge=away_off,
-            xw_net=float(xw_net), xw_lean=xw_lean, xw_delta=float(abs(xw_net)),
+            xw_net=(float(xw_net) if xw_net is not None else np.nan),
+            xw_lean=xw_lean,
+            xw_delta=(float(abs(xw_net)) if xw_net is not None else np.nan),
             ops_net=(float(ops_net) if ops_net is not None else np.nan),
             ops_lean=ops_lean,
             ops_delta=(float(ops_delta) if ops_delta is not None else np.nan),
@@ -327,6 +370,28 @@ def rows_from_dump(xw_df, pl_df):
             bullpen_pitchers_home=h.get("bullpen_pitchers", np.nan),
             bullpen_relief_bf_away=a.get("bullpen_relief_bf", np.nan),
             bullpen_relief_bf_home=h.get("bullpen_relief_bf", np.nan),
+            opp_xwoba_neutral_away=a.get("opp_xwOBA_neutral", np.nan),
+            opp_xwoba_neutral_home=h.get("opp_xwOBA_neutral", np.nan),
+            opp_xwoba_vs_sp_away=a.get("opp_xwOBA_vs_sp", np.nan),
+            opp_xwoba_vs_sp_home=h.get("opp_xwOBA_vs_sp", np.nan),
+            platoon_delta_sp_away=a.get("platoon_delta_sp", np.nan),
+            platoon_delta_sp_home=h.get("platoon_delta_sp", np.nan),
+            sp_share_away=a.get("sp_share", np.nan),
+            sp_share_home=h.get("sp_share", np.nan),
+            bp_share_away=a.get("bp_share", np.nan),
+            bp_share_home=h.get("bp_share", np.nan),
+            mx_xwoba_sp_away=a.get("mx_xwOBA_sp", np.nan),
+            mx_xwoba_sp_home=h.get("mx_xwOBA_sp", np.nan),
+            edge_xwoba_sp_away=a.get("edge_xwOBA_sp", np.nan),
+            edge_xwoba_sp_home=h.get("edge_xwOBA_sp", np.nan),
+            mx_xwoba_bp_away=a.get("mx_xwOBA_bp", np.nan),
+            mx_xwoba_bp_home=h.get("mx_xwOBA_bp", np.nan),
+            edge_xwoba_bp_away=a.get("edge_xwOBA_bp", np.nan),
+            edge_xwoba_bp_home=h.get("edge_xwOBA_bp", np.nan),
+            mx_xwoba_away=a.get("mx_xwOBA", np.nan),
+            mx_xwoba_home=h.get("mx_xwOBA", np.nan),
+            edge_xwoba_away=a.get("edge_xwOBA", np.nan),
+            edge_xwoba_home=h.get("edge_xwOBA", np.nan),
             status="pending", full_away=np.nan, full_home=np.nan,
             f5_away=np.nan, f5_home=np.nan,
             xw_full=None, xw_f5=None, ops_full=None, ops_f5=None,

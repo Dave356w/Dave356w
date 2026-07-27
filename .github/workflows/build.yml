@@ -58,14 +58,13 @@ jobs:
       # and start a new RECORD_TAGS family so incompatible results and weight
       # fits never mix. Audit-only tags may remain in one family. Job-level so
       # grade_leans.py and build_site.py see the same configuration.
-      # v8 retains v7's matchup logic but replaces the per-build empirical-
-      # Bayes K estimates with fixed K=100 for both batters and pitchers. This
-      # changes prediction math and |xw_net| units, so v8 starts fresh record
-      # and scale families. Older rows remain in the ledger/report but never
-      # mix into v8's fit, report, or strength ranking.
-      MODEL_TAG: xw+plat_consol_v8
-      RECORD_TAGS: xw+plat_consol_v8
-      SCALE_TAGS: xw+plat_consol_v8
+      # v9 limits the starter-handedness lineup adjustment to expected starter
+      # innings, then uses the neutral lineup against the bullpen. This changes
+      # prediction math and |xw_net| units, so v9 starts fresh record and scale
+      # families. Older rows remain visible but never mix into v9.
+      MODEL_TAG: xw+plat_consol_v9
+      RECORD_TAGS: xw+plat_consol_v9
+      SCALE_TAGS: xw+plat_consol_v9
     steps:
       - uses: actions/checkout@v4
 

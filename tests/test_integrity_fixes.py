@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 
 import build_site
+import compare_v8_v9
 import grade_leans
 import schedule_gate
 
@@ -39,6 +40,7 @@ class LedgerLockTests(unittest.TestCase):
             dict(game_pk=7, status="graded", model_tag="xw+plat_consol_v6"),
             dict(game_pk=8, status="graded", model_tag="xw+plat_consol_v7"),
             dict(game_pk=9, status="graded", model_tag="xw+plat_consol_v8"),
+            dict(game_pk=10, status="graded", model_tag="xw+plat_consol_v9"),
         ])
         v3_family = ("xw+plat_consol_v2", "xw+plat_consol_v3")
         with mock.patch.object(build_site, "RECORD_TAGS", v3_family), \
@@ -49,7 +51,7 @@ class LedgerLockTests(unittest.TestCase):
         # record family and never mixes with the v2/v3 prediction math.
         with mock.patch.object(build_site, "RECORD_TAGS", ("xw+plat_consol_v4",)):
             self.assertEqual(set(build_site._record_grades(ledger)["game_pk"]), {5})
-        # v5 through v8 each changed prediction math and remain isolated.
+        # v5 through v9 each changed prediction math and remain isolated.
         with mock.patch.object(build_site, "RECORD_TAGS", ("xw+plat_consol_v5",)):
             self.assertEqual(set(build_site._record_grades(ledger)["game_pk"]), {6})
         with mock.patch.object(build_site, "RECORD_TAGS", ("xw+plat_consol_v6",)):
@@ -58,9 +60,12 @@ class LedgerLockTests(unittest.TestCase):
             self.assertEqual(set(build_site._record_grades(ledger)["game_pk"]), {8})
         with mock.patch.object(build_site, "RECORD_TAGS", ("xw+plat_consol_v8",)):
             self.assertEqual(set(build_site._record_grades(ledger)["game_pk"]), {9})
+        with mock.patch.object(build_site, "RECORD_TAGS", ("xw+plat_consol_v9",)):
+            self.assertEqual(set(build_site._record_grades(ledger)["game_pk"]), {10})
         self.assertEqual(
             [label for label, _ in grade_leans._model_family_grades(ledger)],
-            ["v2/v3", "v4", "v5", "v6", "v7", "v8", "xw+plat_consol_v1"],
+            ["v2/v3", "v4", "v5", "v6", "v7", "v8", "v9",
+             "xw+plat_consol_v1"],
         )
 
     def test_load_ledger_preserves_market_history(self):
@@ -77,6 +82,25 @@ class LedgerLockTests(unittest.TestCase):
                 ledger = grade_leans.load_ledger()
             self.assertEqual(ledger.at[0, "close_home_ml"], -120)
             self.assertAlmostEqual(ledger.at[0, "close_p_home"], .54545)
+
+    def test_missing_bullpen_snapshot_is_audited_without_a_fullgame_lean(self):
+        xw = _dump_rows(
+            321,
+            "2026-07-27",
+            "2026-07-27T15:00:00+00:00",
+            "2026-07-27T22:00:00+00:00",
+        )
+        xw.loc[xw["side"] == "away", "edge_xwOBA"] = np.nan
+        xw["pitching_basis"] = "starter_only_no_fullgame_lean"
+        rows = grade_leans.rows_from_dump(xw, None)
+        self.assertEqual(len(rows), 1)
+        self.assertTrue(pd.isna(rows[0]["xw_net"]))
+        self.assertIsNone(rows[0]["xw_lean"])
+        self.assertTrue(pd.isna(rows[0]["xw_delta"]))
+        self.assertEqual(
+            rows[0]["pitching_basis_away"],
+            "starter_only_no_fullgame_lean",
+        )
 
     def test_grades_page_omits_family_history_and_model_column(self):
         ledger = pd.DataFrame([
@@ -270,14 +294,23 @@ class LedgerLockTests(unittest.TestCase):
             xw.loc[xw["side"] == "home", "opener"] = False
             xw.loc[xw["side"] == "away", "opener_reason"] = "reliever_spot_start"
             xw.loc[xw["side"] == "away", "opener_confidence"] = "medium"
-            xw.loc[xw["side"] == "away", "pitching_basis"] = "opener_bullpen_blend"
-            xw.loc[xw["side"] == "home", "pitching_basis"] = "starter_bullpen_blend"
+            xw.loc[xw["side"] == "away", "pitching_basis"] = "opener_bullpen_sequential"
+            xw.loc[xw["side"] == "home", "pitching_basis"] = "starter_bullpen_sequential"
             xw.loc[xw["side"] == "away", "starter_xwOBA"] = .310
             xw.loc[xw["side"] == "home", "starter_xwOBA"] = .300
             xw.loc[xw["side"] == "away", "bullpen_xwOBA"] = .325
             xw.loc[xw["side"] == "home", "bullpen_xwOBA"] = .315
             xw.loc[xw["side"] == "away", "expected_sp_ip"] = 1.5
             xw.loc[xw["side"] == "home", "expected_sp_ip"] = 5.8
+            xw.loc[xw["side"] == "away", "opp_xwOBA_neutral"] = .320
+            xw.loc[xw["side"] == "home", "opp_xwOBA_neutral"] = .315
+            xw.loc[xw["side"] == "away", "opp_xwOBA_vs_sp"] = .330
+            xw.loc[xw["side"] == "home", "opp_xwOBA_vs_sp"] = .310
+            xw.loc[:, "platoon_delta_sp"] = [.010, -.005]
+            xw.loc[:, "sp_share"] = [1.5 / 9, 5.8 / 9]
+            xw.loc[:, "bp_share"] = [7.5 / 9, 3.2 / 9]
+            xw.loc[:, "mx_xwOBA_sp"] = [.323, .301]
+            xw.loc[:, "mx_xwOBA_bp"] = [.328, .310]
             xw.loc[:, "bullpen_pitchers"] = 7
             xw.loc[:, "bullpen_relief_bf"] = 900
             xw.to_csv(os.path.join(td, "leans_2026-07-20_xw.csv"), index=False)
@@ -288,13 +321,17 @@ class LedgerLockTests(unittest.TestCase):
             self.assertEqual(bool(out.iloc[0]["opener_home"]), False)
             self.assertEqual(out.iloc[0]["opener_reason_away"], "reliever_spot_start")
             self.assertEqual(out.iloc[0]["opener_confidence_away"], "medium")
-            self.assertEqual(out.iloc[0]["pitching_basis_away"], "opener_bullpen_blend")
-            self.assertEqual(out.iloc[0]["pitching_basis_home"], "starter_bullpen_blend")
+            self.assertEqual(out.iloc[0]["pitching_basis_away"], "opener_bullpen_sequential")
+            self.assertEqual(out.iloc[0]["pitching_basis_home"], "starter_bullpen_sequential")
             self.assertAlmostEqual(out.iloc[0]["starter_xwoba_away"], .310)
             self.assertAlmostEqual(out.iloc[0]["bullpen_xwoba_home"], .315)
             self.assertAlmostEqual(out.iloc[0]["expected_sp_ip_away"], 1.5)
             self.assertEqual(int(out.iloc[0]["bullpen_pitchers_home"]), 7)
             self.assertEqual(int(out.iloc[0]["bullpen_relief_bf_away"]), 900)
+            self.assertAlmostEqual(out.iloc[0]["opp_xwoba_neutral_away"], .320)
+            self.assertAlmostEqual(out.iloc[0]["opp_xwoba_vs_sp_home"], .310)
+            self.assertAlmostEqual(out.iloc[0]["sp_share_away"], 1.5 / 9)
+            self.assertAlmostEqual(out.iloc[0]["mx_xwoba_bp_home"], .310)
 
     def test_legacy_dump_without_opener_column_stays_nan(self):
         with tempfile.TemporaryDirectory() as td:
@@ -647,7 +684,7 @@ class PostedLineupBackfillTests(unittest.TestCase):
         self.assertAlmostEqual(out.loc[0, "opp_xwOBA"], expected)
 
 
-class OpenerFallbackTests(unittest.TestCase):
+class PitchingPlanTests(unittest.TestCase):
     def test_opener_pids_respects_ip_and_starts_thresholds(self):
         era = {
             1: {"avg_ip": 1.2, "starts": 3},   # opener
@@ -667,39 +704,6 @@ class OpenerFallbackTests(unittest.TestCase):
             },
         }
         self.assertEqual(build_site.opener_classifications(profile), {})
-
-    def test_team_pitching_aggregate_is_bf_weighted(self):
-        pitcher_stat = {
-            10: {"xwOBA": .300, "K%": 28.0, "BB%": 6.0, "PA": 400, "BBE": 200,
-                 "xBA": .230, "xSLG": .380, "EV": 88.0, "LA°": 12.0, "Hard Hit%": 35.0},
-            11: {"xwOBA": .360, "K%": 20.0, "BB%": 9.0, "PA": 100, "BBE": 60,
-                 "xBA": .270, "xSLG": .440, "EV": 90.0, "LA°": 14.0, "Hard Hit%": 42.0},
-            12: {"xwOBA": .320, "K%": 24.0, "BB%": 7.0, "PA": 250, "BBE": 130,
-                 "xBA": .245, "xSLG": .400, "EV": 89.0, "LA°": 13.0, "Hard Hit%": 38.0},
-        }
-        pitcher_bb = {
-            10: {"GB%": 45.0, "FB%": 25.0, "LD%": 20.0, "PU%": 10.0,
-                 "Pull%": 40.0, "Straight%": 35.0, "Oppo%": 25.0},
-            11: {"GB%": 40.0, "FB%": 30.0, "LD%": 20.0, "PU%": 10.0,
-                 "Pull%": 42.0, "Straight%": 34.0, "Oppo%": 24.0},
-            12: {"GB%": 50.0, "FB%": 22.0, "LD%": 18.0, "PU%": 10.0,
-                 "Pull%": 38.0, "Straight%": 36.0, "Oppo%": 26.0},
-        }
-        with mock.patch.object(build_site, "pitcher_roster", return_value=[10, 11, 12]):
-            stat, bb = build_site.team_pitching_aggregate(1, pitcher_stat, pitcher_bb)
-        exp_xw = (.300 * 400 + .360 * 100 + .320 * 250) / 750
-        self.assertAlmostEqual(stat["xwOBA"], exp_xw)
-        self.assertEqual(stat["PA"], 750.0)          # staff total BF -> minimal shrink
-        self.assertEqual(stat["BBE"], 390.0)         # summed, not averaged
-        exp_gb = (45.0 * 200 + 40.0 * 60 + 50.0 * 130) / 390
-        self.assertAlmostEqual(bb["GB%"], exp_gb)    # batted-ball rates weighted by BBE
-
-    def test_team_aggregate_none_when_staff_too_thin(self):
-        pitcher_stat = {10: {"xwOBA": .300, "PA": 400, "BBE": 200}}
-        with mock.patch.object(build_site, "pitcher_roster", return_value=[10]):
-            stat, bb = build_site.team_pitching_aggregate(1, pitcher_stat, {})
-        self.assertIsNone(stat)
-        self.assertIsNone(bb)
 
     def test_team_pitcher_roles_parse_one_team_response(self):
         response = {"stats": [{"splits": [
@@ -773,25 +777,33 @@ class OpenerFallbackTests(unittest.TestCase):
             1.2,
         )
 
-    def test_nine_inning_blend_drives_matchup_but_preserves_starter_card_value(self):
+    def test_sequential_phases_drive_matchup_but_preserve_starter_card_value(self):
         matchup = pd.DataFrame([{
             "game_pk": 1, "side": "away", "pit_xwOBA": .305,
-            "opp_xwOBA": .325, "mx_xwOBA": .313, "edge_xwOBA": -.004,
+            "opp_xwOBA": .325, "opp_xwOBA_vs_sp": .325,
+            "opp_xwOBA_neutral": .315, "platoon_delta_sp": .010,
+            "mx_xwOBA": .313, "edge_xwOBA": -.004,
         }])
         plans = {(1, "away"): {
             "expected_sp_ip": 6.0,
             "bullpen_xwOBA": .330,
             "bullpen_pitchers": 7,
             "bullpen_relief_bf": 900,
-            "pitching_basis": "starter_bullpen_blend",
+            "pitching_basis": "starter_bullpen_sequential",
             "opener": False,
         }}
         out = build_site.apply_pitching_plans(matchup, plans, {"xwOBA": .317})
         expected_pitching = (6 * .305 + 3 * .330) / 9
-        expected_matchup = build_site.matchup_value(.325, expected_pitching, "xwOBA", .317)
+        expected_sp = build_site.matchup_value(.325, .305, "xwOBA", .317)
+        expected_bp = build_site.matchup_value(.315, .330, "xwOBA", .317)
+        expected_matchup = (6 * expected_sp + 3 * expected_bp) / 9
         self.assertEqual(out.loc[0, "starter_xwOBA"], .305)
         self.assertAlmostEqual(out.loc[0, "pit_xwOBA"], expected_pitching)
+        self.assertAlmostEqual(out.loc[0, "mx_xwOBA_sp"], expected_sp)
+        self.assertAlmostEqual(out.loc[0, "mx_xwOBA_bp"], expected_bp)
         self.assertAlmostEqual(out.loc[0, "mx_xwOBA"], expected_matchup)
+        self.assertAlmostEqual(out.loc[0, "sp_share"], 2 / 3)
+        self.assertAlmostEqual(out.loc[0, "bp_share"], 1 / 3)
         self.assertEqual(out.loc[0, "expected_sp_ip"], 6.0)
         self.assertEqual(out.loc[0, "bullpen_pitchers"], 7)
 
@@ -806,11 +818,147 @@ class OpenerFallbackTests(unittest.TestCase):
         )
         lg = {"ERA": 4.20, "xwOBA": .317, "K%": 22.0, "Hard Hit%": 39.0, "OPS": .720}
         side["expected_sp_ip"] = 1.5
-        side["pitching_basis"] = "opener_bullpen_blend"
-        self.assertIn("opener · bullpen blend", build_site._side_html("HOME", side, lg))
+        side["pitching_basis"] = "opener_bullpen_sequential"
+        self.assertIn("opener · bullpen", build_site._side_html("HOME", side, lg))
         self.assertIn("model 1.5 IP + bullpen", build_site._side_html("HOME", side, lg))
         side["is_opener"] = False
-        self.assertNotIn("opener · bullpen blend", build_site._side_html("HOME", side, lg))
+        self.assertNotIn("opener · bullpen", build_site._side_html("HOME", side, lg))
+
+
+class SequentialPitchingModelTests(unittest.TestCase):
+    L = .317
+
+    def phases(self, expected_ip, b0=.320, bsp=.330, sp=.305, bp=.325):
+        return build_site.sequential_xwoba_phases(
+            b0, bsp, sp, bp, self.L, expected_ip
+        )
+
+    def test_q_endpoints_equal_the_corresponding_phase(self):
+        all_sp = self.phases(9.0)
+        all_bp = self.phases(0.0)
+        self.assertAlmostEqual(all_sp["mx_xwOBA"], all_sp["mx_xwOBA_sp"])
+        self.assertAlmostEqual(all_bp["mx_xwOBA"], all_bp["mx_xwOBA_bp"])
+        self.assertEqual(all_sp["sp_share"], 1.0)
+        self.assertEqual(all_bp["sp_share"], 0.0)
+
+    def test_no_platoon_delta_matches_v8_blended_pitching_formula(self):
+        b, sp, bp, expected_ip = .320, .305, .325, 5.4
+        phases = self.phases(expected_ip, b0=b, bsp=b, sp=sp, bp=bp)
+        q = expected_ip / 9
+        v8_pitching = q * sp + (1 - q) * bp
+        v8 = build_site.matchup_value(b, v8_pitching, "xwOBA", self.L)
+        self.assertAlmostEqual(phases["mx_xwOBA"], v8)
+
+    def test_missing_bullpen_suppresses_fullgame_but_keeps_starter_phase(self):
+        matchup = pd.DataFrame([{
+            "game_pk": 1,
+            "side": "away",
+            "pit_xwOBA": .305,
+            "starter_xwOBA": .305,
+            "opp_xwOBA": .330,
+            "opp_xwOBA_vs_sp": .330,
+            "opp_xwOBA_neutral": .320,
+        }])
+        plans = {(1, "away"): {
+            "expected_sp_ip": 1.5,
+            "bullpen_xwOBA": None,
+            "opener": True,
+        }}
+        out = build_site.apply_pitching_plans(matchup, plans, {"xwOBA": self.L})
+        self.assertTrue(pd.notna(out.loc[0, "mx_xwOBA_sp"]))
+        self.assertTrue(pd.isna(out.loc[0, "mx_xwOBA_bp"]))
+        self.assertTrue(pd.isna(out.loc[0, "mx_xwOBA"]))
+        self.assertTrue(pd.isna(out.loc[0, "edge_xwOBA"]))
+        self.assertTrue(pd.isna(out.loc[0, "pit_xwOBA"]))
+        self.assertEqual(
+            out.loc[0, "pitching_basis"],
+            "starter_only_no_fullgame_lean",
+        )
+
+    def test_shorter_workload_reduces_starter_platoon_influence(self):
+        neutral_short = self.phases(1.5, bsp=.320)
+        adjusted_short = self.phases(1.5, bsp=.330)
+        neutral_long = self.phases(6.0, bsp=.320)
+        adjusted_long = self.phases(6.0, bsp=.330)
+        short_effect = adjusted_short["mx_xwOBA"] - neutral_short["mx_xwOBA"]
+        long_effect = adjusted_long["mx_xwOBA"] - neutral_long["mx_xwOBA"]
+        self.assertGreater(long_effect, short_effect)
+        self.assertAlmostEqual(long_effect / short_effect, 4.0)
+
+    def test_opener_hand_changes_only_projected_starter_innings(self):
+        versus_left = self.phases(1.5, bsp=.330)
+        versus_right = self.phases(1.5, bsp=.310)
+        self.assertAlmostEqual(
+            versus_left["mx_xwOBA_bp"],
+            versus_right["mx_xwOBA_bp"],
+        )
+        expected_delta = (1.5 / 9) * (
+            versus_left["mx_xwOBA_sp"] - versus_right["mx_xwOBA_sp"]
+        )
+        self.assertAlmostEqual(
+            versus_left["mx_xwOBA"] - versus_right["mx_xwOBA"],
+            expected_delta,
+        )
+
+    def test_opener_missing_bullpen_never_calls_whole_staff_fallback(self):
+        slate = pd.DataFrame([{
+            "game_pk": 1,
+            "away_probable_pitcher_id": 10,
+            "away_team_id": 100,
+            "home_probable_pitcher_id": np.nan,
+            "home_team_id": np.nan,
+        }])
+        profiles = {10: {"avg_ip": 1.0, "starts": 3}}
+        with mock.patch.object(build_site, "load_team_pitcher_roles", return_value={}), \
+                mock.patch.object(build_site, "bullpen_xwoba_aggregate", return_value=None):
+            plans = build_site.build_pitching_plans(
+                slate, profiles, {}, {"xwOBA": self.L}
+            )
+        self.assertEqual(
+            plans[(1, "away")]["pitching_basis"],
+            "starter_only_no_fullgame_lean",
+        )
+
+
+class V8V9ComparisonTests(unittest.TestCase):
+    def test_replay_uses_identical_phase_inputs_for_both_formulas(self):
+        snapshot = pd.DataFrame([
+            {
+                "game_pk": 1, "game_date": "2026-07-27", "side": "away",
+                "opp_team": "HOME", "opp_xwOBA_neutral": .320,
+                "opp_xwOBA_vs_sp": .330, "starter_xwOBA": .305,
+                "bullpen_xwOBA": .325, "expected_sp_ip": 1.8,
+                "lg_xwOBA": .317, "opener": True,
+            },
+            {
+                "game_pk": 1, "game_date": "2026-07-27", "side": "home",
+                "opp_team": "AWAY", "opp_xwOBA_neutral": .315,
+                "opp_xwOBA_vs_sp": .315, "starter_xwOBA": .310,
+                "bullpen_xwOBA": .320, "expected_sp_ip": 5.4,
+                "lg_xwOBA": .317, "opener": False,
+            },
+        ])
+        sides = compare_v8_v9.recalculate_sides(snapshot)
+        q = 1.8 / 9
+        v8_pitching = q * .305 + (1 - q) * .325
+        expected_v8 = .330 * v8_pitching / .317
+        expected_v9 = q * (.330 * .305 / .317) + (1 - q) * (.320 * .325 / .317)
+        self.assertAlmostEqual(sides.loc[0, "mx_xwOBA_v8_shadow"], expected_v8)
+        self.assertAlmostEqual(sides.loc[0, "mx_xwOBA_v9_recalc"], expected_v9)
+        games = compare_v8_v9.pair_games(sides)
+        self.assertEqual(len(games), 1)
+        self.assertTrue(bool(games.loc[0, "eligible"]))
+        self.assertTrue(bool(games.loc[0, "opener"]))
+
+    def test_legacy_snapshot_without_neutral_composite_is_ineligible(self):
+        legacy = pd.DataFrame([{
+            "opp_xwOBA": .320,
+            "pit_xwOBA": .310,
+            "lg_xwOBA": .317,
+        }])
+        out = compare_v8_v9.recalculate_sides(legacy)
+        self.assertFalse(bool(out.loc[0, "comparison_eligible"]))
+        self.assertTrue(pd.isna(out.loc[0, "mx_xwOBA_v9_recalc"]))
 
 
 class BattingOrderSlotWeightingTests(unittest.TestCase):
@@ -1026,6 +1174,19 @@ class PlatoonXwobaAdjustmentTests(unittest.TestCase):
         w1, w2 = build_site.LINEUP_SLOT_PA[1], build_site.LINEUP_SLOT_PA[2]
         expected = (w1 * s1 + w2 * s2) / (w1 + w2)
         self.assertAlmostEqual(agg.loc[0, "opp_xwOBA"], expected)
+
+    def test_aggregate_preserves_neutral_and_starter_adjusted_composites(self):
+        rows = [(1, .320, 400, "L"), (2, .320, 400, "L")]
+        agg = build_site.aggregate_lineup(
+            self._lineup(rows, hand="R"), ["xwOBA"], weighted=True
+        )
+        self.assertAlmostEqual(agg.loc[0, "opp_xwOBA_neutral"], .320)
+        self.assertAlmostEqual(agg.loc[0, "opp_xwOBA_vs_sp"], .320 + self.ADJ)
+        self.assertAlmostEqual(agg.loc[0, "platoon_delta_sp"], self.ADJ)
+        self.assertAlmostEqual(
+            agg.loc[0, "opp_xwOBA"],
+            agg.loc[0, "opp_xwOBA_vs_sp"],
+        )
 
     def test_all_advantage_lineup_shifts_composite_up_by_the_constant(self):
         prior, k = 0.317, 150.0
