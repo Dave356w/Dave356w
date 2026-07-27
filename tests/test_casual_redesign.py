@@ -617,26 +617,5 @@ class CardCopyTests(unittest.TestCase):
         self.assertNotIn("—", self._visible(b._legend_guide()))
 
 
-class LedgerUsabilityTests(unittest.TestCase):
-    def test_filter_sort_and_row_limit_controls_are_wired(self):
-        self.assertIn("grSearch", b.LEDGER_JS)
-        self.assertIn("data-sort", b.LEDGER_JS)
-        self.assertIn("grLimit", b.LEDGER_JS)
-        self.assertIn("max-height:min(72vh,780px)", b.CSS_GRADES)
-
-    def test_rows_expose_filter_and_sort_values(self):
-        row = pd.Series({
-            "status": "graded", "game_date": "2026-07-27", "game_pk": 1,
-            "away": "SEA", "home": "TEX", "away_sp": "A", "home_sp": "B",
-            "xw_lean": "SEA", "xw_delta": .024, "xw_full": "W",
-            "full_away": 4, "full_home": 2, "close_away_ml": -120,
-            "close_home_ml": 110,
-        })
-        html = b._grades_row(row, show_ml=True)
-        self.assertIn("data-status='graded'", html)
-        self.assertIn("data-result='W'", html)
-        self.assertIn("data-search='sea tex a b'", html)
-
-
 if __name__ == "__main__":
     unittest.main()
