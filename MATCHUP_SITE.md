@@ -168,6 +168,28 @@ splits, continues through the normal path.
 Together these changes alter prediction math and `|xw_net|` units, so v7 starts
 new `RECORD_TAGS` and `SCALE_TAGS` families without rewriting older rows.
 
+### Fixed xwOBA shrinkage (v8)
+
+Model version `xw+plat_consol_v8` keeps the v7 matchup, precision, lineup, and
+full-game pitching logic but replaces the per-build method-of-moments
+shrinkage estimates with one fixed pseudo-sample:
+
+`XWOBA_SHRINK_K = 100`
+
+The same value applies to every batter, probable starter, and reliever before
+the bullpen pool is usage-weighted. The shrinkage target and formula stay the
+same:
+
+`x* = (n·x + 100·prior)/(n+100)`.
+
+An observed deviation from league average therefore retains `n/(n+100)` of
+its raw size: 50% at 100 PA/BF, 75% at 300, and about 86% at 600. Removing the
+daily estimator makes the transformation reproducible and preserves more of
+the player-distribution tails than v7's typically larger separate constants.
+
+This changes both prediction math and `|xw_net|` units, so v8 starts new
+`RECORD_TAGS` and `SCALE_TAGS` families without rewriting historical rows.
+
 ### SP platoon-advantage xwOBA adjustment
 
 A **one-sided** hitter's xwOBA is moved by a flat **±0.010**

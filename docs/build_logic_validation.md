@@ -4,6 +4,9 @@
 > prediction math as of 2026-07-21. v6 retains the verified shrinkage and
 > lineup math but starts a new record family because it replaces the pitching
 > input with an expected-IP starter/bullpen blend; see `MATCHUP_SITE.md`.
+> v8 later retired the method-of-moments estimator and fixed batter and pitcher
+> xwOBA shrinkage at `K=100`; section 2 below documents the historical v5-v7
+> implementation rather than the current one.
 
 **Date:** 2026-07-21
 **Scope:** Statistical soundness and robustness of the daily matchup-lean build

@@ -81,7 +81,7 @@ USE_TEAM_LOGOS = os.environ.get("USE_TEAM_LOGOS", "1") != "0"
 LOGO_CDN = "https://www.mlbstatic.com/team-logos"
 DATA_DIR = os.environ.get("DATA_DIR", "data")            # grading ledger home
 LEDGER_PATH = os.path.join(DATA_DIR, "mlb_lean_ledger.csv")
-MODEL_TAG = os.environ.get("MODEL_TAG", "xw+plat_consol_v7")  # keep in sync with grade_leans.py
+MODEL_TAG = os.environ.get("MODEL_TAG", "xw+plat_consol_v8")  # keep in sync with grade_leans.py
 _RECORD_FAMILIES = {
     # v3 changed only ledger locking/identity; its prediction math is v2.
     "xw+plat_consol_v3": ("xw+plat_consol_v2", "xw+plat_consol_v3"),
@@ -95,6 +95,8 @@ _RECORD_FAMILIES = {
     # new prediction family; older tags remain in the ledger history.
     # v7 centre-matches the weighted and unweighted moments used to estimate
     # xwOBA shrinkage K. It changes prediction math and starts another family.
+    # v8 replaces the per-build estimates with fixed K=100 shrinkage for both
+    # batters and pitchers. It changes prediction math and starts another family.
 }
 RECORD_TAGS = tuple(
     t.strip() for t in os.environ.get(
@@ -106,13 +108,16 @@ RECORD_TAGS = tuple(
 # disagree. v5 introduced empirical-Bayes shrinkage that halved the delta scale
 # (median |xw_net| .036 -> .018); v6 inherits v5's shrinkage, so v5 and v6 share
 # units even though v6 is a fresh RECORD family. v7 changes the estimated K and
-# therefore starts its own scale family. Pre-v5 tags are on the older, unshrunk
-# scale. The default isolates any unlisted tag (never mixes scales); list a tag
-# here only to pool it with others that share its units.
+# therefore starts its own scale family. v8 fixes K at 100 for both pools,
+# widening the shrunk distribution and starting another scale family. Pre-v5
+# tags are on the older, unshrunk scale. The default isolates any unlisted tag
+# (never mixes scales); list a tag here only to pool it with others that share
+# its units.
 _SCALE_FAMILIES = {
     "xw+plat_consol_v5": ("xw+plat_consol_v5", "xw+plat_consol_v6"),
     "xw+plat_consol_v6": ("xw+plat_consol_v5", "xw+plat_consol_v6"),
     "xw+plat_consol_v7": ("xw+plat_consol_v7",),
+    "xw+plat_consol_v8": ("xw+plat_consol_v8",),
 }
 SCALE_TAGS = tuple(
     t.strip() for t in os.environ.get(
@@ -948,7 +953,7 @@ def build_pitching_plans(slate_df, recent_profiles, pitcher_stat, pitcher_bb,
     plans = {}
     classifications = opener_classifications(recent_profiles)
     prior = _f((league_baseline or {}).get("xwOBA"))
-    shrink_k = (league_baseline or {}).get("_xwOBA_K_pit")
+    shrink_k = XWOBA_SHRINK_K
     roles_by_team = {}
     bullpen_by_pair = {}
 
@@ -1237,30 +1242,20 @@ def fetch_all(slate_date):
     log("  league baselines:", {k: league_baseline.get(k) for k in
         ["xwOBA", "Hard Hit%", "K%", "EV", "GB%", "FB%", "Pull%"]})
 
-    # Method-of-moments xwOBA shrinkage constants, estimated once per build over
-    # the full custom leaderboards (xwoba + pa columns). Stashed on
-    # league_baseline so build_xwoba_matchup can read them without a new arg.
+    # v8 uses one fixed pseudo-sample for every batter and pitcher xwOBA,
+    # including each member of the bullpen pool. Keeping the value fixed makes
+    # the shrinkage reproducible across builds and retains more of the observed
+    # distribution's tails than the larger v7 per-pool estimates.
     if USE_XWOBA_SHRINK:
         prior = league_baseline.get("xwOBA")
-
-        def _xw_pa_pairs(cust):
-            if cust is None or "xwoba" not in cust.columns or "pa" not in cust.columns:
-                return []
-            xw = pd.to_numeric(cust["xwoba"], errors="coerce")
-            pa = pd.to_numeric(cust["pa"], errors="coerce")
-            return list(zip(xw.tolist(), pa.tolist()))
-
-        k_bat, note_b = estimate_shrink_k(_xw_pa_pairs(batter_cust), K_BAT_DEFAULT, K_BAT_BAND)
-        k_pit, note_p = estimate_shrink_k(_xw_pa_pairs(pitcher_cust), K_PIT_DEFAULT, K_PIT_BAND)
-        league_baseline["_xwOBA_K_bat"] = k_bat
-        league_baseline["_xwOBA_K_pit"] = k_pit
-        log(f"  xwOBA shrink: prior={prior} | K_bat={k_bat:.0f} ({note_b}) "
-            f"| K_pit={k_pit:.0f} ({note_p})")
+        k_bat = k_pit = XWOBA_SHRINK_K
+        log(f"  xwOBA shrink: prior={prior} | K_bat={k_bat:.0f} (fixed) "
+            f"| K_pit={k_pit:.0f} (fixed)")
 
         # Display-only percentile reference distributions (qualified regulars),
-        # stashed on league_baseline like the K's so the render layer can rank a
-        # player's shrunk xwOBA without re-fetching the leaderboards. Team-games
-        # is estimated once from the batter pool and shared by both qualifiers,
+        # stashed on league_baseline so the render layer can rank a player's
+        # shrunk xwOBA without re-fetching the leaderboards. Team-games is
+        # estimated once from the batter pool and shared by both qualifiers,
         # since pitchers accrue BF at a different per-game rate than hitters.
         g = _est_team_games(pd.to_numeric(batter_cust.get("pa"), errors="coerce")) if batter_cust is not None else None
         qual_bat = PCTILE_QUAL_BAT * g if g else None
@@ -1423,30 +1418,21 @@ WEIGHT_COL = "BBE"
 USE_WEIGHTED = True
 ADD_STATS = {"EV", "LA°"}
 
-# --- xwOBA empirical-Bayes shrinkage (v5+, centre-matched in v7) -----------
+# --- xwOBA empirical-Bayes shrinkage (v5+, fixed K in v8) ------------------
 # Season xwOBA (each hitter) and xwOBA-allowed (the starter) are regressed
 # toward the league xwOBA baseline by sample size before they drive the lean:
 #     x* = (n*x + K*prior) / (n + K)
 # so a small-sample bat or a starter with few batters faced is pulled toward
 # league-average rather than taken at face value. Both sides share one shrinkage
-# target (the league xwOBA baseline). K is estimated by method of moments per
-# player pool each build: sampling noise scales as 1/n, so the gap between the
-# unweighted dispersion around the pool's unweighted mean and the PA-weighted
-# dispersion around its PA-weighted mean identifies the within-PA (sigma^2) and
-# between-player (tau^2) variance components. K = sigma^2 / tau^2 and is a
-# property of the pool, independent of the later shrinkage target. The estimate
-# is clamped to a plausible PA band with a fixed fallback and logged each run,
-# so a degenerate pool cannot silently distort leans. Shrinkage touches only
-# xwOBA (the lean stat); the other columns and the raw per-hitter card values
-# are untouched.
+# target (the league xwOBA baseline). v8 uses K=100 for both batters and
+# pitchers instead of estimating separate values from each day's leaderboards.
+# That preserves more of the observed deviations from league average and makes
+# the transformation stable and directly reproducible. Shrinkage touches only
+# xwOBA (the lean stat); the other columns and raw per-hitter card values are
+# untouched.
 USE_XWOBA_SHRINK = True
 XWOBA_SHRINK_COL = "xwOBA"
-# Fallbacks re-frozen from the centre-matched 2026-07-24 qualifying pools:
-# 573 batters / 116,422 PA (K=172.4); 700 pitchers / 116,029 BF (K=314.5).
-K_BAT_DEFAULT, K_BAT_BAND = 175.0, (80.0, 400.0)
-K_PIT_DEFAULT, K_PIT_BAND = 315.0, (120.0, 1500.0)
-MIN_K_POOL_PA = 10        # drop 1-PA noise from the K-estimation pool
-MIN_K_POOL_N = 20         # need a real population to split the variance
+XWOBA_SHRINK_K = 100.0
 
 # --- SP platoon-advantage xwOBA adjustment ---------------------------------
 # A one-sided hitter's shrunk xwOBA is moved by a flat +/- PLATOON_XWOBA_ADJ
@@ -1616,40 +1602,6 @@ def _shrink_one(x, n, prior, k):
     n = float(n) if pd.notna(n) else 0.0
     x = float(prior) if pd.isna(x) else float(x)
     return (n * x + k * prior) / (n + k)
-
-
-def estimate_shrink_k(pairs, default, band):
-    """Method-of-moments shrinkage constant K = sigma^2 / tau^2 over (rate, n) pairs.
-
-    Sampling variance scales as 1/n, so the unweighted dispersion around the
-    unweighted mean (which lets low-n players count fully) exceeds the
-    n-weighted dispersion around the n-weighted mean by the sampling component.
-    That gap identifies sigma^2 (within-PA) and leaves tau^2 (PA-weighted
-    between-player talent). K is a property of the pool, not of the shrinkage
-    target used later. Returns (k, note); falls back to `default` and clamps to
-    `band` when the pool is thin or a component goes non-positive.
-    """
-    lo, hi = band
-    x = np.array([p[0] for p in pairs], dtype=float)
-    n = np.array([p[1] for p in pairs], dtype=float)
-    m = np.isfinite(x) & np.isfinite(n) & (n >= MIN_K_POOL_PA)
-    x, n = x[m], n[m]
-    if len(x) < MIN_K_POOL_N or n.sum() <= 0:
-        return default, "fallback:thin_pool"
-    mu_w = float(np.average(x, weights=n))
-    Vw = float(np.average((x - mu_w) ** 2, weights=n))    # PA-weighted talent variance
-    Vu = float(((x - x.mean()) ** 2).mean())              # unweighted, own centre
-    coef = float((1.0 / n).mean() - 1.0 / n.mean())       # >= 0 by AM-HM; 0 iff all n equal
-    if coef <= 0:
-        return default, "fallback:equal_n"
-    sig2 = (Vu - Vw) / coef
-    tau2 = Vw - sig2 / n.mean()
-    if sig2 <= 0 or tau2 <= 0:
-        return default, "fallback:neg_var_component"
-    k = sig2 / tau2
-    if not np.isfinite(k) or k <= 0:
-        return default, "fallback:bad_k"
-    return float(min(max(k, lo), hi)), ("ok" if lo <= k <= hi else f"clamped_from_{k:.0f}")
 
 
 # --- percentile display scale (casual redesign) -----------------------------
@@ -1865,13 +1817,11 @@ def build_matchup(P, agg, rate_cols, league_baseline, shrink_prior=None, shrink_
 
 def build_xwoba_matchup(pitchers_df, league_baseline):
     prior = league_baseline.get(XWOBA_SHRINK_COL) if USE_XWOBA_SHRINK else None
-    k_bat = league_baseline.get("_xwOBA_K_bat")
-    k_pit = league_baseline.get("_xwOBA_K_pit")
     pitcher_rows_df, opp_hitters_df = segment_pitcher_blocks(pitchers_df, STATCAST_RATE_COLS)
     opp_lineup_agg_df = aggregate_lineup(opp_hitters_df, STATCAST_RATE_COLS, weighted=USE_WEIGHTED,
-                                         shrink_prior=prior, shrink_k=k_bat)
+                                         shrink_prior=prior, shrink_k=XWOBA_SHRINK_K)
     matchup_df = build_matchup(pitcher_rows_df, opp_lineup_agg_df, STATCAST_RATE_COLS, league_baseline,
-                               shrink_prior=prior, shrink_k=k_pit)
+                               shrink_prior=prior, shrink_k=XWOBA_SHRINK_K)
     return matchup_df, pitcher_rows_df, opp_hitters_df
 
 
@@ -2865,12 +2815,12 @@ def _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
                                     "home": s.get("home_lineup_status")}
     lg_ops_f = _f(lg_ops)
 
-    # Percentile reference distributions + shrink constants (stashed on
-    # league_baseline in fetch_all). Missing on pre-market/degraded builds ->
-    # every pctile_rank returns None and the bars fall back to em-dashes.
+    # Percentile reference distributions are stashed on league_baseline in
+    # fetch_all. Missing on pre-market/degraded builds -> every pctile_rank
+    # returns None and the bars fall back to em-dashes.
     _lb0 = league_baseline or {}
     _prior = _f(_lb0.get("xwOBA"))
-    _k_bat = _lb0.get("_xwOBA_K_bat")   # pitcher pctile ranks an already-shrunk value
+    _k_bat = XWOBA_SHRINK_K
     _ref_bat = _lb0.get("_pctile_ref_bat")
     _ref_pit = _lb0.get("_pctile_ref_pit")
     _ref_kbb = _lb0.get("_pctile_ref_kbb")
