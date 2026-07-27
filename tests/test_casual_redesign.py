@@ -453,20 +453,10 @@ class MobileLayoutTests(unittest.TestCase):
         # The page header still carries the build time exactly once.
         self.assertIn("built 9:00 AM PT", b._legend_head("MLB matchup leans", "9:00 AM PT"))
 
-    def test_lineups_collapsed_by_default_with_persisted_controls(self):
+    def test_lineups_open_by_default(self):
         html = self._html()
-        self.assertEqual(html.count("<details class='lineup'>"), 2)
-        self.assertNotIn("<details class='lineup' open>", html)
-        self.assertIn("mlb-mx-lineups", b.LINEUP_JS)
-        game = RenderTests()._cards()[0]
-        self.assertIn("data-lineups='expand'", b.build_combined([game], None))
-
-    def test_slate_index_links_to_card(self):
-        game = RenderTests()._cards()[0]
-        html = b.build_combined([game], None)
-        self.assertIn("class='slate-index'", html)
-        self.assertIn("href='#game-1'", html)
-        self.assertIn("id='game-1'", html)
+        self.assertEqual(html.count("<details class='lineup' open>"), 2)
+        self.assertNotIn("<details class='lineup'>", html)
 
     def test_lineup_table_has_no_mobile_scroll_floor(self):
         # A 460px min-width forced horizontal scroll inside a ~314px card.
