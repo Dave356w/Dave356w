@@ -11,10 +11,12 @@ It pulls everything through keyless APIs (no browser, no secrets):
 - **Baseball Savant `gf?game_pk=`** — posted lineups (JSON)
 - **Baseball Savant CSV leaderboards** — custom (xwOBA/xBA/xSLG/EV/LA/HardHit/K/BB) + batted-ball, cached once per day
 
-The model matches the updated notebook's multiplicative-ratio matchup anchored
-on league average (`M = B·P/L`, additive for EV/LA), with `edge = M − L` as the
-signal. This is a relative-rate heuristic, not the probability-odds form of
-log5. The platoon lens regresses each side's vs-hand OPS toward an
+The model uses a phase-specific multiplicative-ratio matchup anchored on league
+average (`M = B·P/L`, additive for EV/LA), with `edge = M − L` as the signal.
+The starter phase uses the lineup adjusted for the probable starter's hand; the
+bullpen phase currently uses the neutral lineup. This is a relative-rate
+heuristic, not the probability-odds form of log5. The platoon lens regresses
+each side's vs-hand OPS toward an
 overall×league-platoon prior and is reliability-gated. Lean is xwOBA-driven;
 the platoon lens is still computed and graded into the ledger for auditing but
 is no longer surfaced on the cards (the display is xwOBA-only).
@@ -82,8 +84,8 @@ already fetches, plus one active-roster call per opener club) for the opener's
 own numbers; the swap happens in the lookup dicts, so the whole matchup
 pipeline downstream uses the staff numbers. The aggregate carries the staff's
 total batters faced as its sample size, so the xwOBA shrinkage step barely pulls
-it toward league. If too few staff pitchers appear in the leaderboard
-(`OPENER_MIN_STAFF`) the fallback is skipped and the opener's own line is kept.
+it toward league. If fewer than three staff pitchers appeared in the
+leaderboard, the fallback was skipped and the opener's own line was kept.
 
 The platoon lens was deliberately left untouched — an opener's tiny vL/vR split
 already fails the reliability gate, so that lens abstains on its own. Openers
@@ -189,6 +191,48 @@ the player-distribution tails than v7's typically larger separate constants.
 
 This changes both prediction math and `|xw_net|` units, so v8 starts new
 `RECORD_TAGS` and `SCALE_TAGS` families without rewriting historical rows.
+
+### Sequential starter/bullpen matchup (v9)
+
+Model version `xw+plat_consol_v9` preserves two shrunk lineup composites:
+
+- `B_0 = opp_xwOBA_neutral`, before starter-handedness adjustments.
+- `B_SP = opp_xwOBA_vs_sp`, after the one-sided-hitter ±0.010 adjustment.
+- `platoon_delta_sp = B_SP − B_0`.
+
+The starter and bullpen phases are calculated separately:
+
+`M_SP = B_SP · P_SP / L`
+
+`M_BP = B_0 · P_BP / L`
+
+`M_sequential = q · M_SP + (1 − q) · M_BP`, where
+`q = expected_sp_ip / 9`.
+
+The role-filtered bullpen construction is unchanged: active roster, probable
+starter excluded, rotation arms excluded by role thresholds, each reliever
+shrunk before relief-workload aggregation. Bullpen handedness is neutral until
+a defensible follower/handedness projection exists. The OPS platoon lens remains
+diagnostic and never enters the xwOBA lean.
+
+If either side lacks a valid role-filtered bullpen aggregate, its starter phase
+is still calculated and displayed, but the game's full-game xwOBA lean is
+suppressed. The side is marked
+`pitching_basis=starter_only_no_fullgame_lean`; v9 never treats the probable as
+a nine-inning fallback. The opener whole-staff emergency aggregate is removed
+because it could include rotation pitchers and double-count the probable.
+
+Daily snapshots persist the neutral and starter-adjusted lineup composites,
+starter and bullpen xwOBA, expected innings and shares, each phase matchup, the
+sequential matchup/edge, and the pitching basis. v9 starts isolated
+`RECORD_TAGS` and `SCALE_TAGS` families; v8 results remain historical only.
+
+`python compare_v8_v9.py` recalculates the v8 shadow and v9 sequential formula
+from identical persisted inputs, then reports lean flips, `xw_net` changes,
+expected-IP buckets, openers, bullpen-heavy games, market disagreement, and
+flat-stake ROI when settled ledger/closing-price data exists. Pre-v9 snapshots
+are explicitly ineligible because they did not persist `B_0`; the utility never
+rebuilds an old slate from current Savant data.
 
 ### SP platoon-advantage xwOBA adjustment
 

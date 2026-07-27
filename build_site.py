@@ -81,7 +81,7 @@ USE_TEAM_LOGOS = os.environ.get("USE_TEAM_LOGOS", "1") != "0"
 LOGO_CDN = "https://www.mlbstatic.com/team-logos"
 DATA_DIR = os.environ.get("DATA_DIR", "data")            # grading ledger home
 LEDGER_PATH = os.path.join(DATA_DIR, "mlb_lean_ledger.csv")
-MODEL_TAG = os.environ.get("MODEL_TAG", "xw+plat_consol_v8")  # keep in sync with grade_leans.py
+MODEL_TAG = os.environ.get("MODEL_TAG", "xw+plat_consol_v9")  # keep in sync with grade_leans.py
 _RECORD_FAMILIES = {
     # v3 changed only ledger locking/identity; its prediction math is v2.
     "xw+plat_consol_v3": ("xw+plat_consol_v2", "xw+plat_consol_v3"),
@@ -97,6 +97,9 @@ _RECORD_FAMILIES = {
     # xwOBA shrinkage K. It changes prediction math and starts another family.
     # v8 replaces the per-build estimates with fixed K=100 shrinkage for both
     # batters and pitchers. It changes prediction math and starts another family.
+    # v9 applies the starter-handedness lineup adjustment only to expected
+    # starter innings, then uses the neutral lineup against the bullpen. It is
+    # isolated from v8 for both records and delta-scale ranking.
 }
 RECORD_TAGS = tuple(
     t.strip() for t in os.environ.get(
@@ -118,6 +121,7 @@ _SCALE_FAMILIES = {
     "xw+plat_consol_v6": ("xw+plat_consol_v5", "xw+plat_consol_v6"),
     "xw+plat_consol_v7": ("xw+plat_consol_v7",),
     "xw+plat_consol_v8": ("xw+plat_consol_v8",),
+    "xw+plat_consol_v9": ("xw+plat_consol_v9",),
 }
 SCALE_TAGS = tuple(
     t.strip() for t in os.environ.get(
@@ -136,7 +140,7 @@ FULL_LEAGUE_PLATOON_BASELINES = True
 MIN_LEAGUE_BASELINE_PA = 1
 RECENT_STARTS = 5
 
-# Full-game pitching blend. A probable pitcher is treated as an opener when either his
+# Sequential starter/bullpen model. A probable pitcher is treated as an opener when either his
 # recent starts are repeatedly short or his recent usage is overwhelmingly
 # short relief work. The latter catches relievers named for a one-off start
 # before they have accumulated two official starts. v6 estimates the probable
@@ -147,16 +151,16 @@ RECENT_STARTS = 5
 # The bullpen pool uses season role stats to exclude rotation starters:
 # <=35% of appearances started and <=3.0 IP per appearance. Each included
 # reliever's xwOBA is shrunk independently before the pool is weighted by his
-# estimated relief batters faced. If the role endpoint is unavailable, a
-# normal starter stays starter-only; an opener may use the legacy whole-staff
-# aggregate as an explicitly audited last resort.
+# estimated relief batters faced. If the role-filtered aggregate is unavailable,
+# the starter phase is still displayed but the full-game lean is suppressed.
+# There is no whole-staff opener fallback: it could include rotation arms and
+# double-count the probable pitcher.
 # The platoon lens is left alone -- an opener's tiny vL/vR split already fails
 # the reliability gate, so that lens abstains on its own. Each affected side is
 # flagged with its detection reason and pitching basis so it stays auditable.
-OPENER_FALLBACK = True
 OPENER_MAX_AVG_IP = 3.0     # avg IP/start below this => treat probable as an opener
 OPENER_MIN_STARTS = 2       # need a repeated pattern, not one rain-shortened start
-OPENER_MIN_STAFF = 3        # team aggregate needs at least this many staff pitchers
+BULLPEN_MIN_PITCHERS = 3    # minimum role-filtered relievers for an aggregate
 OPENER_ROLE_APPEARANCES = 10
 OPENER_ROLE_MIN_APPEARANCES = 5
 OPENER_ROLE_MAX_STARTS = 1
@@ -820,52 +824,6 @@ def relief_pitcher_ids(team_id, role_stats, probable_pid=None):
     return out
 
 
-def team_pitching_aggregate(team_id, pitcher_stat, pitcher_bb):
-    """Batters-faced-weighted aggregate of a club's rostered pitchers over the
-    Savant custom leaderboard the build already fetched. Returns (stat, bb)
-    dicts shaped like pitcher_stat[pid] / pitcher_bb[pid] so an opener's entry
-    can be swapped for the staff aggregate, or (None, None) when too few staff
-    pitchers appear in the leaderboard to trust the aggregate."""
-    weighted = []
-    for pid in pitcher_roster(team_id):
-        pa = _f((pitcher_stat.get(pid) or {}).get("PA"))
-        if pa and pa > 0:
-            weighted.append((pid, pa))
-    if len(weighted) < OPENER_MIN_STAFF:
-        return None, None
-    stat = {}
-    for col in STAT_COLS:
-        if col == "BBE":                       # a count, summed below, not a rate
-            continue
-        num = den = 0.0
-        for pid, pa in weighted:
-            v = _f(pitcher_stat[pid].get(col))
-            if v is None:
-                continue
-            num += v * pa
-            den += pa
-        stat[col] = (num / den) if den else np.nan
-    # Large batters-faced total => the shrinkage step barely pulls the staff
-    # xwOBA toward league, which is what we want for a full-staff sample.
-    stat["PA"] = float(sum(pa for _, pa in weighted))
-    stat["BBE"] = float(sum(_f((pitcher_stat.get(pid) or {}).get("BBE")) or 0
-                            for pid, _ in weighted))
-    bb_weighted = [(pid, _f((pitcher_stat.get(pid) or {}).get("BBE")))
-                   for pid, _ in weighted]
-    bb_weighted = [(pid, w) for pid, w in bb_weighted if w and w > 0]
-    bb = {}
-    for col in BB_COLS:
-        num = den = 0.0
-        for pid, w in bb_weighted:
-            v = _f((pitcher_bb.get(pid) or {}).get(col))
-            if v is None:
-                continue
-            num += v * w
-            den += w
-        bb[col] = (num / den) if den else np.nan
-    return stat, bb
-
-
 def bullpen_xwoba_aggregate(team_id, probable_pid, pitcher_stat, role_stats,
                             prior, shrink_k):
     """Role-filtered bullpen xwOBA with per-pitcher empirical-Bayes shrinkage.
@@ -894,7 +852,7 @@ def bullpen_xwoba_aggregate(team_id, probable_pid, pitcher_stat, role_stats,
         shrunk = _shrink_one(xw, bf, prior, shrink_k)
         if shrunk is not None and pd.notna(shrunk):
             weighted.append((pid, usage_bf, float(shrunk)))
-    if len(weighted) < OPENER_MIN_STAFF:
+    if len(weighted) < BULLPEN_MIN_PITCHERS:
         return None
     total_bf = sum(w for _, w, _ in weighted)
     return {
@@ -947,9 +905,9 @@ def expected_pitcher_ip(profile, classification=None):
     return float(np.clip(estimate, SP_IP_MIN, SP_IP_MAX))
 
 
-def build_pitching_plans(slate_df, recent_profiles, pitcher_stat, pitcher_bb,
+def build_pitching_plans(slate_df, recent_profiles, pitcher_stat,
                          league_baseline):
-    """Expected-IP + pooled-relief plan for every probable-pitcher side."""
+    """Expected-IP + role-filtered bullpen plan for every probable-pitcher side."""
     plans = {}
     classifications = opener_classifications(recent_profiles)
     prior = _f((league_baseline or {}).get("xwOBA"))
@@ -985,38 +943,12 @@ def build_pitching_plans(slate_df, recent_profiles, pitcher_stat, pitcher_bb,
                     log(f"  bullpen aggregate failed for team {tid}: {e!r}")
                     bullpen_by_pair[pair] = None
             bullpen = bullpen_by_pair[pair]
-            basis = "starter_bullpen_blend"
-
-            # A thin/missing role pool is allowed to degrade for a normal
-            # starter. For an opener, preserve the older whole-staff estimate
-            # as a visible last resort rather than treating one inning as nine.
-            if bullpen is None and classification:
-                try:
-                    legacy_stat, _ = team_pitching_aggregate(
-                        tid, pitcher_stat, pitcher_bb
-                    )
-                except Exception as e:  # noqa: BLE001
-                    log(f"  opener emergency staff aggregate failed for team {tid}: {e!r}")
-                    legacy_stat = None
-                if legacy_stat is not None:
-                    legacy_xw = _shrink_one(
-                        _f(legacy_stat.get("xwOBA")),
-                        _f(legacy_stat.get("PA")),
-                        prior,
-                        shrink_k,
-                    )
-                    if legacy_xw is not None and pd.notna(legacy_xw):
-                        bullpen = {
-                            "xwOBA": legacy_xw,
-                            "pitcher_count": np.nan,
-                            "relief_bf": _f(legacy_stat.get("PA")),
-                        }
-                        basis = "opener_team_staff_fallback"
-
             if bullpen is None:
-                basis = "probable_starter_no_bullpen"
-            elif classification and basis != "opener_team_staff_fallback":
-                basis = "opener_bullpen_blend"
+                basis = "starter_only_no_fullgame_lean"
+            elif classification:
+                basis = "opener_bullpen_sequential"
+            else:
+                basis = "starter_bullpen_sequential"
 
             key = (int(g["game_pk"]), side)
             plans[key] = {
@@ -1031,14 +963,14 @@ def build_pitching_plans(slate_df, recent_profiles, pitcher_stat, pitcher_bb,
             }
             if bullpen is not None:
                 log(
-                    f"  pitching blend: pid={pid} team={tid} basis={basis} "
+                    f"  sequential pitching: pid={pid} team={tid} basis={basis} "
                     f"exp_ip={expected_ip:.2f} rp_xwOBA={bullpen.get('xwOBA'):.3f} "
                     f"(n_rp={bullpen.get('pitcher_count')})"
                 )
             else:
                 log(
-                    f"  pitching blend unavailable: pid={pid} team={tid}; "
-                    "keeping probable-starter xwOBA"
+                    f"  full-game lean unavailable: pid={pid} team={tid}; "
+                    "displaying starter phase only"
                 )
     return plans
 
@@ -1330,11 +1262,11 @@ def fetch_all(slate_date):
     log(f"Loading probable-pitcher ERA over the last {RECENT_STARTS} starts ...")
     recent_start_era = load_recent_start_era(prob_ids)
 
-    # v6 pitching plans are applied after the starter's own xwOBA has been
-    # shrunk in build_matchup. This keeps the starter card intact while the
-    # lean uses a full-game starter/opener + bullpen blend.
+    # Pitching plans are applied after the starter's own xwOBA has been shrunk
+    # in build_matchup. The starter-handedness lineup composite is used only
+    # for his expected innings; the neutral composite faces the bullpen.
     pitching_plans = build_pitching_plans(
-        slate_df, recent_start_era, pitcher_stat, pitcher_bb, league_baseline
+        slate_df, recent_start_era, pitcher_stat, league_baseline
     )
 
     try:
@@ -1760,9 +1692,23 @@ def aggregate_lineup(H, rate_cols, weighted=True, shrink_prior=None, shrink_k=No
                     vals = vals.where(~backfilled, raw_vals)
             else:
                 vals = pd.to_numeric(pd.Series(g[c]).reset_index(drop=True), errors="coerce")
-            # Platoon term last, on the shrunk (or backfilled) value: it is a
-            # matchup fact about tonight, not a season rate to be regressed.
+
+            # Preserve the neutral xwOBA composite before applying the
+            # probable starter's handedness term. v9 uses this B_0 against the
+            # bullpen and the adjusted B_SP only during the starter phase.
             if c == XWOBA_SHRINK_COL:
+                rec["opp_xwOBA_neutral_mean"] = (
+                    float(vals.mean(skipna=True)) if vals.notna().any() else np.nan
+                )
+                rec["opp_xwOBA_neutral_wmean"] = wmean(vals, w)
+                rec["opp_xwOBA_neutral"] = (
+                    rec["opp_xwOBA_neutral_wmean"]
+                    if weighted
+                    else rec["opp_xwOBA_neutral_mean"]
+                )
+
+                # Platoon term last, on the shrunk (or backfilled) value: it is
+                # a matchup fact about tonight, not a season rate to regress.
                 offsets = platoon_xwoba_offsets(g)
                 if offsets is not None:
                     vals = vals + offsets
@@ -1771,6 +1717,16 @@ def aggregate_lineup(H, rate_cols, weighted=True, shrink_prior=None, shrink_k=No
             )
             rec[f"opp_{c}_wmean"] = wmean(vals, w)
             rec[f"opp_{c}"] = rec[f"opp_{c}_wmean"] if weighted else rec[f"opp_{c}_mean"]
+            if c == XWOBA_SHRINK_COL:
+                # Keep opp_xwOBA as a backward-compatible alias for the
+                # starter-adjusted composite used by v8 and older consumers.
+                rec["opp_xwOBA_vs_sp"] = rec["opp_xwOBA"]
+                rec["platoon_delta_sp"] = (
+                    rec["opp_xwOBA_vs_sp"] - rec["opp_xwOBA_neutral"]
+                    if pd.notna(rec["opp_xwOBA_vs_sp"])
+                    and pd.notna(rec["opp_xwOBA_neutral"])
+                    else np.nan
+                )
         out.append(rec)
     return pd.DataFrame(out)
 
@@ -1802,6 +1758,14 @@ def build_matchup(P, agg, rate_cols, league_baseline, shrink_prior=None, shrink_
                 pv = _shrink_one(pv, pd.to_numeric(pr.get("PA"), errors="coerce"),
                                  shrink_prior, shrink_k)
             ov = a.get(f"opp_{c}")
+            if c == XWOBA_SHRINK_COL:
+                neutral = a.get("opp_xwOBA_neutral")
+                vs_sp = a.get("opp_xwOBA_vs_sp", ov)
+                rec["opp_xwOBA_neutral"] = neutral
+                rec["opp_xwOBA_vs_sp"] = vs_sp
+                rec["platoon_delta_sp"] = a.get("platoon_delta_sp")
+                # The generic opp_xwOBA remains the starter-adjusted alias.
+                ov = vs_sp
             L = league_baseline.get(c, np.nan)
             rec[f"pit_{c}"] = float(pv) if pd.notna(pv) else np.nan
             rec[f"opp_{c}"] = ov
@@ -1810,6 +1774,10 @@ def build_matchup(P, agg, rate_cols, league_baseline, shrink_prior=None, shrink_
                               float(ov) if pd.notna(ov) else np.nan, c, L)
             rec[f"mx_{c}"] = float(M) if pd.notna(M) else np.nan
             rec[f"edge_{c}"] = float(M - L) if pd.notna(M) and pd.notna(L) else np.nan
+            if c == XWOBA_SHRINK_COL:
+                rec["starter_xwOBA"] = rec[f"pit_{c}"]
+                rec["mx_xwOBA_sp"] = rec[f"mx_{c}"]
+                rec["edge_xwOBA_sp"] = rec[f"edge_{c}"]
         rows.append(rec)
     df = pd.DataFrame(rows)
     return df.sort_values(["game_pk", "side"]).reset_index(drop=True)
@@ -1825,36 +1793,97 @@ def build_xwoba_matchup(pitchers_df, league_baseline):
     return matchup_df, pitcher_rows_df, opp_hitters_df
 
 
-def apply_pitching_plans(matchup_df, pitching_plans, league_baseline):
-    """Apply v6's nine-inning pitching blend to the xwOBA lean input.
+def sequential_xwoba_phases(b_neutral, b_vs_sp, starter, bullpen, league,
+                            expected_sp_ip):
+    """Return the v9 starter, bullpen, and workload-weighted matchup phases.
 
-    `build_matchup` has already shrunk the probable pitcher's xwOBA. The card
-    keeps that value in `starter_xwOBA`; `pit_xwOBA` becomes the full-game
-    expected pitching value used by matchup_value and the ledger.
+    The starter-handedness lineup adjustment belongs only to the starter
+    phase. The bullpen phase is neutral until bullpen handedness is modeled.
+    A missing bullpen deliberately leaves the full-game matchup undefined.
+    """
+    q = np.nan
+    if expected_sp_ip is not None and pd.notna(expected_sp_ip):
+        q = float(np.clip(float(expected_sp_ip), 0.0, GAME_INNINGS) / GAME_INNINGS)
+    bp_share = 1.0 - q if pd.notna(q) else np.nan
+
+    mx_sp = matchup_value(b_vs_sp, starter, "xwOBA", league)
+    mx_bp = matchup_value(b_neutral, bullpen, "xwOBA", league)
+    mx = (
+        q * mx_sp + bp_share * mx_bp
+        if pd.notna(q) and pd.notna(mx_sp) and pd.notna(mx_bp)
+        else np.nan
+    )
+    return {
+        "sp_share": q,
+        "bp_share": bp_share,
+        "mx_xwOBA_sp": float(mx_sp) if pd.notna(mx_sp) else np.nan,
+        "edge_xwOBA_sp": (
+            float(mx_sp - league)
+            if pd.notna(mx_sp) and league is not None and pd.notna(league)
+            else np.nan
+        ),
+        "mx_xwOBA_bp": float(mx_bp) if pd.notna(mx_bp) else np.nan,
+        "edge_xwOBA_bp": (
+            float(mx_bp - league)
+            if pd.notna(mx_bp) and league is not None and pd.notna(league)
+            else np.nan
+        ),
+        "mx_xwOBA": float(mx) if pd.notna(mx) else np.nan,
+        "edge_xwOBA": (
+            float(mx - league)
+            if pd.notna(mx) and league is not None and pd.notna(league)
+            else np.nan
+        ),
+    }
+
+
+def apply_pitching_plans(matchup_df, pitching_plans, league_baseline):
+    """Apply v9's sequential starter/bullpen construction to each side.
+
+    `build_matchup` has already shrunk the starter and computed M_SP. This step
+    computes M_BP with the neutral lineup, then combines matchup values by
+    expected innings. `pit_xwOBA` remains a workload-weighted pitching
+    diagnostic for legacy consumers; it does not drive the v9 lean.
     """
     if matchup_df is None or matchup_df.empty:
         return matchup_df
     out = matchup_df.copy()
     for col, default in (
-        ("starter_xwOBA", np.nan),
         ("bullpen_xwOBA", np.nan),
         ("expected_sp_ip", np.nan),
+        ("sp_share", np.nan),
+        ("bp_share", np.nan),
+        ("mx_xwOBA_sp", np.nan),
+        ("edge_xwOBA_sp", np.nan),
+        ("mx_xwOBA_bp", np.nan),
+        ("edge_xwOBA_bp", np.nan),
         ("bullpen_pitchers", np.nan),
         ("bullpen_relief_bf", np.nan),
         ("opener", False),
         ("opener_reason", None),
         ("opener_confidence", None),
-        ("pitching_basis", "probable_starter_no_bullpen"),
+        ("pitching_basis", "starter_only_no_fullgame_lean"),
     ):
-        out[col] = default
+        if col not in out.columns:
+            out[col] = default
 
     league = _f((league_baseline or {}).get("xwOBA"))
     for idx, row in out.iterrows():
         key = (int(row["game_pk"]), row["side"])
         plan = (pitching_plans or {}).get(key) or {}
-        starter = _f(row.get("pit_xwOBA"))
+        starter = _f(row.get("starter_xwOBA"))
+        if starter is None:
+            starter = _f(row.get("pit_xwOBA"))
         bullpen = _f(plan.get("bullpen_xwOBA"))
         expected_ip = _f(plan.get("expected_sp_ip"))
+        b_vs_sp = _f(row.get("opp_xwOBA_vs_sp"))
+        if b_vs_sp is None:
+            b_vs_sp = _f(row.get("opp_xwOBA"))
+        b_neutral = _f(row.get("opp_xwOBA_neutral"))
+        if b_neutral is None:
+            # Legacy/unit-test rows predate the dual composite. Production v9
+            # always supplies B_0; this fallback means "no platoon delta."
+            b_neutral = b_vs_sp
 
         out.at[idx, "starter_xwOBA"] = starter
         out.at[idx, "bullpen_xwOBA"] = bullpen
@@ -1864,24 +1893,33 @@ def apply_pitching_plans(matchup_df, pitching_plans, league_baseline):
         out.at[idx, "opener"] = bool(plan.get("opener"))
         out.at[idx, "opener_reason"] = plan.get("opener_reason")
         out.at[idx, "opener_confidence"] = plan.get("opener_confidence")
-        out.at[idx, "pitching_basis"] = plan.get(
-            "pitching_basis", "probable_starter_no_bullpen"
-        )
-
+        basis = plan.get("pitching_basis")
         if starter is None or bullpen is None or expected_ip is None:
-            continue
-        sp_ip = float(np.clip(expected_ip, 0.0, GAME_INNINGS))
-        blended = (sp_ip * starter + (GAME_INNINGS - sp_ip) * bullpen) / GAME_INNINGS
-        out.at[idx, "pit_xwOBA"] = blended
+            basis = "starter_only_no_fullgame_lean"
+        elif not basis:
+            basis = (
+                "opener_bullpen_sequential"
+                if bool(plan.get("opener"))
+                else "starter_bullpen_sequential"
+            )
+        out.at[idx, "pitching_basis"] = basis
 
-        batter = _f(row.get("opp_xwOBA"))
-        mx = matchup_value(batter, blended, "xwOBA", league)
-        out.at[idx, "mx_xwOBA"] = float(mx) if pd.notna(mx) else np.nan
-        out.at[idx, "edge_xwOBA"] = (
-            float(mx - league)
-            if pd.notna(mx) and league is not None
-            else np.nan
+        phases = sequential_xwoba_phases(
+            b_neutral, b_vs_sp, starter, bullpen, league, expected_ip
         )
+        for col, value in phases.items():
+            out.at[idx, col] = value
+
+        # A single blended pitching rate is not the v9 matchup input because
+        # B_SP and B_0 differ. Keep it only as a diagnostic when both phases
+        # are valid; never leave the starter value looking like a nine-inning
+        # fallback when the bullpen is unavailable.
+        if starter is not None and bullpen is not None and pd.notna(phases["sp_share"]):
+            out.at[idx, "pit_xwOBA"] = (
+                phases["sp_share"] * starter + phases["bp_share"] * bullpen
+            )
+        else:
+            out.at[idx, "pit_xwOBA"] = np.nan
     return out
 
 
@@ -2558,10 +2596,12 @@ def _sp_stat_cell(lab, val, fmt, sub=None, heat=""):
 
 def _side_html(sp_abbr, d, league_baseline):
     badge = f"<span class='hand'>{d['t']}HP</span>" if d["t"] in ("L", "R") else ""
+    has_fullgame = "bullpen_sequential" in str(d.get("pitching_basis") or "")
     opener = ("<span class='flag warn' title='Opener: the model estimates this "
-              "pitcher’s workload, then assigns the remaining innings to the "
-              "role-filtered team bullpen. No specific bulk follower is "
-              "projected.'>opener · bullpen blend</span>") if d.get("is_opener") else ""
+              "pitcher’s workload. The full-game lean also requires a valid "
+              "role-filtered bullpen aggregate.'>"
+              f"{'opener · bullpen' if has_fullgame else 'opener'}</span>") \
+              if d.get("is_opener") else ""
     comp = (f"{d['R']}R/{d['L']}L" + (f"/{d['S']}S" if d["S"] else "")) if d["has_pl"] else "—"
     padv = f" · {d['padv']} plt-adv" if d["has_pl"] else ""
     lb = league_baseline or {}
@@ -2593,7 +2633,9 @@ def _side_html(sp_abbr, d, league_baseline):
     exp_ip = _f(d.get("expected_sp_ip"))
     pitching_note = (
         f" · model {exp_ip:.1f} IP + bullpen"
-        if exp_ip is not None and "bullpen_blend" in str(d.get("pitching_basis") or "")
+        if exp_ip is not None and has_fullgame
+        else " · starter only; no full-game lean"
+        if d.get("pitching_basis") == "starter_only_no_fullgame_lean"
         else ""
     )
     return (
@@ -2849,7 +2891,11 @@ def _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
                      pit_bb=_f(r.get("pit_BB%")),
                      era_season=recent_era.get((gpk, r["pitcher"]), (None, 0, None, None))[2],
                      xera=recent_era.get((gpk, r["pitcher"]), (None, 0, None, None))[3],
-                     opp_xw=_f(r.get("opp_xwOBA")),
+                     opp_xw=(
+                         _f(r.get("opp_xwOBA_vs_sp"))
+                         if _f(r.get("opp_xwOBA_vs_sp")) is not None
+                         else _f(r.get("opp_xwOBA"))
+                     ),
                      xw_edge=_f(r.get("edge_xwOBA")),
                      # Display percentiles (0-100). pit_xwOBA is already shrunk
                      # in build_matchup, so it is ranked directly (invert: low
@@ -2964,8 +3010,9 @@ def _legend_guide():
         "<span><b>Model vs market</b> whether the lean agrees with the DraftKings favorite. A "
         "lean on the <i>underdog</i> is the spot the record tests.</span>"
         "<span class='wide'>DK moneylines via ESPN at build time; cards ordered by first "
-        "pitch. The lean blends the starter's expected innings with a role-filtered bullpen "
-        "for the rest of nine, though the three pitcher stats stay the starter's own line. "
+        "pitch. The lean uses the starter-adjusted lineup for expected starter innings, "
+        "then the neutral lineup against a role-filtered bullpen for the rest of nine; "
+        "the three pitcher stats stay the starter's own line. "
         "◆ marks a platoon advantage over the starter. A one-sided hitter enters the "
         "lineup composite 0.010 xwOBA higher with the advantage and 0.010 lower "
         "without it; a switch hitter is left as-is, since he bats opposite the "

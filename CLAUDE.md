@@ -40,7 +40,9 @@ so it shares v5's delta units. Pre-v5 tags do not: shrinkage halved the scale
 (median `|xw_net|` .036 → .018). v7 changes the shrinkage estimator and starts
 new record and scale families. v8 replaces the per-build batter/pitcher
 estimates with fixed `K=100`, widening the delta distribution and again
-starting new record and scale families.
+starting new record and scale families. v9 splits starter and bullpen matchup
+phases so the starter-handedness lineup adjustment applies only to expected
+starter innings; it starts isolated record and scale families.
 
 When you bump `MODEL_TAG`, decide both questions explicitly in the PR body.
 Silence defaults to a new record family and inherited units — which is wrong
