@@ -162,6 +162,8 @@ class CurrentScoreTests(unittest.TestCase):
         self.assertIn("setInterval(refresh,60000)", js)
         self.assertIn("state==='Live'||state==='Final'", js)
         self.assertIn("linescore.currentInningOrdinal", js)
+        self.assertIn("summaryTime.hidden=inProgress", js)
+        self.assertIn("summaryMarket.hidden=inProgress", js)
 
 
 class RenderTests(unittest.TestCase):
@@ -190,6 +192,30 @@ class RenderTests(unittest.TestCase):
         self.assertIn("LAD bats", text)
         self.assertIn("class='tier", html)
 
+    def test_game_is_collapsed_scoreboard_with_existing_breakdown_inside(self):
+        g, _ = self._cards()
+        html = b.cmb_card(g, None)
+        self.assertIn("<details class='game-card'>", html)
+        self.assertNotIn("<details class='game-card' open>", html)
+        self.assertIn("<summary class='game-summary'", html)
+        self.assertIn("class='summary-team away'", html)
+        self.assertIn("class='summary-center'", html)
+        self.assertIn("class='summary-team home'", html)
+        self.assertIn(">7:05 PM ET</span>", html)
+        self.assertIn(">LAD -160</span>", html)
+        detail = html.split("<div class='game-detail'>", 1)[1]
+        self.assertIn("class='read'", detail)
+        self.assertIn("class='market'", detail)
+        self.assertIn("class='sides'", detail)
+
+    def test_scoreboard_uses_familiar_team_labels_when_schedule_names_exist(self):
+        g, _ = self._cards()
+        g.update(away_team_name="Los Angeles Dodgers",
+                 home_team_name="Arizona Diamondbacks")
+        html = b.cmb_card(g, None)
+        self.assertIn(">Dodgers</a>", html)
+        self.assertIn(">D-backs</a>", html)
+
     def test_team_headers_show_current_streaks(self):
         g, _ = self._cards()
         html = b.cmb_card(g, None)
@@ -215,6 +241,8 @@ class RenderTests(unittest.TestCase):
         self.assertIn(">LIVE · ▲2nd</span>", html)
         self.assertNotIn(">W3</span>", html)
         self.assertNotIn(">L1</span>", html)
+        self.assertIn("class='summary-time' hidden", html)
+        self.assertIn("class='summary-market' hidden", html)
 
     def test_live_game_uses_down_marker_for_bottom_half(self):
         g, _ = self._cards()
@@ -474,7 +502,7 @@ class MobileLayoutTests(unittest.TestCase):
     def test_mobile_trims_card_padding(self):
         m = _mobile_rules()
         # Each phone padding must be tighter than the desktop rule it overrides.
-        for sel, desktop_first in ((".gamehead", 12), (".side", 12),
+        for sel, desktop_first in ((".game-summary", 12), (".side", 12),
                                    (".read", 12), (".mcell", 7)):
             pad = m[sel]["padding"].split()
             self.assertLessEqual(int(pad[0].rstrip("px")), desktop_first,
@@ -482,9 +510,14 @@ class MobileLayoutTests(unittest.TestCase):
             self.assertLess(int(pad[1].rstrip("px")), 16,
                             f"{sel} horizontal padding not reduced")
 
-    def test_gamehead_wraps_teams_then_time(self):
+    def test_scoreboard_keeps_team_center_team_columns(self):
         m = _mobile_rules()
-        self.assertEqual(m[".teams"]["flex"], "1 1 100%")
+        self.assertEqual(
+            m[".teams"]["grid-template-columns"],
+            "minmax(0,1fr) 82px minmax(0,1fr)",
+        )
+        self.assertIn(".game-card[open]>.game-summary", b.CSS)
+        self.assertIn(".summary-chevron", b.CSS)
         self.assertNotIn(".lean", m)
         self.assertNotIn(".lean{", b.CSS)
 

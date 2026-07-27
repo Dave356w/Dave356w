@@ -2274,6 +2274,42 @@ ABBR = {
     "Toronto Blue Jays": "TOR", "Washington Nationals": "WSH",
 }
 
+# Compact scoreboard labels. The schedule feed supplies official full names,
+# while a slate row reads more cleanly with the familiar club name beside the
+# cap logo (and the abbreviation remains the fallback for degraded/test data).
+TEAM_LABELS = {
+    "Arizona Diamondbacks": "D-backs",
+    "Athletics": "Athletics",
+    "Atlanta Braves": "Braves",
+    "Baltimore Orioles": "Orioles",
+    "Boston Red Sox": "Red Sox",
+    "Chicago Cubs": "Cubs",
+    "Chicago White Sox": "White Sox",
+    "Cincinnati Reds": "Reds",
+    "Cleveland Guardians": "Guardians",
+    "Colorado Rockies": "Rockies",
+    "Detroit Tigers": "Tigers",
+    "Houston Astros": "Astros",
+    "Kansas City Royals": "Royals",
+    "Los Angeles Angels": "Angels",
+    "Los Angeles Dodgers": "Dodgers",
+    "Miami Marlins": "Marlins",
+    "Milwaukee Brewers": "Brewers",
+    "Minnesota Twins": "Twins",
+    "New York Mets": "Mets",
+    "New York Yankees": "Yankees",
+    "Philadelphia Phillies": "Phillies",
+    "Pittsburgh Pirates": "Pirates",
+    "San Diego Padres": "Padres",
+    "San Francisco Giants": "Giants",
+    "Seattle Mariners": "Mariners",
+    "St. Louis Cardinals": "Cardinals",
+    "Tampa Bay Rays": "Rays",
+    "Texas Rangers": "Rangers",
+    "Toronto Blue Jays": "Blue Jays",
+    "Washington Nationals": "Nationals",
+}
+
 # ---------- heatmap tints (casual-UI layer; numbers unchanged) ----------
 HEAT_ALPHA_MAX = 0.30
 HEAT_DOMAINS = {"xwOBA_sp": 0.035, "K-BB%": 7.0,
@@ -2461,10 +2497,11 @@ def _mlb_player_link(name, player_id, label=None):
             f"target='_blank' rel='noopener noreferrer'>{text}</a>")
 
 
-def _mlb_standings_link(team):
+def _mlb_standings_link(team, label=None):
     """Primary card-header team link to MLB's current standings page."""
+    text = team if label is None else label
     return ("<a class='team-link' href='https://www.mlb.com/standings/' "
-            f"target='_blank' rel='noopener noreferrer'>{_esc(team)}</a>")
+            f"target='_blank' rel='noopener noreferrer'>{_esc(text)}</a>")
 
 
 def _tier_word(pctile):
@@ -2837,27 +2874,88 @@ def _club_logo(team_id, ctx):
     return f"<span class='clogo t{tid}' aria-hidden='true'></span>" if tid in ids else ""
 
 
+def _summary_team_label(g, side):
+    """Familiar team label for the scoreboard row, with abbreviation fallback."""
+    official = g.get(f"{side}_team_name")
+    if official is not None and not pd.isna(official):
+        official = str(official)
+        return TEAM_LABELS.get(official, official)
+    return str(g.get(f"{side}_abbr") or "")
+
+
+def _summary_market_line(g):
+    """Favorite and current moneyline for the compact row."""
+    odds = g.get("odds") or {}
+    p_home = _f(odds.get("p_home"))
+    if p_home is None:
+        return "Odds pending"
+    side = "home" if p_home >= .5 else "away"
+    ml = odds.get(f"{side}_ml")
+    if ml is None:
+        return "Odds pending"
+    return f"{g.get(f'{side}_abbr') or ''} {_fmt_ml(ml)}".strip()
+
+
+def _summary_team_html(g, side, ctx):
+    abbr = str(g.get(f"{side}_abbr") or "")
+    label = _summary_team_label(g, side)
+    logo = _club_logo(g.get(f"{side}_team_id"), ctx)
+    if not logo:
+        logo = (f"<span class='summary-logo-fallback' aria-hidden='true'>"
+                f"{_esc(abbr[:1])}</span>")
+    return (
+        f"<span class='summary-team {side}' data-team-abbr='{_esc(abbr)}'>"
+        f"{logo}<span class='summary-club'>"
+        f"{_mlb_standings_link(abbr, label)}</span>"
+        f"{_team_meta_span(g, side)}</span>"
+    )
+
+
+def _scoreboard_summary(g, ctx=None):
+    """Collapsed scoreboard row shared by modeled and pending games."""
+    state = str(g.get("abstract_state") or "").lower()
+    in_progress = state in ("live", "final")
+    hide_pregame = " hidden" if in_progress else ""
+    time_text = str(g.get("time_pt") or "Time TBD")
+    market_text = _summary_market_line(g)
+    game_no = (f"<span class='game-no'>{_esc(g['game_label'])}</span>"
+               if g.get("game_label") else "")
+    away_label = _summary_team_label(g, "away")
+    home_label = _summary_team_label(g, "home")
+    return (
+        f"<summary class='game-summary' aria-label='{_esc(away_label)} at "
+        f"{_esc(home_label)}; expand game breakdown'>"
+        f"<span class='teams' data-game-pk='{int(g['game_pk'])}'>"
+        f"{_summary_team_html(g, 'away', ctx)}"
+        f"<span class='summary-center'>{_game_state_span(g)}"
+        f"<span class='summary-time'{hide_pregame}>{_esc(time_text)}</span>"
+        f"{game_no}<span class='summary-market'{hide_pregame}>"
+        f"{_esc(market_text)}</span></span>"
+        f"{_summary_team_html(g, 'home', ctx)}</span>"
+        "<span class='summary-chevron' aria-hidden='true'>⌄</span>"
+        "</summary>"
+    )
+
+
+def _detail_context_html(g):
+    when = " · ".join(x for x in (g.get("time_pt"), g.get("venue")) if x)
+    return f"<div class='detail-context'>{_esc(when)}</div>" if when else ""
+
+
 def cmb_card(g, strength_scale=None, ctx=None):
     if g.get("unavailable"):
-        game_no = f" <span class='game-no'>{_esc(g['game_label'])}</span>" if g.get("game_label") else ""
-        when = " · ".join(x for x in (g.get("time_pt"), g.get("venue")) if x)
         probables = " vs ".join(
             "TBD" if x is None or (isinstance(x, float) and pd.isna(x)) else str(x)
             for x in (g.get("away_probable"), g.get("home_probable")))
         return (
             "<article class='card unavailable'>"
-            "<div class='gamehead'>"
-            f"<span class='teams' data-game-pk='{int(g['game_pk'])}'>"
-            f"{_club_logo(g.get('away_team_id'), ctx)}"
-            f"{_mlb_standings_link(g['away_abbr'])}{_team_meta_span(g, 'away')} "
-            f"<span class='at'>@</span> {_club_logo(g.get('home_team_id'), ctx)}"
-            f"{_mlb_standings_link(g['home_abbr'])}"
-            f"{_team_meta_span(g, 'home')}{game_no}{_game_state_span(g)}</span>"
-            + (f"<span class='when'>{_esc(when)}</span>" if when else "")
-            + "</div>"
-            "<div class='card-note'><b>Awaiting paired probable pitchers</b>"
+            "<details class='game-card'>"
+            + _scoreboard_summary(g, ctx)
+            + "<div class='game-detail'>"
+            + _detail_context_html(g)
+            + "<div class='card-note'><b>Awaiting paired probable pitchers</b>"
             f"<span>{_esc(probables)} · matchup lean will appear after both starters are listed.</span></div>"
-            "</article>")
+            "</div></details></article>")
 
     a, h = g["away"], g["home"]
     away_abbr, home_abbr = g["away_abbr"], g["home_abbr"]
@@ -2874,24 +2972,17 @@ def cmb_card(g, strength_scale=None, ctx=None):
             fav = home_abbr if net > 0 else away_abbr
             strength_word, _ = lean_strength(delta, strength_scale)
             read_html = _read_sentence(away_abbr, home_abbr, a, h, fav, strength_word)
-    when = " · ".join(x for x in (g.get("time_pt"), g.get("venue")) if x)
-    game_no = f" <span class='game-no'>{_esc(g['game_label'])}</span>" if g.get("game_label") else ""
     return (
         "<article class='card'>"
-        "<div class='gamehead'>"
-        f"<span class='teams' data-game-pk='{int(g['game_pk'])}'>"
-        f"{_club_logo(g.get('away_team_id'), ctx)}"
-        f"{_mlb_standings_link(away_abbr)}{_team_meta_span(g, 'away')} "
-        f"<span class='at'>@</span> {_club_logo(g.get('home_team_id'), ctx)}"
-        f"{_mlb_standings_link(home_abbr)}{_team_meta_span(g, 'home')}"
-        f"{game_no}{_game_state_span(g)}</span>"
-        + (f"<span class='when'>{_esc(when)}</span>" if when else "")
-        + "</div>"
+        "<details class='game-card'>"
+        + _scoreboard_summary(g, ctx)
+        + "<div class='game-detail'>"
+        + _detail_context_html(g)
         + (read_html or "")
         + _market_html(g.get('odds'), away_abbr, home_abbr, fav, ctx)
         + f"<div class='sides'>{_side_html(away_abbr, a, g['league_baseline'])}"
         + f"{_side_html(home_abbr, h, g['league_baseline'])}</div>"
-        + "</article>")
+        + "</div></details></article>")
 
 
 def _game_order_key(game):
@@ -3037,6 +3128,8 @@ def _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
         games.append(dict(
             away=mk(a), home=mk(h),
             away_abbr=away_abbr, home_abbr=home_abbr,
+            away_team_name=(srow.get("away_team") if srow is not None else None),
+            home_team_name=(srow.get("home_team") if srow is not None else None),
             away_team_id=(srow.get("away_team_id") if srow is not None else None),
             home_team_id=(srow.get("home_team_id") if srow is not None else None),
             away_streak=_streak(srow.get("away_team_id")) if srow is not None else None,
@@ -3076,6 +3169,8 @@ def _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
                 game_datetime_utc=srow.get("game_datetime_utc"),
                 away_abbr=srow.get("away_abbrev") or _abbr(srow.get("away_team")),
                 home_abbr=srow.get("home_abbrev") or _abbr(srow.get("home_team")),
+                away_team_name=srow.get("away_team"),
+                home_team_name=srow.get("home_team"),
                 away_team_id=srow.get("away_team_id"),
                 home_team_id=srow.get("home_team_id"),
                 away_streak=_streak(srow.get("away_team_id")),
@@ -3207,25 +3302,58 @@ body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 var(--sans);
 .chip .val{font:600 16px/1.15 var(--mono);color:var(--chip-fg);font-variant-numeric:tabular-nums;margin-top:2px}
 .chip .sub{font:400 10px/1 var(--mono);color:var(--muted);margin-top:2px}
 
-.grid{display:flex;flex-direction:column;gap:16px}
+.grid{display:flex;flex-direction:column;gap:8px}
 .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
   box-shadow:var(--shadow);overflow:hidden}
 
-/* ---------- game header ---------- */
-.gamehead{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;
-  padding:12px 16px 10px;border-bottom:1px solid var(--line-2)}
-.teams{font:800 22px/1 var(--sans);letter-spacing:.02em}
-.teams .at{color:var(--faint);font-weight:400;font-size:16px;margin:0 4px}
+/* ---------- collapsed scoreboard row ---------- */
+.game-card{margin:0}
+.game-summary{position:relative;display:flex;align-items:center;min-height:94px;
+  padding:12px 16px;list-style:none;cursor:pointer;user-select:none}
+.game-summary::-webkit-details-marker{display:none}
+.game-summary::marker{content:""}
+.game-summary:hover{background:var(--surface-2)}
+.game-summary:focus-visible{outline:2px solid rgba(var(--lean),1);outline-offset:-2px}
+.game-card[open]>.game-summary{background:var(--surface-2);
+  border-bottom:1px solid var(--line-2)}
+.teams{display:grid;grid-template-columns:minmax(0,1fr) minmax(120px,.68fr) minmax(0,1fr);
+  align-items:center;gap:14px;width:100%;min-width:0;padding-right:22px}
+.summary-team{display:grid;align-items:center;gap:8px;min-width:0}
+.summary-team.away{grid-template-columns:42px minmax(0,1fr) auto;
+  grid-template-areas:"logo club meta"}
+.summary-team.home{grid-template-columns:auto minmax(0,1fr) 42px;
+  grid-template-areas:"meta club logo"}
+.summary-team .clogo,.summary-logo-fallback{grid-area:logo}
+.summary-team .clogo{width:42px;height:42px;margin:0;vertical-align:middle}
+.summary-logo-fallback{display:grid;width:42px;height:42px;place-items:center;
+  border:1px solid var(--line);border-radius:var(--r-pill);background:var(--surface-2);
+  color:var(--muted);font:800 15px/1 var(--sans)}
+.summary-club{grid-area:club;min-width:0;font:750 15px/1.15 var(--sans)}
+.summary-club .team-link{display:block;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;text-decoration:none}
+.summary-club .team-link:hover{text-decoration:underline;text-underline-offset:3px}
+.summary-team.home .summary-club{text-align:right}
+.summary-center{display:flex;min-width:0;flex-direction:column;align-items:center;
+  justify-content:center;gap:4px;text-align:center}
+.summary-time{font:800 16px/1 var(--mono);font-variant-numeric:tabular-nums}
+.summary-market{font:600 11px/1.1 var(--mono);color:var(--muted);
+  font-variant-numeric:tabular-nums}
+.summary-chevron{position:absolute;right:13px;top:50%;color:var(--faint);
+  font:800 16px/1 var(--sans);transform:translateY(-50%);
+  transition:transform .16s ease,color .16s ease}
+.game-card[open]>.game-summary .summary-chevron{
+  color:var(--ink);transform:translateY(-50%) rotate(180deg)}
 .teams .team-meta{font:600 11px/1 var(--mono);color:var(--muted);letter-spacing:0;
-  margin-left:3px;vertical-align:middle}
+  grid-area:meta;margin:0;vertical-align:middle;white-space:nowrap}
 .teams .score{font-size:16px;font-weight:800;color:var(--ink)}
 .game-no{font:700 11px/1 var(--mono);color:var(--muted);vertical-align:middle}
-.game-state{display:inline-block;margin-left:7px;padding:3px 6px;border:1px solid var(--line);
+.game-state{display:inline-block;padding:3px 6px;border:1px solid var(--line);
   border-radius:var(--r-s);font:750 9px/1 var(--sans);letter-spacing:.08em;
   vertical-align:middle;color:var(--muted);background:var(--surface-2)}
 .game-state.live{color:rgba(var(--cool),1);border-color:rgba(var(--cool),.35);
   background:rgba(var(--cool),.10)}
-.when{font:400 12px/1.3 var(--sans);color:var(--muted)}
+.detail-context{padding:7px 16px;border-bottom:1px solid var(--line-2);
+  color:var(--muted);font:500 11px/1.3 var(--sans)}
 .card-note{display:flex;flex-direction:column;gap:4px;padding:14px 16px 16px;color:var(--muted)}
 .card-note b{color:var(--ink);font-size:13px}.card-note span{font-size:12px}
 
@@ -3388,10 +3516,24 @@ tr.mach{display:table-row}
 @media (max-width:540px){
   /* Tighter chrome: the card gutters, not the content, give up the width. */
   body{padding:14px 10px 44px}
-  .gamehead{gap:5px 9px;padding:10px 12px 9px}
-  /* Teams take their own line; game time sits beneath it. */
-  .teams{flex:1 1 100%;font-size:19px}
-  .when{font-size:11.5px}
+  .game-summary{min-height:82px;padding:10px 10px}
+  .teams{grid-template-columns:minmax(0,1fr) 82px minmax(0,1fr);
+    gap:7px;padding-right:17px}
+  .summary-team{gap:2px 6px}
+  .summary-team.away{grid-template-columns:30px minmax(0,1fr);
+    grid-template-areas:"logo club" "logo meta"}
+  .summary-team.home{grid-template-columns:minmax(0,1fr) 30px;
+    grid-template-areas:"club logo" "meta logo"}
+  .summary-team .clogo,.summary-logo-fallback{width:30px;height:30px}
+  .summary-logo-fallback{font-size:12px}
+  .summary-club{font-size:12.5px}
+  .teams .team-meta{font-size:9.5px}
+  .teams .score{font-size:14px}
+  .summary-center{gap:3px}
+  .summary-time{font-size:12.5px}
+  .summary-market{font-size:9.5px}
+  .summary-chevron{right:6px}
+  .detail-context{padding:7px 12px}
   .read{padding:10px 12px}
   .side{padding:10px 12px 12px}
   .mcell{padding:6px 7px}
@@ -3506,9 +3648,14 @@ def score_refresh_js():
     var teams=game.teams||{{}};
     setMeta(header.querySelector('.team-meta.away'),(teams.away||{{}}).score,state);
     setMeta(header.querySelector('.team-meta.home'),(teams.home||{{}}).score,state);
+    var inProgress=state==='Live'||state==='Final';
+    var summaryTime=header.querySelector('.summary-time');
+    var summaryMarket=header.querySelector('.summary-market');
+    if(summaryTime) summaryTime.hidden=inProgress;
+    if(summaryMarket) summaryMarket.hidden=inProgress;
     var badge=header.querySelector('.game-state');
     if(!badge) return;
-    if(state==='Live'||state==='Final'){{
+    if(inProgress){{
       badge.hidden=false;
       if(state==='Live'){{
         var linescore=game.linescore||{{}};
