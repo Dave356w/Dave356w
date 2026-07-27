@@ -346,7 +346,10 @@ def get_slate(slate_date, sport_id=1):
                 "home_probable_pitcher": h.get("probablePitcher", {}).get("fullName"),
                 "away_probable_pitcher_id": a.get("probablePitcher", {}).get("id"),
                 "home_probable_pitcher_id": h.get("probablePitcher", {}).get("id"),
+                "abstract_state": g.get("status", {}).get("abstractGameState"),
                 "status": g.get("status", {}).get("detailedState"),
+                "away_score": a.get("score"),
+                "home_score": h.get("score"),
                 "venue": g.get("venue", {}).get("name"),
                 "savant_preview_url": f'https://baseballsavant.mlb.com/preview?game_pk={g.get("gamePk")}&game_date={od}',
             })
@@ -2715,10 +2718,39 @@ def _market_html(o, away_abbr, home_abbr, fav=None, ctx=None):
         + "</div>")
 
 
-def _streak_span(streak):
-    """Small current-streak chip appended to a team abbreviation."""
-    return (f"<span class='streak' title='current win/loss streak'>"
-            f"{_esc(streak)}</span>" if streak else "")
+def _score_text(score):
+    """Whole-run score text, or None when the schedule has not supplied one."""
+    value = pd.to_numeric(score, errors="coerce")
+    return str(int(value)) if pd.notna(value) else None
+
+
+def _team_meta_span(g, side):
+    """Render the pregame streak, replaced by the score for live/final games."""
+    streak = g.get(f"{side}_streak")
+    state = str(g.get("abstract_state") or "").lower()
+    data = f" data-streak='{_esc(streak)}'" if streak else ""
+    if state in ("live", "final"):
+        score = _score_text(g.get(f"{side}_score"))
+        title = "live score" if state == "live" else "final score"
+        text = score if score is not None else "—"
+        return (f"<span class='team-meta score {side}'{data} title='{title}'>"
+                f"{text}</span>")
+    if not streak:
+        return f"<span class='team-meta streak {side}' data-streak='' hidden></span>"
+    return (f"<span class='team-meta streak {side}'{data} "
+            f"title='current win/loss streak'>{_esc(streak)}</span>")
+
+
+def _game_state_span(g):
+    """LIVE/FINAL header badge; hidden before first pitch."""
+    state = str(g.get("abstract_state") or "").lower()
+    raw_detail = g.get("status")
+    detail = "" if raw_detail is None or pd.isna(raw_detail) else str(raw_detail)
+    if state not in ("live", "final"):
+        return "<span class='game-state' hidden></span>"
+    label = "LIVE" if state == "live" else "FINAL"
+    title = f" title='{_esc(detail)}'" if detail else ""
+    return f"<span class='game-state {state}'{title}>{label}</span>"
 
 
 def _logo_assets(games):
@@ -2790,11 +2822,12 @@ def cmb_card(g, strength_scale=None, ctx=None):
         return (
             "<article class='card unavailable'>"
             "<div class='gamehead'>"
-            f"<span class='teams'>{_club_logo(g.get('away_team_id'), ctx)}"
-            f"{_mlb_standings_link(g['away_abbr'])}{_streak_span(g.get('away_streak'))} "
+            f"<span class='teams' data-game-pk='{int(g['game_pk'])}'>"
+            f"{_club_logo(g.get('away_team_id'), ctx)}"
+            f"{_mlb_standings_link(g['away_abbr'])}{_team_meta_span(g, 'away')} "
             f"<span class='at'>@</span> {_club_logo(g.get('home_team_id'), ctx)}"
             f"{_mlb_standings_link(g['home_abbr'])}"
-            f"{_streak_span(g.get('home_streak'))}{game_no}</span>"
+            f"{_team_meta_span(g, 'home')}{game_no}{_game_state_span(g)}</span>"
             + (f"<span class='when'>{_esc(when)}</span>" if when else "")
             + "</div>"
             "<div class='card-note'><b>Awaiting paired probable pitchers</b>"
@@ -2828,10 +2861,12 @@ def cmb_card(g, strength_scale=None, ctx=None):
     return (
         "<article class='card'>"
         "<div class='gamehead'>"
-        f"<span class='teams'>{_club_logo(g.get('away_team_id'), ctx)}"
-        f"{_mlb_standings_link(away_abbr)}{_streak_span(g.get('away_streak'))} "
+        f"<span class='teams' data-game-pk='{int(g['game_pk'])}'>"
+        f"{_club_logo(g.get('away_team_id'), ctx)}"
+        f"{_mlb_standings_link(away_abbr)}{_team_meta_span(g, 'away')} "
         f"<span class='at'>@</span> {_club_logo(g.get('home_team_id'), ctx)}"
-        f"{_mlb_standings_link(home_abbr)}{_streak_span(g.get('home_streak'))}{game_no}</span>"
+        f"{_mlb_standings_link(home_abbr)}{_team_meta_span(g, 'home')}"
+        f"{game_no}{_game_state_span(g)}</span>"
         + (f"<span class='when'>{_esc(when)}</span>" if when else "")
         + lean_html
         + "</div>"
@@ -2989,6 +3024,10 @@ def _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
             home_team_id=(srow.get("home_team_id") if srow is not None else None),
             away_streak=_streak(srow.get("away_team_id")) if srow is not None else None,
             home_streak=_streak(srow.get("home_team_id")) if srow is not None else None,
+            abstract_state=(srow.get("abstract_state") if srow is not None else None),
+            status=(srow.get("status") if srow is not None else None),
+            away_score=(srow.get("away_score") if srow is not None else None),
+            home_score=(srow.get("home_score") if srow is not None else None),
             game_pk=gpk, game_number=game_number, game_label=game_label,
             game_datetime_utc=(srow.get("game_datetime_utc") if srow is not None else None),
             time_pt=_game_time_pt(srow.get("game_datetime_utc")) if srow is not None else "",
@@ -3018,6 +3057,10 @@ def _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
                 home_team_id=srow.get("home_team_id"),
                 away_streak=_streak(srow.get("away_team_id")),
                 home_streak=_streak(srow.get("home_team_id")),
+                abstract_state=srow.get("abstract_state"),
+                status=srow.get("status"),
+                away_score=srow.get("away_score"),
+                home_score=srow.get("home_score"),
                 time_pt=_game_time_pt(srow.get("game_datetime_utc")),
                 venue=str(srow.get("venue") or ""),
                 away_probable=srow.get("away_probable_pitcher"),
@@ -3147,9 +3190,15 @@ body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 var(--sans);
   padding:12px 16px 10px;border-bottom:1px solid var(--line-2)}
 .teams{font:800 22px/1 var(--sans);letter-spacing:.02em}
 .teams .at{color:var(--faint);font-weight:400;font-size:16px;margin:0 4px}
-.teams .streak{font:600 11px/1 var(--mono);color:var(--muted);letter-spacing:0;
+.teams .team-meta{font:600 11px/1 var(--mono);color:var(--muted);letter-spacing:0;
   margin-left:3px;vertical-align:middle}
+.teams .score{font-size:16px;font-weight:800;color:var(--ink)}
 .game-no{font:700 11px/1 var(--mono);color:var(--muted);vertical-align:middle}
+.game-state{display:inline-block;margin-left:7px;padding:3px 6px;border:1px solid var(--line);
+  border-radius:var(--r-s);font:750 9px/1 var(--sans);letter-spacing:.08em;
+  vertical-align:middle;color:var(--muted);background:var(--surface-2)}
+.game-state.live{color:rgba(var(--cool),1);border-color:rgba(var(--cool),.35);
+  background:rgba(var(--cool),.10)}
 .when{font:400 12px/1.3 var(--sans);color:var(--muted)}
 .lean{margin-left:auto;display:flex;align-items:baseline;gap:7px;
   border:1px solid rgba(var(--amberbg),.55);background:rgba(var(--amberbg),.14);
@@ -3411,8 +3460,72 @@ THEME_JS = r"""
 """
 
 
-def html_document(body, built_txt, title=None):
+def score_refresh_js():
+    """Browser-side score refresh without rerunning the model build."""
+    return rf"""
+(function(){{
+  var url='https://statsapi.mlb.com/api/v1/schedule?sportId=1&date={SLATE_DATE}&hydrate=linescore';
+  var headers={{}};
+  document.querySelectorAll('.teams[data-game-pk]').forEach(function(el){{
+    headers[String(el.getAttribute('data-game-pk'))]=el;
+  }});
+  function setMeta(el,score,state){{
+    if(!el) return;
+    if(state==='Live'||state==='Final'){{
+      el.hidden=false;
+      el.textContent=(score===null||score===undefined)?'—':String(score);
+      el.className='team-meta score '+(el.classList.contains('home')?'home':'away');
+      el.title=state==='Live'?'live score':'final score';
+    }}else{{
+      var streak=el.getAttribute('data-streak')||'';
+      el.textContent=streak;
+      el.className='team-meta streak '+(el.classList.contains('home')?'home':'away');
+      el.title='current win/loss streak';
+      el.hidden=!streak;
+    }}
+  }}
+  function update(game){{
+    var header=headers[String(game.gamePk)];
+    if(!header) return;
+    var status=game.status||{{}};
+    var state=status.abstractGameState||'Preview';
+    var teams=game.teams||{{}};
+    setMeta(header.querySelector('.team-meta.away'),(teams.away||{{}}).score,state);
+    setMeta(header.querySelector('.team-meta.home'),(teams.home||{{}}).score,state);
+    var badge=header.querySelector('.game-state');
+    if(!badge) return;
+    if(state==='Live'||state==='Final'){{
+      badge.hidden=false;
+      badge.textContent=state==='Live'?'LIVE':'FINAL';
+      badge.className='game-state '+state.toLowerCase();
+      badge.title=status.detailedState||'';
+    }}else{{
+      badge.hidden=true;
+      badge.textContent='';
+      badge.className='game-state';
+      badge.title='';
+    }}
+  }}
+  function refresh(){{
+    if(document.hidden) return;
+    fetch(url,{{cache:'no-store'}})
+      .then(function(r){{if(!r.ok) throw new Error(String(r.status));return r.json();}})
+      .then(function(data){{
+        (data.dates||[]).forEach(function(day){{
+          (day.games||[]).forEach(update);
+        }});
+      }})
+      .catch(function(){{}});
+  }}
+  refresh();
+  window.setInterval(refresh,60000);
+}})();
+"""
+
+
+def html_document(body, built_txt, title=None, extra_js=None):
     title = title or f"MLB matchup leans - {SLATE_DATE}"
+    extra_script = f"<script>{extra_js}</script>" if extra_js else ""
     return (
         "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
@@ -3425,6 +3538,7 @@ def html_document(body, built_txt, title=None):
         "<button id='themeBtn' class='theme' type='button'>Theme: auto</button></div></div>"
         f"{body}</div>"
         f"<script>{THEME_JS}</script>"
+        f"{extra_script}"
         "</body></html>")
 
 
@@ -3717,12 +3831,12 @@ def render_combined_html(xw_df, pl_df, pitcher_rows_df, built_txt,
     if not games:
         inner = head + "<div class='legend'><div class='lg-title'>No paired probables yet — " \
                        "probables/lineups not posted. Check back closer to first pitch.</div></div>" + footer
-        return html_document(inner, built_txt)
+        return html_document(inner, built_txt, extra_js=score_refresh_js())
     strength_scale = lean_strength_scale()
     logo_assets, logo_css = _logo_assets(games)
     ctx = {**(market_context_records() or {}), "logo_ids": set(logo_assets)}
     body = logo_css + head + build_combined(games, strength_scale, ctx) + footer
-    return html_document(body, built_txt)
+    return html_document(body, built_txt, extra_js=score_refresh_js())
 
 
 def empty_slate_html(built_txt):
