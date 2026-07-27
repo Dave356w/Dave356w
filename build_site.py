@@ -331,6 +331,7 @@ def get_slate(slate_date, sport_id=1):
         od = db.get("date", slate_date)
         for g in db.get("games", []):
             a, h = g["teams"]["away"], g["teams"]["home"]
+            linescore = g.get("linescore") or {}
             rows.append({
                 "game_pk": g.get("gamePk"),
                 "game_date": od,
@@ -350,6 +351,10 @@ def get_slate(slate_date, sport_id=1):
                 "status": g.get("status", {}).get("detailedState"),
                 "away_score": a.get("score"),
                 "home_score": h.get("score"),
+                "current_inning": linescore.get("currentInning"),
+                "current_inning_ordinal": linescore.get("currentInningOrdinal"),
+                "inning_half": linescore.get("inningHalf"),
+                "is_top_inning": linescore.get("isTopInning"),
                 "venue": g.get("venue", {}).get("name"),
                 "savant_preview_url": f'https://baseballsavant.mlb.com/preview?game_pk={g.get("gamePk")}&game_date={od}',
             })
@@ -2748,9 +2753,36 @@ def _game_state_span(g):
     detail = "" if raw_detail is None or pd.isna(raw_detail) else str(raw_detail)
     if state not in ("live", "final"):
         return "<span class='game-state' hidden></span>"
-    label = "LIVE" if state == "live" else "FINAL"
+    label = "LIVE"
+    if state == "live":
+        inning = _inning_indicator(g)
+        if inning:
+            label += f" · {inning}"
+    else:
+        label = "FINAL"
     title = f" title='{_esc(detail)}'" if detail else ""
     return f"<span class='game-state {state}'{title}>{label}</span>"
+
+
+def _inning_indicator(g):
+    """Live inning as ▲2nd / ▼2nd; empty when the feed has no inning yet."""
+    ordinal = g.get("current_inning_ordinal")
+    if ordinal is None or pd.isna(ordinal):
+        inning = pd.to_numeric(g.get("current_inning"), errors="coerce")
+        if pd.isna(inning):
+            return ""
+        n = int(inning)
+        suffix = "th" if 10 < n % 100 < 14 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+        ordinal = f"{n}{suffix}"
+    half = str(g.get("inning_half") or "").lower()
+    if half == "top":
+        marker = "▲"
+    elif half == "bottom":
+        marker = "▼"
+    else:
+        top = g.get("is_top_inning")
+        marker = ("▲" if bool(top) else "▼") if top is not None and not pd.isna(top) else ""
+    return f"{marker}{_esc(ordinal)}"
 
 
 def _logo_assets(games):
@@ -3028,6 +3060,12 @@ def _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
             status=(srow.get("status") if srow is not None else None),
             away_score=(srow.get("away_score") if srow is not None else None),
             home_score=(srow.get("home_score") if srow is not None else None),
+            current_inning=(srow.get("current_inning") if srow is not None else None),
+            current_inning_ordinal=(
+                srow.get("current_inning_ordinal") if srow is not None else None
+            ),
+            inning_half=(srow.get("inning_half") if srow is not None else None),
+            is_top_inning=(srow.get("is_top_inning") if srow is not None else None),
             game_pk=gpk, game_number=game_number, game_label=game_label,
             game_datetime_utc=(srow.get("game_datetime_utc") if srow is not None else None),
             time_pt=_game_time_pt(srow.get("game_datetime_utc")) if srow is not None else "",
@@ -3061,6 +3099,10 @@ def _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
                 status=srow.get("status"),
                 away_score=srow.get("away_score"),
                 home_score=srow.get("home_score"),
+                current_inning=srow.get("current_inning"),
+                current_inning_ordinal=srow.get("current_inning_ordinal"),
+                inning_half=srow.get("inning_half"),
+                is_top_inning=srow.get("is_top_inning"),
                 time_pt=_game_time_pt(srow.get("game_datetime_utc")),
                 venue=str(srow.get("venue") or ""),
                 away_probable=srow.get("away_probable_pitcher"),
@@ -3496,7 +3538,23 @@ def score_refresh_js():
     if(!badge) return;
     if(state==='Live'||state==='Final'){{
       badge.hidden=false;
-      badge.textContent=state==='Live'?'LIVE':'FINAL';
+      if(state==='Live'){{
+        var linescore=game.linescore||{{}};
+        var ordinal=linescore.currentInningOrdinal||'';
+        if(!ordinal&&linescore.currentInning!==null&&linescore.currentInning!==undefined){{
+          var n=Number(linescore.currentInning);
+          var mod100=n%100;
+          var suffix=(mod100>10&&mod100<14)?'th':({{1:'st',2:'nd',3:'rd'}}[n%10]||'th');
+          ordinal=String(n)+suffix;
+        }}
+        var half=String(linescore.inningHalf||'').toLowerCase();
+        var marker=half==='top'?'▲':(half==='bottom'?'▼':'');
+        if(!marker&&linescore.isTopInning===true) marker='▲';
+        if(!marker&&linescore.isTopInning===false) marker='▼';
+        badge.textContent='LIVE'+(ordinal?' · '+marker+ordinal:'');
+      }}else{{
+        badge.textContent='FINAL';
+      }}
       badge.className='game-state '+state.toLowerCase();
       badge.title=status.detailedState||'';
     }}else{{

@@ -32,6 +32,8 @@ def _game(away, home, a, h, odds):
                 home_streak="L1", game_pk=1, game_number=1, game_label="",
                 abstract_state="Preview", status="Scheduled",
                 away_score=None, home_score=None,
+                current_inning=None, current_inning_ordinal=None,
+                inning_half=None, is_top_inning=None,
                 game_datetime_utc=None, time_pt="7:05 PM ET", venue="Park", odds=odds,
                 league_baseline={"xwOBA": .312, "K%": .22, "BB%": .08, "OPS": .715, "ERA": 4.1})
 
@@ -132,6 +134,12 @@ class CurrentScoreTests(unittest.TestCase):
                 "abstractGameState": "Live",
                 "detailedState": "In Progress",
             },
+            "linescore": {
+                "currentInning": 2,
+                "currentInningOrdinal": "2nd",
+                "inningHalf": "Top",
+                "isTopInning": True,
+            },
             "teams": {
                 "away": {"team": {"id": 119, "name": "Dodgers"}, "score": 3},
                 "home": {"team": {"id": 147, "name": "Yankees"}, "score": 2},
@@ -145,12 +153,15 @@ class CurrentScoreTests(unittest.TestCase):
         self.assertEqual(row["status"], "In Progress")
         self.assertEqual(row["away_score"], 3)
         self.assertEqual(row["home_score"], 2)
+        self.assertEqual(row["current_inning_ordinal"], "2nd")
+        self.assertEqual(row["inning_half"], "Top")
 
     def test_browser_refresh_uses_one_slate_request_per_minute(self):
         js = b.score_refresh_js()
         self.assertIn("statsapi.mlb.com/api/v1/schedule", js)
         self.assertIn("setInterval(refresh,60000)", js)
         self.assertIn("state==='Live'||state==='Final'", js)
+        self.assertIn("linescore.currentInningOrdinal", js)
 
 
 class RenderTests(unittest.TestCase):
@@ -192,16 +203,27 @@ class RenderTests(unittest.TestCase):
     def test_live_game_replaces_streaks_with_scores(self):
         g, _ = self._cards()
         g.update(abstract_state="Live", status="In Progress",
-                 away_score=3, home_score=2)
+                 away_score=3, home_score=2,
+                 current_inning=2, current_inning_ordinal="2nd",
+                 inning_half="Top", is_top_inning=True)
         html = b.cmb_card(g, None)
         self.assertIn("class='team-meta score away'", html)
         self.assertIn("class='team-meta score home'", html)
         self.assertIn(">3</span>", html)
         self.assertIn(">2</span>", html)
         self.assertIn("class='game-state live'", html)
-        self.assertIn(">LIVE</span>", html)
+        self.assertIn(">LIVE · ▲2nd</span>", html)
         self.assertNotIn(">W3</span>", html)
         self.assertNotIn(">L1</span>", html)
+
+    def test_live_game_uses_down_marker_for_bottom_half(self):
+        g, _ = self._cards()
+        g.update(abstract_state="Live", status="In Progress",
+                 away_score=1, home_score=4,
+                 current_inning=1, current_inning_ordinal="1st",
+                 inning_half="Bottom", is_top_inning=False)
+        html = b.cmb_card(g, None)
+        self.assertIn(">LIVE · ▼1st</span>", html)
 
     def test_final_game_replaces_streaks_with_final_score(self):
         g, _ = self._cards()
