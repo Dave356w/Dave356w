@@ -30,6 +30,8 @@ def _side(p, opp_abbr, pit_xw_pct, kbb_pct, xw_edge, hitters, player_id=None):
 def _game(away, home, a, h, odds):
     return dict(away=a, home=h, away_abbr=away, home_abbr=home, away_streak="W3",
                 home_streak="L1", game_pk=1, game_number=1, game_label="",
+                abstract_state="Preview", status="Scheduled",
+                away_score=None, home_score=None,
                 game_datetime_utc=None, time_pt="7:05 PM ET", venue="Park", odds=odds,
                 league_baseline={"xwOBA": .312, "K%": .22, "BB%": .08, "OPS": .715, "ERA": 4.1})
 
@@ -119,6 +121,38 @@ class CurrentStreakTests(unittest.TestCase):
             self.assertEqual(b.fetch_current_streaks(), {119: "W3", 147: "L1"})
 
 
+class CurrentScoreTests(unittest.TestCase):
+    def test_slate_carries_official_state_and_scores(self):
+        schedule = {"dates": [{"date": "2026-07-27", "games": [{
+            "gamePk": 123,
+            "gameDate": "2026-07-27T23:10:00Z",
+            "gameNumber": 1,
+            "doubleHeader": "N",
+            "status": {
+                "abstractGameState": "Live",
+                "detailedState": "In Progress",
+            },
+            "teams": {
+                "away": {"team": {"id": 119, "name": "Dodgers"}, "score": 3},
+                "home": {"team": {"id": 147, "name": "Yankees"}, "score": 2},
+            },
+            "venue": {"name": "Test Park"},
+        }]}]}
+        from unittest import mock
+        with mock.patch.object(b, "_get_json", return_value=schedule):
+            row = b.get_slate("2026-07-27").iloc[0]
+        self.assertEqual(row["abstract_state"], "Live")
+        self.assertEqual(row["status"], "In Progress")
+        self.assertEqual(row["away_score"], 3)
+        self.assertEqual(row["home_score"], 2)
+
+    def test_browser_refresh_uses_one_slate_request_per_minute(self):
+        js = b.score_refresh_js()
+        self.assertIn("statsapi.mlb.com/api/v1/schedule", js)
+        self.assertIn("setInterval(refresh,60000)", js)
+        self.assertIn("state==='Live'||state==='Final'", js)
+
+
 class RenderTests(unittest.TestCase):
     def _cards(self):
         ari = [_hitter(f"A{i}", "LF", "R", .33, 60) for i in range(9)]
@@ -148,10 +182,36 @@ class RenderTests(unittest.TestCase):
     def test_team_headers_show_current_streaks(self):
         g, _ = self._cards()
         html = b.cmb_card(g, None)
-        self.assertIn("class='streak'", html)
+        self.assertIn("class='team-meta streak away'", html)
+        self.assertIn("class='team-meta streak home'", html)
         self.assertIn(">W3</span>", html)
         self.assertIn(">L1</span>", html)
+        self.assertIn("class='game-state' hidden", html)
         self.assertNotIn("last 10 games", html)
+
+    def test_live_game_replaces_streaks_with_scores(self):
+        g, _ = self._cards()
+        g.update(abstract_state="Live", status="In Progress",
+                 away_score=3, home_score=2)
+        html = b.cmb_card(g, None)
+        self.assertIn("class='team-meta score away'", html)
+        self.assertIn("class='team-meta score home'", html)
+        self.assertIn(">3</span>", html)
+        self.assertIn(">2</span>", html)
+        self.assertIn("class='game-state live'", html)
+        self.assertIn(">LIVE</span>", html)
+        self.assertNotIn(">W3</span>", html)
+        self.assertNotIn(">L1</span>", html)
+
+    def test_final_game_replaces_streaks_with_final_score(self):
+        g, _ = self._cards()
+        g.update(abstract_state="Final", status="Final",
+                 away_score=6, home_score=4)
+        html = b.cmb_card(g, None)
+        self.assertIn(">6</span>", html)
+        self.assertIn(">4</span>", html)
+        self.assertIn("class='game-state final'", html)
+        self.assertIn(">FINAL</span>", html)
 
     def test_condensed_footer_keeps_only_casual_guide(self):
         html = b._legend_guide()
