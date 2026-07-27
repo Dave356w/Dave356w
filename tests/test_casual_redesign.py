@@ -28,8 +28,8 @@ def _side(p, opp_abbr, pit_xw_pct, kbb_pct, xw_edge, hitters, player_id=None):
 
 
 def _game(away, home, a, h, odds):
-    return dict(away=a, home=h, away_abbr=away, home_abbr=home, away_l10="5-5",
-                home_l10="5-5", game_pk=1, game_number=1, game_label="",
+    return dict(away=a, home=h, away_abbr=away, home_abbr=home, away_streak="W3",
+                home_streak="L1", game_pk=1, game_number=1, game_label="",
                 game_datetime_utc=None, time_pt="7:05 PM ET", venue="Park", odds=odds,
                 league_baseline={"xwOBA": .312, "K%": .22, "BB%": .08, "OPS": .715, "ERA": 4.1})
 
@@ -107,6 +107,18 @@ class PercentileTests(unittest.TestCase):
         self.assertIsNone(b.pctile_rank(.3, 100, None, .312, 130.0))
 
 
+class CurrentStreakTests(unittest.TestCase):
+    def test_reads_official_streak_code_and_ignores_invalid_values(self):
+        standings = {"records": [{"teamRecords": [
+            {"team": {"id": 119}, "streak": {"streakCode": "W3"}},
+            {"team": {"id": 147}, "streak": {"streakCode": "L1"}},
+            {"team": {"id": 999}, "streak": {"streakCode": "—"}},
+        ]}]}
+        from unittest import mock
+        with mock.patch.object(b, "_get_json", return_value=standings):
+            self.assertEqual(b.fetch_current_streaks(), {119: "W3", 147: "L1"})
+
+
 class RenderTests(unittest.TestCase):
     def _cards(self):
         ari = [_hitter(f"A{i}", "LF", "R", .33, 60) for i in range(9)]
@@ -132,6 +144,24 @@ class RenderTests(unittest.TestCase):
         self.assertIn("class='matchlab'", html)      # matchup-labeled columns
         self.assertIn("LAD bats", text)
         self.assertIn("class='tier", html)
+
+    def test_team_headers_show_current_streaks(self):
+        g, _ = self._cards()
+        html = b.cmb_card(g, None)
+        self.assertIn("class='streak'", html)
+        self.assertIn(">W3</span>", html)
+        self.assertIn(">L1</span>", html)
+        self.assertNotIn("last 10 games", html)
+
+    def test_condensed_footer_keeps_only_casual_guide(self):
+        html = b._legend_guide()
+        self.assertIn("How to read a card", html)
+        self.assertIn("warmer / longer bar", html)
+        self.assertIn("xwOBA %ile", html)
+        self.assertIn("Model vs market", html)
+        self.assertIn("platoon advantage", html)
+        self.assertNotIn("role-filtered bullpen", html)
+        self.assertNotIn("0.010 xwOBA", html)
 
     def test_read_names_the_opposing_starter(self):
         # away offense faces the HOME starter; home offense the AWAY starter.
