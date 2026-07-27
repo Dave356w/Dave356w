@@ -2219,11 +2219,11 @@ def fetch_pregame_odds(slate_df):
     return out
 
 
-def fetch_last10_records(slate_df=None):
-    """team_id -> 'W-L' over each team's last 10 games (StatsAPI standings).
+def fetch_current_streaks(slate_df=None):
+    """team_id -> current streak code such as 'W3' or 'L1'.
 
     Display-only and strictly best-effort: any failure logs and returns an
-    empty map so the card header simply omits the record rather than failing
+    empty map so the card header simply omits the streak rather than failing
     the build. `slate_df` is accepted for signature symmetry with the odds
     fetch; standings cover all teams regardless of the slate.
     """
@@ -2234,21 +2234,21 @@ def fetch_last10_records(slate_df=None):
                         "date": SLATE_DATE, "standingsTypes": "regularSeason"},
                        tries=2)
     except Exception as e:  # noqa: BLE001
-        log(f"last-10 records: standings fetch failed ({e!r}) -> header omits")
+        log(f"current streaks: standings fetch failed ({e!r}) -> header omits")
         return out
     for grp in js.get("records", []):
         for tr in grp.get("teamRecords", []):
             tid = (tr.get("team") or {}).get("id")
             if tid is None:
                 continue
-            l10 = next((s for s in (tr.get("records") or {}).get("splitRecords", [])
-                        if s.get("type") == "lastTen"), None)
-            if l10 and l10.get("wins") is not None and l10.get("losses") is not None:
-                try:
-                    out[int(tid)] = f"{int(l10['wins'])}-{int(l10['losses'])}"
-                except (TypeError, ValueError):
-                    continue
-    log(f"last-10 records attached: {len(out)} teams")
+            code = str((tr.get("streak") or {}).get("streakCode") or "").upper()
+            if not re.fullmatch(r"[WL]\d+", code):
+                continue
+            try:
+                out[int(tid)] = code
+            except (TypeError, ValueError):
+                continue
+    log(f"current streaks attached: {len(out)} teams")
     return out
 
 
@@ -2715,9 +2715,10 @@ def _market_html(o, away_abbr, home_abbr, fav=None, ctx=None):
         + "</div>")
 
 
-def _l10_span(rec):
-    """Small 'W-L' chip (last-10 record) appended to a team abbr; '' if unknown."""
-    return f"<span class='l10' title='last 10 games'>{_esc(rec)}</span>" if rec else ""
+def _streak_span(streak):
+    """Small current-streak chip appended to a team abbreviation."""
+    return (f"<span class='streak' title='current win/loss streak'>"
+            f"{_esc(streak)}</span>" if streak else "")
 
 
 def _logo_assets(games):
@@ -2790,10 +2791,10 @@ def cmb_card(g, strength_scale=None, ctx=None):
             "<article class='card unavailable'>"
             "<div class='gamehead'>"
             f"<span class='teams'>{_club_logo(g.get('away_team_id'), ctx)}"
-            f"{_mlb_standings_link(g['away_abbr'])}{_l10_span(g.get('away_l10'))} "
+            f"{_mlb_standings_link(g['away_abbr'])}{_streak_span(g.get('away_streak'))} "
             f"<span class='at'>@</span> {_club_logo(g.get('home_team_id'), ctx)}"
             f"{_mlb_standings_link(g['home_abbr'])}"
-            f"{_l10_span(g.get('home_l10'))}{game_no}</span>"
+            f"{_streak_span(g.get('home_streak'))}{game_no}</span>"
             + (f"<span class='when'>{_esc(when)}</span>" if when else "")
             + "</div>"
             "<div class='card-note'><b>Awaiting paired probable pitchers</b>"
@@ -2828,9 +2829,9 @@ def cmb_card(g, strength_scale=None, ctx=None):
         "<article class='card'>"
         "<div class='gamehead'>"
         f"<span class='teams'>{_club_logo(g.get('away_team_id'), ctx)}"
-        f"{_mlb_standings_link(away_abbr)}{_l10_span(g.get('away_l10'))} "
+        f"{_mlb_standings_link(away_abbr)}{_streak_span(g.get('away_streak'))} "
         f"<span class='at'>@</span> {_club_logo(g.get('home_team_id'), ctx)}"
-        f"{_mlb_standings_link(home_abbr)}{_l10_span(g.get('home_l10'))}{game_no}</span>"
+        f"{_mlb_standings_link(home_abbr)}{_streak_span(g.get('home_streak'))}{game_no}</span>"
         + (f"<span class='when'>{_esc(when)}</span>" if when else "")
         + lean_html
         + "</div>"
@@ -2870,12 +2871,12 @@ def build_combined(games, strength_scale=None, ctx=None):
 def _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
                           opp_hitters_df=None, detail_df=None, lg_ops=None,
                           slate_df=None, lineup_df=None,
-                          league_baseline=None, odds=None, last10=None):
-    last10 = last10 or {}
+                          league_baseline=None, odds=None, streaks=None):
+    streaks = streaks or {}
 
-    def _l10(team_id):
+    def _streak(team_id):
         try:
-            return last10.get(int(team_id))
+            return streaks.get(int(team_id))
         except (TypeError, ValueError):
             return None
 
@@ -2986,8 +2987,8 @@ def _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
             away_abbr=away_abbr, home_abbr=home_abbr,
             away_team_id=(srow.get("away_team_id") if srow is not None else None),
             home_team_id=(srow.get("home_team_id") if srow is not None else None),
-            away_l10=_l10(srow.get("away_team_id")) if srow is not None else None,
-            home_l10=_l10(srow.get("home_team_id")) if srow is not None else None,
+            away_streak=_streak(srow.get("away_team_id")) if srow is not None else None,
+            home_streak=_streak(srow.get("home_team_id")) if srow is not None else None,
             game_pk=gpk, game_number=game_number, game_label=game_label,
             game_datetime_utc=(srow.get("game_datetime_utc") if srow is not None else None),
             time_pt=_game_time_pt(srow.get("game_datetime_utc")) if srow is not None else "",
@@ -3015,8 +3016,8 @@ def _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
                 home_abbr=srow.get("home_abbrev") or _abbr(srow.get("home_team")),
                 away_team_id=srow.get("away_team_id"),
                 home_team_id=srow.get("home_team_id"),
-                away_l10=_l10(srow.get("away_team_id")),
-                home_l10=_l10(srow.get("home_team_id")),
+                away_streak=_streak(srow.get("away_team_id")),
+                home_streak=_streak(srow.get("home_team_id")),
                 time_pt=_game_time_pt(srow.get("game_datetime_utc")),
                 venue=str(srow.get("venue") or ""),
                 away_probable=srow.get("away_probable_pitcher"),
@@ -3041,31 +3042,21 @@ def _legend_guide():
     return (
         "<div class='legend'>"
         "<div class='lg-lead'><b>How to read a card:</b> the <b>lean</b> names the model's "
-        "favored side and its strength: <b>slight / clear / strong</b>, ranked against every "
-        "graded lean to date. Matchup-strength estimates from season data, not score "
-        "predictions.</div>"
+        "favored side; <b>slight / clear / strong</b> shows its relative strength. "
+        "It estimates matchup advantage, not the final score.</div>"
         "<div class='lg-keys'>"
         "<span class='k'><i class='sw warm'></i>warmer / longer bar = better for hitters</span>"
         "<span class='k'><i class='sw cool'></i>cooler / longer bar = better for the pitcher</span>"
-        "<span class='k'><b>xwOBA %ile</b> league-wide rank of a bat or arm (0–100)</span>"
+        "<span class='k'><b>xwOBA %ile</b> league rank from 0–100; higher is better</span>"
         "</div>"
         "<div class='lg-notes'>"
-        "<span><b>Percentiles</b> rank expected quality (xwOBA) against qualified regulars; "
-        "thin samples regress toward league, so a hot week isn't mistaken for elite.</span>"
-        "<span><b>Standouts</b> a lineup's top bats by percentile.</span>"
-        "<span><b>Starter quality</b> xwOBA-allowed and K−BB% percentiles (higher = better), "
-        "tiered elite / solid / below avg.</span>"
-        "<span><b>Model vs market</b> whether the lean agrees with the DraftKings favorite. A "
-        "lean on the <i>underdog</i> is the spot the record tests.</span>"
-        "<span class='wide'>DK moneylines via ESPN at build time; cards ordered by first "
-        "pitch. The lean uses the starter-adjusted lineup for expected starter innings, "
-        "then the neutral lineup against a role-filtered bullpen for the rest of nine; "
-        "the three pitcher stats stay the starter's own line. "
-        "◆ marks a platoon advantage over the starter. A one-sided hitter enters the "
-        "lineup composite 0.010 xwOBA higher with the advantage and 0.010 lower "
-        "without it; a switch hitter is left as-is, since he bats opposite the "
-        "starter nearly every time and his season line already reflects that. The "
-        "per-hitter xwOBA column stays the raw season rate.</span>"
+        "<span><b>Standouts</b> are the lineup's highest-ranked bats.</span>"
+        "<span><b>Starter quality</b> uses xwOBA allowed and K−BB%; higher is better.</span>"
+        "<span><b>Model vs market</b> shows whether the lean agrees with the DK favorite; "
+        "disagree means the model favors the underdog.</span>"
+        "<span><b>◆</b> marks a platoon advantage over the starter.</span>"
+        "<span class='wide'>DraftKings moneylines via ESPN at build time; cards are ordered "
+        "by first pitch.</span>"
         "</div></div>")
 
 
@@ -3156,7 +3147,7 @@ body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 var(--sans);
   padding:12px 16px 10px;border-bottom:1px solid var(--line-2)}
 .teams{font:800 22px/1 var(--sans);letter-spacing:.02em}
 .teams .at{color:var(--faint);font-weight:400;font-size:16px;margin:0 4px}
-.teams .l10{font:600 11px/1 var(--mono);color:var(--muted);letter-spacing:0;
+.teams .streak{font:600 11px/1 var(--mono);color:var(--muted);letter-spacing:0;
   margin-left:3px;vertical-align:middle}
 .game-no{font:700 11px/1 var(--mono);color:var(--muted);vertical-align:middle}
 .when{font:400 12px/1.3 var(--sans);color:var(--muted)}
@@ -3715,11 +3706,11 @@ def render_grades_html(built_txt):
 def render_combined_html(xw_df, pl_df, pitcher_rows_df, built_txt,
                          opp_hitters_df=None, detail_df=None, lg_ops=None,
                          slate_df=None, lineup_df=None,
-                         league_baseline=None, odds=None, last10=None):
+                         league_baseline=None, odds=None, streaks=None):
     games = _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
                                   opp_hitters_df=opp_hitters_df, detail_df=detail_df,
                                   lg_ops=lg_ops, slate_df=slate_df, lineup_df=lineup_df,
-                                  league_baseline=league_baseline, odds=odds, last10=last10)
+                                  league_baseline=league_baseline, odds=odds, streaks=streaks)
     head = _legend_head("MLB matchup leans — Statcast xwOBA", built_txt)
     # Cards lead; the how-to-read guide and the record strip sit below them.
     footer = _legend_guide() + records_strip_html()
@@ -3866,12 +3857,12 @@ def main():
         log(f"pregame odds skipped: {e!r}")
         odds = {}
 
-    log("Fetching last-10 records (best-effort, display-only) ...")
+    log("Fetching current streaks (best-effort, display-only) ...")
     try:
-        last10 = fetch_last10_records(data["slate_df"])
+        streaks = fetch_current_streaks(data["slate_df"])
     except Exception as e:  # noqa: BLE001
-        log(f"last-10 records skipped: {e!r}")
-        last10 = {}
+        log(f"current streaks skipped: {e!r}")
+        streaks = {}
 
     log("Rendering index.html ...")
     html = render_combined_html(
@@ -3879,7 +3870,7 @@ def main():
         opp_hitters_df=opp_hitters_df, detail_df=platoon_detail_df,
         lg_ops=league_ops_overall, slate_df=data["slate_df"],
         lineup_df=data["lineup_projection_df"],
-        league_baseline=data["league_baseline"], odds=odds, last10=last10)
+        league_baseline=data["league_baseline"], odds=odds, streaks=streaks)
     with open(out_path, "w") as f:
         f.write(html)
     log(f"Wrote {out_path} ({len(html):,} bytes, {len(matchup_df)} matchup rows)")
