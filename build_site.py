@@ -2497,13 +2497,6 @@ def _mlb_player_link(name, player_id, label=None):
             f"target='_blank' rel='noopener noreferrer'>{text}</a>")
 
 
-def _mlb_standings_link(team, label=None):
-    """Primary card-header team link to MLB's current standings page."""
-    text = team if label is None else label
-    return ("<a class='team-link' href='https://www.mlb.com/standings/' "
-            f"target='_blank' rel='noopener noreferrer'>{_esc(text)}</a>")
-
-
 def _tier_word(pctile):
     """(label, css-class) plain-word starter quality from an xwOBA-against
     percentile. Class picks the accent: elite=steel, below=ember, else neutral."""
@@ -2905,8 +2898,7 @@ def _summary_team_html(g, side, ctx):
                 f"{_esc(abbr[:1])}</span>")
     return (
         f"<span class='summary-team {side}' data-team-abbr='{_esc(abbr)}'>"
-        f"{logo}<span class='summary-club'>"
-        f"{_mlb_standings_link(abbr, label)}</span>"
+        f"{logo}<span class='summary-club'>{_esc(label)}</span>"
         f"{_team_meta_span(g, side)}</span>"
     )
 
@@ -3328,10 +3320,8 @@ body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 var(--sans);
 .summary-logo-fallback{display:grid;width:42px;height:42px;place-items:center;
   border:1px solid var(--line);border-radius:var(--r-pill);background:var(--surface-2);
   color:var(--muted);font:800 15px/1 var(--sans)}
-.summary-club{grid-area:club;min-width:0;font:750 15px/1.15 var(--sans)}
-.summary-club .team-link{display:block;overflow:hidden;text-overflow:ellipsis;
-  white-space:nowrap;text-decoration:none}
-.summary-club .team-link:hover{text-decoration:underline;text-underline-offset:3px}
+.summary-club{grid-area:club;min-width:0;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;font:750 15px/1.15 var(--sans)}
 .summary-team.home .summary-club{text-align:right}
 .summary-center{display:flex;min-width:0;flex-direction:column;align-items:center;
   justify-content:center;gap:4px;text-align:center}
@@ -3382,11 +3372,11 @@ body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 var(--sans);
 /* SP block */
 .sp .who{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
 .sp .nm{font:700 16px/1.2 var(--sans)}
-.player-link,.team-link{color:inherit;text-decoration:underline;
+.player-link{color:inherit;text-decoration:underline;
   text-decoration-color:rgba(var(--lean),.5);text-decoration-thickness:1px;
   text-underline-offset:2px}
-.player-link:hover,.team-link:hover{color:rgba(var(--lean),1);text-decoration-color:currentColor}
-.player-link:focus-visible,.team-link:focus-visible{
+.player-link:hover{color:rgba(var(--lean),1);text-decoration-color:currentColor}
+.player-link:focus-visible{
   outline:2px solid rgba(var(--lean),1);outline-offset:2px}
 .hand{font:500 10px/1.4 var(--mono);color:var(--muted);border:1px solid var(--line);border-radius:var(--r-s);padding:0 4px}
 .sp .role{font-size:11px;color:var(--faint);margin-top:1px}
@@ -3524,6 +3514,8 @@ tr.mach{display:table-row}
     grid-template-areas:"logo club" "logo meta"}
   .summary-team.home{grid-template-columns:minmax(0,1fr) 30px;
     grid-template-areas:"club logo" "meta logo"}
+  .summary-team.away .team-meta{justify-self:start}
+  .summary-team.home .team-meta{justify-self:end;text-align:right}
   .summary-team .clogo,.summary-logo-fallback{width:30px;height:30px}
   .summary-logo-fallback{font-size:12px}
   .summary-club{font-size:12.5px}

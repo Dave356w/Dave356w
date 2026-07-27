@@ -213,8 +213,8 @@ class RenderTests(unittest.TestCase):
         g.update(away_team_name="Los Angeles Dodgers",
                  home_team_name="Arizona Diamondbacks")
         html = b.cmb_card(g, None)
-        self.assertIn(">Dodgers</a>", html)
-        self.assertIn(">D-backs</a>", html)
+        self.assertIn("<span class='summary-club'>Dodgers</span>", html)
+        self.assertIn("<span class='summary-club'>D-backs</span>", html)
 
     def test_team_headers_show_current_streaks(self):
         g, _ = self._cards()
@@ -296,20 +296,12 @@ class RenderTests(unittest.TestCase):
     def test_player_link_falls_back_to_escaped_text_without_id(self):
         self.assertEqual(b._mlb_player_link("A & B", None), "A &amp; B")
 
-    def test_only_primary_header_abbreviations_link_to_mlb_standings(self):
+    def test_collapsed_team_labels_do_not_link_to_mlb_standings(self):
         g, _ = self._cards()
         html = b.cmb_card(g, None)
-        href = "href='https://www.mlb.com/standings/'"
-        self.assertEqual(html.count(href), 2)
-        self.assertIn(f"{href} target='_blank' rel='noopener noreferrer'>LAD</a>", html)
-        self.assertIn(f"{href} target='_blank' rel='noopener noreferrer'>ARI</a>", html)
-        read = html.split("class='read'")[1].split("</p>")[0]
-        market = html.split("class='market'")[1].split("</div><div class='sides'>")[0]
-        sides = html.split("<div class='sides'>")[1]
-        self.assertNotIn("team-link", read)
-        self.assertNotIn("team-link", market)
-        self.assertNotIn("team-link", sides)
-        self.assertIn(".team-link:focus-visible", b.CSS)
+        self.assertNotIn("https://www.mlb.com/standings/", html)
+        self.assertNotIn("team-link", html)
+        self.assertNotIn(".team-link", b.CSS)
 
     def test_model_machinery_renders(self):
         # The model machinery (formerly gated behind an Analyst toggle) is now
@@ -520,6 +512,15 @@ class MobileLayoutTests(unittest.TestCase):
         self.assertIn(".summary-chevron", b.CSS)
         self.assertNotIn(".lean", m)
         self.assertNotIn(".lean{", b.CSS)
+
+    def test_mobile_team_meta_stays_under_its_team_name(self):
+        m = _mobile_rules()
+        self.assertEqual(
+            m[".summary-team.away .team-meta"]["justify-self"], "start"
+        )
+        home = m[".summary-team.home .team-meta"]
+        self.assertEqual(home["justify-self"], "end")
+        self.assertEqual(home["text-align"], "right")
 
 
 class StarterBlockTests(unittest.TestCase):
