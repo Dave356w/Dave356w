@@ -268,13 +268,19 @@ class RenderTests(unittest.TestCase):
     def test_player_link_falls_back_to_escaped_text_without_id(self):
         self.assertEqual(b._mlb_player_link("A & B", None), "A &amp; B")
 
-    def test_team_names_and_abbreviations_link_to_mlb_standings(self):
+    def test_only_primary_header_abbreviations_link_to_mlb_standings(self):
         g, _ = self._cards()
         html = b.cmb_card(g, None)
         href = "href='https://www.mlb.com/standings/'"
-        self.assertGreaterEqual(html.count(href), 12)
+        self.assertEqual(html.count(href), 2)
         self.assertIn(f"{href} target='_blank' rel='noopener noreferrer'>LAD</a>", html)
         self.assertIn(f"{href} target='_blank' rel='noopener noreferrer'>ARI</a>", html)
+        read = html.split("class='read'")[1].split("</p>")[0]
+        market = html.split("class='market'")[1].split("</div><div class='sides'>")[0]
+        sides = html.split("<div class='sides'>")[1]
+        self.assertNotIn("team-link", read)
+        self.assertNotIn("team-link", market)
+        self.assertNotIn("team-link", sides)
         self.assertIn(".team-link:focus-visible", b.CSS)
 
     def test_model_machinery_renders(self):
@@ -330,35 +336,35 @@ class RenderTests(unittest.TestCase):
         fb = b._verdict_html("ARI", dict(p_home=.62), "LAD", "ARI", {})
         self.assertIn("No edge on the line", fb)
 
-    def test_no_lean_pill_when_edge_missing(self):
+    def test_missing_edge_has_no_lean_read_or_header_pill(self):
         g, _ = self._cards()
         g["away"]["xw_edge"] = None
-        self.assertIn("no lean", b.cmb_card(g, None))
+        html = b.cmb_card(g, None)
+        self.assertNotIn("class='read'", html)
+        self.assertNotIn("class='lean", html)
 
-    def test_exact_zero_delta_is_neutral_not_home(self):
+    def test_exact_zero_delta_has_no_lean_read(self):
         g, _ = self._cards()
         g["away"]["xw_edge"] = .012345
         g["home"]["xw_edge"] = .012345
         html = b.cmb_card(g, None)
-        self.assertIn("no lean", html)
-        self.assertNotIn("<span class='lt'><a", html)
+        self.assertNotIn("class='read'", html)
+        self.assertNotIn("class='lean", html)
 
     def test_nonzero_sub_display_delta_still_names_a_favorite(self):
-        # A delta too small to have printed at three decimals is still a lean:
-        # the pill must name the side, not collapse to the neutral "no lean".
+        # A delta too small to have printed at three decimals is still a lean,
+        # and the plain-language read must name the side.
         g, _ = self._cards()
         g["away"]["xw_edge"] = .01234567891
         g["home"]["xw_edge"] = .01234567890
         html = b.cmb_card(g, None)
-        self.assertNotIn("no lean", html)
-        self.assertIn("<span class='lt'><a class='team-link'", html)
-        self.assertIn(">ARI</a></span>", html)
+        self.assertIn("class='read'", html)
+        self.assertIn("lean to <b>ARI</b>", html)
+        self.assertNotIn("class='lean", html)
 
 
-class LeanPillTests(unittest.TestCase):
-    """The pill shows the ledger-ranked strength word only. |Δxw| itself lives
-    in the ledger (xw_net / xw_delta, written on every row), so it is relocated
-    rather than discarded -- the card is not the record."""
+class LeanDescriptionTests(unittest.TestCase):
+    """The read sentence is the card's single lean explanation."""
 
     def _card(self, **over):
         r = RenderTests()
@@ -367,23 +373,23 @@ class LeanPillTests(unittest.TestCase):
             g[k[:4]]["xw_edge"] = v
         return b.cmb_card(g, None)
 
-    def test_pill_keeps_strength_word_without_the_number(self):
+    def test_read_keeps_strength_word_without_header_pill(self):
         html = self._card()
-        self.assertIn("<span class='ls'>strong</span>", html)
-        self.assertIn("class='lean strong'", html)
+        self.assertIn("That is a <b>strong</b> lean to", html)
+        self.assertNotIn("class='lean", html)
         self.assertNotIn("Δxw", html)
         self.assertNotIn("<span class='mach'> · Δ", html)
 
-    def test_neutral_pill_carries_no_number_either(self):
+    def test_missing_edge_has_neither_read_nor_pill(self):
         html = self._card(away=None)
-        self.assertIn("<span class='ls'>no lean</span>", html)
+        self.assertNotIn("class='read'", html)
+        self.assertNotIn("class='lean", html)
         self.assertNotIn("Δxw", html)
 
-    def test_delta_styling_hook_is_gone_from_css(self):
-        # .ld styled the removed delta readout; .lean .ls .mach styled its
-        # mono suffix. Neither has markup left to hook.
-        self.assertNotIn(".lean .ld{", b.CSS)
-        self.assertNotIn(".lean .ls .mach{", b.CSS)
+    def test_header_pill_css_is_removed(self):
+        self.assertNotIn(".lean{", b.CSS)
+        self.assertNotIn(".lean.", b.CSS)
+        self.assertNotIn(".lean ", b.CSS)
 
 
 def _mobile_rules():
@@ -476,12 +482,11 @@ class MobileLayoutTests(unittest.TestCase):
             self.assertLess(int(pad[1].rstrip("px")), 16,
                             f"{sel} horizontal padding not reduced")
 
-    def test_gamehead_wraps_teams_then_time_and_lean(self):
+    def test_gamehead_wraps_teams_then_time(self):
         m = _mobile_rules()
-        self.assertEqual(m[".teams"]["flex"], "1 1 100%")     # teams own a line
-        self.assertEqual(m[".lean"]["margin-left"], "auto")   # lean right of time
-        # The old rule pinned the lean hard-left under the teams.
-        self.assertNotIn(".lean{margin-left:0}", b.CSS)
+        self.assertEqual(m[".teams"]["flex"], "1 1 100%")
+        self.assertNotIn(".lean", m)
+        self.assertNotIn(".lean{", b.CSS)
 
 
 class StarterBlockTests(unittest.TestCase):
@@ -590,12 +595,13 @@ class CardCopyTests(unittest.TestCase):
         self.assertIn("That is a <b>", html)
 
     def test_placeholder_em_dash_survives(self):
-        # No market and no lean: the em-dash is data, not prose.
+        # No market: the em-dash is data, not prose.
         g_html = self._card(odds={})
         self.assertIn("<div class='v'>—</div>", g_html)
-        self.assertIn("<span class='lt'>—</span>",
-                      self._card(odds={}, away=dict(RenderTests()._cards()[0]["away"],
-                                                    xw_edge=None)))
+        no_edge = self._card(
+            odds={}, away=dict(RenderTests()._cards()[0]["away"], xw_edge=None)
+        )
+        self.assertNotIn("class='lean", no_edge)
 
     def test_legend_prose_is_em_dash_free(self):
         self.assertNotIn("—", self._visible(b._legend_guide()))

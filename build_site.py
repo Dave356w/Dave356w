@@ -2462,7 +2462,7 @@ def _mlb_player_link(name, player_id, label=None):
 
 
 def _mlb_standings_link(team):
-    """Team name/abbreviation link to MLB's current standings page."""
+    """Primary card-header team link to MLB's current standings page."""
     return ("<a class='team-link' href='https://www.mlb.com/standings/' "
             f"target='_blank' rel='noopener noreferrer'>{_esc(team)}</a>")
 
@@ -2532,12 +2532,12 @@ def _read_sentence(away_abbr, home_abbr, a, h, fav, strength_word):
     hw = f"<b class='{ch}'>{gh}</b>" if ch else f"<b>{gh}</b>"
     home_sp = _mlb_player_link(h["p"], h.get("player_id"), _last(h["p"]))
     away_sp = _mlb_player_link(a["p"], a.get("player_id"), _last(a["p"]))
-    away_team = _mlb_standings_link(away_abbr)
-    home_team = _mlb_standings_link(home_abbr)
+    away_team = _esc(away_abbr)
+    home_team = _esc(home_abbr)
     return (f"<p class='read'>{away_team}'s bats grade {aw} against "
             f"{home_sp}; {home_team}'s grade {hw} against "
             f"{away_sp}. That is a <b>{strength_word or 'lean'}</b> "
-            f"lean to {_mlb_standings_link(fav)}.</p>")
+            f"lean to <b>{_esc(fav)}</b>.</p>")
 
 
 def _market_fav(odds, away_abbr, home_abbr):
@@ -2572,7 +2572,7 @@ def _verdict_html(fav, odds, away_abbr, home_abbr, ctx=None):
                 if rec else "No edge on the line here.")
         return ("<div class='verdict'><div class='l'>Model vs market</div>"
                 f"<div class='vt'>Model agrees with the market: "
-                f"{_mlb_standings_link(fav)} favored. "
+                f"{_esc(fav)} favored. "
                 f"{tail}</div></div>")
     price = (odds.get("home_ml") if fav == home_abbr else odds.get("away_ml"))
     px = f" ({_fmt_ml(price)})" if price is not None else ""
@@ -2581,8 +2581,8 @@ def _verdict_html(fav, odds, away_abbr, home_abbr, ctx=None):
             if rec else "This is the spot the record is built to test.")
     return ("<div class='verdict edge'><div class='l'>Model vs market · disagree</div>"
             f"<div class='vt'>Model leans the underdog "
-            f"<b>{_mlb_standings_link(fav)}{px}</b> against the "
-            f"market's {_mlb_standings_link(mkt)}. {tail}</div></div>")
+            f"<b>{_esc(fav)}{px}</b> against the "
+            f"market's {_esc(mkt)}. {tail}</div></div>")
 
 
 def _hitter_row_html(i, hr):
@@ -2620,7 +2620,7 @@ def _lineup_details(side_d):
     return (
         "<details class='lineup' open>"
         "<summary><span class='chev'>▶</span>"
-        f"<span class='tl'>{_mlb_standings_link(side_d['opp_abbr'])} lineup</span>"
+        f"<span class='tl'>{_esc(side_d['opp_abbr'])} lineup</span>"
         f"<span class='st {st_cls}'>{st_lab}</span>"
         f"<span class='lw mach'>{summ}</span></summary>"
         f"<div class='lu-scroll'><table class='lu'>{head}{body}</table></div></details>")
@@ -2677,8 +2677,8 @@ def _side_html(sp_abbr, d, league_baseline):
         if d.get("pitching_basis") == "starter_only_no_fullgame_lean"
         else ""
     )
-    sp_team = _mlb_standings_link(sp_abbr)
-    opp_team = _mlb_standings_link(d["opp_abbr"])
+    sp_team = _esc(sp_abbr)
+    opp_team = _esc(d["opp_abbr"])
     return (
         f"<section class='side'>"
         f"<div class='matchlab'>{sp_team} starter → {opp_team} bats</div>"
@@ -2706,7 +2706,7 @@ def _market_html(o, away_abbr, home_abbr, fav=None, ctx=None):
     def _mlcell(prefix, lab, cur, opn):
         sub = f" <span class='mv'>← {_fmt_ml(opn)} open</span>" if opn is not None else ""
         return (f"<div class='mcell'><div class='l'>{prefix} · "
-                f"{_mlb_standings_link(lab)}</div>"
+                f"{_esc(lab)}</div>"
                 f"<div class='v'>{_fmt_ml(cur)}{sub}</div></div>")
     tot = f"o/u {o['total']:g}" if o.get("total") is not None else "—"
     ph = f"{o['p_home'] * 100:.1f}%" if o.get("p_home") is not None else "—"
@@ -2716,7 +2716,7 @@ def _market_html(o, away_abbr, home_abbr, fav=None, ctx=None):
         + _mlcell("DK ML", home_abbr, o.get("home_ml"), o.get("open_home_ml"))
         + f"<div class='mcell'><div class='l'>Total</div><div class='v'>{tot}</div></div>"
         + f"<div class='mcell'><div class='l'>Implied "
-        + _mlb_standings_link(home_abbr)
+        + _esc(home_abbr)
         + f" (devig)</div><div class='v'>{ph}</div></div>"
         + "</div>"
         + _verdict_html(fav, o, away_abbr, home_abbr, ctx)
@@ -2837,13 +2837,6 @@ def _club_logo(team_id, ctx):
     return f"<span class='clogo t{tid}' aria-hidden='true'></span>" if tid in ids else ""
 
 
-# Neutral pill: no favorite named. Shared by the exact-tie case and the
-# missing-edge case -- both mean "the model has no side here", and neither
-# may render as a 0.0 tie on some team.
-NO_LEAN_PILL = ("<span class='lean nolean'><span class='lk'>lean</span>"
-                "<span class='lt'>—</span><span class='ls'>no lean</span></span>")
-
-
 def cmb_card(g, strength_scale=None, ctx=None):
     if g.get("unavailable"):
         game_no = f" <span class='game-no'>{_esc(g['game_label'])}</span>" if g.get("game_label") else ""
@@ -2869,14 +2862,10 @@ def cmb_card(g, strength_scale=None, ctx=None):
     a, h = g["away"], g["home"]
     away_abbr, home_abbr = g["away_abbr"], g["home_abbr"]
     # a = away SP -> his xw_edge is the HOME offense edge. When either edge is
-    # missing there is no defined lean: neutral "no lean" pill (no favorite),
-    # never a fabricated 0.0 tie. The strength word ranks |Δxw| against the
-    # ledger's lean-magnitude history (display-only). The pill carries that word
-    # alone -- |Δxw| itself is a ledger column (xw_net / xw_delta, written on
-    # every row), so dropping it from the card moves the number rather than
-    # deleting it.
+    # missing there is no defined lean and no read sentence. The strength word
+    # ranks |Δxw| against the ledger's lean-magnitude history (display-only)
+    # and appears once, in the plain-language read beneath the header.
     fav = strength_word = read_html = None
-    lean_html = NO_LEAN_PILL
     if a["xw_edge"] is not None and h["xw_edge"] is not None:
         home_off, away_off = a["xw_edge"], h["xw_edge"]
         net = home_off - away_off
@@ -2884,9 +2873,6 @@ def cmb_card(g, strength_scale=None, ctx=None):
             delta = abs(net)
             fav = home_abbr if net > 0 else away_abbr
             strength_word, _ = lean_strength(delta, strength_scale)
-            lean_html = (f"<span class='lean {strength_word or ''}'><span class='lk'>lean</span>"
-                         f"<span class='lt'>{_mlb_standings_link(fav)}</span>"
-                         f"<span class='ls'>{strength_word or 'lean'}</span></span>")
             read_html = _read_sentence(away_abbr, home_abbr, a, h, fav, strength_word)
     when = " · ".join(x for x in (g.get("time_pt"), g.get("venue")) if x)
     game_no = f" <span class='game-no'>{_esc(g['game_label'])}</span>" if g.get("game_label") else ""
@@ -2900,7 +2886,6 @@ def cmb_card(g, strength_scale=None, ctx=None):
         f"{_mlb_standings_link(home_abbr)}{_team_meta_span(g, 'home')}"
         f"{game_no}{_game_state_span(g)}</span>"
         + (f"<span class='when'>{_esc(when)}</span>" if when else "")
-        + lean_html
         + "</div>"
         + (read_html or "")
         + _market_html(g.get('odds'), away_abbr, home_abbr, fav, ctx)
@@ -3214,7 +3199,6 @@ body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 var(--sans);
 .lg-notes .wide{grid-column:1/-1}
 .sw{width:11px;height:11px;border-radius:var(--r-s);display:inline-block}
 .sw.warm{background:rgba(var(--warm),.85)} .sw.cool{background:rgba(var(--cool),.85)}
-.sw.lean{background:rgba(var(--amberbg),.6)} .sw.grey{background:var(--line);border:1px solid var(--faint)}
 
 /* chips kept for grades.html summary */
 .chip{flex:1 1 64px;min-width:60px;border:1px solid var(--line-2);border-radius:var(--r);
@@ -3242,13 +3226,6 @@ body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 var(--sans);
 .game-state.live{color:rgba(var(--cool),1);border-color:rgba(var(--cool),.35);
   background:rgba(var(--cool),.10)}
 .when{font:400 12px/1.3 var(--sans);color:var(--muted)}
-.lean{margin-left:auto;display:flex;align-items:baseline;gap:7px;
-  border:1px solid rgba(var(--amberbg),.55);background:rgba(var(--amberbg),.14);
-  border-radius:var(--r-s);padding:4px 10px}
-.lean .lk{font:600 10px/1 var(--sans);letter-spacing:.14em;text-transform:uppercase;color:rgba(var(--lean),1)}
-.lean .lt{font:800 15px/1 var(--sans)}
-.lean.nolean{border-color:var(--line);background:var(--surface-2)}
-.lean.nolean .lk,.lean.nolean .lt{color:var(--muted)}
 .card-note{display:flex;flex-direction:column;gap:4px;padding:14px 16px 16px;color:var(--muted)}
 .card-note b{color:var(--ink);font-size:13px}.card-note span{font-size:12px}
 
@@ -3348,10 +3325,6 @@ td.bar{width:86px;padding:4px 8px 4px 2px}
 .read b{font-weight:700}
 .read .warmtx{color:rgba(var(--warm),1)} .read .cooltx{color:rgba(var(--cool),1)}
 
-.lean .ls{font:600 11px/1 var(--sans);letter-spacing:.02em;color:var(--muted);text-transform:uppercase}
-.lean.slight{border-color:rgba(var(--amberbg),.35);background:rgba(var(--amberbg),.09)}
-.lean.strong{border-color:rgba(var(--amberbg),.75);background:rgba(var(--amberbg),.24)}
-
 /* percentile slider (fill length = percentile; hue = whose favor) */
 .sl{display:inline-block;width:88px;height:9px;border-radius:var(--r-s);background:var(--surface-2);
   border:1px solid var(--line-2);vertical-align:middle;overflow:hidden;position:relative}
@@ -3416,10 +3389,9 @@ tr.mach{display:table-row}
   /* Tighter chrome: the card gutters, not the content, give up the width. */
   body{padding:14px 10px 44px}
   .gamehead{gap:5px 9px;padding:10px 12px 9px}
-  /* Teams take their own line; time and lean share the next one, lean right. */
+  /* Teams take their own line; game time sits beneath it. */
   .teams{flex:1 1 100%;font-size:19px}
   .when{font-size:11.5px}
-  .lean{margin-left:auto;padding:3px 9px}
   .read{padding:10px 12px}
   .side{padding:10px 12px 12px}
   .mcell{padding:6px 7px}
@@ -3780,7 +3752,7 @@ def _lean_cell(lean, delta, muted=False):
     if not isinstance(lean, str) or not lean:
         return "<span class='muted'>—</span>"
     d = pd.to_numeric(delta, errors="coerce")
-    txt = _mlb_standings_link(lean) + (
+    txt = _esc(lean) + (
         f" <span class='muted'>Δ{delta3(d)}</span>" if pd.notna(d) else ""
     )
     return f"<span class='muted'>{txt}</span>" if muted else txt
@@ -3802,8 +3774,8 @@ def _grades_row(r, show_ml=False):
                      "lineup'>°</span>")
     cells = [
         _esc(r["game_date"]),
-        (f"{_mlb_standings_link(r['away'])} <span class='muted'>@</span> "
-         f"{_mlb_standings_link(r['home'])}{proj_mark}"
+        (f"{_esc(r['away'])} <span class='muted'>@</span> "
+         f"{_esc(r['home'])}{proj_mark}"
          f"<br><span class='sp'>{_esc(r.get('away_sp') or '—')} v {_esc(r.get('home_sp') or '—')}</span>"),
         _lean_cell(r["xw_lean"], r["xw_delta"]),
     ]
