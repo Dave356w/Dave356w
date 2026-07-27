@@ -2618,7 +2618,7 @@ def _lineup_details(side_d):
     if not body:
         body = "<tr><td class='na' colspan='5'>lineup unavailable</td></tr>"
     return (
-        "<details class='lineup'>"
+        "<details class='lineup' open>"
         "<summary><span class='chev'>▶</span>"
         f"<span class='tl'>{_esc(side_d['opp_abbr'])} lineup</span>"
         f"<span class='st {st_cls}'>{st_lab}</span>"
@@ -2845,7 +2845,7 @@ def cmb_card(g, strength_scale=None, ctx=None):
             "TBD" if x is None or (isinstance(x, float) and pd.isna(x)) else str(x)
             for x in (g.get("away_probable"), g.get("home_probable")))
         return (
-            f"<article class='card unavailable' id='game-{int(g['game_pk'])}'>"
+            "<article class='card unavailable'>"
             "<div class='gamehead'>"
             f"<span class='teams' data-game-pk='{int(g['game_pk'])}'>"
             f"{_club_logo(g.get('away_team_id'), ctx)}"
@@ -2877,7 +2877,7 @@ def cmb_card(g, strength_scale=None, ctx=None):
     when = " · ".join(x for x in (g.get("time_pt"), g.get("venue")) if x)
     game_no = f" <span class='game-no'>{_esc(g['game_label'])}</span>" if g.get("game_label") else ""
     return (
-        f"<article class='card' id='game-{int(g['game_pk'])}'>"
+        "<article class='card'>"
         "<div class='gamehead'>"
         f"<span class='teams' data-game-pk='{int(g['game_pk'])}'>"
         f"{_club_logo(g.get('away_team_id'), ctx)}"
@@ -2915,46 +2915,7 @@ def _game_order_key(game):
 
 def build_combined(games, strength_scale=None, ctx=None):
     cards = sorted(games, key=_game_order_key)
-    index_rows = []
-    for g in cards:
-        away, home = _esc(g["away_abbr"]), _esc(g["home_abbr"])
-        status = _esc(g.get("time_pt") or g.get("status") or "—")
-        lean, strength, relation, ml = "Awaiting model", "", "—", "—"
-        if not g.get("unavailable"):
-            a, h = g["away"], g["home"]
-            if a.get("xw_edge") is not None and h.get("xw_edge") is not None:
-                net = a["xw_edge"] - h["xw_edge"]
-                if net:
-                    lean = home if net > 0 else away
-                    strength, _ = lean_strength(abs(net), strength_scale)
-                    odds = g.get("odds") or {}
-                    p_home = odds.get("p_home")
-                    if p_home is not None:
-                        market = home if p_home >= .5 else away
-                        relation = "agree" if market == lean else "disagree"
-                    raw_ml = odds.get("home_ml") if lean == home else odds.get("away_ml")
-                    ml = _fmt_ml(raw_ml)
-        index_rows.append(
-            "<a class='slate-row' href='#game-{pk}'>"
-            "<span class='slate-game'>{away} <i>@</i> {home}</span>"
-            "<span class='slate-status'>{status}</span>"
-            "<span class='slate-lean'>{lean}{strength}</span>"
-            "<span class='slate-market'>{relation}</span>"
-            "<span class='slate-ml'>{ml}</span></a>".format(
-                pk=int(g["game_pk"]), away=away, home=home, status=status,
-                lean=_esc(lean),
-                strength=f" · {_esc(strength)}" if strength else "",
-                relation=_esc(relation), ml=_esc(ml)))
-    index_html = (
-        "<section class='slate-index' aria-label='Slate overview'>"
-        "<div class='slate-index-head'><b>Slate overview</b>"
-        "<span>matchup · start · model · market · ML</span></div>"
-        + "".join(index_rows) + "</section>")
-    controls = (
-        "<div class='lineup-controls' aria-label='Lineup display'>"
-        "<button type='button' data-lineups='expand'>Expand all lineups</button>"
-        "<button type='button' data-lineups='collapse'>Collapse all lineups</button></div>")
-    return (index_html + controls + "<div class='grid'>"
+    return ("<div class='grid'>"
             + "".join(cmb_card(g, strength_scale, ctx) for g in cards)
             + "</div>")
 
@@ -3219,10 +3180,6 @@ body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 var(--sans);
 .topbar{display:flex;align-items:baseline;justify-content:space-between;gap:12px;
   border-bottom:2px solid var(--ink);padding-bottom:10px;margin-bottom:12px}
 .brand{font:800 16px/1 var(--sans);letter-spacing:.13em;text-transform:uppercase}
-.top-actions{display:flex;align-items:center;gap:12px}
-.primary-nav{display:flex;gap:10px;font:650 12px/1 var(--sans)}
-.primary-nav a{color:var(--muted);text-decoration:none}
-.primary-nav a:hover,.primary-nav a:focus-visible{color:var(--ink);text-decoration:underline}
 .theme{appearance:none;border:1px solid var(--line);background:var(--surface);color:var(--muted);
   font:600 12px/1 var(--sans);padding:7px 11px;border-radius:var(--r);cursor:pointer}
 .theme:hover{color:var(--ink)}
@@ -3253,21 +3210,6 @@ body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 var(--sans);
 .grid{display:flex;flex-direction:column;gap:16px}
 .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
   box-shadow:var(--shadow);overflow:hidden}
-.slate-index{margin:0 2px 12px;background:var(--surface);border:1px solid var(--line);
-  border-radius:var(--r);overflow:hidden}
-.slate-index-head,.slate-row{display:grid;grid-template-columns:1.3fr .9fr .9fr .7fr .45fr;
-  gap:10px;align-items:center;padding:7px 10px}
-.slate-index-head{font-size:11px;color:var(--muted);background:var(--surface-2)}
-.slate-index-head span{grid-column:2/-1;text-align:right}
-.slate-row{border-top:1px solid var(--line-2);color:var(--ink);text-decoration:none;
-  font:550 11.5px/1.3 var(--mono)}
-.slate-row:hover,.slate-row:focus-visible{background:var(--surface-2)}
-.slate-game{font-family:var(--sans);font-weight:750}.slate-game i{font-style:normal;color:var(--faint)}
-.slate-status,.slate-market{color:var(--muted)}.slate-ml{text-align:right}
-.lineup-controls{display:flex;justify-content:flex-end;gap:7px;margin:0 2px 10px}
-.lineup-controls button{appearance:none;border:1px solid var(--line);background:var(--surface);
-  color:var(--muted);font:600 11px/1 var(--sans);padding:6px 9px;border-radius:var(--r);cursor:pointer}
-.lineup-controls button:hover,.lineup-controls button:focus-visible{color:var(--ink)}
 
 /* ---------- game header ---------- */
 .gamehead{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;
@@ -3446,12 +3388,6 @@ tr.mach{display:table-row}
 @media (max-width:540px){
   /* Tighter chrome: the card gutters, not the content, give up the width. */
   body{padding:14px 10px 44px}
-  .topbar{align-items:flex-start}.top-actions{align-items:flex-end;flex-direction:column-reverse;gap:8px}
-  .primary-nav{font-size:11px}
-  .slate-index-head{display:flex;justify-content:space-between}
-  .slate-index-head span{display:none}
-  .slate-row{grid-template-columns:1.2fr .8fr .8fr}
-  .slate-market,.slate-ml{display:none}
   .gamehead{gap:5px 9px;padding:10px 12px 9px}
   /* Teams take their own line; game time sits beneath it. */
   .teams{flex:1 1 100%;font-size:19px}
@@ -3534,20 +3470,6 @@ THEME_JS = r"""
     var order=['auto','light','dark'];var n=order[(order.indexOf(cur())+1)%3];
     apply(n);try{localStorage.setItem(KEY,n);}catch(e){}
   });}
-})();
-"""
-
-LINEUP_JS = r"""
-(function(){
-  var KEY='mlb-mx-lineups';
-  function setAll(open, persist){
-    document.querySelectorAll('details.lineup').forEach(function(el){el.open=open;});
-    if(persist){try{localStorage.setItem(KEY,open?'expanded':'collapsed');}catch(e){}}
-  }
-  document.querySelectorAll('[data-lineups]').forEach(function(btn){
-    btn.addEventListener('click',function(){setAll(btn.getAttribute('data-lineups')==='expand',true);});
-  });
-  try{if(localStorage.getItem(KEY)==='expanded') setAll(true,false);}catch(e){}
 })();
 """
 
@@ -3642,11 +3564,10 @@ def html_document(body, built_txt, title=None, extra_js=None):
         f"<style>{CSS}{CSS_GRADES}</style></head><body>"
         f"<div class='mx-wrap'>"
         "<div class='topbar'><div class='brand'>MLB matchup leans</div>"
-        "<div class='top-actions'><nav class='primary-nav' aria-label='Primary'>"
-        "<a href='index.html'>Today's leans</a><a href='grades.html'>Full ledger</a></nav>"
+        "<div style='display:flex;gap:8px'>"
         "<button id='themeBtn' class='theme' type='button'>Theme: auto</button></div></div>"
         f"{body}</div>"
-        f"<script>{THEME_JS}{LINEUP_JS}</script>"
+        f"<script>{THEME_JS}</script>"
         f"{extra_script}"
         "</body></html>")
 
