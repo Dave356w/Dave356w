@@ -3498,13 +3498,20 @@ CSS_GRADES = r"""
 .gr-summary{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 12px}
 .gr-summary .chip{flex:1 1 110px;background:var(--surface);border-color:var(--line)}
 .gr-note{font:500 11.5px/1.5 var(--mono);color:var(--muted);margin:0 2px 14px}
+.gr-tools{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 10px}
+.gr-tools input,.gr-tools select{border:1px solid var(--line);background:var(--surface);color:var(--ink);
+  border-radius:var(--r);padding:7px 9px;font:500 12px/1 var(--sans)}
+.gr-tools input{flex:1 1 220px}.gr-tools select{flex:0 1 auto}
+.gr-count{margin-left:auto;align-self:center;font:600 11px/1 var(--mono);color:var(--muted)}
 .gr-tablewrap{overflow-x:auto;background:var(--surface);border:1px solid var(--line);
-  border-radius:var(--r);box-shadow:var(--shadow)}
+  border-radius:var(--r);box-shadow:var(--shadow);max-height:min(72vh,780px);overflow:auto}
 table.gr{border-collapse:collapse;width:100%;min-width:760px;
   font:500 12px/1.35 var(--mono);font-variant-numeric:tabular-nums}
 table.gr th{font:600 9.5px/1 var(--sans);text-transform:uppercase;letter-spacing:.08em;color:var(--muted);
   text-align:left;padding:10px;border-bottom:1px solid var(--line);white-space:nowrap;
-  position:sticky;top:0;background:var(--surface)}
+  position:sticky;top:0;background:var(--surface);z-index:1}
+table.gr th button{appearance:none;border:0;background:none;color:inherit;font:inherit;
+  letter-spacing:inherit;text-transform:inherit;padding:0;cursor:pointer}
 table.gr td{padding:8px 10px;border-bottom:1px solid var(--line-2);white-space:nowrap;vertical-align:top}
 table.gr tr:last-child td{border-bottom:none}
 table.gr tr.void{opacity:.5}
@@ -3534,6 +3541,34 @@ THEME_JS = r"""
     var order=['auto','light','dark'];var n=order[(order.indexOf(cur())+1)%3];
     apply(n);try{localStorage.setItem(KEY,n);}catch(e){}
   });}
+})();
+"""
+
+LEDGER_JS = r"""
+(function(){
+  var table=document.querySelector('table.gr');
+  if(!table) return;
+  var body=table.tBodies[0], rows=Array.prototype.slice.call(body.rows);
+  var search=document.getElementById('grSearch'), status=document.getElementById('grStatus');
+  var result=document.getElementById('grResult'), limit=document.getElementById('grLimit');
+  var count=document.getElementById('grCount'), sortKey='date', sortDir=-1;
+  function val(row,key){var raw=row.getAttribute('data-'+key)||'';var n=Number(raw);return raw!==''&&!isNaN(n)?n:raw.toLowerCase();}
+  function render(){
+    var q=(search.value||'').trim().toLowerCase(), shown=0, max=Number(limit.value||50);
+    rows.sort(function(a,b){var x=val(a,sortKey),y=val(b,sortKey);return x<y?-sortDir:x>y?sortDir:0;});
+    rows.forEach(function(row){
+      var keep=(!q||(row.getAttribute('data-search')||'').indexOf(q)>=0)
+        &&(!status.value||row.getAttribute('data-status')===status.value)
+        &&(!result.value||row.getAttribute('data-result')===result.value);
+      row.hidden=!keep||shown>=max;if(keep&&shown<max) shown+=1;body.appendChild(row);
+    });
+    count.textContent=shown+' shown';
+  }
+  [search,status,result,limit].forEach(function(el){el.addEventListener('input',render);});
+  table.querySelectorAll('th button[data-sort]').forEach(function(btn){
+    btn.addEventListener('click',function(){var key=btn.getAttribute('data-sort');sortDir=sortKey===key?-sortDir:-1;sortKey=key;render();});
+  });
+  render();
 })();
 """
 
@@ -3646,7 +3681,7 @@ def html_document(body, built_txt, title=None, extra_js=None):
         "<a href='index.html'>Today's leans</a><a href='grades.html'>Full ledger</a></nav>"
         "<button id='themeBtn' class='theme' type='button'>Theme: auto</button></div></div>"
         f"{body}</div>"
-        f"<script>{THEME_JS}{LINEUP_JS}</script>"
+        f"<script>{THEME_JS}{LINEUP_JS}{LEDGER_JS}</script>"
         f"{extra_script}"
         "</body></html>")
 
@@ -3862,7 +3897,17 @@ def _grades_row(r, show_ml=False):
         cells += [_lean_ml_cell(r, "xw_lean")]
     cells += [final, _wlt_badge(r["xw_full"])]
     cls = " class='void'" if status == "void" else ""
-    return f"<tr{cls}>" + "".join(f"<td>{c}</td>" for c in cells) + "</tr>"
+    result = str(r.get("xw_full") or "")
+    search = " ".join(str(r.get(k) or "") for k in ("away", "home", "away_sp", "home_sp")).lower()
+    delta = pd.to_numeric(r.get("xw_delta"), errors="coerce")
+    lean_ml = (r.get("close_home_ml") if r.get("xw_lean") == r.get("home")
+               else r.get("close_away_ml"))
+    attrs = (
+        f" data-status='{_esc(status)}' data-result='{_esc(result)}'"
+        f" data-search='{_esc(search)}' data-date='{_esc(r.get('game_date') or '')}'"
+        f" data-delta='{'' if pd.isna(delta) else float(delta)}'"
+        f" data-ml='{'' if pd.isna(pd.to_numeric(lean_ml, errors='coerce')) else float(lean_ml)}'")
+    return f"<tr{cls}{attrs}>" + "".join(f"<td>{c}</td>" for c in cells) + "</tr>"
 
 
 def render_grades_html(built_txt):
@@ -3918,12 +3963,26 @@ def render_grades_html(built_txt):
     heads = (["Date", "Game", "xwOBA lean"]
              + (["xw ML"] if show_ml else [])
              + ["Final", "xw F"])
+    sort_keys = ["date", "", "delta"] + (["ml"] if show_ml else []) + ["", "result"]
     led = led.sort_values(["game_date", "game_pk"], ascending=[False, True])
     rows = "".join(_grades_row(r, show_ml) for _, r in led.iterrows())
+    toolbar = (
+        "<div class='gr-tools' aria-label='Ledger filters'>"
+        "<input id='grSearch' type='search' placeholder='Search team or pitcher' aria-label='Search team or pitcher'>"
+        "<select id='grStatus' aria-label='Status'><option value=''>All statuses</option>"
+        "<option value='pending'>Pending</option><option value='graded'>Graded</option>"
+        "<option value='void'>Void</option></select>"
+        "<select id='grResult' aria-label='Result'><option value=''>All results</option>"
+        "<option value='W'>W</option><option value='L'>L</option><option value='T'>T</option></select>"
+        "<select id='grLimit' aria-label='Rows per page'><option>25</option>"
+        "<option selected>50</option><option>100</option></select>"
+        "<span id='grCount' class='gr-count' aria-live='polite'></span></div>")
     table = ("<div class='gr-tablewrap'><table class='gr'><thead><tr>"
-             + "".join(f"<th>{h}</th>" for h in heads)
+             + "".join(
+                 f"<th>{f'<button type=\"button\" data-sort=\"{key}\">{h} ↕</button>' if key else h}</th>"
+                 for h, key in zip(heads, sort_keys))
              + f"</tr></thead><tbody>{rows}</tbody></table></div>")
-    return html_document(back + head + summary + table, built_txt, title="MLB lean grades")
+    return html_document(back + head + summary + toolbar + table, built_txt, title="MLB lean grades")
 
 
 def render_combined_html(xw_df, pl_df, pitcher_rows_df, built_txt,
