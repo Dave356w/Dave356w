@@ -120,6 +120,7 @@ class LedgerLockTests(unittest.TestCase):
         self.assertNotIn("<th>Model</th>", page)
         self.assertNotIn("<td>v5</td>", page)
         self.assertNotIn("<td>v6</td>", page)
+        self.assertNotIn("mlb.com/standings", page)
 
     def test_snapshot_lock_status(self):
         self.assertEqual(
