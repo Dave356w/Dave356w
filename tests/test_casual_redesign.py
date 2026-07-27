@@ -124,21 +124,23 @@ class RenderTests(unittest.TestCase):
     def test_casual_card_structure(self):
         g, _ = self._cards()
         html = b.cmb_card(g, None)
+        text = re.sub(r"<[^>]+>", "", html)
         self.assertIn("class='sl h'", html)          # hitter percentile bar
         self.assertIn("class='sl p'", html)          # starter percentile bar
         self.assertIn("Standouts", html)
         self.assertIn("class='read'", html)
         self.assertIn("class='matchlab'", html)      # matchup-labeled columns
-        self.assertIn("LAD bats", html)
+        self.assertIn("LAD bats", text)
         self.assertIn("class='tier", html)
 
     def test_read_names_the_opposing_starter(self):
         # away offense faces the HOME starter; home offense the AWAY starter.
         g, _ = self._cards()
         read = b.cmb_card(g, None).split("class='read'")[1].split("</p>")[0]
-        self.assertIn("LAD's bats grade", read)
-        self.assertIn("against Gallen", read)       # LAD faces home SP Gallen
-        self.assertIn("against Glasnow", read)      # ARI faces away SP Glasnow
+        text = re.sub(r"<[^>]+>", "", read)
+        self.assertIn("LAD's bats grade", text)
+        self.assertIn("against Gallen", text)       # LAD faces home SP Gallen
+        self.assertIn("against Glasnow", text)      # ARI faces away SP Glasnow
 
     def test_player_names_link_to_official_mlb_profiles(self):
         g, _ = self._cards()
@@ -153,6 +155,15 @@ class RenderTests(unittest.TestCase):
 
     def test_player_link_falls_back_to_escaped_text_without_id(self):
         self.assertEqual(b._mlb_player_link("A & B", None), "A &amp; B")
+
+    def test_team_names_and_abbreviations_link_to_mlb_standings(self):
+        g, _ = self._cards()
+        html = b.cmb_card(g, None)
+        href = "href='https://www.mlb.com/standings/'"
+        self.assertGreaterEqual(html.count(href), 12)
+        self.assertIn(f"{href} target='_blank' rel='noopener noreferrer'>LAD</a>", html)
+        self.assertIn(f"{href} target='_blank' rel='noopener noreferrer'>ARI</a>", html)
+        self.assertIn(".team-link:focus-visible", b.CSS)
 
     def test_model_machinery_renders(self):
         # The model machinery (formerly gated behind an Analyst toggle) is now
@@ -218,8 +229,7 @@ class RenderTests(unittest.TestCase):
         g["home"]["xw_edge"] = .012345
         html = b.cmb_card(g, None)
         self.assertIn("no lean", html)
-        self.assertNotIn("<span class='lt'>ARI</span>", html)
-        self.assertNotIn("<span class='lt'>LAD</span>", html)
+        self.assertNotIn("<span class='lt'><a", html)
 
     def test_nonzero_sub_display_delta_still_names_a_favorite(self):
         # A delta too small to have printed at three decimals is still a lean:
@@ -229,7 +239,8 @@ class RenderTests(unittest.TestCase):
         g["home"]["xw_edge"] = .01234567890
         html = b.cmb_card(g, None)
         self.assertNotIn("no lean", html)
-        self.assertIn("<span class='lt'>ARI</span>", html)
+        self.assertIn("<span class='lt'><a class='team-link'", html)
+        self.assertIn(">ARI</a></span>", html)
 
 
 class LeanPillTests(unittest.TestCase):
