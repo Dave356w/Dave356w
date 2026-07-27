@@ -162,7 +162,7 @@ OPENER_MAX_AVG_IP = 3.0     # avg IP/start below this => treat probable as an op
 OPENER_MIN_STARTS = 2       # need a repeated pattern, not one rain-shortened start
 BULLPEN_MIN_PITCHERS = 3    # minimum role-filtered relievers for an aggregate
 OPENER_ROLE_APPEARANCES = 10
-OPENER_ROLE_MIN_APPEARANCES = 5
+OPENER_ROLE_MIN_APPEARANCES = 3
 OPENER_ROLE_MAX_STARTS = 1
 OPENER_ROLE_MIN_RELIEF_SHARE = 0.70
 OPENER_ROLE_MAX_MEDIAN_IP = 2.0
