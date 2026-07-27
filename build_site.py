@@ -2406,7 +2406,8 @@ def _hitters_for(opp_hitters_df, detail_df, gpk, fp, lg_ops,
         if adv_tag is None or not pd.notna(adv_tag):
             adv_tag = d["platoon_adv"] if d is not None else None
         rows.append(dict(
-            name=r["Name"], pos=str(r.get("Pos.") or ""),
+            name=r["Name"], player_id=r.get("player_id"),
+            pos=str(r.get("Pos.") or ""),
             bats=(str(r.get("bats") or ""))[:1].upper(),
             xw=xw_raw,
             xw_team_backfill=team_backfill,
@@ -2435,6 +2436,21 @@ def _last(name):
     while len(parts) > 1 and parts[-1].lower().strip(".") in _NAME_SUFFIXES:
         parts = parts[:-1]
     return parts[-1] if parts else str(name or "")
+
+
+def _mlb_player_link(name, player_id, label=None):
+    """Official MLB player-page link, falling back to plain text without an ID.
+
+    MLB's stable ID-only route redirects to the current canonical name slug, so
+    trades, accents, suffixes, and name changes do not require URL maintenance.
+    """
+    text = _esc(name if label is None else label)
+    try:
+        pid = int(player_id)
+    except (TypeError, ValueError, OverflowError):
+        return text
+    return (f"<a class='player-link' href='https://www.mlb.com/player/{pid}' "
+            f"target='_blank' rel='noopener noreferrer'>{text}</a>")
 
 
 def _tier_word(pctile):
@@ -2467,7 +2483,8 @@ def _spotlight_html(hitters, n=3, thresh=70):
     top = [h for h in ranked[:n] if h["xw_pctile"] >= thresh]
     if not top:
         return ""
-    pills = "".join(f"<span class='pill'>{_esc(_last(h['name']))} "
+    pills = "".join(f"<span class='pill'>"
+                    f"{_mlb_player_link(h['name'], h.get('player_id'), _last(h['name']))} "
                     f"<b>{round(h['xw_pctile'])}</b></span>" for h in top)
     return f"<div class='spot'><span class='sl-lab'>Standouts</span>{pills}</div>"
 
@@ -2499,9 +2516,11 @@ def _read_sentence(away_abbr, home_abbr, a, h, fav, strength_word):
     gh, ch = _grade_word(home_edge)
     aw = f"<b class='{ca}'>{ga}</b>" if ca else f"<b>{ga}</b>"
     hw = f"<b class='{ch}'>{gh}</b>" if ch else f"<b>{gh}</b>"
+    home_sp = _mlb_player_link(h["p"], h.get("player_id"), _last(h["p"]))
+    away_sp = _mlb_player_link(a["p"], a.get("player_id"), _last(a["p"]))
     return (f"<p class='read'>{_esc(away_abbr)}'s bats grade {aw} against "
-            f"{_esc(_last(h['p']))}; {_esc(home_abbr)}'s grade {hw} against "
-            f"{_esc(_last(a['p']))}. That is a <b>{strength_word or 'lean'}</b> "
+            f"{home_sp}; {_esc(home_abbr)}'s grade {hw} against "
+            f"{away_sp}. That is a <b>{strength_word or 'lean'}</b> "
             f"lean to {_esc(fav)}.</p>")
 
 
@@ -2551,7 +2570,8 @@ def _verdict_html(fav, odds, away_abbr, home_abbr, ctx=None):
 def _hitter_row_html(i, hr):
     """One batting-order row: name + Statcast percentile bar, raw xwOBA, and the
     ◆ platoon-advantage marker."""
-    nm = _esc(hr["name"])
+    nm_text = _esc(hr["name"])
+    nm_link = _mlb_player_link(hr["name"], hr.get("player_id"))
     b = f"<span class='b'>{hr['bats']}</span>" if hr["bats"] else ""
     adv = ("<span class='adv mach' title='platoon advantage vs this SP'>◆</span>"
            if hr["adv"] else "")
@@ -2561,7 +2581,8 @@ def _hitter_row_html(i, hr):
     xw_mark = "<span class='pa'>*</span>" if backfill else ""
     xw_c = f"<td class='r mach'{xw_title}>{f3(hr['xw'])}{xw_mark}</td>"
     return (f"<tr><td class='ord'>{i}</td>"
-            f"<td class='nm' title='{nm}'>{nm}{adv}{b}</td><td class='pos'>{_esc(hr['pos'])}</td>"
+            f"<td class='nm' title='{nm_text}'>{nm_link}{adv}{b}</td>"
+            f"<td class='pos'>{_esc(hr['pos'])}</td>"
             f"<td class='pct r'>{bar}</td>{xw_c}</tr>")
 
 
@@ -2641,7 +2662,8 @@ def _side_html(sp_abbr, d, league_baseline):
     return (
         f"<section class='side'>"
         f"<div class='matchlab'>{_esc(sp_abbr)} starter → {_esc(d['opp_abbr'])} bats</div>"
-        f"<div class='sp'><div class='who'><span class='nm'>{_esc(d['p'])}</span>{badge}{tier}{opener}</div>"
+        f"<div class='sp'><div class='who'><span class='nm'>"
+        f"{_mlb_player_link(d['p'], d.get('player_id'))}</span>{badge}{tier}{opener}</div>"
         f"<div class='role'>faces the {_esc(d['opp_abbr'])} lineup"
         f"<span class='mach'> · {comp}{padv}{pitching_note}</span></div>"
         f"<div class='sp-bars'>{bars}</div>"
@@ -2838,11 +2860,15 @@ def _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
             return None
 
     throws = {}
+    player_ids = {}
     recent_era = {}
     if pitcher_rows_df is not None and not pitcher_rows_df.empty:
         for _, pr in pitcher_rows_df.iterrows():
-            throws[(pr["game_pk"], pr["Name"])] = pr.get("throws")
-            recent_era[(pr["game_pk"], pr["Name"])] = (
+            key = (pr["game_pk"], pr["Name"])
+            throws[key] = pr.get("throws")
+            if pd.notna(pr.get("player_id")):
+                player_ids[key] = int(pr["player_id"])
+            recent_era[key] = (
                 _f(pr.get("ERA_L5")), int(pr.get("ERA_L5_GS") or 0),
                 _f(pr.get("ERA_SEASON")), _f(pr.get("xERA")))
     pl_map = _pl_lookup(pl_df)
@@ -2885,7 +2911,9 @@ def _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
             starter_xw = _f(r.get("starter_xwOBA"))
             if starter_xw is None:
                 starter_xw = _f(r.get("pit_xwOBA"))
-            d = dict(p=r["pitcher"], t=t if t in ("L", "R") else "",
+            d = dict(p=r["pitcher"],
+                     player_id=player_ids.get((gpk, r["pitcher"])),
+                     t=t if t in ("L", "R") else "",
                      opp=r["opp_team"], opp_abbr=_abbr(r["opp_team"]),
                      pit_xw=starter_xw, pit_k=_f(r.get("pit_K%")),
                      pit_bb=_f(r.get("pit_BB%")),
@@ -3147,6 +3175,11 @@ body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 var(--sans);
 /* SP block */
 .sp .who{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
 .sp .nm{font:700 16px/1.2 var(--sans)}
+.player-link{color:inherit;text-decoration:underline;
+  text-decoration-color:rgba(var(--lean),.5);text-decoration-thickness:1px;
+  text-underline-offset:2px}
+.player-link:hover{color:rgba(var(--lean),1);text-decoration-color:currentColor}
+.player-link:focus-visible{outline:2px solid rgba(var(--lean),1);outline-offset:2px}
 .hand{font:500 10px/1.4 var(--mono);color:var(--muted);border:1px solid var(--line);border-radius:var(--r-s);padding:0 4px}
 .sp .role{font-size:11px;color:var(--faint);margin-top:1px}
 .spstats{display:flex;margin-top:8px;border:1px solid var(--line-2);border-radius:var(--r);overflow:hidden}

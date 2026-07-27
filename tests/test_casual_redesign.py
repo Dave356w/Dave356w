@@ -12,13 +12,15 @@ import pandas as pd
 import build_site as b
 
 
-def _hitter(name, pos, bats, xw, pct, adv=False):
-    return dict(name=name, pos=pos, bats=bats, xw=xw, xw_pctile=pct, adv=adv,
+def _hitter(name, pos, bats, xw, pct, adv=False, player_id=None):
+    return dict(name=name, player_id=player_id, pos=pos, bats=bats, xw=xw,
+                xw_pctile=pct, adv=adv,
                 ops=None, pa=0, low=False, mx=None, edge=None)
 
 
-def _side(p, opp_abbr, pit_xw_pct, kbb_pct, xw_edge, hitters):
-    return dict(p=p, t="R", opp_abbr=opp_abbr, pit_xw=.300, pit_k=.24, pit_bb=.07,
+def _side(p, opp_abbr, pit_xw_pct, kbb_pct, xw_edge, hitters, player_id=None):
+    return dict(p=p, player_id=player_id, t="R", opp_abbr=opp_abbr,
+                pit_xw=.300, pit_k=.24, pit_bb=.07,
                 era_season=3.6, xera=3.4, opp_xw=.330, xw_edge=xw_edge,
                 pit_xw_pctile=pit_xw_pct, kbb_pctile=kbb_pct, lu_status="posted",
                 is_opener=False, has_pl=True, R=5, L=4, S=0, padv=3, pl_fl={},
@@ -137,6 +139,20 @@ class RenderTests(unittest.TestCase):
         self.assertIn("LAD's bats grade", read)
         self.assertIn("against Gallen", read)       # LAD faces home SP Gallen
         self.assertIn("against Glasnow", read)      # ARI faces away SP Glasnow
+
+    def test_player_names_link_to_official_mlb_profiles(self):
+        g, _ = self._cards()
+        g["away"]["player_id"] = 675512
+        g["away"]["hitters"][0]["name"] = "Curtis Mead"
+        g["away"]["hitters"][0]["player_id"] = 678554
+        html = b.cmb_card(g, None)
+        self.assertIn("href='https://www.mlb.com/player/675512'", html)
+        self.assertIn("href='https://www.mlb.com/player/678554'", html)
+        self.assertIn("target='_blank' rel='noopener noreferrer'", html)
+        self.assertIn(".player-link:focus-visible", b.CSS)
+
+    def test_player_link_falls_back_to_escaped_text_without_id(self):
+        self.assertEqual(b._mlb_player_link("A & B", None), "A &amp; B")
 
     def test_model_machinery_renders(self):
         # The model machinery (formerly gated behind an Analyst toggle) is now
