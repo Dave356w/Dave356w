@@ -37,6 +37,8 @@ class LedgerLockTests(unittest.TestCase):
             dict(game_pk=5, status="graded", model_tag="xw+plat_consol_v4"),
             dict(game_pk=6, status="graded", model_tag="xw+plat_consol_v5"),
             dict(game_pk=7, status="graded", model_tag="xw+plat_consol_v6"),
+            dict(game_pk=8, status="graded", model_tag="xw+plat_consol_v7"),
+            dict(game_pk=9, status="graded", model_tag="xw+plat_consol_v8"),
         ])
         v3_family = ("xw+plat_consol_v2", "xw+plat_consol_v3")
         with mock.patch.object(build_site, "RECORD_TAGS", v3_family), \
@@ -47,14 +49,18 @@ class LedgerLockTests(unittest.TestCase):
         # record family and never mixes with the v2/v3 prediction math.
         with mock.patch.object(build_site, "RECORD_TAGS", ("xw+plat_consol_v4",)):
             self.assertEqual(set(build_site._record_grades(ledger)["game_pk"]), {5})
-        # v5 and v6 each changed prediction math and remain isolated.
+        # v5 through v8 each changed prediction math and remain isolated.
         with mock.patch.object(build_site, "RECORD_TAGS", ("xw+plat_consol_v5",)):
             self.assertEqual(set(build_site._record_grades(ledger)["game_pk"]), {6})
         with mock.patch.object(build_site, "RECORD_TAGS", ("xw+plat_consol_v6",)):
             self.assertEqual(set(build_site._record_grades(ledger)["game_pk"]), {7})
+        with mock.patch.object(build_site, "RECORD_TAGS", ("xw+plat_consol_v7",)):
+            self.assertEqual(set(build_site._record_grades(ledger)["game_pk"]), {8})
+        with mock.patch.object(build_site, "RECORD_TAGS", ("xw+plat_consol_v8",)):
+            self.assertEqual(set(build_site._record_grades(ledger)["game_pk"]), {9})
         self.assertEqual(
             [label for label, _ in grade_leans._model_family_grades(ledger)],
-            ["v2/v3", "v4", "v5", "v6", "xw+plat_consol_v1"],
+            ["v2/v3", "v4", "v5", "v6", "v7", "v8", "xw+plat_consol_v1"],
         )
 
     def test_load_ledger_preserves_market_history(self):
@@ -736,11 +742,13 @@ class OpenerFallbackTests(unittest.TestCase):
         }
         with mock.patch.object(build_site, "pitcher_roster", return_value=[10, 11, 12]):
             out = build_site.bullpen_xwoba_aggregate(
-                1, 999, pitcher_stat, roles, prior=.317, shrink_k=100
+                1, 999, pitcher_stat, roles, prior=.317,
+                shrink_k=build_site.XWOBA_SHRINK_K,
             )
-        x10 = (200 * .280 + 100 * .317) / 300
-        x11 = (100 * .340 + 100 * .317) / 200
-        x12 = (50 * .370 + 100 * .317) / 150
+        k = build_site.XWOBA_SHRINK_K
+        x10 = (200 * .280 + k * .317) / (200 + k)
+        x11 = (100 * .340 + k * .317) / (100 + k)
+        x12 = (50 * .370 + k * .317) / (50 + k)
         expected = (200 * x10 + 80 * x11 + 50 * x12) / 330
         self.assertAlmostEqual(out["xwOBA"], expected)
         self.assertEqual(out["pitcher_count"], 3)
@@ -884,41 +892,30 @@ class XwobaShrinkageTests(unittest.TestCase):
         s = float(build_site.shrink_xwoba([0.360], [150], prior, k).iloc[0])
         self.assertAlmostEqual(build_site._shrink_one(0.360, 150, prior, k), s, places=6)
 
-    def test_mom_k_recovers_planted_ratio(self):
-        # Plant tau^2 and sigma^2, synthesize a pool, recover K = sigma^2/tau^2.
-        rng = np.random.default_rng(0)
-        centre, tau, sigma = 0.299, 0.030, 0.5
-        n = rng.integers(30, 650, size=1200).astype(float)
-        theta = rng.normal(centre, tau, size=1200)         # true talent
-        x = rng.normal(theta, sigma / np.sqrt(n))          # observed, noisier at low n
-        k, note = build_site.estimate_shrink_k(
-            list(zip(x, n)), build_site.K_BAT_DEFAULT, (10.0, 5000.0)
-        )
-        planted = sigma ** 2 / tau ** 2                    # ~278
-        self.assertEqual(note, "ok")
-        self.assertLess(abs(k - planted) / planted, 0.35)  # within ~35% of truth
+    def test_model_uses_fixed_100_for_batters_and_pitchers(self):
+        self.assertEqual(build_site.XWOBA_SHRINK_K, 100.0)
+        with (
+            mock.patch.object(
+                build_site, "segment_pitcher_blocks",
+                return_value=("pitcher_rows", "opposing_hitters"),
+            ),
+            mock.patch.object(
+                build_site, "aggregate_lineup", return_value="lineup_aggregate"
+            ) as aggregate,
+            mock.patch.object(
+                build_site, "build_matchup", return_value=pd.DataFrame()
+            ) as matchup,
+        ):
+            build_site.build_xwoba_matchup(pd.DataFrame(), {"xwOBA": .317})
 
-    def test_mom_k_is_translation_invariant(self):
-        # K describes pool dispersion, not the shrinkage target or xwOBA level.
-        # Shifting every observed rate must leave the estimate unchanged.
-        rng = np.random.default_rng(4)
-        n = rng.integers(20, 650, size=1000).astype(float)
-        theta = rng.normal(0.298, 0.028, size=1000)
-        x = rng.normal(theta, 0.45 / np.sqrt(n))
-        args = (build_site.K_BAT_DEFAULT, (10.0, 5000.0))
-        k1, note1 = build_site.estimate_shrink_k(list(zip(x, n)), *args)
-        k2, note2 = build_site.estimate_shrink_k(list(zip(x + 0.025, n)), *args)
-        self.assertEqual((note1, note2), ("ok", "ok"))
-        self.assertAlmostEqual(k1, k2, places=10)
-
-    def test_mom_k_falls_back_on_thin_pool(self):
-        k, note = build_site.estimate_shrink_k(
-            [(0.4, 100), (0.3, 200)],
-            build_site.K_PIT_DEFAULT,
-            build_site.K_PIT_BAND,
+        self.assertEqual(
+            aggregate.call_args.kwargs["shrink_k"],
+            build_site.XWOBA_SHRINK_K,
         )
-        self.assertEqual(k, build_site.K_PIT_DEFAULT)
-        self.assertTrue(note.startswith("fallback"))
+        self.assertEqual(
+            matchup.call_args.kwargs["shrink_k"],
+            build_site.XWOBA_SHRINK_K,
+        )
 
     def _lineup_H(self, rows):
         # rows: (batting_order, xwOBA, PA); one game vs one pitcher.
