@@ -116,12 +116,21 @@ RECORD_TAGS = tuple(
 # tags are on the older, unshrunk scale. The default isolates any unlisted tag
 # (never mixes scales); list a tag here only to pool it with others that share
 # its units.
+#
+# v8 and v9 share units. v9 differs from v8 by exactly one term --
+# v9 - v8 == -(1 - q) * platoon_delta_sp * P_BP / L -- because the two forms
+# expand to the same starter phase and differ only in which lineup composite
+# meets the bullpen. Measured on the 2026-07-28 slate that term has sd 0.00103
+# against a matchup dispersion of 0.01662 (6.2%), and compare_v8_v9.py reports
+# 0 lean flips over 24 eligible games. That is a units-preserving change, so
+# the two pool for delta-scale ranking. RECORD_TAGS is a separate question and
+# is deliberately left isolated.
 _SCALE_FAMILIES = {
     "xw+plat_consol_v5": ("xw+plat_consol_v5", "xw+plat_consol_v6"),
     "xw+plat_consol_v6": ("xw+plat_consol_v5", "xw+plat_consol_v6"),
     "xw+plat_consol_v7": ("xw+plat_consol_v7",),
-    "xw+plat_consol_v8": ("xw+plat_consol_v8",),
-    "xw+plat_consol_v9": ("xw+plat_consol_v9",),
+    "xw+plat_consol_v8": ("xw+plat_consol_v8", "xw+plat_consol_v9"),
+    "xw+plat_consol_v9": ("xw+plat_consol_v8", "xw+plat_consol_v9"),
 }
 SCALE_TAGS = tuple(
     t.strip() for t in os.environ.get(
@@ -3855,28 +3864,68 @@ def market_context_records():
 # only against SCALE_TAGS rows (same |xw_net| units as the current model) --
 # never against the full graded pool, which mixes the pre/post-v5 scales.
 # Display-only -- the lean math, MODEL_TAG, and ledger are untouched.
-# Fallback cutoffs used only when the scale-compatible history is below
-# LEAN_STRENGTH_MIN. These are the pre-v5-scale p33/p80 (~2x the v5+ shrunk
-# scale); with 30+ v5+ rows the dynamic scale fires and these do not, but they
-# would over-label a brand-new v5+-scale family until it accrues 30 graded rows.
-LEAN_STRENGTH_FALLBACK = (0.021, 0.060)   # slight < ~p33 <= clear < ~p80 <= strong
+#
+# Last-resort cutoffs, used only when neither the scale-compatible ledger rows
+# nor tonight's own slate reach LEAN_STRENGTH_MIN -- in practice only on the
+# first build of a brand-new scale family with a tiny slate.
+# Provenance: p33/p80 of |xw_net| over the 24 xw+plat_consol_v8/v9 ledger rows
+# as of 2026-07-28 (0.0151 / 0.0325), rounded. The previous literal here was
+# the *pre-v5 unshrunk* p33/p80 (0.021, 0.060), left in place across the v5,
+# v7 and v8 shrinkage changes that moved the distribution underneath it; with
+# v9's observed maximum |xw_net| of 0.0462 it made "strong" unreachable for
+# every game in the family. Invalidated by any MODEL_TAG bump that changes the
+# delta scale -- i.e. whenever _SCALE_FAMILIES gains a new entry. Recompute
+# from the new family's rows, or delete this and let the dynamic scale run.
+LEAN_STRENGTH_FALLBACK = (0.015, 0.032)   # slight < ~p33 <= clear < ~p80 <= strong
 LEAN_STRENGTH_MIN = 30
 
 
-def lean_strength_scale():
-    """Sorted |xw_net| from graded ledger rows that share the current model's
-    delta scale (SCALE_TAGS), for ranking a lean's size. Never pools across a
-    scale change (v5's shrinkage halved the units), and does not fall back to
-    the full graded pool; returns None (-> fixed cutoffs) when the
-    scale-compatible history is below LEAN_STRENGTH_MIN."""
+def lean_strength_scale(slate_deltas=None):
+    """Sorted |xw_net| on the current model's delta scale (SCALE_TAGS), for
+    ranking a lean's size. Never pools across a scale change (v5's shrinkage
+    halved the units) and never falls back to the full ledger.
+
+    Every SCALE_TAGS row counts regardless of grade status: |xw_net| is a
+    pregame quantity, so a scale of lean *magnitudes* needs no outcome. The old
+    `status == "graded"` filter discarded pending rows and left each new scale
+    family ranking against the frozen fallback for days after a MODEL_TAG bump,
+    which is exactly how the pre-v5 cutoffs survived three scale changes.
+    `slate_deltas` (tonight's own |Δxw|, same units by construction) tops up the
+    pool so a fresh family is ranked on its own units from its first build.
+
+    Returns None (-> LEAN_STRENGTH_FALLBACK) only when the combined pool is
+    still below LEAN_STRENGTH_MIN."""
+    parts = []
     led = load_ledger_df()
-    if led is None or "xw_net" not in led.columns or "status" not in led.columns:
+    if led is not None and "xw_net" in led.columns:
+        scaled = (led[led["model_tag"].isin(SCALE_TAGS)]
+                  if "model_tag" in led.columns else led)
+        parts.append(pd.to_numeric(scaled["xw_net"], errors="coerce").abs().dropna().to_numpy())
+    if slate_deltas is not None:
+        parts.append(pd.to_numeric(pd.Series(list(slate_deltas)), errors="coerce")
+                     .abs().dropna().to_numpy())
+    if not parts:
         return None
-    graded = led[led["status"] == "graded"]
-    scaled = (graded[graded["model_tag"].isin(SCALE_TAGS)]
-              if "model_tag" in graded.columns else graded)
-    arr = np.sort(pd.to_numeric(scaled["xw_net"], errors="coerce").abs().dropna().to_numpy())
+    arr = np.sort(np.concatenate(parts))
     return arr if arr.size >= LEAN_STRENGTH_MIN else None
+
+
+def _slate_deltas(games):
+    """Tonight's |Δxw| per game, computed exactly as cmb_card does. An exact
+    zero is an abstention (v7 rule), not a lean of size zero, so it is excluded
+    from the magnitude scale just as it is excluded from the cards."""
+    out = []
+    for g in games or ():
+        if g.get("unavailable"):
+            continue
+        a, h = g.get("away") or {}, g.get("home") or {}
+        ae, he = a.get("xw_edge"), h.get("xw_edge")
+        if ae is None or he is None:
+            continue
+        net = ae - he
+        if net:
+            out.append(abs(net))
+    return out
 
 
 def lean_strength(delta, scale):
@@ -4108,7 +4157,7 @@ def render_combined_html(xw_df, pl_df, pitcher_rows_df, built_txt,
         inner = head + "<div class='legend'><div class='lg-title'>No paired probables yet — " \
                        "probables/lineups not posted. Check back closer to first pitch.</div></div>" + footer
         return html_document(inner, built_txt, extra_js=score_refresh_js())
-    strength_scale = lean_strength_scale()
+    strength_scale = lean_strength_scale(_slate_deltas(games))
     logo_assets, logo_css = _logo_assets(games)
     ctx = {**(market_context_records() or {}), "logo_ids": set(logo_assets)}
     body = logo_css + head + build_combined(games, strength_scale, ctx) + footer
