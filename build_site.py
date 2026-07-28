@@ -3305,7 +3305,17 @@ CSS = r"""/* ============================================================
    ============================================================ */
 :root{
   --bg:#f3f5f7; --surface:#ffffff; --surface-2:#eef1f4; --ink:#161b20;
-  --muted:#5d6a76; --faint:#98a4af; --line:#dde3e8; --line-2:#eceff2;
+  --muted:#4f5a65; --faint:#636e7b; --line:#dde3e8; --line-2:#eceff2;
+  /* --faint is a text colour, not a hairline: column headers, stat labels,
+     the `lg .312` / `season 4.04` subs, the machinery line, the opening-price
+     tail and the `projected` badge all use it, all below 12px. It must clear
+     4.5:1 against BOTH --surface and --surface-2 (the market strip and the
+     stat cells sit on --surface-2). The previous #98a4af measured 2.54:1 on
+     white and 2.24:1 on the strip; #5f6c78 dark measured 3.15:1. --muted moved
+     with it (5.54 -> 7.04:1 on white) so the two-step text hierarchy survives
+     the darkening instead of collapsing into one tone. Re-measure both
+     surfaces before changing either -- tests/test_casual_redesign.py checks
+     the ratios and the ordering. */
   --warm:198,84,44;             /* ember  -- offense-favorable  */
   --cool:52,116,168;            /* steel  -- pitcher-favorable  */
   --lean:176,124,16;            /* amber  -- lean pill / links  */
@@ -3329,20 +3339,25 @@ CSS = r"""/* ============================================================
 }
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
   --bg:#0f1418; --surface:#171d24; --surface-2:#131920; --ink:#e7ecef;
-  --muted:#96a2ad; --faint:#5f6c78; --line:#242e38; --line-2:#1c242c;
+  --muted:#96a2ad; --faint:#7f8b97; --line:#242e38; --line-2:#1c242c;
   --warm:236,122,72; --cool:96,158,208; --lean:244,196,96; --amberbg:244,196,96;
   --chip-fg:#e7ecef;
   --shadow:0 1px 2px rgba(0,0,0,.45),0 14px 32px -22px rgba(0,0,0,.8);
 }}
 html[data-theme="dark"]{
   --bg:#0f1418; --surface:#171d24; --surface-2:#131920; --ink:#e7ecef;
-  --muted:#96a2ad; --faint:#5f6c78; --line:#242e38; --line-2:#1c242c;
+  --muted:#96a2ad; --faint:#7f8b97; --line:#242e38; --line-2:#1c242c;
   --warm:236,122,72; --cool:96,158,208; --lean:244,196,96; --amberbg:244,196,96;
   --chip-fg:#e7ecef;
   --shadow:0 1px 2px rgba(0,0,0,.45),0 14px 32px -22px rgba(0,0,0,.8);
 }
 
 *{box-sizing:border-box}
+/* The `hidden` attribute must win over any component `display`. `.game-state`
+   set `display:inline-block`, which outranks the UA sheet's `[hidden]` rule, so
+   the empty pregame badge rendered as a bare bordered chip above the time on
+   every unstarted card -- and score_refresh_js re-hides it the same way. */
+[hidden]{display:none!important}
 body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 var(--sans);
   -webkit-font-smoothing:antialiased;padding:20px 16px 60px}
 .mx-wrap{max-width:1060px;margin:0 auto}
@@ -3429,7 +3444,8 @@ body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 var(--sans);
    reads as one horizontal line of numbers at phone widths too. */
 .market{border-bottom:1px solid var(--line-2);background:var(--surface-2)}
 .modds{display:flex}
-.mcell{flex:1 1 0;min-width:0;padding:7px 16px;border-right:1px solid var(--line-2)}
+.mcell{flex:1 1 0;min-width:0;display:flex;flex-direction:column;
+  justify-content:space-between;padding:7px 16px;border-right:1px solid var(--line-2)}
 .mcell:last-child{border-right:0}
 .mcell .l,.verdict .l{font:600 9px/1.4 var(--sans);letter-spacing:.14em;
   text-transform:uppercase;color:var(--faint)}
@@ -3440,7 +3456,12 @@ body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 var(--sans);
 .sides{display:grid;grid-template-columns:1fr 1fr}
 .side{padding:12px 16px 14px;min-width:0}
 .side + .side{border-left:1px solid var(--line-2)}
-@media (max-width:760px){
+/* Side-by-side only once a column can hold the lineup table without an
+   inner horizontal scroll. Measured in headless Chromium: the table
+   overflows its column by 62px at 762px wide, 23px at 840px, 3px at 880px
+   and 0 from ~900px up. 760px put every card on the slate into a hidden
+   side-scroll across the whole tablet range. */
+@media (max-width:900px){
   .sides{grid-template-columns:1fr}
   .side + .side{border-left:0;border-top:1px solid var(--line-2)}
 }
@@ -3459,9 +3480,9 @@ body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 var(--sans);
 .spstats{display:flex;margin-top:8px;border:1px solid var(--line-2);border-radius:var(--r);overflow:hidden}
 .stat{flex:1;padding:6px 8px 5px;border-right:1px solid var(--line-2);min-width:0}
 .stat:last-child{border-right:0}
-.stat .l{font:600 9px/1.4 var(--sans);letter-spacing:.1em;text-transform:uppercase;color:var(--faint);white-space:nowrap}
+.stat .l{font:600 9px/1.4 var(--sans);letter-spacing:.1em;text-transform:uppercase;color:var(--muted);white-space:nowrap}
 .stat .v{font:500 14px/1.3 var(--mono);font-variant-numeric:tabular-nums}
-.stat .s{font:400 10px/1.3 var(--mono);color:var(--faint)}
+.stat .s{font:400 10px/1.3 var(--mono);color:var(--muted)}
 /* Pills on the starter's `.who` line -- the tier word and the flags -- share
    one type treatment so they read as one family. Size, tracking, case and box
    metrics live here and nowhere else; every rule below adds colour only. The
@@ -3493,14 +3514,10 @@ details[open] summary .chev{transform:rotate(90deg)}
 table.lu{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
 table.lu th{font:600 9px/1.4 var(--sans);letter-spacing:.1em;text-transform:uppercase;color:var(--faint);
   text-align:right;padding:2px 6px 4px;border-bottom:1px solid var(--line-2);white-space:nowrap}
-table.lu th.n,table.lu td.n{text-align:left}
 table.lu td{font:400 12px/1.4 var(--mono);text-align:right;padding:4px 6px;
   border-bottom:1px solid var(--line-2);white-space:nowrap}
 table.lu tr:last-child td{border-bottom:0}
 td.ord{font-size:11px;color:var(--faint);width:26px;text-align:center;border-right:1px solid var(--line-2)}
-td.n{font:400 12.5px/1.4 var(--sans);max-width:150px;overflow:hidden;text-overflow:ellipsis}
-td.n .b{font:400 9px/1 var(--mono);color:var(--muted);margin-left:4px}
-td.n .adv{color:rgba(var(--warm),1);font-size:9px;margin-left:2px}
 td.pos{color:var(--muted);font-size:10px}
 td .pa{color:var(--faint);font-size:10px}
 td.na{color:var(--faint)}
@@ -3620,7 +3637,7 @@ tr.mach{display:table-row}
   /* `table.lu td` is (0,1,2); a bare `td.nm` is (0,1,1) and loses the
      white-space battle no matter where it sits. Match the qualifier. */
   table.lu th{white-space:normal}
-  table.lu td.nm,table.lu td.n{max-width:none;white-space:normal}
+  table.lu td.nm{max-width:none;white-space:normal}
   td.ord,table.lu th:first-child{width:18px;padding-left:0}
   td.pct{width:auto}
   td.pos{font-size:9.5px}
