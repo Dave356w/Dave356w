@@ -539,7 +539,7 @@ class MobileLayoutTests(unittest.TestCase):
         self.assertLess(int(m[".sl"]["width"].rstrip("px")), 88)
         # The name is the one elastic column: it wraps rather than truncating,
         # and the selector must outrank `table.lu td`'s nowrap (0,1,2).
-        nm = m["table.lu td.nm,table.lu td.n"]
+        nm = m["table.lu td.nm"]
         self.assertEqual(nm["white-space"], "normal")
         self.assertEqual(nm["max-width"], "none")
 
@@ -610,6 +610,102 @@ class StarterBlockTests(unittest.TestCase):
         self.assertIn(".sp .nm{font:700 16px/1.2 var(--sans)}", b.CSS)
         self.assertIn("table.lu td.nm{font:400 12.5px/1.4 var(--sans)", b.CSS)
         self.assertNotIn("\ntd.nm{font:", b.CSS)
+
+
+def _token(name, block):
+    """Value of a CSS custom property inside a `{...}` token block."""
+    m = re.search(rf"{name}:\s*(#[0-9a-fA-F]{{6}})", block)
+    assert m, f"{name} not found"
+    return m.group(1)
+
+
+def _relative_luminance(hex_colour):
+    channels = [int(hex_colour[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+    linear = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+              for c in channels]
+    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+
+def _contrast(a, b_):
+    la, lb = sorted((_relative_luminance(a), _relative_luminance(b_)),
+                    reverse=True)
+    return (la + 0.05) / (lb + 0.05)
+
+
+class ReadabilityTests(unittest.TestCase):
+    """--faint carries real text, so it is held to a text contrast ratio.
+
+    It colours the lineup column headers, the stat labels, the `lg .312` /
+    `season 4.04` subs, the machinery line, the `<- 142 open` price tail and
+    the `projected` badge -- all under 12px, so WCAG AA is 4.5:1. The shipped
+    #98a4af measured 2.54:1 on --surface and 2.24:1 on --surface-2; the dark
+    #5f6c78 measured 3.15:1. Both surfaces matter: the market strip and the
+    stat cells sit on --surface-2, everything else on --surface."""
+
+    def _theme_blocks(self):
+        light = b.CSS.split(":root{", 1)[1].split("}", 1)[0]
+        dark = b.CSS.split('html[data-theme="dark"]{', 1)[1].split("}", 1)[0]
+        return light, dark
+
+    def test_faint_text_meets_aa_on_both_surfaces(self):
+        for label, block in zip(("light", "dark"), self._theme_blocks()):
+            faint = _token("--faint", block)
+            for surface in ("--surface", "--surface-2"):
+                ratio = _contrast(faint, _token(surface, block))
+                self.assertGreaterEqual(
+                    round(ratio, 2), 4.5,
+                    f"{label} --faint {faint} on {surface}: {ratio:.2f}:1")
+
+    def test_faint_stays_lighter_than_muted(self):
+        # The fix must not collapse the two-step text hierarchy.
+        for block in self._theme_blocks():
+            surface = _token("--surface", block)
+            self.assertLess(_contrast(_token("--faint", block), surface),
+                            _contrast(_token("--muted", block), surface))
+
+
+class HiddenAttributeTests(unittest.TestCase):
+    """`hidden` has to beat component display rules.
+
+    `.game-state{display:inline-block}` outranks the UA sheet's `[hidden]`,
+    so the empty pregame badge rendered as a bare bordered chip above the
+    first-pitch time on every unstarted card. score_refresh_js re-hides the
+    same element by setting `.hidden`, so the JS path needed it too."""
+
+    def test_hidden_attribute_is_enforced(self):
+        self.assertIn("[hidden]{display:none!important}", b.CSS)
+
+    def test_pregame_badge_is_emitted_hidden(self):
+        g, _ = RenderTests()._cards()
+        self.assertIn("<span class='game-state' hidden></span>", b.cmb_card(g, None))
+
+
+class SidesBreakpointTests(unittest.TestCase):
+    """The two-column split may not hand the lineup table a hidden scroll.
+
+    Measured in headless Chromium against a full rendered slate: each
+    `.lu-scroll` overflowed its column by 62px at 762px viewport width, 43px
+    at 800, 23px at 840, 3px at 880 and 0 from ~900 up."""
+
+    def test_single_column_until_the_table_fits(self):
+        m = re.search(r"@media \(max-width:(\d+)px\)\{\s*\.sides\{"
+                      r"grid-template-columns:1fr\}", b.CSS)
+        self.assertIsNotNone(m, ".sides single-column rule not found")
+        self.assertGreaterEqual(int(m.group(1)), 900)
+
+    def test_dead_lineup_name_rules_are_gone(self):
+        # The table emits class `nm`; the `.n` twins never matched anything.
+        self.assertNotIn("table.lu th.n,", b.CSS)
+        self.assertNotIn("\ntd.n{", b.CSS)
+        self.assertNotIn("td.n .adv", b.CSS)
+
+    def test_market_cells_bottom_align_their_values(self):
+        # "Implied XXX (devig)" wraps to two lines on a phone; without this the
+        # fourth number sat a line below the other three.
+        mcell = b.CSS.split(".mcell{", 1)[1].split("}", 1)[0]
+        self.assertIn("display:flex", mcell)
+        self.assertIn("flex-direction:column", mcell)
+        self.assertIn("justify-content:space-between", mcell)
 
 
 class ShapeScaleTests(unittest.TestCase):
