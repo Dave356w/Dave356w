@@ -5,6 +5,7 @@ machinery.
 All display-only -- these guard the render layer, not the lean math."""
 import re
 import unittest
+import unittest.mock
 
 import numpy as np
 import pandas as pd
@@ -706,6 +707,94 @@ class SidesBreakpointTests(unittest.TestCase):
         self.assertIn("display:flex", mcell)
         self.assertIn("flex-direction:column", mcell)
         self.assertIn("justify-content:space-between", mcell)
+
+
+class BaseOutStateTests(unittest.TestCase):
+    """Scoreboard-app base-out state on the collapsed row.
+
+    The diamond and the out dots only mean something between first pitch and
+    the last out, so the markup is always emitted (score_refresh_js fills it in
+    place) and `hidden` off the live path."""
+
+    def _live(self, **over):
+        g, _ = RenderTests()._cards()
+        g.update(abstract_state="Live", status="In Progress",
+                 away_score=3, home_score=2, current_inning=9,
+                 current_inning_ordinal="9th", inning_half="Top",
+                 is_top_inning=True)
+        g.update(over)
+        return b.cmb_card(g, None)
+
+    def test_live_game_shows_occupied_bases_and_outs(self):
+        html = self._live(on_first=True, on_second=True, on_third=False, outs=2)
+        bo = html.split("<span class='bo'", 1)[1].split("</span></span>", 1)[0]
+        self.assertIn("<i class='b1 on'></i>", bo)
+        self.assertIn("<i class='b2 on'></i>", bo)
+        self.assertIn("<i class='b3'></i>", bo)          # empty base stays outline
+        self.assertEqual(bo.count("<i class='on'></i>"), 2)   # two out dots
+        self.assertIn("2 out, runners on first and second", bo)
+
+    def test_indicator_is_hidden_off_the_live_path(self):
+        g, _ = RenderTests()._cards()
+        for state in (None, "Preview", "Final"):
+            g.update(abstract_state=state, on_first=True, outs=1)
+            self.assertIn("<span class='bo' hidden>", b.cmb_card(g, None))
+        self.assertIn("<span class='bo'>", self._live(on_first=True, outs=1))
+
+    def test_missing_state_degrades_to_empty_bases(self):
+        html = self._live()
+        bo = html.split("<span class='bo'", 1)[1].split("</span></span>", 1)[0]
+        self.assertNotIn(" on'", bo)
+        self.assertIn("bases empty", bo)
+
+    def test_base_out_sentences(self):
+        self.assertEqual(b._base_out_text((False,) * 3, 0), "0 out, bases empty")
+        self.assertEqual(b._base_out_text((True,) * 3, 2), "2 out, bases loaded")
+        self.assertEqual(b._base_out_text((False, False, True), 1),
+                         "1 out, runner on third")
+        # An unknown out count still reads the runners.
+        self.assertEqual(b._base_out_text((True, False, False), None),
+                         "runner on first")
+
+    def test_refresh_updates_the_indicator_live(self):
+        js = b.score_refresh_js()
+        self.assertIn("setBaseOut(header.querySelector('.bo')", js)
+        self.assertIn("offense.first", js)
+        self.assertIn("linescore.outs", js)
+
+    def test_slate_carries_base_out_columns(self):
+        # Presence of the key is the signal; StatsAPI omits empty bases.
+        payload = {"dates": [{"date": "2026-07-28", "games": [{
+            "gamePk": 1, "gameDate": "2026-07-28T23:05:00Z", "gameNumber": 1,
+            "status": {"abstractGameState": "Live", "detailedState": "In Progress"},
+            "teams": {"away": {"team": {"id": 1, "name": "A", "abbreviation": "AAA"}},
+                      "home": {"team": {"id": 2, "name": "H", "abbreviation": "HHH"}}},
+            "linescore": {"currentInning": 9, "outs": 2,
+                          "offense": {"first": {"id": 10}, "third": {"id": 11}}},
+        }]}]}
+        with unittest.mock.patch.object(b, "_get_json", return_value=payload):
+            row = b.get_slate("2026-07-28").iloc[0]
+        self.assertTrue(row["on_first"])
+        self.assertFalse(row["on_second"])
+        self.assertTrue(row["on_third"])
+        self.assertEqual(row["outs"], 2)
+
+
+class GameClockTests(unittest.TestCase):
+    """First-pitch times drop the zone suffix; the page states it once."""
+
+    def test_game_time_has_no_zone_suffix(self):
+        self.assertEqual(b._game_time_pt("2026-07-28T23:05:00Z"), "4:05 PM")
+        self.assertEqual(b._game_time_pt(""), "")
+
+    def test_zone_is_declared_once_in_the_legend(self):
+        self.assertIn("times are Pacific", b._legend_guide())
+
+    def test_build_stamp_keeps_its_zone(self):
+        # A timestamp without a zone is ambiguous; a slate of local first
+        # pitches is not, once the page has said which local.
+        self.assertIn("built 9:00 AM PT",
+                      b._legend_head("MLB matchup leans", "9:00 AM PT"))
 
 
 class ShapeScaleTests(unittest.TestCase):

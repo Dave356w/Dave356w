@@ -383,6 +383,14 @@ def get_slate(slate_date, sport_id=1):
                 "current_inning_ordinal": linescore.get("currentInningOrdinal"),
                 "inning_half": linescore.get("inningHalf"),
                 "is_top_inning": linescore.get("isTopInning"),
+                # Base-out state. `offense` carries a player object per occupied
+                # base and omits the key entirely when the base is empty, so
+                # presence is the signal. Absent on unstarted games -> all False
+                # / no outs, and the card hides the indicator.
+                "on_first": bool((linescore.get("offense") or {}).get("first")),
+                "on_second": bool((linescore.get("offense") or {}).get("second")),
+                "on_third": bool((linescore.get("offense") or {}).get("third")),
+                "outs": linescore.get("outs"),
                 "venue": g.get("venue", {}).get("name"),
                 "savant_preview_url": f'https://baseballsavant.mlb.com/preview?game_pk={g.get("gamePk")}&game_date={od}',
             })
@@ -2459,7 +2467,12 @@ def _fmt_ml(v):
 
 
 def _fmt_pt_clock(dt):
-    return dt.strftime("%I:%M %p").lstrip("0") + " PT"
+    """Bare wall clock for a game row -- no zone suffix.
+
+    Every first pitch on the page is Pacific and the page says so once, in the
+    legend, rather than repeating ` PT` on every card. The build stamp keeps
+    its suffix: that one is a timestamp, not a schedule."""
+    return dt.strftime("%I:%M %p").lstrip("0")
 
 
 def _game_time_pt(iso_utc):
@@ -2877,6 +2890,50 @@ def _game_state_span(g):
     return f"<span class='game-state {state}'{title}>{label}</span>"
 
 
+def _base_out_text(bases, outs):
+    """Screen-reader sentence for the diamond, e.g. '2 out, runners on first
+    and second'. The glyph itself is aria-hidden, so this is the only reading
+    of the state; an unknown out count degrades to the runners alone."""
+    named = [n for n, on in zip(("first", "second", "third"), bases) if on]
+    if not named:
+        runners = "bases empty"
+    elif len(named) == 3:
+        runners = "bases loaded"
+    elif len(named) == 1:
+        runners = f"runner on {named[0]}"
+    else:
+        runners = f"runners on {' and '.join(named)}"
+    if outs is None:
+        return runners
+    return f"{outs} out, {runners}"
+
+
+def _base_out_html(g):
+    """Diamond + out dots for the collapsed row, as in a scoreboard app.
+
+    Always emitted so score_refresh_js can fill it in place, and `hidden`
+    unless the game is live -- a base-out state means nothing before first
+    pitch or after the last out. The three bases carry `on` when occupied and
+    the dots fill up to the out count; both are aria-hidden decorations over
+    `_base_out_text`."""
+    state = str(g.get("abstract_state") or "").lower()
+    bases = tuple(bool(g.get(k)) for k in ("on_first", "on_second", "on_third"))
+    outs_val = pd.to_numeric(g.get("outs"), errors="coerce")
+    outs = int(outs_val) if pd.notna(outs_val) else None
+    live = state == "live"
+    cls = ["b1", "b2", "b3"]
+    diamond = "".join(
+        f"<i class='{c}{' on' if on else ''}'></i>" for c, on in zip(cls, bases))
+    dots = "".join(
+        f"<i class='{'on' if outs is not None and i < outs else ''}'></i>"
+        for i in range(3))
+    return (f"<span class='bo'{'' if live else ' hidden'}>"
+            f"<span class='diamond' aria-hidden='true'>{diamond}</span>"
+            f"<span class='outs' aria-hidden='true'>{dots}</span>"
+            f"<span class='bo-sr'>{_esc(_base_out_text(bases, outs))}</span>"
+            "</span>")
+
+
 def _inning_indicator(g):
     """Live inning as ▲2nd / ▼2nd; empty when the feed has no inning yet."""
     ordinal = g.get("current_inning_ordinal")
@@ -3003,6 +3060,7 @@ def _scoreboard_summary(g, ctx=None):
         f"<span class='teams' data-game-pk='{int(g['game_pk'])}'>"
         f"{_summary_team_html(g, 'away', ctx)}"
         f"<span class='summary-center'>{_game_state_span(g)}"
+        f"{_base_out_html(g)}"
         f"<span class='summary-time'{hide_pregame}>{_esc(time_text)}</span>"
         f"{game_no}<span class='summary-market'{hide_pregame}>"
         f"{_esc(market_text)}</span></span>"
@@ -3219,6 +3277,10 @@ def _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
             ),
             inning_half=(srow.get("inning_half") if srow is not None else None),
             is_top_inning=(srow.get("is_top_inning") if srow is not None else None),
+            on_first=(srow.get("on_first") if srow is not None else None),
+            on_second=(srow.get("on_second") if srow is not None else None),
+            on_third=(srow.get("on_third") if srow is not None else None),
+            outs=(srow.get("outs") if srow is not None else None),
             game_pk=gpk, game_number=game_number, game_label=game_label,
             game_datetime_utc=(srow.get("game_datetime_utc") if srow is not None else None),
             time_pt=_game_time_pt(srow.get("game_datetime_utc")) if srow is not None else "",
@@ -3258,6 +3320,10 @@ def _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
                 current_inning_ordinal=srow.get("current_inning_ordinal"),
                 inning_half=srow.get("inning_half"),
                 is_top_inning=srow.get("is_top_inning"),
+                on_first=srow.get("on_first"),
+                on_second=srow.get("on_second"),
+                on_third=srow.get("on_third"),
+                outs=srow.get("outs"),
                 time_pt=_game_time_pt(srow.get("game_datetime_utc")),
                 venue=str(srow.get("venue") or ""),
                 away_probable=srow.get("away_probable_pitcher"),
@@ -3295,8 +3361,10 @@ def _legend_guide():
         "<span><b>Model vs market</b> shows whether the lean agrees with the DK favorite; "
         "disagree means the model favors the underdog.</span>"
         "<span><b>◆</b> marks a platoon advantage over the starter.</span>"
-        "<span class='wide'>DraftKings moneylines via ESPN at build time; cards are ordered "
-        "by first pitch.</span>"
+        "<span>On a live game the <b>diamond</b> shows runners on base and the "
+        "dots below it the outs.</span>"
+        "<span class='wide'>DraftKings moneylines via ESPN at build time; first pitch "
+        "times are Pacific; cards are ordered by first pitch.</span>"
         "</div></div>")
 
 
@@ -3433,6 +3501,32 @@ body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 var(--sans);
   vertical-align:middle;color:var(--muted);background:var(--surface-2)}
 .game-state.live{color:rgba(var(--cool),1);border-color:rgba(var(--cool),.35);
   background:rgba(var(--cool),.10)}
+
+/* Base-out state: three bases on a diamond over three out dots, the scoreboard
+   convention. The bases are 7px squares rotated 45deg and placed on a 3-column
+   grid -- second on the top row, third and first flanking below -- so the
+   cluster reads as a diamond without any glyph font or image. Occupied bases
+   and recorded outs fill solid; the rest stay hairline outlines. */
+.bo{display:flex;flex-direction:column;align-items:center;gap:2px}
+/* Diamond geometry: the bases are 6px squares rotated 45deg, so the facing
+   edges of two of them are 6px apart when their centres are 6px apart along
+   the 45deg diagonal. A 5.5px cell step puts adjacent centres 7.8px apart --
+   6px of base plus a ~1.8px gap, tight enough to read as one cluster without
+   the squares merging into a bar. The squares overflow the grid box by design;
+   the padding keeps that overflow off the badge above. */
+.diamond{display:grid;flex:none;grid-template-columns:repeat(3,5.5px);
+  grid-template-rows:repeat(2,5.5px);place-items:center;padding:3px 2px}
+.diamond i{width:6px;height:6px;flex:none;border:1px solid var(--faint);
+  transform:rotate(45deg)}
+.diamond .b2{grid-area:1/2}.diamond .b3{grid-area:2/1}.diamond .b1{grid-area:2/3}
+.diamond i.on{background:rgba(var(--lean),1);border-color:rgba(var(--lean),1)}
+.outs{display:flex;align-items:center;gap:3px}
+.outs i{width:5px;height:5px;flex:none;border:1px solid var(--faint);
+  border-radius:var(--r-pill)}
+.outs i.on{background:var(--ink);border-color:var(--ink)}
+/* The glyph is decorative; _base_out_text carries the state for readers. */
+.bo-sr{position:absolute;width:1px;height:1px;margin:-1px;padding:0;
+  border:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 .detail-context{padding:7px 16px;border-bottom:1px solid var(--line-2);
   color:var(--muted);font:500 11px/1.3 var(--sans)}
 .card-note{display:flex;flex-direction:column;gap:4px;padding:14px 16px 16px;color:var(--muted)}
@@ -3785,12 +3879,38 @@ def score_refresh_js():
       el.hidden=!streak;
     }}
   }}
+  function baseOutText(bases,outs){{
+    var named=['first','second','third'].filter(function(n,i){{return bases[i];}});
+    var runners=named.length===0?'bases empty':
+      named.length===3?'bases loaded':
+      named.length===1?'runner on '+named[0]:
+      'runners on '+named.join(' and ');
+    return outs===null||outs===undefined?runners:String(outs)+' out, '+runners;
+  }}
+  function setBaseOut(el,linescore,live){{
+    if(!el) return;
+    el.hidden=!live;
+    if(!live) return;
+    var offense=linescore.offense||{{}};
+    var bases=[!!offense.first,!!offense.second,!!offense.third];
+    var outs=(linescore.outs===null||linescore.outs===undefined)?null:Number(linescore.outs);
+    ['b1','b2','b3'].forEach(function(cls,i){{
+      var base=el.querySelector('.diamond .'+cls);
+      if(base) base.className=cls+(bases[i]?' on':'');
+    }});
+    el.querySelectorAll('.outs i').forEach(function(dot,i){{
+      dot.className=(outs!==null&&i<outs)?'on':'';
+    }});
+    var sr=el.querySelector('.bo-sr');
+    if(sr) sr.textContent=baseOutText(bases,outs);
+  }}
   function update(game){{
     var header=headers[String(game.gamePk)];
     if(!header) return;
     var status=game.status||{{}};
     var state=status.abstractGameState||'Preview';
     var teams=game.teams||{{}};
+    setBaseOut(header.querySelector('.bo'),game.linescore||{{}},state==='Live');
     setMeta(header.querySelector('.team-meta.away'),(teams.away||{{}}).score,state);
     setMeta(header.querySelector('.team-meta.home'),(teams.home||{{}}).score,state);
     var inProgress=state==='Live'||state==='Final';
