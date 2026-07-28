@@ -40,11 +40,18 @@ def _game(away, home, a, h, odds):
 
 class LeanStrengthTests(unittest.TestCase):
     def test_fixed_fallback_buckets(self):
-        # No ledger scale -> fixed cutoffs (0.021 / 0.060), no percentile.
-        self.assertEqual(b.lean_strength(0.010, None)[0], "slight")
-        self.assertEqual(b.lean_strength(0.040, None)[0], "clear")
-        self.assertEqual(b.lean_strength(0.090, None)[0], "strong")
-        self.assertIsNone(b.lean_strength(0.040, None)[1])
+        # No scale at all -> fixed cutoffs (0.015 / 0.032), no percentile.
+        c1, c2 = b.LEAN_STRENGTH_FALLBACK
+        self.assertEqual(b.lean_strength(c1 / 2, None)[0], "slight")
+        self.assertEqual(b.lean_strength((c1 + c2) / 2, None)[0], "clear")
+        self.assertEqual(b.lean_strength(c2 * 2, None)[0], "strong")
+        self.assertIsNone(b.lean_strength((c1 + c2) / 2, None)[1])
+
+    def test_fallback_is_on_the_current_shrunk_scale(self):
+        # Regression: the fallback was the pre-v5 unshrunk p33/p80 (.021/.060),
+        # which no v8/v9 delta can reach -- v9's observed max |xw_net| is
+        # .0462, so "strong" was unreachable for the entire family.
+        self.assertLess(b.LEAN_STRENGTH_FALLBACK[1], 0.0462)
 
     def test_ranked_against_scale(self):
         scale = np.sort(np.array([round(0.01 * i, 2) for i in range(1, 11)] * 4, float))
@@ -82,6 +89,50 @@ class LeanStrengthTests(unittest.TestCase):
         with mock.patch.object(b, "load_ledger_df", return_value=self._ledger(rows)), \
                 mock.patch.object(b, "SCALE_TAGS", ("xw+plat_consol_v5", "xw+plat_consol_v6")):
             self.assertIsNone(b.lean_strength_scale())
+
+    def test_scale_counts_pending_rows(self):
+        # |xw_net| is a pregame quantity: a magnitude scale needs no outcome.
+        # 20 graded + 20 pending must reach the pool, not just the 20 graded.
+        led = self._ledger([("xw+plat_consol_v9", 0.02)] * 40)
+        led.loc[20:, "status"] = "pending"
+        from unittest import mock
+        with mock.patch.object(b, "load_ledger_df", return_value=led), \
+                mock.patch.object(b, "SCALE_TAGS", ("xw+plat_consol_v9",)):
+            scale = b.lean_strength_scale()
+        self.assertIsNotNone(scale)
+        self.assertEqual(scale.size, 40)
+
+    def test_slate_deltas_top_up_thin_ledger(self):
+        # A fresh scale family: 24 ledger rows is under the minimum on its own,
+        # but tonight's own deltas are the same units and carry it over.
+        rows = [("xw+plat_consol_v9", 0.02)] * 24
+        from unittest import mock
+        with mock.patch.object(b, "load_ledger_df", return_value=self._ledger(rows)), \
+                mock.patch.object(b, "SCALE_TAGS", ("xw+plat_consol_v9",)):
+            self.assertIsNone(b.lean_strength_scale())
+            scale = b.lean_strength_scale([0.03] * 12)
+        self.assertIsNotNone(scale)
+        self.assertEqual(scale.size, 36)
+
+    def test_v8_v9_share_a_scale_family(self):
+        # v9 - v8 is one term worth ~6% of matchup dispersion and flips no
+        # leans, so the two measure |xw_net| on the same units.
+        for tag in ("xw+plat_consol_v8", "xw+plat_consol_v9"):
+            self.assertEqual(b._SCALE_FAMILIES[tag],
+                             ("xw+plat_consol_v8", "xw+plat_consol_v9"))
+
+    def test_slate_deltas_helper(self):
+        def game(ae, he, **kw):
+            return {"away": {"xw_edge": ae}, "home": {"xw_edge": he}, **kw}
+        games = [game(0.02, 0.01),            # |net| = 0.01
+                 game(0.01, 0.04),            # |net| = 0.03
+                 game(0.02, 0.02),            # exact zero -> abstention
+                 game(None, 0.01),            # missing edge -> no lean
+                 game(0.05, 0.01, unavailable=True)]
+        out = b._slate_deltas(games)
+        self.assertEqual([round(x, 4) for x in out], [0.01, 0.03])
+        self.assertEqual(b._slate_deltas([]), [])
+        self.assertEqual(b._slate_deltas(None), [])
 
 
 class PercentileTests(unittest.TestCase):
