@@ -44,6 +44,8 @@ import numpy as np
 import pandas as pd
 import requests
 
+import pitch_arsenal
+
 # ------------------------------------------------------------
 # CONFIG
 # ------------------------------------------------------------
@@ -1441,6 +1443,13 @@ USE_XWOBA_SHRINK = True
 XWOBA_SHRINK_COL = "xwOBA"
 XWOBA_SHRINK_K = 100.0
 
+# Pitch-mix shadow arm (pitch_arsenal.py). OFF by default and inert when on:
+# it writes shadow columns for forward testing and never moves a lean, so no
+# MODEL_TAG bump is involved either way. Turn it on only once
+# pitch_arsenal_probe.py shows the batter x pitch-type deviation is reliable
+# enough to beat the noise it injects; see that script for the budget.
+USE_PITCH_MIX_SHADOW = os.environ.get("PITCH_MIX_SHADOW", "0") == "1"
+
 # --- SP platoon-advantage xwOBA adjustment ---------------------------------
 # A one-sided hitter's shrunk xwOBA is moved by a flat +/- PLATOON_XWOBA_ADJ
 # depending on whether he holds the handedness edge over tonight's starter, then
@@ -1866,6 +1875,76 @@ def build_xwoba_matchup(pitchers_df, league_baseline):
     matchup_df = build_matchup(pitcher_rows_df, opp_lineup_agg_df, STATCAST_RATE_COLS, league_baseline,
                                shrink_prior=prior, shrink_k=XWOBA_SHRINK_K)
     return matchup_df, pitcher_rows_df, opp_hitters_df
+
+
+def attach_pitch_mix_shadow(matchup_df, pitcher_rows_df, opp_hitters_df,
+                            league_baseline, batter_arsenal, pitcher_arsenal):
+    """Add the pitch-mix shadow columns. Never touches an existing column.
+
+    The arm re-weights the opposing lineup by the starter's arsenal (see
+    `pitch_arsenal`) and records what the starter phase *would* have been. It
+    is deliberately inert: `mx_xwOBA`, `edge_xwOBA` and every column the lean
+    and the ledger's `xw_net` read are untouched, so a build with the flag on
+    and a build with it off produce identical leans. The columns exist so the
+    arm can be forward-tested against the record before it is allowed to move
+    anything -- a control in the ledger, not a UI element.
+
+    Sides with no arsenal coverage carry a multiplier of exactly 1.0 and a
+    shadow phase equal to the real one, which is the honest reading of "no
+    information", and keeps the column defined for every row.
+    """
+    if matchup_df is None or matchup_df.empty:
+        return matchup_df
+    out = matchup_df.copy()
+    lg_type = pitch_arsenal.league_by_pitch_type(batter_arsenal)
+    cells, overall = pitch_arsenal.batter_relative_cells(batter_arsenal, lg_type)
+    L = league_baseline.get(XWOBA_SHRINK_COL, np.nan)
+
+    pit_ids = {}
+    if pitcher_rows_df is not None and not pitcher_rows_df.empty:
+        for _, r in pitcher_rows_df.iterrows():
+            pid = pd.to_numeric(r.get("player_id"), errors="coerce")
+            if pd.notna(pid):
+                pit_ids[(r["game_pk"], r["Name"])] = int(pid)
+
+    # Batting order is the row order inside each (game_pk, faced_pitcher)
+    # block, so the slot-PA weights line up with the composite's own weighting.
+    lineups = {}
+    if opp_hitters_df is not None and not opp_hitters_df.empty:
+        for key, grp in opp_hitters_df.groupby(["game_pk", "faced_pitcher"],
+                                               sort=False):
+            rows = []
+            for slot, (_, r) in enumerate(grp.iterrows(), start=1):
+                pid = pd.to_numeric(r.get("player_id"), errors="coerce")
+                rows.append((int(pid) if pd.notna(pid) else None,
+                             LINEUP_SLOT_PA.get(slot, LINEUP_SLOT_PA[9])))
+            lineups[key] = rows
+
+    mults, covs, ns, bases = [], [], [], []
+    for _, row in out.iterrows():
+        key = (row["game_pk"], row["pitcher"])
+        weights, basis = pitch_arsenal.pitcher_pa_weights(
+            pitcher_arsenal, pit_ids.get(key))
+        mult, cov, n = pitch_arsenal.lineup_mix_multiplier(
+            lineups.get(key, []), weights, cells, overall)
+        mults.append(mult)
+        covs.append(cov)
+        ns.append(n)
+        bases.append(basis)
+    out["mix_mult"] = mults
+    out["mix_coverage"] = covs
+    out["mix_hitters"] = ns
+    out["mix_basis"] = bases
+
+    b_sp = pd.to_numeric(out.get("opp_xwOBA_vs_sp"), errors="coerce")
+    starter = pd.to_numeric(out.get("starter_xwOBA"), errors="coerce")
+    out["opp_xwOBA_mix"] = b_sp * out["mix_mult"]
+    mx = [matchup_value(b, p, "xwOBA", L)
+          for b, p in zip(out["opp_xwOBA_mix"], starter)]
+    out["mx_xwOBA_sp_mix"] = mx
+    out["edge_xwOBA_sp_mix"] = [
+        (m - L) if pd.notna(m) and pd.notna(L) else np.nan for m in mx]
+    return out
 
 
 def sequential_xwoba_phases(b_neutral, b_vs_sp, starter, bullpen, league,
@@ -4468,6 +4547,25 @@ def main():
             f.write(html)
         log(f"Wrote {out_path}")
         return 0
+
+    if USE_PITCH_MIX_SHADOW:
+        # Shadow only: extra columns for forward testing, no effect on any lean.
+        # Failure-isolated like the odds fetch -- an arsenal outage must never
+        # take down a build that has already fetched everything the lean needs.
+        log("Attaching pitch-mix shadow columns (inert; forward test only) ...")
+        try:
+            batter_arsenal, pitcher_arsenal = pitch_arsenal.fetch_arsenals(
+                cached_csv, SEASON)
+            matchup_df = attach_pitch_mix_shadow(
+                matchup_df, pitcher_rows_df, opp_hitters_df,
+                data["league_baseline"], batter_arsenal, pitcher_arsenal)
+            cov = pd.to_numeric(matchup_df.get("mix_coverage"), errors="coerce")
+            log(f"  arsenal cells: {len(batter_arsenal)} batter rows, "
+                f"{len(pitcher_arsenal)} pitcher rows; median side coverage "
+                f"{cov.median():.2f}" if cov is not None and len(cov)
+                else "  arsenal coverage unavailable")
+        except Exception as e:  # noqa: BLE001
+            log(f"pitch-mix shadow skipped: {e!r}")
 
     log("Building platoon-OPS matchup ...")
     try:

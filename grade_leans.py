@@ -192,6 +192,17 @@ AUDIT_COLS = [
     "edge_xwoba_bp_away", "edge_xwoba_bp_home",
     "mx_xwoba_away", "mx_xwoba_home",
     "edge_xwoba_away", "edge_xwoba_home",
+    # Pitch-mix shadow arm (build_site.USE_PITCH_MIX_SHADOW, default off). The
+    # opposing lineup re-weighted by the starter's arsenal, recorded so the arm
+    # can be scored against the record before it is allowed to move a lean.
+    # NaN on every row built with the flag off, and on legacy rows; never
+    # backfilled, and never read by grading.
+    "mix_mult_away", "mix_mult_home",
+    "mix_coverage_away", "mix_coverage_home",
+    "mix_basis_away", "mix_basis_home",
+    "opp_xwoba_mix_away", "opp_xwoba_mix_home",
+    "mx_xwoba_sp_mix_away", "mx_xwoba_sp_mix_home",
+    "edge_xwoba_sp_mix_away", "edge_xwoba_sp_mix_home",
 ]
 MODEL_FIELDS = [
     "game_date","away","home","away_sp","home_sp","model_tag",
@@ -231,8 +242,13 @@ def load_ledger():
         led = pd.read_csv(LEDGER_PATH)
         persisted_cols = (LEDGER_COLS + [c for c in MARKET_COLS if c not in LEDGER_COLS]
                           + AUDIT_COLS)
-        for c in persisted_cols:
-            if c not in led.columns: led[c] = np.nan
+        # Add every missing column in one concat. Inserting them one at a time
+        # refragmented the frame on each new audit column and pandas warns.
+        missing = [c for c in persisted_cols if c not in led.columns]
+        if missing:
+            led = pd.concat(
+                [led, pd.DataFrame(np.nan, index=led.index, columns=missing)],
+                axis=1)
         # Preserve already attached market columns. Dropping them here forced
         # every CI run to refetch the full closing-odds history.
         led = led[persisted_cols]
@@ -409,6 +425,18 @@ def rows_from_dump(xw_df, pl_df):
             mx_xwoba_home=h.get("mx_xwOBA", np.nan),
             edge_xwoba_away=a.get("edge_xwOBA", np.nan),
             edge_xwoba_home=h.get("edge_xwOBA", np.nan),
+            mix_mult_away=a.get("mix_mult", np.nan),
+            mix_mult_home=h.get("mix_mult", np.nan),
+            mix_coverage_away=a.get("mix_coverage", np.nan),
+            mix_coverage_home=h.get("mix_coverage", np.nan),
+            mix_basis_away=a.get("mix_basis", np.nan),
+            mix_basis_home=h.get("mix_basis", np.nan),
+            opp_xwoba_mix_away=a.get("opp_xwOBA_mix", np.nan),
+            opp_xwoba_mix_home=h.get("opp_xwOBA_mix", np.nan),
+            mx_xwoba_sp_mix_away=a.get("mx_xwOBA_sp_mix", np.nan),
+            mx_xwoba_sp_mix_home=h.get("mx_xwOBA_sp_mix", np.nan),
+            edge_xwoba_sp_mix_away=a.get("edge_xwOBA_sp_mix", np.nan),
+            edge_xwoba_sp_mix_home=h.get("edge_xwOBA_sp_mix", np.nan),
             status="pending", full_away=np.nan, full_home=np.nan,
             f5_away=np.nan, f5_home=np.nan,
             xw_full=None, xw_f5=None, ops_full=None, ops_f5=None,

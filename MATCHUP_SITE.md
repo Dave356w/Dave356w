@@ -278,6 +278,60 @@ flat-stake ROI when settled ledger/closing-price data exists. Pre-v9 snapshots
 are explicitly ineligible because they did not persist `B_0`; the utility never
 rebuilds an old slate from current Savant data.
 
+### Pitch-mix shadow arm (not in any lean)
+
+`pitch_arsenal.py` builds a candidate replacement for the batter side of the
+starter phase: the opposing lineup re-weighted by the starter's arsenal, using
+each hitter's xwOBA by pitch type. It is **shadow-only and off by default**
+(`PITCH_MIX_SHADOW=1` to enable). With the flag on it writes extra columns and
+changes nothing else, so builds with and without it produce identical leans and
+no `MODEL_TAG` bump is involved either way.
+
+Three corrections separate the implementation from the obvious version of the
+idea, and each is enforced by a test:
+
+- **PA share, not usage share.** Usage is per pitch; the batter values are per
+  plate appearance, and putaway pitches end plate appearances well above their
+  usage rate. The weights are the starter's PA share per pitch type; usage is a
+  flagged fallback (`mix_basis`).
+- **League-relative per pitch type.** League xwOBA against a slider sits far
+  below league xwOBA against a four-seamer, so a raw weighted average scores a
+  slider-heavy arsenal low on mix alone — and the starter's own xwOBA-allowed,
+  which the matchup already multiplies in, is low *because* of that mix.
+  Everything is a ratio to league-at-that-pitch-type, normalised so a
+  league-average hitter returns exactly 1.0 against any arsenal.
+- **It supplements the platoon term.** Savant's batter arsenal splits pool both
+  pitcher hands, so `PLATOON_XWOBA_ADJ` still applies. The multiplier is a
+  starter-phase quantity only: a bullpen is not one arsenal.
+
+Each (batter, pitch type) cell is regressed toward that hitter's own overall
+relative level rather than toward league, so what survives is pitch-specific
+skill and not general hitting ability the composite already carries. A hitter
+with no cells lands on a multiplier of exactly 1.0 — the degradation is
+continuous, with no coverage threshold.
+
+**Why it is dark.** At the build's usual `K = 100`, residual cell noise moves a
+game delta by about 0.013 xwOBA against a current-family median `|xw_net|` of
+0.0195 — two thirds of a typical lean, injected as noise. Holding that to ~19%
+needs `K ≈ 600`, at which point even an 80-point raw cell deviation moves a
+lineup composite by 0.0008. Whether the arm can escape that squeeze depends on
+the true dispersion of batter × pitch-type skill, which has not been measured
+here.
+
+`python pitch_arsenal_probe.py` is that measurement: it decomposes the observed
+cell dispersion into sampling and between-player components (implying a `K`),
+estimates year-over-year reliability of the deviation, and prints both against
+the noise budget the arm has to clear. **Run it before turning the flag on.**
+
+**No-lookahead.** This cannot be backtested against the existing ledger:
+`.savant_cache/` is date-keyed and gitignored, and today's leaderboard is
+season-to-date, so scoring old rows against it is lookahead. The shadow columns
+(`mix_*`, `opp_xwoba_mix_*`, `mx_xwoba_sp_mix_*`, `edge_xwoba_sp_mix_*` in the
+ledger, NaN on every row built with the flag off) exist so the arm accrues a
+forward record. Promotion to the lean would change both prediction math and
+`|xw_net|` units, so it would start new `RECORD_TAGS` **and** `SCALE_TAGS`
+families.
+
 ### SP platoon-advantage xwOBA adjustment
 
 A **one-sided** hitter's xwOBA is moved by a flat **±0.010**
@@ -369,6 +423,8 @@ answered differently:
 |------|---------|
 | `build_site.py` | One-shot generator: fetch → matchup dataframes → writes `public/index.html` and `public/grades.html` (fully self-contained: inline CSS, dark-mode via `prefers-color-scheme`, no external assets). Also dumps the day's leans to `data/leans_<date>_{xw,pl}.csv` for the grading ledger. |
 | `grade_leans.py` | Grading ledger: ingests the lean dumps as pending rows, grades them against StatsAPI linescores (full-game + F5), attaches closing DK moneylines (via `market_backfill`), writes `data/mlb_lean_ledger.csv` + `data/ledger_report.txt`. |
+| `pitch_arsenal.py` | Pitch-mix shadow arm: the opposing lineup re-weighted by the starter's arsenal. Off by default (`PITCH_MIX_SHADOW=1`), inert when on — writes shadow columns for forward testing and never moves a lean. |
+| `pitch_arsenal_probe.py` | Measurement that gates the arm: cell dispersion split into signal and sampling noise, year-over-year reliability, and the noise budget the arm must clear. Prints only; writes nothing to `data/`. |
 | `market_backfill.py` | Odds join: attaches ESPN/DraftKings opening + closing moneylines and the devigged home close probability to settled ledger rows (score-verified join, idempotent, no silent defaults), and computes the vs-market scoreboard. |
 | `run_market_update.py` | Headless CLI for the odds join: `--dry-run` preview, one-off backfills, `--merge-backfill` for pre-enriched files. CI doesn't need it (grading calls `attach_market` directly); it's for local runs. |
 | `.github/workflows/build.yml` | Scheduled + manual workflow: build → grade → commit ledger → deploy Pages. |
