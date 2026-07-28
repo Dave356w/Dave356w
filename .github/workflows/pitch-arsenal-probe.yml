@@ -1,0 +1,67 @@
+name: Pitch-arsenal probe
+
+# Manual only. Measures whether the batter x pitch-type deviation carries
+# enough signal to justify the pitch-mix arm (pitch_arsenal.py), which ships
+# dark behind PITCH_MIX_SHADOW. Read the report before enabling that flag.
+#
+# Touches nothing: no build, no lean, no ledger, no commit, no Pages deploy.
+# It pulls two Savant leaderboards, prints the report to the run log, and
+# uploads it as an artifact. `contents: read` makes that structural rather
+# than a promise.
+on:
+  workflow_dispatch:
+    inputs:
+      season:
+        description: 'Season to measure (prior season is pulled too, for the year-over-year estimate)'
+        required: false
+        default: '2026'
+      min_pa:
+        description: "Leaderboard PA floor per (batter, pitch type) cell"
+        required: false
+        default: '25'
+      sd_pa:
+        description: 'Assumed sd of a single PA xwOBA -- every noise figure scales linearly with it'
+        required: false
+        default: '0.85'
+
+permissions:
+  contents: read
+
+# Deliberately NOT in the site-build concurrency group: this job never writes
+# to data/, so it cannot interleave with a ledger commit and has no reason to
+# queue behind a build.
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10        # fail fast if Savant hangs
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # No Savant cache restore on purpose. The probe is run to look at fresh
+      # leaderboard state; reusing the build's day-keyed cache would silently
+      # measure whatever the last build happened to pull.
+      - name: Run probe
+        run: |
+          python pitch_arsenal_probe.py \
+            --season "${{ inputs.season }}" \
+            --min-pa "${{ inputs.min_pa }}" \
+            --sd-pa "${{ inputs.sd_pa }}" \
+            --out pitch_arsenal_probe_report.txt
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pitch-arsenal-probe-${{ inputs.season }}
+          path: pitch_arsenal_probe_report.txt
+          if-no-files-found: warn
