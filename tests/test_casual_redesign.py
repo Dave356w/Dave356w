@@ -114,12 +114,13 @@ class LeanStrengthTests(unittest.TestCase):
         self.assertIsNotNone(scale)
         self.assertEqual(scale.size, 36)
 
-    def test_v8_v9_share_a_scale_family(self):
+    def test_v8_v9_v10_share_a_scale_family(self):
         # v9 - v8 is one term worth ~6% of matchup dispersion and flips no
-        # leans, so the two measure |xw_net| on the same units.
-        for tag in ("xw+plat_consol_v8", "xw+plat_consol_v9"):
-            self.assertEqual(b._SCALE_FAMILIES[tag],
-                             ("xw+plat_consol_v8", "xw+plat_consol_v9"))
+        # leans; v10 only re-weights a convex combination of the same two
+        # phases. All three measure |xw_net| on the same units.
+        fam = ("xw+plat_consol_v8", "xw+plat_consol_v9", "xw+plat_consol_v10")
+        for tag in fam:
+            self.assertEqual(b._SCALE_FAMILIES[tag], fam)
 
     def test_slate_deltas_helper(self):
         def game(ae, he, **kw):

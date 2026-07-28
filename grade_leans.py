@@ -57,7 +57,7 @@ from market_backfill import MARKET_COLS, attach_market
 DATA_DIR    = os.environ.get("DATA_DIR", "data")
 LEDGER_PATH = os.path.join(DATA_DIR, "mlb_lean_ledger.csv")
 REPORT_PATH = os.path.join(DATA_DIR, "ledger_report.txt")
-MODEL_TAG   = os.environ.get("MODEL_TAG", "xw+plat_consol_v9")
+MODEL_TAG   = os.environ.get("MODEL_TAG", "xw+plat_consol_v10")
 _RECORD_FAMILIES = {
     # v3 changed only ledger locking/identity; its prediction math is v2.
     "xw+plat_consol_v3": ("xw+plat_consol_v2", "xw+plat_consol_v3"),
@@ -74,6 +74,13 @@ _RECORD_FAMILIES = {
     # starts another prediction family.
     # v9 applies starter platoon adjustments only to projected starter innings
     # and uses the neutral lineup against the bullpen.
+    # v10 weights the two phases by share of plate appearances (measured BF/IP)
+    # instead of share of innings. Prediction math changed, so the tag moves,
+    # but a BF/IP-ratio sweep over 0.95-1.10 flips 0 of 12 leans and shifts
+    # xw_net by 1.6-3.4% of its median magnitude: v9 and v10 decisions agree,
+    # so they share one win-loss line rather than resetting the sample again.
+    "xw+plat_consol_v9": ("xw+plat_consol_v9", "xw+plat_consol_v10"),
+    "xw+plat_consol_v10": ("xw+plat_consol_v9", "xw+plat_consol_v10"),
 }
 RECORD_TAGS = tuple(
     t.strip() for t in os.environ.get(
@@ -87,7 +94,7 @@ MODEL_FAMILY_TAGS = (
     ("v6", ("xw+plat_consol_v6",)),
     ("v7", ("xw+plat_consol_v7",)),
     ("v8", ("xw+plat_consol_v8",)),
-    ("v9", ("xw+plat_consol_v9",)),
+    ("v9/v10", ("xw+plat_consol_v9", "xw+plat_consol_v10")),
 )
 N_FIT_MIN   = 120
 _FINAL  = {"Final", "Game Over", "Completed Early"}
@@ -168,6 +175,10 @@ AUDIT_COLS = [
     "expected_sp_ip_away", "expected_sp_ip_home",
     "bullpen_pitchers_away", "bullpen_pitchers_home",
     "bullpen_relief_bf_away", "bullpen_relief_bf_home",
+    # v10 records the measured BF/IP behind the PA-share blend weight, so a
+    # side's sp_share can be re-derived from the ledger without a rebuild.
+    "sp_bf_per_ip_away", "sp_bf_per_ip_home",
+    "bp_bf_per_ip_away", "bp_bf_per_ip_home",
     # v9 sequential-phase audit. Suffixes identify the pitcher side; the
     # opponent-lineup fields therefore describe the offense facing that side.
     "opp_xwoba_neutral_away", "opp_xwoba_neutral_home",
@@ -200,6 +211,8 @@ MODEL_FIELDS = [
     "expected_sp_ip_away","expected_sp_ip_home",
     "bullpen_pitchers_away","bullpen_pitchers_home",
     "bullpen_relief_bf_away","bullpen_relief_bf_home",
+    "sp_bf_per_ip_away","sp_bf_per_ip_home",
+    "bp_bf_per_ip_away","bp_bf_per_ip_home",
     "opp_xwoba_neutral_away","opp_xwoba_neutral_home",
     "opp_xwoba_vs_sp_away","opp_xwoba_vs_sp_home",
     "platoon_delta_sp_away","platoon_delta_sp_home",
@@ -370,6 +383,10 @@ def rows_from_dump(xw_df, pl_df):
             bullpen_pitchers_home=h.get("bullpen_pitchers", np.nan),
             bullpen_relief_bf_away=a.get("bullpen_relief_bf", np.nan),
             bullpen_relief_bf_home=h.get("bullpen_relief_bf", np.nan),
+            sp_bf_per_ip_away=a.get("sp_bf_per_ip", np.nan),
+            sp_bf_per_ip_home=h.get("sp_bf_per_ip", np.nan),
+            bp_bf_per_ip_away=a.get("bp_bf_per_ip", np.nan),
+            bp_bf_per_ip_home=h.get("bp_bf_per_ip", np.nan),
             opp_xwoba_neutral_away=a.get("opp_xwOBA_neutral", np.nan),
             opp_xwoba_neutral_home=h.get("opp_xwOBA_neutral", np.nan),
             opp_xwoba_vs_sp_away=a.get("opp_xwOBA_vs_sp", np.nan),

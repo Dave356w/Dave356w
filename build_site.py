@@ -81,7 +81,7 @@ USE_TEAM_LOGOS = os.environ.get("USE_TEAM_LOGOS", "1") != "0"
 LOGO_CDN = "https://www.mlbstatic.com/team-logos"
 DATA_DIR = os.environ.get("DATA_DIR", "data")            # grading ledger home
 LEDGER_PATH = os.path.join(DATA_DIR, "mlb_lean_ledger.csv")
-MODEL_TAG = os.environ.get("MODEL_TAG", "xw+plat_consol_v9")  # keep in sync with grade_leans.py
+MODEL_TAG = os.environ.get("MODEL_TAG", "xw+plat_consol_v10")  # keep in sync with grade_leans.py
 _RECORD_FAMILIES = {
     # v3 changed only ledger locking/identity; its prediction math is v2.
     "xw+plat_consol_v3": ("xw+plat_consol_v2", "xw+plat_consol_v3"),
@@ -100,6 +100,19 @@ _RECORD_FAMILIES = {
     # v9 applies the starter-handedness lineup adjustment only to expected
     # starter innings, then uses the neutral lineup against the bullpen. It is
     # isolated from v8 for both records and delta-scale ranking.
+    #
+    # v10 blends the two phases on their share of plate appearances rather than
+    # of innings, using measured BF/IP. Prediction math changed, so the tag is
+    # bumped -- but the record question is answered by measurement, not reflex.
+    # Sweeping the starter/bullpen BF/IP ratio over 0.95-1.10 on the 2026-07-28
+    # slate moves xw_net with sd 0.0004-0.0009 against a median |xw_net| of
+    # 0.0268 (1.6-3.4%) and flips 0 of 12 leans; only an implausible 1.20 ratio
+    # flips one, on a game whose |xw_net| is 0.0013. v9 and v10 rows are
+    # therefore produced by models that agree on the decision and share a
+    # win-loss line. Isolating v10 would reset the graded sample to zero for
+    # the eighth time in a month and buy nothing.
+    "xw+plat_consol_v9": ("xw+plat_consol_v9", "xw+plat_consol_v10"),
+    "xw+plat_consol_v10": ("xw+plat_consol_v9", "xw+plat_consol_v10"),
 }
 RECORD_TAGS = tuple(
     t.strip() for t in os.environ.get(
@@ -112,7 +125,9 @@ RECORD_TAGS = tuple(
 # (median |xw_net| .036 -> .018); v6 inherits v5's shrinkage, so v5 and v6 share
 # units even though v6 is a fresh RECORD family. v7 changes the estimated K and
 # therefore starts its own scale family. v8 fixes K at 100 for both pools,
-# widening the shrunk distribution and starting another scale family. Pre-v5
+# widening the shrunk distribution and starting another scale family. v10
+# only re-weights a convex combination of the two existing phases, so the
+# delta distribution is unchanged in units. Pre-v5
 # tags are on the older, unshrunk scale. The default isolates any unlisted tag
 # (never mixes scales); list a tag here only to pool it with others that share
 # its units.
@@ -129,8 +144,12 @@ _SCALE_FAMILIES = {
     "xw+plat_consol_v5": ("xw+plat_consol_v5", "xw+plat_consol_v6"),
     "xw+plat_consol_v6": ("xw+plat_consol_v5", "xw+plat_consol_v6"),
     "xw+plat_consol_v7": ("xw+plat_consol_v7",),
-    "xw+plat_consol_v8": ("xw+plat_consol_v8", "xw+plat_consol_v9"),
-    "xw+plat_consol_v9": ("xw+plat_consol_v8", "xw+plat_consol_v9"),
+    "xw+plat_consol_v8": ("xw+plat_consol_v8", "xw+plat_consol_v9",
+                          "xw+plat_consol_v10"),
+    "xw+plat_consol_v9": ("xw+plat_consol_v8", "xw+plat_consol_v9",
+                          "xw+plat_consol_v10"),
+    "xw+plat_consol_v10": ("xw+plat_consol_v8", "xw+plat_consol_v9",
+                           "xw+plat_consol_v10"),
 }
 SCALE_TAGS = tuple(
     t.strip() for t in os.environ.get(
@@ -841,6 +860,28 @@ def relief_pitcher_ids(team_id, role_stats, probable_pid=None):
     return out
 
 
+def bf_per_ip(role):
+    """Measured batters faced per inning from a pitcher's season role line.
+
+    The blend weight has to be a share of plate appearances, not of innings,
+    because xwOBA is a per-PA rate. BF/IP is what converts one to the other and
+    it is observed, not modelled: both terms come from the same season role
+    call, so a pitcher who allows more baserunners shows a higher rate without
+    any on-base proxy standing in for it. Returns None when either term is
+    missing, which degrades the caller to the innings share.
+    """
+    role = role or {}
+    bf = _f(role.get("batters_faced"))
+    apps = _f(role.get("appearances"))
+    avg_ip = _f(role.get("avg_ip_per_appearance"))
+    if bf is None or apps is None or avg_ip is None:
+        return None
+    season_ip = float(avg_ip) * float(apps)
+    if bf <= 0 or season_ip <= 0:
+        return None
+    return float(bf) / season_ip
+
+
 def bullpen_xwoba_aggregate(team_id, probable_pid, pitcher_stat, role_stats,
                             prior, shrink_k):
     """Role-filtered bullpen xwOBA with per-pitcher empirical-Bayes shrinkage.
@@ -868,15 +909,22 @@ def bullpen_xwoba_aggregate(team_id, probable_pid, pitcher_stat, role_stats,
             continue
         shrunk = _shrink_one(xw, bf, prior, shrink_k)
         if shrunk is not None and pd.notna(shrunk):
-            weighted.append((pid, usage_bf, float(shrunk)))
+            weighted.append((pid, usage_bf, float(shrunk), bf_per_ip(role)))
     if len(weighted) < BULLPEN_MIN_PITCHERS:
         return None
-    total_bf = sum(w for _, w, _ in weighted)
+    total_bf = sum(w for _, w, _, _ in weighted)
+    # Pool BF/IP on the same pitchers and the same usage weights that produced
+    # the pool's xwOBA, so the rate describes the innings this bullpen is
+    # actually expected to throw. Pitchers missing a role line are skipped
+    # here without affecting the xwOBA aggregate above.
+    rated = [(w, r) for _, w, _, r in weighted if r is not None]
+    rate_bf = sum(w for w, _ in rated)
     return {
-        "xwOBA": sum(w * x for _, w, x in weighted) / total_bf,
+        "xwOBA": sum(w * x for _, w, x, _ in weighted) / total_bf,
         "pitcher_count": len(weighted),
         "relief_bf": total_bf,
-        "pitcher_ids": tuple(pid for pid, _, _ in weighted),
+        "bf_per_ip": (sum(w * r for w, r in rated) / rate_bf) if rate_bf > 0 else None,
+        "pitcher_ids": tuple(pid for pid, _, _, _ in weighted),
     }
 
 
@@ -977,6 +1025,8 @@ def build_pitching_plans(slate_df, recent_profiles, pitcher_stat,
                 "bullpen_xwOBA": None if bullpen is None else bullpen.get("xwOBA"),
                 "bullpen_pitchers": None if bullpen is None else bullpen.get("pitcher_count"),
                 "bullpen_relief_bf": None if bullpen is None else bullpen.get("relief_bf"),
+                "sp_bf_per_ip": bf_per_ip((roles_by_team.get(tid) or {}).get(pid)),
+                "bp_bf_per_ip": None if bullpen is None else bullpen.get("bf_per_ip"),
             }
             if bullpen is not None:
                 log(
@@ -1811,16 +1861,33 @@ def build_xwoba_matchup(pitchers_df, league_baseline):
 
 
 def sequential_xwoba_phases(b_neutral, b_vs_sp, starter, bullpen, league,
-                            expected_sp_ip):
-    """Return the v9 starter, bullpen, and workload-weighted matchup phases.
+                            expected_sp_ip, sp_bf_per_ip=None, bp_bf_per_ip=None):
+    """Return the v10 starter, bullpen, and workload-weighted matchup phases.
 
     The starter-handedness lineup adjustment belongs only to the starter
     phase. The bullpen phase is neutral until bullpen handedness is modeled.
     A missing bullpen deliberately leaves the full-game matchup undefined.
+
+    The phases are averaged on their share of **plate appearances**, not of
+    innings. Both phase values are per-PA xwOBA rates, so the innings share
+    v9 used was the wrong denominator: a pitcher who allows more baserunners
+    faces more batters per inning, which means the innings share systematically
+    underweights the starter exactly when he is the one being hit. Measured
+    BF/IP for each phase converts innings to PA. When either rate is
+    unavailable the weight falls back to the innings share, which is the same
+    number whenever the two rates are equal -- the degradation is continuous,
+    not a threshold.
     """
     q = np.nan
     if expected_sp_ip is not None and pd.notna(expected_sp_ip):
-        q = float(np.clip(float(expected_sp_ip), 0.0, GAME_INNINGS) / GAME_INNINGS)
+        ip_sp = float(np.clip(float(expected_sp_ip), 0.0, GAME_INNINGS))
+        ip_bp = GAME_INNINGS - ip_sp
+        r_sp, r_bp = _f(sp_bf_per_ip), _f(bp_bf_per_ip)
+        if r_sp is not None and r_bp is not None and r_sp > 0 and r_bp > 0:
+            pa_sp, pa_bp = ip_sp * r_sp, ip_bp * r_bp
+            q = pa_sp / (pa_sp + pa_bp) if (pa_sp + pa_bp) > 0 else np.nan
+        else:
+            q = ip_sp / GAME_INNINGS
     bp_share = 1.0 - q if pd.notna(q) else np.nan
 
     mx_sp = matchup_value(b_vs_sp, starter, "xwOBA", league)
@@ -1876,6 +1943,8 @@ def apply_pitching_plans(matchup_df, pitching_plans, league_baseline):
         ("edge_xwOBA_bp", np.nan),
         ("bullpen_pitchers", np.nan),
         ("bullpen_relief_bf", np.nan),
+        ("sp_bf_per_ip", np.nan),
+        ("bp_bf_per_ip", np.nan),
         ("opener", False),
         ("opener_reason", None),
         ("opener_confidence", None),
@@ -1921,8 +1990,13 @@ def apply_pitching_plans(matchup_df, pitching_plans, league_baseline):
             )
         out.at[idx, "pitching_basis"] = basis
 
+        sp_rate = _f(plan.get("sp_bf_per_ip"))
+        bp_rate = _f(plan.get("bp_bf_per_ip"))
+        out.at[idx, "sp_bf_per_ip"] = sp_rate
+        out.at[idx, "bp_bf_per_ip"] = bp_rate
         phases = sequential_xwoba_phases(
-            b_neutral, b_vs_sp, starter, bullpen, league, expected_ip
+            b_neutral, b_vs_sp, starter, bullpen, league, expected_ip,
+            sp_bf_per_ip=sp_rate, bp_bf_per_ip=bp_rate,
         )
         for col, value in phases.items():
             out.at[idx, col] = value
