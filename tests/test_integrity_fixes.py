@@ -64,9 +64,18 @@ class LedgerLockTests(unittest.TestCase):
             self.assertEqual(set(build_site._record_grades(ledger)["game_pk"]), {10})
         self.assertEqual(
             [label for label, _ in grade_leans._model_family_grades(ledger)],
-            ["v2/v3", "v4", "v5", "v6", "v7", "v8", "v9",
+            ["v2/v3", "v4", "v5", "v6", "v7", "v8", "v9/v10",
              "xw+plat_consol_v1"],
         )
+
+    def test_v9_and_v10_share_one_record_family(self):
+        # v10 re-weights the phase blend from innings share to PA share. A
+        # BF/IP-ratio sweep over 0.95-1.10 flips 0 of 12 leans, so the two
+        # models agree on the decision and pool into one win-loss line.
+        fam = ("xw+plat_consol_v9", "xw+plat_consol_v10")
+        for tag in fam:
+            self.assertEqual(build_site._RECORD_FAMILIES[tag], fam)
+            self.assertEqual(grade_leans._RECORD_FAMILIES[tag], fam)
 
     def test_load_ledger_preserves_market_history(self):
         with tempfile.TemporaryDirectory() as td:
@@ -841,6 +850,63 @@ class SequentialPitchingModelTests(unittest.TestCase):
         self.assertAlmostEqual(all_bp["mx_xwOBA"], all_bp["mx_xwOBA_bp"])
         self.assertEqual(all_sp["sp_share"], 1.0)
         self.assertEqual(all_bp["sp_share"], 0.0)
+
+    def test_pa_share_weight_uses_measured_bf_per_ip(self):
+        # xwOBA is a per-PA rate, so the blend weight is the PA share.
+        ip, r_sp, r_bp = 5.4, 4.60, 4.20
+        p = build_site.sequential_xwoba_phases(
+            .320, .330, .305, .325, self.L, ip,
+            sp_bf_per_ip=r_sp, bp_bf_per_ip=r_bp,
+        )
+        pa_sp, pa_bp = ip * r_sp, (9 - ip) * r_bp
+        self.assertAlmostEqual(p["sp_share"], pa_sp / (pa_sp + pa_bp))
+        self.assertAlmostEqual(p["sp_share"] + p["bp_share"], 1.0)
+        # A starter allowing more baserunners faces more batters per inning, so
+        # the PA share must exceed the innings share he was credited in v9.
+        self.assertGreater(p["sp_share"], ip / 9)
+
+    def test_equal_rates_reproduce_the_innings_share(self):
+        # The correction is centred, not a bias: identical BF/IP on both sides
+        # is exactly v9's weight, so the change degrades continuously.
+        for rate in (3.9, 4.3, 5.0):
+            p = build_site.sequential_xwoba_phases(
+                .320, .330, .305, .325, self.L, 5.4,
+                sp_bf_per_ip=rate, bp_bf_per_ip=rate,
+            )
+            self.assertAlmostEqual(p["sp_share"], 5.4 / 9)
+
+    def test_missing_rate_falls_back_to_innings_share(self):
+        for kw in ({}, {"sp_bf_per_ip": 4.4}, {"bp_bf_per_ip": 4.4},
+                   {"sp_bf_per_ip": 0, "bp_bf_per_ip": 4.4},
+                   {"sp_bf_per_ip": None, "bp_bf_per_ip": None}):
+            p = build_site.sequential_xwoba_phases(
+                .320, .330, .305, .325, self.L, 5.4, **kw)
+            self.assertAlmostEqual(p["sp_share"], 5.4 / 9)
+
+    def test_pa_share_preserves_endpoints(self):
+        # Nine starter innings leaves the bullpen zero PAs whatever the rates.
+        hi = build_site.sequential_xwoba_phases(
+            .320, .330, .305, .325, self.L, 9.0,
+            sp_bf_per_ip=4.6, bp_bf_per_ip=4.0)
+        lo = build_site.sequential_xwoba_phases(
+            .320, .330, .305, .325, self.L, 0.0,
+            sp_bf_per_ip=4.6, bp_bf_per_ip=4.0)
+        self.assertEqual(hi["sp_share"], 1.0)
+        self.assertEqual(lo["sp_share"], 0.0)
+
+    def test_bf_per_ip_from_role_line(self):
+        self.assertAlmostEqual(
+            build_site.bf_per_ip(
+                {"batters_faced": 430, "appearances": 20,
+                 "avg_ip_per_appearance": 5.0}),
+            430 / 100.0)
+        for bad in ({}, None,
+                    {"batters_faced": 0, "appearances": 20,
+                     "avg_ip_per_appearance": 5.0},
+                    {"batters_faced": 430, "appearances": 0,
+                     "avg_ip_per_appearance": 5.0},
+                    {"batters_faced": 430, "appearances": 20}):
+            self.assertIsNone(build_site.bf_per_ip(bad))
 
     def test_no_platoon_delta_matches_v8_blended_pitching_formula(self):
         b, sp, bp, expected_ip = .320, .305, .325, 5.4

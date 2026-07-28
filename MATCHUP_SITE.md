@@ -227,6 +227,50 @@ starter and bullpen xwOBA, expected innings and shares, each phase matchup, the
 sequential matchup/edge, and the pitching basis. v9 starts isolated
 `RECORD_TAGS` and `SCALE_TAGS` families; v8 results remain historical only.
 
+### PA-share phase weighting (v10)
+
+Model version `xw+plat_consol_v10` keeps v9's two phases and changes only the
+weight that averages them. Both `M_SP` and `M_BP` are **per-plate-appearance**
+xwOBA rates, but v9 averaged them on a share of **innings**
+(`q = expected_sp_ip / 9`). Those are different denominators. A pitcher who
+allows more baserunners faces more batters per inning, so the innings share
+systematically underweights the starter in exactly the games where he is the
+one being hit.
+
+v10 converts innings to plate appearances with a **measured** BF/IP for each
+phase, taken from the same season role call the bullpen filter already uses
+(`bf_per_ip` = season batters faced ÷ season innings; no on-base proxy stands
+in for it):
+
+`q = (E[IP_SP]·r_SP) / (E[IP_SP]·r_SP + (9 − E[IP_SP])·r_BP)`
+
+The bullpen's `r_BP` is pooled over the same pitchers and the same usage
+weights that produced the pool's xwOBA. When either rate is unavailable the
+weight falls back to the innings share, which is the identical number whenever
+`r_SP = r_BP` — the degradation is continuous, not a threshold. Endpoints are
+preserved: nine starter innings still leaves the bullpen zero PAs.
+
+`sp_bf_per_ip` and `bp_bf_per_ip` are persisted to the dumps and the ledger, so
+a side's `sp_share` can be re-derived without a rebuild.
+
+**Versioning.** This changes prediction math, so `MODEL_TAG` moves to v10 — but
+both family questions are answered by measurement rather than reflex:
+
+- **`SCALE_TAGS` — pooled with v8/v9.** The weight is a convex combination of
+  the same two phases either way; `|xw_net|` units are unchanged.
+- **`RECORD_TAGS` — pooled with v9.** Sweeping the starter/bullpen BF/IP ratio
+  over 0.95–1.10 on the 2026-07-28 slate moves `xw_net` with sd 0.0004–0.0009
+  against a median `|xw_net|` of 0.0268 (1.6–3.4%) and flips **0 of 12** leans.
+  Only an implausible 1.20 ratio flips one, on a game whose `|xw_net|` is
+  0.0013. v9 and v10 agree on the decision, so they share one win-loss line.
+
+**Honest limit.** The sweep is a bound over plausible BF/IP ratios, not a
+measurement of the realised ratio distribution — the build environment could
+not reach StatsAPI to fetch live role lines. The correction is justified on
+dimensional grounds; with 11 graded rows in the family, the ledger cannot and
+will not resolve whether it improves accuracy. The persisted `*_bf_per_ip`
+columns make the realised ratios auditable from the first live build.
+
 `python compare_v8_v9.py` recalculates the v8 shadow and v9 sequential formula
 from identical persisted inputs, then reports lean flips, `xw_net` changes,
 expected-IP buckets, openers, bullpen-heavy games, market disagreement, and
