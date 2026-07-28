@@ -3233,7 +3233,7 @@ CSS = r"""/* ============================================================
   --shadow:0 1px 2px rgba(16,18,29,.05),0 10px 26px -20px rgba(16,18,29,.28);
   /* Corner-radius scale -- three tiers, no raw px radii anywhere else.
      --r      containers: things that hold other content (card, stat strip,
-              table wrapper, chip, button)
+              table wrapper, button)
      --r-s    inline marks: badges, flags, status tags, percentile bars,
               legend swatches -- anything sitting inside a line of text
      --r-pill true pills: fully-rounded ends, used only where the shape is
@@ -3286,13 +3286,6 @@ body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 var(--sans);
 .lg-notes .wide{grid-column:1/-1}
 .sw{width:11px;height:11px;border-radius:var(--r-s);display:inline-block}
 .sw.warm{background:rgba(var(--warm),.85)} .sw.cool{background:rgba(var(--cool),.85)}
-
-/* chips kept for grades.html summary */
-.chip{flex:1 1 64px;min-width:60px;border:1px solid var(--line-2);border-radius:var(--r);
-  padding:6px 7px 5px;text-align:center;background:transparent}
-.chip .lab{font:600 9px/1 var(--sans);text-transform:uppercase;letter-spacing:.07em;color:var(--muted)}
-.chip .val{font:600 16px/1.15 var(--mono);color:var(--chip-fg);font-variant-numeric:tabular-nums;margin-top:2px}
-.chip .sub{font:400 10px/1 var(--mono);color:var(--muted);margin-top:2px}
 
 .grid{display:flex;flex-direction:column;gap:8px}
 .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
@@ -3565,21 +3558,57 @@ CSS_GRADES = r"""
 .backlink{font:600 12px/1 var(--sans);margin:0 2px 12px}
 .backlink a{color:rgba(var(--lean),1);text-decoration:none}
 .backlink a:hover{text-decoration:underline}
-.gr-summary{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 12px}
-.gr-summary .chip{flex:1 1 110px;background:var(--surface);border-color:var(--line)}
-.gr-note{font:500 11.5px/1.5 var(--mono);color:var(--muted);margin:0 2px 14px}
-.gr-tablewrap{overflow-x:auto;background:var(--surface);border:1px solid var(--line);
-  border-radius:var(--r);box-shadow:var(--shadow)}
-table.gr{border-collapse:collapse;width:100%;min-width:760px;
+
+/* ---------- grades page: masthead ---------- */
+.gr-head{margin:0 2px 13px}
+.gr-h1{font:800 19px/1.15 var(--sans);letter-spacing:-.01em;margin:0 0 5px}
+.gr-lead{font:500 12px/1.55 var(--sans);color:var(--muted);max-width:80ch;margin:0}
+.gr-lead b{color:var(--ink);font-weight:700}
+
+/* ---------- summary: one stat strip, same idiom as a card's SP stat row ---------- */
+.gr-summary{display:flex;flex-wrap:wrap;margin:0 0 9px;background:var(--surface);
+  border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);overflow:hidden}
+.gr-stat{flex:1 1 132px;min-width:0;padding:9px 14px 8px;border-right:1px solid var(--line-2)}
+.gr-stat:last-child{border-right:0}
+.gr-stat .l{font:600 9px/1.4 var(--sans);letter-spacing:.14em;text-transform:uppercase;color:var(--faint)}
+.gr-stat .v{font:600 19px/1.2 var(--mono);font-variant-numeric:tabular-nums;
+  color:var(--chip-fg);margin-top:3px}
+.gr-stat .s{font:400 10.5px/1.35 var(--mono);color:var(--muted);margin-top:2px}
+.gr-stat .v.cool{color:rgba(var(--cool),1)}
+.gr-stat .v.warm{color:rgba(var(--warm),1)}
+.gr-note{font:500 11px/1.55 var(--mono);color:var(--faint);margin:0 2px 14px}
+.gr-note b{color:var(--muted);font-weight:700}
+
+/* ---------- ledger table ---------- */
+/* overflow:clip, not hidden -- `hidden` makes this a scroll container and the
+   sticky column head then sticks to a box with no scrollable overflow, i.e.
+   never. `clip` still rounds off the table corners. */
+.gr-tablewrap{background:var(--surface);border:1px solid var(--line);
+  border-radius:var(--r);box-shadow:var(--shadow);overflow:clip}
+table.gr{border-collapse:collapse;width:100%;table-layout:auto;
   font:500 12px/1.35 var(--mono);font-variant-numeric:tabular-nums}
-table.gr th{font:600 9.5px/1 var(--sans);text-transform:uppercase;letter-spacing:.08em;color:var(--muted);
-  text-align:left;padding:10px;border-bottom:1px solid var(--line);white-space:nowrap;
-  position:sticky;top:0;background:var(--surface)}
-table.gr td{padding:8px 10px;border-bottom:1px solid var(--line-2);white-space:nowrap;vertical-align:top}
-table.gr tr:last-child td{border-bottom:none}
-table.gr tr.void{opacity:.5}
-table.gr .sp{font:400 11px/1.3 var(--mono);color:var(--muted)}
-.wlt{display:inline-block;min-width:16px;text-align:center;font:700 11px/1 var(--mono);
+table.gr th{font:600 9px/1 var(--sans);text-transform:uppercase;letter-spacing:.12em;color:var(--faint);
+  text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);white-space:nowrap;
+  position:sticky;top:0;background:var(--surface);z-index:2}
+table.gr td{padding:9px 12px;border-bottom:1px solid var(--line-2);white-space:nowrap;vertical-align:middle}
+table.gr tbody tr:last-child td{border-bottom:none}
+table.gr tbody tr.gr-row:hover td{background:var(--surface-2)}
+table.gr tr.void td{opacity:.45}
+table.gr .sp{display:block;margin-top:2px;font:400 10.5px/1.3 var(--mono);color:var(--faint)}
+.gr-game{font:650 12.5px/1.3 var(--sans)}
+.gr-game .at{color:var(--faint);font-weight:500}
+
+/* Date group header -- the 300+ rows read as one undifferentiated scroll
+   without it. Sticks under the column head (28px = its padded line box). */
+tr.gr-day th{position:sticky;top:28px;z-index:1;background:var(--surface-2);
+  padding:6px 12px;border-top:1px solid var(--line);border-bottom:1px solid var(--line-2);
+  font:700 10.5px/1.4 var(--mono);letter-spacing:.02em;text-transform:none;color:var(--muted)}
+tr.gr-day .d{color:var(--ink)}
+tr.gr-day .n{color:var(--faint);font-weight:500}
+tr.gr-day .rec{float:right;color:var(--muted)}
+
+/* ---------- badges ---------- */
+.wlt{display:inline-block;min-width:17px;text-align:center;font:700 10.5px/1 var(--mono);
   padding:3px 6px;border-radius:var(--r-s)}
 .wlt.W{color:rgba(var(--cool),1);background:rgba(var(--cool),.12);border:1px solid rgba(var(--cool),.3)}
 .wlt.L{color:rgba(var(--warm),1);background:rgba(var(--warm),.12);border:1px solid rgba(var(--warm),.3)}
@@ -3587,6 +3616,30 @@ table.gr .sp{font:400 11px/1.3 var(--mono);color:var(--muted)}
 .wlt.none{color:var(--faint);background:transparent;border:1px dashed var(--line)}
 .st{font:600 9.5px/1 var(--sans);letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
 .st.void{color:rgba(var(--warm),.9)}
+
+/* ---------- phone: each row becomes a labelled block ----------
+   The table used to carry min-width:760px, so every phone view of the ledger
+   was a horizontal scroll. Cells relabel themselves from data-l instead. */
+@media (max-width:720px){
+  table.gr thead{position:absolute;width:1px;height:1px;margin:-1px;overflow:hidden;
+    clip:rect(0 0 0 0);white-space:nowrap}
+  table.gr,table.gr tbody,table.gr tr,table.gr td,table.gr th{display:block}
+  tr.gr-day th{position:static;top:auto}
+  table.gr tr.gr-row{display:grid;grid-template-columns:minmax(0,1fr) auto;
+    column-gap:10px;row-gap:4px;padding:11px 13px;border-bottom:1px solid var(--line-2)}
+  table.gr tbody tr.gr-row:last-child{border-bottom:0}
+  table.gr tr.gr-row td{border:0;padding:0;white-space:normal}
+  table.gr td.c-game{grid-column:1;grid-row:1;min-width:0}
+  table.gr td.c-res{grid-column:2;grid-row:1;justify-self:end;align-self:start}
+  /* Remaining cells stack full-width under the game, each relabelled from
+     data-l. Fixed label column so the values line up down the block. These
+     need the table.gr prefix to outrank the display:block reset above. */
+  table.gr td.c-lean,table.gr td.c-ml,table.gr td.c-final{
+    grid-column:1/-1;display:flex;align-items:baseline;gap:9px;color:var(--muted)}
+  table.gr td.c-lean::before,table.gr td.c-ml::before,table.gr td.c-final::before{
+    content:attr(data-l);flex:0 0 46px;font:600 8.5px/1.7 var(--sans);
+    letter-spacing:.1em;text-transform:uppercase;color:var(--faint);white-space:nowrap}
+}
 """
 
 THEME_JS = r"""
@@ -3911,18 +3964,62 @@ def _grades_row(r, show_ml=False):
            for c in ("lineup_status_away", "lineup_status_home")):
         proj_mark = (" <span class='muted' title='locked with a projected "
                      "lineup'>°</span>")
-    cells = [
-        _esc(r["game_date"]),
-        (f"{_esc(r['away'])} <span class='muted'>@</span> "
-         f"{_esc(r['home'])}{proj_mark}"
-         f"<br><span class='sp'>{_esc(r.get('away_sp') or '—')} v {_esc(r.get('home_sp') or '—')}</span>"),
-        _lean_cell(r["xw_lean"], r["xw_delta"]),
-    ]
+    game = (f"<span class='gr-game'>{_esc(r['away'])} <span class='at'>@</span> "
+            f"{_esc(r['home'])}</span>{proj_mark}"
+            f"<span class='sp'>{_esc(r.get('away_sp') or '—')} v "
+            f"{_esc(r.get('home_sp') or '—')}</span>")
+    # (class, phone label, html). data-l only surfaces in the stacked phone
+    # layout, so it stays short; the column heads carry the full names. The
+    # slate date is carried by the group header row, not repeated per row.
+    cells = [("c-game", "Game", game),
+             ("c-lean", "Lean", _lean_cell(r["xw_lean"], r["xw_delta"]))]
     if show_ml:
-        cells += [_lean_ml_cell(r, "xw_lean")]
-    cells += [final, _wlt_badge(r["xw_full"])]
-    cls = " class='void'" if status == "void" else ""
-    return f"<tr{cls}>" + "".join(f"<td>{c}</td>" for c in cells) + "</tr>"
+        cells.append(("c-ml", "ML", _lean_ml_cell(r, "xw_lean")))
+    cells += [("c-final", "Final", final),
+              ("c-res", "Result", _wlt_badge(r["xw_full"]))]
+    cls = "gr-row void" if status == "void" else "gr-row"
+    tds = "".join(f"<td class='{c}' data-l='{lab}'>{v}</td>" for c, lab, v in cells)
+    return f"<tr class='{cls}'>{tds}</tr>"
+
+
+def _grades_day_header(date, day, ncols):
+    """Group separator for one slate date: weekday, game count, day record.
+
+    313 rows in one flat tbody read as an undifferentiated scroll; the ledger
+    is naturally keyed by slate date, so the date leads each group instead of
+    repeating in every row."""
+    try:
+        weekday = pd.to_datetime(date).strftime("%a")
+    except Exception:  # noqa: BLE001
+        weekday = ""
+    n = len(day)
+    lab = f"<span class='d'>{_esc(date)}</span>"
+    if weekday:
+        lab += f" <span class='n'>{weekday}</span>"
+    lab += f" <span class='n'>· {n} game{'' if n == 1 else 's'}</span>"
+    # Day record only once something on that date is graded; an all-pending
+    # date would otherwise show a meaningless 0-0.
+    decided = day["xw_full"].isin(["W", "L", "T"]).sum() if "xw_full" in day else 0
+    if decided:
+        lab += f"<span class='rec'>{_rec_parts(day['xw_full'])[0]}</span>"
+    return (f"<tr class='gr-day'><th colspan='{ncols}' scope='colgroup'>"
+            f"{lab}</th></tr>")
+
+
+def _lock_provenance(led):
+    """(verified, unverified) rows for the pregame-lock claim.
+
+    The page asserted every row locked before first pitch. `lock_status` is
+    null on every row that predates the instrumentation, and those rows carry
+    no `snapshot_utc`/`scheduled_start_utc` either, so nothing in the ledger
+    substantiates the claim for them. Report the split instead of asserting
+    the whole."""
+    n = len(led)
+    if "lock_status" not in led.columns:
+        return 0, n
+    verified = int(led["lock_status"].astype("string")
+                   .str.startswith("pregame", na=False).sum())
+    return verified, n - verified
 
 
 def render_grades_html(built_txt):
@@ -3934,30 +4031,29 @@ def render_grades_html(built_txt):
                        "</div></div>")
         return html_document(body, built_txt, title="MLB lean grades")
 
-    n_graded = int((led["status"] == "graded").sum())
     n_pend = int((led["status"] == "pending").sum())
     n_void = int((led["status"] == "void").sum())
-    head = ("<div class='legend'><div class='lg-title'>"
-            f"Grading ledger · {n_graded} graded · {n_pend} pending"
-            + (f" · {n_void} void" if n_void else "")
-            + f" · built {built_txt}<br>"
-            "<em>all rows locked before first pitch</em></div></div>")
+    head = ("<div class='gr-head'><h1 class='gr-h1'>Grading ledger</h1>"
+            "<div class='gr-lead'>Every lean this model has published, graded "
+            f"against the final score. Built {built_txt}.</div></div>")
 
     g = _display_grades(led)
-    chips, notes = [], []
+    stats, notes = [], []
 
-    def chip(lab, val, sub=None):
-        s = f"<div class='sub'>{sub}</div>" if sub else ""
-        chips.append(f"<div class='chip'><div class='lab'>{lab}</div>"
-                     f"<div class='val'>{val}</div>{s}</div>")
+    def stat(lab, val, sub=None, tone=""):
+        s = f"<div class='s'>{sub}</div>" if sub else ""
+        stats.append(f"<div class='gr-stat'><div class='l'>{lab}</div>"
+                     f"<div class='v{(' ' + tone) if tone else ''}'>{val}</div>{s}</div>")
 
     if g.empty:
         summary = "<div class='gr-note'>No graded games yet.</div>"
     else:
-        chip("Graded", str(len(g)), f"{n_pend} pending")
-        b, p = _rec_parts(g["xw_full"]); chip("xwOBA · full", b, p)
+        pend_sub = f"{n_pend} pending" + (f" · {n_void} void" if n_void else "")
+        stat("Graded", str(len(g)), pend_sub)
+        b, p = _rec_parts(g["xw_full"]); stat("xwOBA · full", b, p)
         # vs-market scoreboard (closing DK MLs attached by grade_leans.py via
-        # market_backfill; columns absent until the first market run).
+        # market_backfill; columns absent until the first market run). z leads
+        # the cell -- it is the primary metric, per the note below.
         if "close_p_home" in g.columns and g["close_p_home"].notna().any():
             try:
                 from market_backfill import vs_market_summary
@@ -3967,22 +4063,33 @@ def render_grades_html(built_txt):
                 mkt = {}
             m = mkt.get("xwOBA")
             if m:
-                chip("xwOBA · vs mkt", f"{m['w']}-{m['n'] - m['w']}",
-                     f"z {m['z']:+.2f} · {m['roi_units']:+.2f}u flat")
+                stat("xwOBA · vs mkt", f"z {m['z']:+.2f}",
+                     f"{m['w']}-{m['n'] - m['w']} · {m['roi_units']:+.2f}u flat",
+                     tone="cool" if m["z"] > 0 else "warm")
         notes.append("xwOBA graded full-game vs devigged DK closing ML (ESPN capture); "
-                     "z and flat ROI are the primary metrics.")
-        summary = ("<div class='gr-summary'>" + "".join(chips) + "</div>"
-                   + (f"<div class='gr-note'>{' · '.join(notes)}</div>" if notes else ""))
+                     "z and flat ROI are the primary metrics")
+        # Provenance, not a blanket claim: state how many rows the ledger can
+        # actually show locked pregame.
+        verified, unverified = _lock_provenance(led)
+        lock = f"<b>{verified}</b> of <b>{len(led)}</b> rows carry a pregame lock timestamp"
+        notes.append(lock + (f"; {unverified} legacy rows predate that "
+                             "instrumentation and are unverified"
+                             if unverified else ""))
+        summary = ("<div class='gr-summary'>" + "".join(stats) + "</div>"
+                   + (f"<div class='gr-note'>{'. '.join(notes)}.</div>" if notes else ""))
 
     show_ml = "close_home_ml" in led.columns and led["close_home_ml"].notna().any()
-    heads = (["Date", "Game", "xwOBA lean"]
+    heads = (["Game", "xwOBA lean"]
              + (["xw ML"] if show_ml else [])
              + ["Final", "xw F"])
     led = led.sort_values(["game_date", "game_pk"], ascending=[False, True])
-    rows = "".join(_grades_row(r, show_ml) for _, r in led.iterrows())
+    body = []
+    for date, day in led.groupby("game_date", sort=False):
+        body.append(_grades_day_header(date, day, len(heads)))
+        body += [_grades_row(r, show_ml) for _, r in day.iterrows()]
     table = ("<div class='gr-tablewrap'><table class='gr'><thead><tr>"
              + "".join(f"<th>{h}</th>" for h in heads)
-             + f"</tr></thead><tbody>{rows}</tbody></table></div>")
+             + f"</tr></thead><tbody>{''.join(body)}</tbody></table></div>")
     return html_document(back + head + summary + table, built_txt, title="MLB lean grades")
 
 
