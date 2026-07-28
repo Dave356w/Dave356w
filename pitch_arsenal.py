@@ -71,7 +71,7 @@ _USAGE_COLS = ("pitch_usage", "pitch_percent", "usage", "pitch_usage_pct")
 # Cell shrinkage pseudo-sample. 600 keeps ~15% of a 110-PA cell's deviation,
 # which holds the arm's contribution to a game delta near 0.0036 xwOBA (19% of
 # the median lean) instead of 0.0130 (67%) at K=100.
-MIX_SHRINK_K = 600.0
+MIX_SHRINK_K = 100.0
 
 # Multiplier clamp. A hitter whose surviving deviation implies more than this
 # is a data artifact, not a matchup; the clamp keeps one bad cell from moving
