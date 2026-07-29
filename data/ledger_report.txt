@@ -1,4 +1,4 @@
-LEAN LEDGER — 26 graded games  [xw+plat_consol_v9]
+LEAN LEDGER — 26 graded games  [xw+plat_consol_v9 + xw+plat_consol_v10]
 xwOBA lean   full: 13-13  (0.500)   F5: 10-11-5  (0.476)
 platoon lean full: 11-11  (0.500)   F5: 9-9-4  (0.500)   (reliable-only, n=22)
 xwOBA on same subset  full: 11-11  (0.500)   F5: 8-10-4  (0.444)
