@@ -27,7 +27,8 @@
 #     exit WITHOUT writing index.html, so CI skips the deploy and the last
 #     good page stays live. A legitimate empty slate (off-day) writes a
 #     friendly "no games" page instead (a successful build).
-#   - index.html carries a "built HH:MM ET" line beside the slate date.
+#   - index.html carries a "built HH:MM" line beside the slate date; every
+#     clock on the site is Pacific and the legend is where that is stated.
 # ============================================================
 
 import base64
@@ -2506,7 +2507,7 @@ def clamp(x, a, b):
 def edge_color(edge, ksign=1):
     if edge is None:
         return "var(--faint)"
-    return "rgba(var(--warm),1)" if edge * ksign >= 0 else "rgba(var(--cool),1)"
+    return "rgba(var(--warm-tx),1)" if edge * ksign >= 0 else "rgba(var(--cool-tx),1)"
 
 
 def f3(v):
@@ -2548,9 +2549,9 @@ def _fmt_ml(v):
 def _fmt_pt_clock(dt):
     """Bare wall clock for a game row -- no zone suffix.
 
-    Every first pitch on the page is Pacific and the page says so once, in the
-    legend, rather than repeating ` PT` on every card. The build stamp keeps
-    its suffix: that one is a timestamp, not a schedule."""
+    Every clock on the page is Pacific and the page says so once, in the
+    legend, rather than repeating ` PT` on every card. The build stamp dropped
+    its suffix too -- one zone, stated once, is the whole convention."""
     return dt.strftime("%I:%M %p").lstrip("0")
 
 
@@ -3447,6 +3448,43 @@ def _legend_guide():
         "</div></div>")
 
 
+FONT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "fonts")
+# (family, file, weight range). Both are variable fonts subset to the glyphs
+# this site actually emits -- ASCII, Latin-1 and Latin Extended-A (the roster
+# carries Jose, Pena, Suarez, Munoz...) plus the exact symbol set grepped out
+# of this module. Full latin subsets were 35KB/31KB; these are 27KB/28KB.
+_FONT_FACES = (
+    ("Archivo", "archivo-subset.woff2", "100 900"),
+    ("JetBrains Mono", "jetbrains-mono-subset.woff2", "400 800"),
+)
+
+
+def font_face_css():
+    """`@font-face` rules with the woff2 payloads inlined as data URIs.
+
+    The page loads no external resources -- logos are already inlined the same
+    way -- and keeping the fonts local holds that. A missing or unreadable file
+    degrades to the system stack behind it in `--sans`/`--mono` rather than
+    failing the build: the type gets plainer, the numbers still line up, and
+    the slate still ships. Licences sit next to the files in assets/fonts/
+    (both OFL).
+    """
+    out = []
+    for family, fname, wght in _FONT_FACES:
+        path = os.path.join(FONT_DIR, fname)
+        try:
+            with open(path, "rb") as fh:
+                b64 = base64.b64encode(fh.read()).decode("ascii")
+        except OSError as e:  # noqa: BLE001
+            log(f"font {fname} unavailable, falling back to system stack: {e!r}")
+            continue
+        out.append(
+            f"@font-face{{font-family:'{family}';font-style:normal;"
+            f"font-weight:{wght};font-display:swap;"
+            f"src:url(data:font/woff2;base64,{b64}) format('woff2-variations')}}")
+    return "".join(out)
+
+
 CSS = r"""/* ============================================================
    MLB matchup leans -- box-score / scout-sheet tokens
    ============================================================ */
@@ -3466,10 +3504,38 @@ CSS = r"""/* ============================================================
   --warm:198,84,44;             /* ember  -- offense-favorable  */
   --cool:52,116,168;            /* steel  -- pitcher-favorable  */
   --lean:176,124,16;            /* amber  -- lean pill / links  */
+  /* Text-only twins of the three accents. The accents above were picked as
+     fills and borders, but they are also set as `color` on the tier pills,
+     the LIVE badge, the read-line emphasis, the verdict label and the ledger
+     badges -- all 9-13.5px, and most of them sitting on a .08-.12 tint of
+     their own hue, which lifts the background toward the text. Measured in
+     headless Chromium at 390px over the composited tint: warm 3.94:1 on the
+     `.B` strip and 4.01:1 on its own tier tint, cool 3.90:1 under the LIVE
+     badge, lean 3.12:1 on the amber verdict -- all short of 4.5:1, in light
+     only (dark passed everywhere, so there the twins alias the accents).
+     These are the same hue and saturation darkened in HLS until every
+     background each one lands on -- both bare surfaces and a .08/.10/.12
+     wash of its own hue over either -- clears 4.5:1. The .12 case is the
+     binding one; solving against .08 alone left the ledger W/L badges at
+     3.86:1. Use them wherever an accent
+     is the `color`; keep the base tokens for fills, borders and bar hues so
+     the percentile bars and legend swatches do not shift.
+     tests/test_casual_redesign.py measures both. */
+  --warm-tx:164,69,36;
+  --cool-tx:46,103,149;
+  --lean-tx:130,92,12;
   --amberbg:246,196,86;
   --chip-fg:#1b1e25;
-  --mono:ui-monospace,"SF Mono","Cascadia Mono",Menlo,Consolas,monospace;
-  --sans:system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;
+  /* Archivo (text) and JetBrains Mono (every number on the page) are inlined
+     by font_face_css() as subset variable woff2. The system stacks stay behind
+     them as the fallback if a font file ever goes missing. Archivo is a
+     grotesque with enough width and x-height to stay legible at the label
+     sizes; JetBrains Mono was picked for its digits -- slashed zero, a 1 with
+     a foot, unmistakable 6/8/9 -- because scores, odds, xwOBA and percentiles
+     are the whole point of the page and they were rendering in whatever
+     generic mono the OS happened to supply. */
+  --mono:"JetBrains Mono",ui-monospace,"SF Mono","Cascadia Mono",Menlo,Consolas,monospace;
+  --sans:"Archivo",system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;
   --shadow:0 1px 2px rgba(16,18,29,.05),0 10px 26px -20px rgba(16,18,29,.28);
   /* Corner-radius scale -- three tiers, no raw px radii anywhere else.
      --r      containers: things that hold other content (card, stat strip,
@@ -3488,6 +3554,9 @@ CSS = r"""/* ============================================================
   --bg:#0f1418; --surface:#171d24; --surface-2:#131920; --ink:#e7ecef;
   --muted:#96a2ad; --faint:#7f8b97; --line:#242e38; --line-2:#1c242c;
   --warm:236,122,72; --cool:96,158,208; --lean:244,196,96; --amberbg:244,196,96;
+  /* Dark already clears 4.5:1 on every accent-as-text pair, so the text
+     twins alias the accents rather than introducing a second palette. */
+  --warm-tx:236,122,72; --cool-tx:96,158,208; --lean-tx:244,196,96;
   --chip-fg:#e7ecef;
   --shadow:0 1px 2px rgba(0,0,0,.45),0 14px 32px -22px rgba(0,0,0,.8);
 }}
@@ -3495,6 +3564,9 @@ html[data-theme="dark"]{
   --bg:#0f1418; --surface:#171d24; --surface-2:#131920; --ink:#e7ecef;
   --muted:#96a2ad; --faint:#7f8b97; --line:#242e38; --line-2:#1c242c;
   --warm:236,122,72; --cool:96,158,208; --lean:244,196,96; --amberbg:244,196,96;
+  /* Dark already clears 4.5:1 on every accent-as-text pair, so the text
+     twins alias the accents rather than introducing a second palette. */
+  --warm-tx:236,122,72; --cool-tx:96,158,208; --lean-tx:244,196,96;
   --chip-fg:#e7ecef;
   --shadow:0 1px 2px rgba(0,0,0,.45),0 14px 32px -22px rgba(0,0,0,.8);
 }
@@ -3505,27 +3577,27 @@ html[data-theme="dark"]{
    the empty pregame badge rendered as a bare bordered chip above the time on
    every unstarted card -- and score_refresh_js re-hides it the same way. */
 [hidden]{display:none!important}
-body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 var(--sans);
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.45 var(--sans);
   -webkit-font-smoothing:antialiased;padding:20px 16px 60px}
 .mx-wrap{max-width:1060px;margin:0 auto}
 
 .topbar{display:flex;align-items:baseline;justify-content:space-between;gap:12px;
   border-bottom:2px solid var(--ink);padding-bottom:10px;margin-bottom:12px}
-.brand{font:800 16px/1 var(--sans);letter-spacing:.13em;text-transform:uppercase}
+.brand{font:800 18px/1 var(--sans);letter-spacing:.13em;text-transform:uppercase}
 .theme{appearance:none;border:1px solid var(--line);background:var(--surface);color:var(--muted);
-  font:600 12px/1 var(--sans);padding:7px 11px;border-radius:var(--r);cursor:pointer}
+  font:600 14px/1 var(--sans);padding:7px 11px;border-radius:var(--r);cursor:pointer}
 .theme:hover{color:var(--ink)}
 .theme:focus-visible{outline:2px solid rgba(var(--lean),1);outline-offset:2px}
 
 .legend{margin:2px 2px 14px}
-.lg-title{font-size:13px;font-weight:650;letter-spacing:.01em;margin-bottom:7px}
+.lg-title{font-size:14.5px;font-weight:650;letter-spacing:.01em;margin-bottom:7px}
 .lg-title em{font-style:normal;color:var(--muted);font-weight:500}
-.lg-lead{font-size:11.5px;line-height:1.5;color:var(--muted);max-width:82ch;margin-bottom:9px}
+.lg-lead{font-size:13px;line-height:1.5;color:var(--muted);max-width:82ch;margin-bottom:9px}
 .lg-lead b{color:var(--ink);font-weight:700}
-.lg-keys{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:11.5px;color:var(--muted)}
+.lg-keys{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:13px;color:var(--muted)}
 .lg-keys .k{display:inline-flex;align-items:center;gap:6px}
 .lg-notes{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px 18px;
-  margin-top:8px;font-size:11px;line-height:1.4;color:var(--faint)}
+  margin-top:8px;font-size:13px;line-height:1.4;color:var(--faint)}
 .lg-notes b{color:var(--muted);font-weight:700}
 .lg-notes i{font-style:normal;color:var(--muted)}
 .lg-notes .wide{grid-column:1/-1}
@@ -3557,28 +3629,28 @@ body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 var(--sans);
 .summary-team .clogo{width:42px;height:42px;margin:0;vertical-align:middle}
 .summary-logo-fallback{display:grid;width:42px;height:42px;place-items:center;
   border:1px solid var(--line);border-radius:var(--r-pill);background:var(--surface-2);
-  color:var(--muted);font:800 15px/1 var(--sans)}
+  color:var(--muted);font:800 16.5px/1 var(--sans)}
 .summary-club{grid-area:club;min-width:0;overflow:hidden;text-overflow:ellipsis;
-  white-space:nowrap;font:750 15px/1.15 var(--sans)}
+  white-space:nowrap;font:750 16.5px/1.15 var(--sans)}
 .summary-team.home .summary-club{text-align:right}
 .summary-center{display:flex;min-width:0;flex-direction:column;align-items:center;
   justify-content:center;gap:4px;text-align:center}
-.summary-time{font:800 16px/1 var(--mono);font-variant-numeric:tabular-nums}
-.summary-market{font:600 11px/1.1 var(--mono);color:var(--muted);
+.summary-time{font:800 18px/1 var(--mono);font-variant-numeric:tabular-nums}
+.summary-market{font:600 13px/1.1 var(--mono);color:var(--muted);
   font-variant-numeric:tabular-nums}
 .summary-chevron{position:absolute;right:13px;top:50%;color:var(--faint);
-  font:800 16px/1 var(--sans);transform:translateY(-50%);
+  font:800 18px/1 var(--sans);transform:translateY(-50%);
   transition:transform .16s ease,color .16s ease}
 .game-card[open]>.game-summary .summary-chevron{
   color:var(--ink);transform:translateY(-50%) rotate(180deg)}
-.teams .team-meta{font:600 11px/1 var(--mono);color:var(--muted);letter-spacing:0;
+.teams .team-meta{font:600 13px/1 var(--mono);color:var(--muted);letter-spacing:0;
   grid-area:meta;margin:0;vertical-align:middle;white-space:nowrap}
-.teams .score{font-size:16px;font-weight:800;color:var(--ink)}
-.game-no{font:700 11px/1 var(--mono);color:var(--muted);vertical-align:middle}
+.teams .score{font-size:18px;font-weight:800;color:var(--ink)}
+.game-no{font:700 13px/1 var(--mono);color:var(--muted);vertical-align:middle}
 .game-state{display:inline-block;padding:3px 6px;border:1px solid var(--line);
-  border-radius:var(--r-s);font:750 9px/1 var(--sans);letter-spacing:.08em;
+  border-radius:var(--r-s);font:750 12px/1 var(--sans);letter-spacing:.08em;
   vertical-align:middle;color:var(--muted);background:var(--surface-2)}
-.game-state.live{color:rgba(var(--cool),1);border-color:rgba(var(--cool),.35);
+.game-state.live{color:rgba(var(--cool-tx),1);border-color:rgba(var(--cool),.35);
   background:rgba(var(--cool),.10)}
 
 /* Base-out state: three bases on a diamond over three out dots, the scoreboard
@@ -3607,9 +3679,9 @@ body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 var(--sans);
 .bo-sr{position:absolute;width:1px;height:1px;margin:-1px;padding:0;
   border:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 .detail-context{padding:7px 16px;border-bottom:1px solid var(--line-2);
-  color:var(--muted);font:500 11px/1.3 var(--sans)}
+  color:var(--muted);font:500 13px/1.3 var(--sans)}
 .card-note{display:flex;flex-direction:column;gap:4px;padding:14px 16px 16px;color:var(--muted)}
-.card-note b{color:var(--ink);font-size:13px}.card-note span{font-size:12px}
+.card-note b{color:var(--ink);font-size:14.5px}.card-note span{font-size:14px}
 
 /* ---------- market strip ---------- */
 /* Two stacked rows: the four odds numbers, then the verdict. .modds never
@@ -3620,10 +3692,10 @@ body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 var(--sans);
 .mcell{flex:1 1 0;min-width:0;display:flex;flex-direction:column;
   justify-content:space-between;padding:7px 16px;border-right:1px solid var(--line-2)}
 .mcell:last-child{border-right:0}
-.mcell .l,.verdict .l{font:600 9px/1.4 var(--sans);letter-spacing:.14em;
+.mcell .l,.verdict .l{font:600 12px/1.4 var(--sans);letter-spacing:.14em;
   text-transform:uppercase;color:var(--faint)}
-.mcell .v{font:500 13px/1.4 var(--mono);font-variant-numeric:tabular-nums}
-.mcell .v .mv{color:var(--faint);font-size:11px}
+.mcell .v{font:500 14.5px/1.4 var(--mono);font-variant-numeric:tabular-nums}
+.mcell .v .mv{color:var(--faint);font-size:13px}
 
 /* ---------- two sides ---------- */
 .sides{display:grid;grid-template-columns:1fr 1fr}
@@ -3641,30 +3713,30 @@ body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 var(--sans);
 
 /* SP block */
 .sp .who{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
-.sp .nm{font:700 16px/1.2 var(--sans)}
+.sp .nm{font:700 18px/1.2 var(--sans)}
 .player-link{color:inherit;text-decoration:underline;
   text-decoration-color:rgba(var(--lean),.5);text-decoration-thickness:1px;
   text-underline-offset:2px}
-.player-link:hover{color:rgba(var(--lean),1);text-decoration-color:currentColor}
+.player-link:hover{color:rgba(var(--lean-tx),1);text-decoration-color:currentColor}
 .player-link:focus-visible{
   outline:2px solid rgba(var(--lean),1);outline-offset:2px}
-.hand{font:500 10px/1.4 var(--mono);color:var(--muted);border:1px solid var(--line);border-radius:var(--r-s);padding:0 4px}
-.sp .role{font-size:11px;color:var(--faint);margin-top:1px}
+.hand{font:500 12.5px/1.4 var(--mono);color:var(--muted);border:1px solid var(--line);border-radius:var(--r-s);padding:0 4px}
+.sp .role{font-size:13px;color:var(--faint);margin-top:1px}
 .spstats{display:flex;margin-top:8px;border:1px solid var(--line-2);border-radius:var(--r);overflow:hidden}
 .stat{flex:1;padding:6px 8px 5px;border-right:1px solid var(--line-2);min-width:0}
 .stat:last-child{border-right:0}
-.stat .l{font:600 9px/1.4 var(--sans);letter-spacing:.1em;text-transform:uppercase;color:var(--muted);white-space:nowrap}
-.stat .v{font:500 14px/1.3 var(--mono);font-variant-numeric:tabular-nums}
-.stat .s{font:400 10px/1.3 var(--mono);color:var(--muted)}
+.stat .l{font:600 12px/1.4 var(--sans);letter-spacing:.1em;text-transform:uppercase;color:var(--muted);white-space:nowrap}
+.stat .v{font:500 16px/1.3 var(--mono);font-variant-numeric:tabular-nums}
+.stat .s{font:400 12.5px/1.3 var(--mono);color:var(--muted)}
 /* Pills on the starter's `.who` line -- the tier word and the flags -- share
    one type treatment so they read as one family. Size, tracking, case and box
    metrics live here and nowhere else; every rule below adds colour only. The
    `.tier` accents sit further down with the percentile bars. Spacing comes
    from `.sp .who`'s 8px gap: no pill carries its own margin. */
-.tier,.flag{font:600 9.5px/1.4 var(--sans);letter-spacing:.06em;text-transform:uppercase;
+.tier,.flag{font:600 12px/1.4 var(--sans);letter-spacing:.06em;text-transform:uppercase;
   border-radius:var(--r-s);padding:1px 6px;white-space:nowrap}
 .flag{color:var(--muted);border:1px solid var(--line)}
-.flag.warn{color:rgba(var(--warm),1);border-color:rgba(var(--warm),.45)}
+.flag.warn{color:rgba(var(--warm-tx),1);border-color:rgba(var(--warm),.45)}
 .flag.mute{color:var(--faint)}
 
 /* ---------- lineup: order rail + shared-axis edge bars ---------- */
@@ -3673,26 +3745,26 @@ details.lineup summary{cursor:pointer;list-style:none;display:flex;align-items:b
   padding:8px 0 6px;user-select:none}
 details.lineup summary::-webkit-details-marker{display:none}
 details.lineup summary:focus-visible{outline:2px solid rgba(var(--lean),1);outline-offset:2px}
-summary .tl{font:700 11px/1.4 var(--sans);letter-spacing:.12em;text-transform:uppercase}
-summary .st{font:600 10px/1.4 var(--sans);letter-spacing:.08em;border-radius:var(--r-s);padding:1px 6px}
-summary .st.posted{color:rgba(var(--cool),1);border:1px solid rgba(var(--cool),.45)}
-summary .st.partial{color:rgba(var(--lean),1);border:1px solid rgba(var(--amberbg),.5)}
+summary .tl{font:700 13px/1.4 var(--sans);letter-spacing:.12em;text-transform:uppercase}
+summary .st{font:600 12.5px/1.4 var(--sans);letter-spacing:.08em;border-radius:var(--r-s);padding:1px 6px}
+summary .st.posted{color:rgba(var(--cool-tx),1);border:1px solid rgba(var(--cool),.45)}
+summary .st.partial{color:rgba(var(--lean-tx),1);border:1px solid rgba(var(--amberbg),.5)}
 summary .st.projected{color:var(--faint);border:1px solid var(--line)}
-summary .lw{margin-left:auto;font:500 11px/1.4 var(--mono);color:var(--muted);font-variant-numeric:tabular-nums}
-summary .chev{font-size:10px;color:var(--faint);transition:transform .12s}
+summary .lw{margin-left:auto;font:500 13px/1.4 var(--mono);color:var(--muted);font-variant-numeric:tabular-nums}
+summary .chev{font-size:12.5px;color:var(--faint);transition:transform .12s}
 details[open] summary .chev{transform:rotate(90deg)}
 @media (prefers-reduced-motion:reduce){summary .chev{transition:none}}
 
 .lu-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
 table.lu{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
-table.lu th{font:600 9px/1.4 var(--sans);letter-spacing:.1em;text-transform:uppercase;color:var(--faint);
+table.lu th{font:600 12px/1.4 var(--sans);letter-spacing:.1em;text-transform:uppercase;color:var(--faint);
   text-align:right;padding:2px 6px 4px;border-bottom:1px solid var(--line-2);white-space:nowrap}
-table.lu td{font:400 12px/1.4 var(--mono);text-align:right;padding:4px 6px;
+table.lu td{font:400 14px/1.4 var(--mono);text-align:right;padding:4px 6px;
   border-bottom:1px solid var(--line-2);white-space:nowrap}
 table.lu tr:last-child td{border-bottom:0}
-td.ord{font-size:11px;color:var(--faint);width:26px;text-align:center;border-right:1px solid var(--line-2)}
-td.pos{color:var(--muted);font-size:10px}
-td .pa{color:var(--faint);font-size:10px}
+td.ord{font-size:13px;color:var(--faint);width:26px;text-align:center;border-right:1px solid var(--line-2)}
+td.pos{color:var(--muted);font-size:12.5px}
+td .pa{color:var(--faint);font-size:12.5px}
 td.na{color:var(--faint)}
 tr.low td{color:var(--muted)}
 
@@ -3702,53 +3774,53 @@ td.bar{width:86px;padding:4px 8px 4px 2px}
    Card layer: percentile bars, plain-language read, verdict, and the
    full model machinery (always shown).
    ============================================================ */
-.matchlab{font:600 9.5px/1.4 var(--sans);letter-spacing:.1em;text-transform:uppercase;
+.matchlab{font:600 12px/1.4 var(--sans);letter-spacing:.1em;text-transform:uppercase;
   color:var(--faint);margin-bottom:6px}
-.read{margin:0;padding:12px 16px;font:500 13.5px/1.5 var(--sans);color:var(--ink);
+.read{margin:0;padding:12px 16px;font:500 16px/1.5 var(--sans);color:var(--ink);
   border-bottom:1px solid var(--line-2)}
 .read b{font-weight:700}
-.read .warmtx{color:rgba(var(--warm),1)} .read .cooltx{color:rgba(var(--cool),1)}
+.read .warmtx{color:rgba(var(--warm-tx),1)} .read .cooltx{color:rgba(var(--cool-tx),1)}
 
 /* percentile slider (fill length = percentile; hue = whose favor) */
 .sl{display:inline-block;width:88px;height:9px;border-radius:var(--r-s);background:var(--surface-2);
   border:1px solid var(--line-2);vertical-align:middle;overflow:hidden;position:relative}
 .sl i{display:block;height:100%;border-radius:var(--r-s) 0 0 var(--r-s)}
 .sl.h i{background:rgba(var(--warm),.85)} .sl.p i{background:rgba(var(--cool),.85)}
-.pn{font:600 11px/1 var(--mono);margin-left:8px;font-variant-numeric:tabular-nums;color:var(--muted)}
+.pn{font:600 13px/1 var(--mono);margin-left:8px;font-variant-numeric:tabular-nums;color:var(--muted)}
 
 /* starter percentile bars + quality tier */
 .sp-bars{margin-top:9px}
 .spct{display:flex;align-items:center;gap:9px;margin-top:6px}
-.spct .lab{font:600 9.5px/1.4 var(--sans);letter-spacing:.06em;text-transform:uppercase;
+.spct .lab{font:600 12px/1.4 var(--sans);letter-spacing:.06em;text-transform:uppercase;
   color:var(--muted);min-width:64px}
 /* `.tier` type + box metrics are shared with `.flag` up in the SP block. */
-.tier.elite{color:rgba(var(--cool),1);border:1px solid rgba(var(--cool),.5);background:rgba(var(--cool),.10)}
+.tier.elite{color:rgba(var(--cool-tx),1);border:1px solid rgba(var(--cool),.5);background:rgba(var(--cool),.10)}
 .tier.solid{color:var(--muted);border:1px solid var(--line)}
-.tier.below{color:rgba(var(--warm),1);border:1px solid rgba(var(--warm),.5);background:rgba(var(--warm),.08)}
+.tier.below{color:rgba(var(--warm-tx),1);border:1px solid rgba(var(--warm),.5);background:rgba(var(--warm),.08)}
 
 /* spotlight (top bats by percentile) */
 .spot{display:flex;flex-wrap:wrap;align-items:baseline;gap:5px 8px;margin:12px 0 2px}
-.spot .sl-lab{font:600 9.5px/1.4 var(--sans);letter-spacing:.1em;text-transform:uppercase;color:var(--faint)}
-.spot .pill{font:600 11px/1.3 var(--mono);color:var(--ink);background:var(--surface-2);
+.spot .sl-lab{font:600 12px/1.4 var(--sans);letter-spacing:.1em;text-transform:uppercase;color:var(--faint)}
+.spot .pill{font:600 13px/1.3 var(--mono);color:var(--ink);background:var(--surface-2);
   border:1px solid var(--line-2);border-radius:var(--r-pill);padding:2px 9px;font-variant-numeric:tabular-nums}
-.spot .pill b{color:rgba(var(--warm),1)}
+.spot .pill b{color:rgba(var(--warm-tx),1)}
 
 /* model-vs-market verdict — its own full-width row beneath the odds, at every
    width. The prose grows downward instead of stealing width from the numbers. */
 .verdict{padding:7px 16px;border-top:1px solid var(--line-2);border-left:3px solid var(--line)}
-.verdict .l{color:var(--muted)} .verdict .vt{font:600 12px/1.4 var(--sans);color:var(--muted);margin-top:2px}
+.verdict .l{color:var(--muted)} .verdict .vt{font:600 14px/1.4 var(--sans);color:var(--muted);margin-top:2px}
 .verdict.edge{border-left-color:rgba(var(--lean),1);background:rgba(var(--amberbg),.10)}
-.verdict.edge .l{color:rgba(var(--lean),1)} .verdict.edge .vt{color:var(--ink)}
+.verdict.edge .l{color:rgba(var(--lean-tx),1)} .verdict.edge .vt{color:var(--ink)}
 
 /* hitter row: percentile column + name cell */
 td.pct{width:150px;white-space:nowrap}
 table.lu td.nm,table.lu th.nm,table.lu td.pos{text-align:left}
 /* Qualified so it outranks `table.lu td`'s mono face (0,1,2): hitter names are
    sans, the numbers around them stay mono. A bare `td.nm` never won this. */
-table.lu td.nm{font:400 12.5px/1.4 var(--sans);max-width:170px;
+table.lu td.nm{font:400 14px/1.4 var(--sans);max-width:170px;
   overflow:hidden;text-overflow:ellipsis}
-td.nm .b{font:400 9px/1 var(--mono);color:var(--muted);margin-left:4px}
-td.nm .adv{color:rgba(var(--warm),1);font-size:10px;margin-left:2px}
+td.nm .b{font:400 12px/1 var(--mono);color:var(--muted);margin-left:4px}
+td.nm .adv{color:rgba(var(--warm-tx),1);font-size:12.5px;margin-left:2px}
 
 /* Model machinery — always shown (analyst is the default and only view). The
    per-element display types match how the old Analyst toggle revealed them. */
@@ -3773,7 +3845,13 @@ tr.mach{display:table-row}
   /* Tighter chrome: the card gutters, not the content, give up the width. */
   body{padding:14px 10px 44px}
   .game-summary{min-height:82px;padding:10px 10px}
-  .teams{grid-template-columns:minmax(0,1fr) 82px minmax(0,1fr);
+  /* Centre column holds the first-pitch time on one line. At the Comfortable
+     scale "7:05 PM ET" measures 84px in JetBrains Mono 14px (headless
+     Chromium), so the old 82px wrapped it onto two rows on every unstarted
+     card. 92px clears it with slack for a longer zone label; at 320px that
+     still leaves 88px a side, and the widest thing a side carries is a 30px
+     logo plus a three-letter club. */
+  .teams{grid-template-columns:minmax(0,1fr) 92px minmax(0,1fr);
     gap:7px;padding-right:17px}
   .summary-team{gap:2px 6px}
   .summary-team.away{grid-template-columns:30px minmax(0,1fr);
@@ -3783,21 +3861,21 @@ tr.mach{display:table-row}
   .summary-team.away .team-meta{justify-self:start}
   .summary-team.home .team-meta{justify-self:end;text-align:right}
   .summary-team .clogo,.summary-logo-fallback{width:30px;height:30px}
-  .summary-logo-fallback{font-size:12px}
-  .summary-club{font-size:12.5px}
-  .teams .team-meta{font-size:9.5px}
-  .teams .score{font-size:14px}
+  .summary-logo-fallback{font-size:14px}
+  .summary-club{font-size:14px}
+  .teams .team-meta{font-size:12px}
+  .teams .score{font-size:16px}
   .summary-center{gap:3px}
-  .summary-time{font-size:12.5px}
-  .summary-market{font-size:9.5px}
+  .summary-time{font-size:14px;white-space:nowrap}
+  .summary-market{font-size:12px}
   .summary-chevron{right:6px}
   .detail-context{padding:7px 12px}
   .read{padding:10px 12px}
   .side{padding:10px 12px 12px}
   .mcell{padding:6px 7px}
-  .mcell .l{font-size:8px;letter-spacing:.04em}
-  .mcell .v{font-size:12px}
-  .mcell .v .mv{display:block;font-size:9.5px}
+  .mcell .l{font-size:12px;letter-spacing:.04em}
+  .mcell .v{font-size:14px}
+  .mcell .v .mv{display:block;font-size:12px}
   .verdict{padding:7px 12px}
   .lg-notes{grid-template-columns:1fr}
   .lg-notes .wide{grid-column:auto}
@@ -3813,43 +3891,63 @@ tr.mach{display:table-row}
   table.lu td.nm{max-width:none;white-space:normal}
   td.ord,table.lu th:first-child{width:18px;padding-left:0}
   td.pct{width:auto}
-  td.pos{font-size:9.5px}
+  td.pos{font-size:12px}
   .sl{width:46px}
-  .pn{margin-left:5px;font-size:10px}
+  .pn{margin-left:5px;font-size:12.5px}
+}
+
+/* ============================================================
+   Touch targets (pointer axis, not width)
+   ------------------------------------------------------------
+   Measured in headless Chromium at 390px: the theme button rendered 28px
+   tall and every lineup disclosure 32px, against a 44px floor (iOS HIG) /
+   48dp (Material). The collapsed game row already clears it at 82px.
+   Gated on `pointer:coarse` rather than a width breakpoint because it is
+   the input device, not the viewport, that sets the floor -- a touch laptop
+   at 1200px needs it and a 400px desktop window does not. Padding does the
+   growing, so the type and the layout are untouched.
+   ============================================================ */
+@media (pointer:coarse){
+  .theme{min-height:44px;padding:7px 14px}
+  details.lineup summary{padding-top:14px;padding-bottom:12px}
 }
 """
 
 CSS_GRADES = r"""
 .gradestrip{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 14px;margin:0 2px 16px;
   padding:10px 14px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
-  font:600 12px/1.4 var(--mono);color:var(--ink);font-variant-numeric:tabular-nums}
-.gradestrip .lab{font:600 9.5px/1 var(--sans);text-transform:uppercase;letter-spacing:.09em;color:var(--muted)}
+  font:600 14px/1.4 var(--mono);color:var(--ink);font-variant-numeric:tabular-nums}
+.gradestrip .lab{font:600 12px/1 var(--sans);text-transform:uppercase;letter-spacing:.09em;color:var(--muted)}
 .gradestrip .muted{color:var(--muted);font-weight:500}
-.gradestrip a{color:rgba(var(--lean),1);text-decoration:none;margin-left:auto;font:600 12px/1 var(--sans);white-space:nowrap}
+.gradestrip a{color:rgba(var(--lean-tx),1);text-decoration:none;margin-left:auto;font:600 14px/1 var(--sans);white-space:nowrap}
 .gradestrip a:hover{text-decoration:underline}
 
-.backlink{font:600 12px/1 var(--sans);margin:0 2px 12px}
-.backlink a{color:rgba(var(--lean),1);text-decoration:none}
+.backlink{font:600 14px/1 var(--sans);margin:0 2px 12px}
+.backlink a{color:rgba(var(--lean-tx),1);text-decoration:none}
 .backlink a:hover{text-decoration:underline}
 
 /* ---------- grades page: masthead ---------- */
 .gr-head{margin:0 2px 13px}
 .gr-h1{font:800 19px/1.15 var(--sans);letter-spacing:-.01em;margin:0 0 5px}
-.gr-lead{font:500 12px/1.55 var(--sans);color:var(--muted);max-width:80ch;margin:0}
+.gr-lead{font:500 14px/1.55 var(--sans);color:var(--muted);max-width:80ch;margin:0}
 .gr-lead b{color:var(--ink);font-weight:700}
+/* `9:34 PM · 2026-07-28` is one token. Left to wrap it breaks at the
+   date's own hyphen, so a phone renders `2026-` over `07-28`. */
+.gr-lead .stamp{white-space:nowrap}
 
 /* ---------- summary: one stat strip, same idiom as a card's SP stat row ---------- */
 .gr-summary{display:flex;flex-wrap:wrap;margin:0 0 9px;background:var(--surface);
   border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);overflow:hidden}
 .gr-stat{flex:1 1 132px;min-width:0;padding:9px 14px 8px;border-right:1px solid var(--line-2)}
 .gr-stat:last-child{border-right:0}
-.gr-stat .l{font:600 9px/1.4 var(--sans);letter-spacing:.14em;text-transform:uppercase;color:var(--faint)}
+.gr-stat .l{font:600 12px/1.4 var(--sans);letter-spacing:.14em;text-transform:uppercase;color:var(--faint)}
 .gr-stat .v{font:600 19px/1.2 var(--mono);font-variant-numeric:tabular-nums;
   color:var(--chip-fg);margin-top:3px}
-.gr-stat .s{font:400 10.5px/1.35 var(--mono);color:var(--muted);margin-top:2px}
-.gr-stat .v.cool{color:rgba(var(--cool),1)}
-.gr-stat .v.warm{color:rgba(var(--warm),1)}
-.gr-note{font:500 11px/1.55 var(--mono);color:var(--faint);margin:0 2px 14px}
+.gr-stat .s{font:400 12.5px/1.35 var(--sans);font-variant-numeric:tabular-nums;
+  color:var(--muted);margin-top:2px}
+.gr-stat .v.cool{color:rgba(var(--cool-tx),1)}
+.gr-stat .v.warm{color:rgba(var(--warm-tx),1)}
+.gr-note{font:500 13px/1.55 var(--sans);color:var(--faint);margin:0 2px 14px}
 .gr-note b{color:var(--muted);font-weight:700}
 
 /* ---------- ledger table ---------- */
@@ -3858,37 +3956,43 @@ CSS_GRADES = r"""
    never. `clip` still rounds off the table corners. */
 .gr-tablewrap{background:var(--surface);border:1px solid var(--line);
   border-radius:var(--r);box-shadow:var(--shadow);overflow:clip}
+/* Mono is for figures that line up in a column -- the lean deltas, the finals,
+   the W/L badges -- and nothing else. The prose around them (the methodology
+   note, the pitcher matchups, the day headers, the stat captions) is sans:
+   at the Comfortable scale the note alone ran to a full screen of monospace
+   on a phone, which reads as a code block rather than a sentence. */
 table.gr{border-collapse:collapse;width:100%;table-layout:auto;
-  font:500 12px/1.35 var(--mono);font-variant-numeric:tabular-nums}
-table.gr th{font:600 9px/1 var(--sans);text-transform:uppercase;letter-spacing:.12em;color:var(--faint);
+  font:500 14px/1.35 var(--mono);font-variant-numeric:tabular-nums}
+table.gr th{font:600 12px/1 var(--sans);text-transform:uppercase;letter-spacing:.12em;color:var(--faint);
   text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);white-space:nowrap;
   position:sticky;top:0;background:var(--surface);z-index:2}
 table.gr td{padding:9px 12px;border-bottom:1px solid var(--line-2);white-space:nowrap;vertical-align:middle}
 table.gr tbody tr:last-child td{border-bottom:none}
 table.gr tbody tr.gr-row:hover td{background:var(--surface-2)}
 table.gr tr.void td{opacity:.45}
-table.gr .sp{display:block;margin-top:2px;font:400 10.5px/1.3 var(--mono);color:var(--faint)}
-.gr-game{font:650 12.5px/1.3 var(--sans)}
+table.gr .sp{display:block;margin-top:2px;font:400 12.5px/1.3 var(--sans);color:var(--faint)}
+.gr-game{font:650 14px/1.3 var(--sans)}
 .gr-game .at{color:var(--faint);font-weight:500}
 
 /* Date group header -- the 300+ rows read as one undifferentiated scroll
    without it. Sticks under the column head (28px = its padded line box). */
 tr.gr-day th{position:sticky;top:28px;z-index:1;background:var(--surface-2);
   padding:6px 12px;border-top:1px solid var(--line);border-bottom:1px solid var(--line-2);
-  font:700 10.5px/1.4 var(--mono);letter-spacing:.02em;text-transform:none;color:var(--muted)}
+  font:700 12.5px/1.4 var(--sans);font-variant-numeric:tabular-nums;
+  letter-spacing:.02em;text-transform:none;color:var(--muted)}
 tr.gr-day .d{color:var(--ink)}
 tr.gr-day .n{color:var(--faint);font-weight:500}
 tr.gr-day .rec{float:right;color:var(--muted)}
 
 /* ---------- badges ---------- */
-.wlt{display:inline-block;min-width:17px;text-align:center;font:700 10.5px/1 var(--mono);
+.wlt{display:inline-block;min-width:17px;text-align:center;font:700 12.5px/1 var(--mono);
   padding:3px 6px;border-radius:var(--r-s)}
-.wlt.W{color:rgba(var(--cool),1);background:rgba(var(--cool),.12);border:1px solid rgba(var(--cool),.3)}
-.wlt.L{color:rgba(var(--warm),1);background:rgba(var(--warm),.12);border:1px solid rgba(var(--warm),.3)}
+.wlt.W{color:rgba(var(--cool-tx),1);background:rgba(var(--cool),.12);border:1px solid rgba(var(--cool),.3)}
+.wlt.L{color:rgba(var(--warm-tx),1);background:rgba(var(--warm),.12);border:1px solid rgba(var(--warm),.3)}
 .wlt.T{color:var(--muted);background:var(--surface-2);border:1px solid var(--line)}
 .wlt.none{color:var(--faint);background:transparent;border:1px dashed var(--line)}
-.st{font:600 9.5px/1 var(--sans);letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
-.st.void{color:rgba(var(--warm),.9)}
+.st{font:600 12px/1 var(--sans);letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.st.void{color:rgba(var(--warm-tx),.9)}
 
 /* ---------- phone: each row becomes a labelled block ----------
    The table used to carry min-width:760px, so every phone view of the ledger
@@ -3910,7 +4014,7 @@ tr.gr-day .rec{float:right;color:var(--muted)}
   table.gr td.c-lean,table.gr td.c-ml,table.gr td.c-final{
     grid-column:1/-1;display:flex;align-items:baseline;gap:9px;color:var(--muted)}
   table.gr td.c-lean::before,table.gr td.c-ml::before,table.gr td.c-final::before{
-    content:attr(data-l);flex:0 0 46px;font:600 8.5px/1.7 var(--sans);
+    content:attr(data-l);flex:0 0 46px;font:600 12px/1.7 var(--sans);
     letter-spacing:.1em;text-transform:uppercase;color:var(--faint);white-space:nowrap}
 }
 """
@@ -4052,7 +4156,7 @@ def html_document(body, built_txt, title=None, extra_js=None):
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
         f"<title>{title}</title>"
         "<meta name='robots' content='noindex'>"
-        f"<style>{CSS}{CSS_GRADES}</style></head><body>"
+        f"<style>{font_face_css()}{CSS}{CSS_GRADES}</style></head><body>"
         f"<div class='mx-wrap'>"
         "<div class='topbar'><div class='brand'>MLB matchup leans</div>"
         "<div style='display:flex;gap:8px'>"
@@ -4374,7 +4478,8 @@ def render_grades_html(built_txt):
     n_void = int((led["status"] == "void").sum())
     head = ("<div class='gr-head'><h1 class='gr-h1'>Grading ledger</h1>"
             "<div class='gr-lead'>Every lean this model has published, graded "
-            f"against the final score. Built {built_txt}.</div></div>")
+            f"against the final score. Built <span class='stamp'>{built_txt}"
+            "</span>.</div></div>")
 
     g = _display_grades(led)
     stats, notes = [], []
@@ -4491,7 +4596,7 @@ def _lineup_status_columns(lineup_df):
 def _built_text_now():
     now_pt = datetime.now(PT)
     return (now_pt.strftime("%I:%M %p").lstrip("0")
-            + now_pt.strftime(" PT · %Y-%m-%d"))
+            + now_pt.strftime(" · %Y-%m-%d"))
 
 
 def write_grades_page(built_txt=None):

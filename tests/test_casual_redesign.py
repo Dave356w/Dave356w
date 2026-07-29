@@ -557,10 +557,18 @@ class MobileLayoutTests(unittest.TestCase):
 
     def test_scoreboard_keeps_team_center_team_columns(self):
         m = _mobile_rules()
-        self.assertEqual(
-            m[".teams"]["grid-template-columns"],
-            "minmax(0,1fr) 82px minmax(0,1fr)",
-        )
+        # Three columns, the middle one fixed: team / centre / team. The centre
+        # width tracks the type scale -- it has to hold "7:05 PM ET" on one
+        # line, which measures 84px at the Comfortable scale (JetBrains Mono
+        # 14px, headless Chromium). Assert the shape and the floor, not a
+        # frozen literal, so a type change fails on the thing that matters.
+        cols = m[".teams"]["grid-template-columns"].split()
+        self.assertEqual(cols[0], "minmax(0,1fr)")
+        self.assertEqual(cols[2], "minmax(0,1fr)")
+        self.assertGreaterEqual(int(cols[1].rstrip("px")), 84,
+                                "centre column cannot hold the time on one line")
+        self.assertEqual(m[".summary-time"].get("white-space"), "nowrap",
+                         "the time can still wrap if the column ever narrows")
         self.assertIn(".game-card[open]>.game-summary", b.CSS)
         self.assertIn(".summary-chevron", b.CSS)
         self.assertNotIn(".lean", m)
@@ -604,12 +612,18 @@ class StarterBlockTests(unittest.TestCase):
                          "div.sp still open where the lineup begins")
 
     def test_starter_name_rule_stays_scoped_to_the_starter(self):
-        # The 16px/700 rule is the starter's alone; the hitter cell keeps its
-        # own smaller sans face. That rule has to be qualified -- a bare
-        # `td.nm` (0,1,1) loses to `table.lu td`'s mono (0,1,2), which is what
-        # closing div.sp exposed.
-        self.assertIn(".sp .nm{font:700 16px/1.2 var(--sans)}", b.CSS)
-        self.assertIn("table.lu td.nm{font:400 12.5px/1.4 var(--sans)", b.CSS)
+        # The starter's name rule is his alone; the hitter cell keeps its own
+        # smaller sans face. That rule has to be qualified -- a bare `td.nm`
+        # (0,1,1) loses to `table.lu td`'s mono (0,1,2), which is what closing
+        # div.sp exposed. Sizes move with the type scale, so what is asserted
+        # is the qualifier and the ordering, not the literals.
+        starter = re.search(r"\.sp \.nm\{font:700 ([\d.]+)px/", b.CSS)
+        hitter = re.search(r"table\.lu td\.nm\{font:400 ([\d.]+)px/1\.4 var\(--sans\)",
+                           b.CSS)
+        self.assertIsNotNone(starter, "starter name rule missing or unqualified")
+        self.assertIsNotNone(hitter, "hitter name cell lost its sans qualifier")
+        self.assertGreater(float(starter.group(1)), float(hitter.group(1)),
+                           "starter name no longer outsizes the hitter cell")
         self.assertNotIn("\ntd.nm{font:", b.CSS)
 
 
@@ -663,6 +677,112 @@ class ReadabilityTests(unittest.TestCase):
             surface = _token("--surface", block)
             self.assertLess(_contrast(_token("--faint", block), surface),
                             _contrast(_token("--muted", block), surface))
+
+
+def _rgb_token(name, block):
+    """Value of an `r,g,b` custom property (the accents) as a hex string."""
+    m = re.search(rf"{name}:\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)", block)
+    assert m, f"{name} not found"
+    return "#" + "".join(f"{int(v):02x}" for v in m.groups())
+
+
+def _over(fg_hex, alpha, bg_hex):
+    """`fg` at `alpha` composited over opaque `bg` -- what the eye gets when a
+    tier pill lays a .08-.12 wash of its own hue over the card surface."""
+    f = [int(fg_hex[i:i + 2], 16) for i in (1, 3, 5)]
+    b_ = [int(bg_hex[i:i + 2], 16) for i in (1, 3, 5)]
+    return "#" + "".join(f"{round(f[i] * alpha + b_[i] * (1 - alpha)):02x}"
+                         for i in range(3))
+
+
+class AccentTextContrastTests(unittest.TestCase):
+    """The accents double as text colours, and mostly on a tint of themselves.
+
+    `--warm/--cool/--lean` were chosen as fills and borders. They are also set
+    as `color` on the tier pills, the LIVE badge, the read-line emphasis, the
+    verdict label, the ledger W/L badges and the machinery numbers -- 9 to
+    13.5px, so WCAG AA is 4.5:1. Most of those sit on a .08-.12 wash of the
+    same hue, which lifts the background toward the text and costs roughly
+    half a point of ratio. Measured in headless Chromium at 390px, light
+    failed on all three (warm 3.94:1, cool 3.90:1, lean 3.12:1); dark passed.
+    The `-tx` twins are the fix, and this is what holds them."""
+
+    # Every tint alpha an accent is set as text over, on either surface. .12
+    # is the binding case (the ledger W/L badges); solving the twins against
+    # the tier pills' .08 alone left warm at 3.86:1 there.
+    ALPHAS = (0.08, 0.10, 0.12)
+    TOKENS = ("--warm-tx", "--cool-tx", "--lean-tx")
+
+    def _theme_blocks(self):
+        light = b.CSS.split(":root{", 1)[1].split("}", 1)[0]
+        dark = b.CSS.split('html[data-theme="dark"]{', 1)[1].split("}", 1)[0]
+        return ("light", light), ("dark", dark)
+
+    def test_accent_text_meets_aa_over_its_own_tint(self):
+        for label, block in self._theme_blocks():
+            for token in self.TOKENS:
+                tx = _rgb_token(token, block)
+                for alpha in self.ALPHAS:
+                    for surface in ("--surface", "--surface-2"):
+                        bg = _over(tx, alpha, _token(surface, block))
+                        ratio = _contrast(tx, bg)
+                        self.assertGreaterEqual(
+                            round(ratio, 2), 4.5,
+                            f"{label} {token} {tx} on {alpha} tint over "
+                            f"{surface}: {ratio:.2f}:1")
+
+    def test_accent_text_meets_aa_on_bare_surfaces(self):
+        # `.read .warmtx` and `td.nm .adv` carry no tint at all.
+        for label, block in self._theme_blocks():
+            for token in self.TOKENS:
+                tx = _rgb_token(token, block)
+                for surface in ("--surface", "--surface-2"):
+                    ratio = _contrast(tx, _token(surface, block))
+                    self.assertGreaterEqual(
+                        round(ratio, 2), 4.5,
+                        f"{label} {token} {tx} on {surface}: {ratio:.2f}:1")
+
+    def test_fills_and_bars_keep_the_base_accents(self):
+        # The twins are darker. If they leak into the percentile bars or the
+        # legend swatches the chart hues shift, which is the thing this split
+        # exists to prevent.
+        self.assertIn(".sl.h i{background:rgba(var(--warm),.85)}", b.CSS)
+        self.assertIn(".sl.p i{background:rgba(var(--cool),.85)}", b.CSS)
+        self.assertIn(".sw.warm{background:rgba(var(--warm),.85)}", b.CSS)
+        self.assertIn("background:rgba(var(--cool),.10)", b.CSS)
+
+    def test_no_accent_is_still_used_as_a_bare_text_colour(self):
+        # Any bare `color:rgba(var(--warm|cool|lean),...)` left in the sheet
+        # is a spot this audit missed. `border-color` and
+        # `text-decoration-color` are not text and keep the base accents, so
+        # the lookbehind has to exclude them.
+        stray = re.findall(
+            r"(?<![-\w])color:\s*rgba\(var\(--(warm|cool|lean)\),", b.CSS)
+        self.assertEqual(stray, [], f"accent used as text colour: {stray}")
+
+
+class TouchTargetTests(unittest.TestCase):
+    """44px (iOS HIG) / 48dp (Material) floor on the two controls that missed.
+
+    Measured in headless Chromium at 390px: the theme button rendered 28px
+    tall and every lineup disclosure 32px. The collapsed game row already
+    cleared it at 82px. Gated on the pointer axis, not a width breakpoint --
+    a touch laptop needs the floor and a narrow desktop window does not."""
+
+    def _coarse_block(self):
+        # The media query holds nested rule blocks, so stop at the newline-
+        # anchored brace that closes the query, not the first `}`.
+        return b.CSS.split("@media (pointer:coarse){", 1)[1].split("\n}", 1)[0]
+
+    def test_theme_button_clears_the_floor(self):
+        self.assertIn("min-height:44px", self._coarse_block())
+
+    def test_lineup_disclosure_grows_by_padding(self):
+        # Padding, so the type and the layout are untouched: 32px of content
+        # box plus 14+12 of padding replaces the base 8+6.
+        block = self._coarse_block()
+        self.assertIn("details.lineup summary{padding-top:14px", block)
+        self.assertIn("padding-bottom:12px", block)
 
 
 class HiddenAttributeTests(unittest.TestCase):
