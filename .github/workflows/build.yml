@@ -53,18 +53,18 @@ jobs:
     if: needs.plan.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15        # fail fast if an upstream API hangs
-    env:
-      # MODEL_TAG records row lineage. On any prediction-math change, bump it
-      # and start a new RECORD_TAGS family so incompatible results and weight
-      # fits never mix. Audit-only tags may remain in one family. Job-level so
-      # grade_leans.py and build_site.py see the same configuration.
-      # v9 limits the starter-handedness lineup adjustment to expected starter
-      # innings, then uses the neutral lineup against the bullpen. This changes
-      # prediction math and |xw_net| units, so v9 starts fresh record and scale
-      # families. Older rows remain visible but never mix into v9.
-      MODEL_TAG: xw+plat_consol_v9
-      RECORD_TAGS: xw+plat_consol_v9
-      SCALE_TAGS: xw+plat_consol_v9
+    # MODEL_TAG / RECORD_TAGS / SCALE_TAGS are deliberately NOT set here. They
+    # used to be pinned job-level, which made this file a third copy of the
+    # model version alongside build_site.py and grade_leans.py -- and it drifted:
+    # the v10 commit bumped both modules' defaults and their family maps but not
+    # this block, so CI kept stamping MODEL_TAG=xw+plat_consol_v9 while running
+    # v10's PA-share phase weighting. Every 2026-07-28 row carries v10 math under
+    # a v9 tag as a result. Leaving them unset makes the code the single source
+    # of truth: build_site.py and grade_leans.py default to the same MODEL_TAG
+    # and derive RECORD_TAGS/SCALE_TAGS from _RECORD_FAMILIES/_SCALE_FAMILIES,
+    # so a version bump is one edit and the two equivalence relations stay
+    # wherever they are reasoned about. Override here only to re-run a past
+    # slate under its historical tag, and remove the override afterwards.
     steps:
       - uses: actions/checkout@v4
 

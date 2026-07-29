@@ -1,14 +1,23 @@
 # Build-logic validation — MLB matchup-lean model
 
-> Historical validation note: this review covers the starter-only v5
-> prediction math as of 2026-07-21. v6 retains the verified shrinkage and
-> lineup math but starts a new record family because it replaces the pitching
-> input with an expected-IP starter/bullpen blend; see `MATCHUP_SITE.md`.
-> v8 later retired the method-of-moments estimator and fixed batter and pitcher
-> xwOBA shrinkage at `K=100`; section 2 below documents the historical v5-v7
-> implementation rather than the current one.
+> **Historical document. Reviewed the v5 model on 2026-07-21; current model is
+> v10.** What still holds and what has been superseded:
+>
+> | section | status against v10 |
+> |---|---|
+> | 1. Matchup math | **Holds**, with one amendment — the lean is now a two-phase blend, so the `d_lineup + d_sp` linearization in §1 describes the starter phase only. See the amendment note in §1. |
+> | 2. Shrinkage | **Superseded.** v8 retired the per-build method-of-moments estimator for a fixed `XWOBA_SHRINK_K = 100`. §2 documents the v5–v7 estimator it validated, not today's code. |
+> | 3. Platoon lens | **Holds.** Still computed and graded; no longer surfaced on the cards. |
+> | 4. Vs-market test | **Holds.** Unchanged. |
+> | 5. Integrity controls | **Holds**, and the pregame lock has since been exercised in anger — it correctly rejected post-game refreshes on 2026-07-26 and 07-28. |
+> | Empirical read | **Refreshed below** against the current 310-row ledger. |
+>
+> The model versions between this review and now: v6 (expected-IP
+> starter/bullpen blend), v7 (centre-matched shrinkage moments, full precision,
+> zero-as-abstention), v8 (fixed `K=100`), v9 (starter/bullpen phase split),
+> v10 (PA-share phase weighting). See `MATCHUP_SITE.md` §"The current model".
 
-**Date:** 2026-07-21
+**Date of review:** 2026-07-21 · **Refreshed:** 2026-07-29
 **Scope:** Statistical soundness and robustness of the daily matchup-lean build
 logic in this repo (`build_site.py`, `grade_leans.py`, `market_backfill.py`)
 that generates <https://dave356w.github.io/dave356w/>.
@@ -34,12 +43,31 @@ model shows **no statistically significant edge over the closing market**.
   `d_lineup + d_sp`, giving the lineup and starter components equal first-order
   weight — consistent with the logit reweight check in `grade_leans.report`
   that expects an implied weight ratio ≈ +1.00.
+  > **v9/v10 amendment.** The edge is now `q·M_SP + (1−q)·M_BP`, so this
+  > linearization describes the **starter phase only**. The bullpen phase adds
+  > a second `B_0·P_BP/L` term carrying weight `1−q` (typically 0.35–0.45), and
+  > it uses the *neutral* lineup composite, so the handedness term appears at
+  > weight `q` rather than 1. The equal-weight expectation for lineup vs
+  > pitching still holds within each phase; the weight fit has not been
+  > re-derived for the two-phase form and remains gated at 120 F5 decisions
+  > (currently 21), so nothing has been fit against it either way.
 - Team/side mapping is consistent end to end: the away-SP row carries the
   **home** offense's edge (and vice-versa); grading resolves W/L against the
   correct winner (`grade_leans._wlt`). Full-game and first-5-innings (F5)
   grades are computed separately; F5 requires all five innings present.
 
-### 2. Empirical-Bayes xwOBA shrinkage — v5 (`shrink_xwoba`, `estimate_shrink_k`)
+### 2. Empirical-Bayes xwOBA shrinkage — **as reviewed at v5; superseded at v8**
+
+> **Current code:** `shrink_xwoba` applies a fixed `XWOBA_SHRINK_K = 100` to
+> every batter, probable starter, and reliever. The form is unchanged —
+> `x* = (n·x + K·prior)/(n+K)` — only `K` is now a constant rather than a
+> per-build estimate. `estimate_shrink_k` is no longer on the lean path.
+> v7 first corrected the estimator (centring each moment on its own population
+> mean), then v8 removed it entirely: a fixed pseudo-sample is reproducible
+> across builds and preserves more of the player-distribution tails than the
+> typically larger estimated constants it replaced. The verification below is
+> retained because it is what established the estimator was *correctly
+> implemented* before it was retired on other grounds.
 - `x* = (n·x + K·prior)/(n+K)`, both batters and the starter regressed toward
   the shared league xwOBA prior. Sharing the prior is correct: league-wide
   xwOBA-allowed equals league xwOBA.
@@ -81,34 +109,44 @@ model shows **no statistically significant edge over the closing market**.
 - Sample gate (`N_FIT_MIN = 120` F5 decisions) before the logit reweight;
   standardized predictors + ridge for numerical stability.
 
-## Empirical read (committed ledger, 203 graded games with closing lines)
+## Empirical read — refreshed 2026-07-29 (310 graded rows, 309 with closing lines)
 
-| Lean | Record | Market-expected W | z | ROI |
-|------|--------|-------------------|-----|-----|
-| xwOBA   | 117-86 | 109.4 | **+1.09** | +5.26u |
-| platoon | 81-71  | 81.9  | **−0.14** | −8.69u |
+Computed with `market_backfill.vs_market_summary`, the same function the site
+renders from. Families are never pooled for a *record*; they are shown side by
+side here because the pooled row is what the public page publishes.
 
-- The full-game xwOBA win rate (.582 over the v2+v3 family) beats a naive
-  baseline, but against the **closing line** (the sharp benchmark the z-test
-  targets) it is within noise (z ≈ +1.1; ~1.96 needed for significance).
-- The model agrees with the market favorite ~68% of the time and its record
-  equals the favorite baseline (117-86) — it is largely tracking the favorite.
+| Scope | Lean | Record | Market-expected W | z | ROI |
+|---|---|---|---|---|---|
+| all graded (mixed families) | xwOBA | 174-135 | 166.5 | **+0.87** | +1.28u |
+| all graded (mixed families) | platoon | 121-113 | 126.7 | **−0.76** | −19.95u |
+| v2/v3 (n=188) | xwOBA | 109-79 | 101.3 | **+1.13** | +5.96u |
+| v9/v10 — current (n=26) | xwOBA | 13-13 | 14.3 | **−0.50** | −2.91u |
+
+- The 2026-07-21 review read xwOBA at z +1.09 over 203 rows. With 106 more
+  games the pooled z has **fallen to +0.87** — the edge has not grown with
+  sample, which is what an absent edge looks like.
+- Against a trivial baseline: over all 309 rows the model is .563 while
+  always-home is .502. In the current v9/v10 family it is .500 against
+  always-home .462, on 26 games — far too few to read.
+- Market agreement has *risen sharply*: ~69% of leans matched the closing
+  favourite over the full ledger, but **84.6%** in the current family. The
+  model is tracking the favourite more closely than it used to, which shrinks
+  the space where it can differ from the market at all.
 
 This is not a flaw in the build logic; it is the sober read the z-test is
 designed to produce. The system is honest about it by construction.
 
 ## Test suite
 
-`python -m unittest discover -s tests` → **26 passed** after fixing one stale
-fixture (`test_pitcher_card_shows_season_era_but_colors_l5_vs_league` was
-missing the `pit_bb` key that `_side_html` reads; production always sets it in
-`_df_to_combined_games`). That fix ships in this same PR. No statistical impact.
+`python -m pytest tests/ -q` → **211 passed** (2026-07-29). The original review
+ran 26 via `unittest discover` after fixing one stale fixture
+(`test_pitcher_card_shows_season_era_but_colors_l5_vs_league` was missing the
+`pit_bb` key that `_side_html` reads). CI still does not run the suite —
+`build.yml` has no test step and `requirements.txt` has no pytest — so this
+remains a local-only gate.
 
 ## Notes / limitations
 
-- The committed `data/ledger_report.txt` reads "no graded games yet" because it
-  summarizes only the *current* `MODEL_TAG` family (v5, 15 recent games); the
-  full v2/v3 history (189 graded) is intact in `data/mlb_lean_ledger.csv`.
 - Multiple sub-splits (|Δ| terciles, DIVERGE h2h, reliable-only) are useful
   descriptively but invite multiple-comparison over-reading; the headline z vs
   market is the disciplined significance statistic.
@@ -116,220 +154,18 @@ missing the `pit_bb` key that `_side_html` reads; production always sets it in
   review environment (network policy), so a live end-to-end fetch was not
   exercised; the model math, shrinkage, and market statistics were validated
   from the committed ledger and unit tests instead.
-
-## POSSIBLE UPDATES
-
-- The theory is stronger than the current one-sided arm, but it should be modeled as a pitch-type-conditioned replacement for aggregate xwOBA—not as another multiplier layered on top of aggregate batter and pitcher xwOBA.
-
-## What the model is actually estimating
-
-For batter (b), pitcher (p), and pitch type (t), decompose expected xwOBA into:
-
-[
-g(\hat{x}_{bpt})
-================
-
-g(\mu_t)
-
-* a_b
-* d_p
-* u_{bt}
-* v_{pt}
-  ]
-
-Where:
-
-* (\mu_t): league xwOBA when a PA ends on pitch type (t)
-* (a_b): batter’s general ability
-* (d_p): pitcher’s general run-prevention ability
-* (u_{bt}): batter’s pitch-type-specific residual
-* (v_{pt}): pitcher’s pitch-type-specific residual
-* (g): a calibrated link, probably log-relative rather than raw addition
-
-The matchup prediction becomes:
-
-[
-\hat{x}_{bp}
-============
-
-\sum_t q_{bpt},\hat{x}_{bpt}
-]
-
-Here (q_{bpt}) is the probability that a PA between this pitcher and batter ends on pitch type (t).
-
-This is not a true batter-by-pitcher interaction in the statistical sense. It is an **arsenal-mediated matchup**: the interaction emerges because a particular pitcher distributes PAs across pitch types on which the batter and pitcher have different conditional strengths.
-
-A true (b \times p \times t) term would require substantial head-to-head history and would be hopelessly sparse.
-
-## Why it could beat aggregate xwOBA
-
-Aggregate xwOBA treats these two pitchers similarly if their overall results are similar:
-
-* Pitcher A: elite slider, weak fastball
-* Pitcher B: elite fastball, weak slider
-
-It likewise treats two equal-overall batters similarly even if one destroys fastballs and struggles against sliders.
-
-The pitch-type model distinguishes those matchups. It can theoretically capture information that aggregate xwOBA discards:
-
-1. The pitcher’s arsenal distribution.
-2. The pitcher’s quality within each pitch type.
-3. The batter’s relative performance against each pitch type.
-4. How those three elements line up in this matchup.
-
-That is a real theoretical advantage.
-
-## The rough summary-stat version
-
-If only leaderboard summaries are available, the natural first approximation is:
-
-[
-\hat{x}_{bpt}
-=============
-
-\mu_t
-\left(\frac{\widetilde B_{bt}}{\mu_t}\right)
-\left(\frac{\widetilde P_{pt}}{\mu_t}\right)
-============================================
-
-\frac{\widetilde B_{bt}\widetilde P_{pt}}{\mu_t}
-]
-
-Where:
-
-* (\widetilde B_{bt}) is shrunk batter xwOBA against type (t)
-* (\widetilde P_{pt}) is shrunk pitcher xwOBA allowed on type (t)
-* Both shrink toward their player’s general level, not directly toward league
-
-However, the batter and pitcher ratios must be centered so that their pitch-type cells reconstruct their aggregate ability. Otherwise the pitcher’s arsenal quality and overall xwOBA get counted twice.
-
-A calibrated version is safer:
-
-[
-\log(\hat{x}_{bpt})
-===================
-
-\log(\mu_t)
-+\lambda_B\log(R^B_{bt})
-+\lambda_P\log(R^P_{pt})
-]
-
-The data should estimate (\lambda_B) and (\lambda_P). Given the batter-side reliability of only 0.161, (\lambda_B) may need to be considerably below 1.
-
-## Aggregate xwOBA should remain the prior
-
-“Instead of aggregate xwOBA” should not mean discarding aggregate information. Aggregate xwOBA should determine the player-level fallback:
-
-* No batter pitch-type data → batter’s aggregate level.
-* No pitcher pitch-type data → pitcher’s aggregate level.
-* No reliable deviations for either player → the model collapses exactly to the aggregate prediction.
-
-The pitch-type cells should only redistribute a player’s known ability across pitch types. They should not independently re-estimate all of that ability from small cells.
-
-## The largest theoretical risks
-
-### 1. Terminal pitch type is endogenous
-
-A PA does not randomly end on a slider or fastball. The terminal pitch depends on:
-
-* Count
-* Batter handedness
-* Previous pitches
-* Batter takes and fouls
-* Pitcher strategy
-* Game situation
-
-A slider ending an 0–2 PA is not directly comparable to a fastball ending a 3–1 PA. League-relative normalization by pitch type helps, but it does not remove batter- and pitcher-specific count distributions.
-
-At minimum, league baselines and preferably player effects should be conditioned on platoon handedness. Count conditioning would be even better.
-
-### 2. Pitch-type labels are broad
-
-Two four-seamers can differ by six mph, vertical break, release height, and location. “Performance against FF” may not transfer from an ordinary fastball to an unusual one.
-
-Eventually, pitch-shape clusters could be more predictive than MLB pitch labels. That would represent a more genuine compatibility model.
-
-### 3. The pitcher controls different mixes against different batters
-
-Using one starter-wide PA-share vector assumes he attacks lefties and righties identically. He does not.
-
-The weighting distribution should ideally be:
-
-[
-q(t\mid p,\text{batter side})
-]
-
-A fully developed model might also condition on batter tendencies, because batters influence which pitches survive to the terminal pitch.
-
-### 4. Measurement noise compounds
-
-The joint model introduces three uncertain quantities:
-
-* Batter pitch-type effect
-* Pitcher pitch-type effect
-* Matchup-specific terminal-pitch distribution
-
-Approximately:
-
-[
-\operatorname{Var}(\delta_{\text{joint}})
-\approx
-\operatorname{Var}(\delta_B)
-+
-\operatorname{Var}(\delta_P)
-+
-\operatorname{Var}(\delta_q)
-]
-
-The current (0.0028) game-delta noise at (K=600) covers only the batter side. Pitcher and mix uncertainty will increase the total.
-
-### 5. Retrospective leakage is easy
-
-A game’s PA contributes to both the batter’s and pitcher’s full-season pitch-type numbers. Using those full-season values to “predict” that same game would inject the outcome into both sides of the feature.
-
-Every backtest must use strictly pregame data or leave-the-matchup-out features.
-
-## Best development sequence
-
-Do not jump directly from the aggregate baseline to the complete joint model. Run an ablation ladder:
-
-| Model              | Batter type residual | Pitcher type residual | Arsenal mix |
-| ------------------ | -------------------: | --------------------: | ----------: |
-| Aggregate baseline |                   No |                    No |          No |
-| Mix baseline       |                   No |                    No |         Yes |
-| Batter arm         |                  Yes |                    No |         Yes |
-| Pitcher arm        |                   No |                   Yes |         Yes |
-| Joint model        |                  Yes |                   Yes |         Yes |
-
-This will reveal whether any improvement comes from:
-
-* Simply knowing the pitcher’s mix
-* Batter-specific pitch response
-* Pitcher quality by pitch type
-* The combination of both sides
-
-The pitcher component may prove more reliable than the batter component because pitch shape and pitch quality are repeatable pitcher skills. But much of that value may already be present in aggregate pitcher xwOBA, so only its within-arsenal residual can add new information.
-
-## My bottom line
-
-The theory is valid and more complete than using aggregate xwOBA alone. The clean model is:
-
-[
-\boxed{
-\text{league pitch-type baseline}
-+\text{batter overall}
-+\text{pitcher overall}
-+\text{batter-type residual}
-+\text{pitcher-type residual}
-}
-]
-
-weighted by a handedness-aware terminal-pitch distribution.
-
-The key empirical question is not whether batter and pitcher pitch-type numbers contain signal individually. It is whether the **joint, fully shrunk, time-safe prediction improves future PA-level xwOBA beyond the aggregate model**.
-
-Given the current batter reliability, I would expect one of three outcomes:
-
-1. Pitcher-type residuals add useful lift, while batter residuals receive very little weight.
-2. CU/ST/SL batter effects add a small amount of matchup value, but FF adds almost none.
-3. The theory is directionally correct but the available leaderboard samples are too noisy, requiring pitch-shape or plate-appearance-level modeling to make it pay.
+- The v7 family's 22-23 line is internally heterogeneous — three different
+  prediction models shipped under that one tag. See the versioning note at the
+  end of the platoon-adjustment section in `MATCHUP_SITE.md`.
+- **Superseded note:** this section used to record that
+  `data/ledger_report.txt` read "no graded games yet". It now reports the
+  current family (26 graded) plus immutable per-family history, so the internal
+  report and the public page no longer disagree.
+
+
+## Related
+
+- `docs/pitch_mix_theory.md` — design notes for the pitch-type-conditioned
+  matchup (the shadow arm in `pitch_arsenal.py`). Moved out of this file: it is
+  a forward-looking design argument, not a validation of shipped build logic.
+- `docs/f5_market_validation.md` — F5 market capture and first results.

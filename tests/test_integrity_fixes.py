@@ -1401,5 +1401,41 @@ class MarketContextRecordsTests(unittest.TestCase):
         self.assertEqual(ctx, {})
 
 
+class ModelTagProvenanceTests(unittest.TestCase):
+    """The ledger's lineage stamp must describe the math that produced the row.
+
+    The v10 bump moved both modules' defaults and family maps but left
+    `.github/workflows/build.yml` pinning MODEL_TAG=xw+plat_consol_v9, so CI ran
+    v10's PA-share weighting and stamped every row v9. The workflow env was a
+    third copy of the version that nothing kept in sync.
+    """
+
+    WORKFLOW = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        ".github", "workflows", "build.yml",
+    )
+
+    def test_modules_agree_on_the_default_tag(self):
+        self.assertEqual(build_site.MODEL_TAG, grade_leans.MODEL_TAG)
+
+    def test_modules_agree_on_the_record_family(self):
+        self.assertEqual(build_site.RECORD_TAGS, grade_leans.RECORD_TAGS)
+
+    def test_current_tag_is_in_its_own_record_and_scale_families(self):
+        self.assertIn(build_site.MODEL_TAG, build_site.RECORD_TAGS)
+        self.assertIn(build_site.MODEL_TAG, build_site.SCALE_TAGS)
+
+    def test_workflow_does_not_pin_model_tags(self):
+        with open(self.WORKFLOW, encoding="utf-8") as fh:
+            lines = [ln.split("#", 1)[0] for ln in fh]
+        for var in ("MODEL_TAG", "RECORD_TAGS", "SCALE_TAGS"):
+            pinned = [ln.strip() for ln in lines if ln.strip().startswith(f"{var}:")]
+            self.assertEqual(
+                pinned, [],
+                f"{var} is pinned in build.yml; it overrides the module defaults "
+                "and silently drifts from them on the next version bump",
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
