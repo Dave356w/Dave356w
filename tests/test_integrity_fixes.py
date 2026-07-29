@@ -399,7 +399,7 @@ class SlateCompletenessTests(unittest.TestCase):
         self.assertIn("TB", html)
         self.assertIn("BOS", html)
 
-    def test_legend_guide_and_record_strip_render_below_cards(self):
+    def test_record_strip_and_build_stamp_render_below_cards(self):
         slate = pd.DataFrame([dict(
             game_pk=789,
             away_abbrev="TB",
@@ -420,15 +420,13 @@ class SlateCompletenessTests(unittest.TestCase):
             "test build",
             slate_df=slate,
         )
-        # Cards lead, how-to-read guide after them, the record strip (when a
-        # ledger exists) after that, and the model/build stamp last. Match on
-        # element markup, not bare class names, which also appear in the CSS.
-        self.assertLess(html.index("Awaiting paired"),
-                        html.index("How to read a card"))
+        # Cards lead, the record strip (when a ledger exists) sits under them,
+        # and the model/build stamp is last. Match on element markup, not bare
+        # class names, which also appear in the CSS.
         stamp = html.index("<div class='lg-title'>")
-        self.assertLess(html.index("How to read a card"), stamp)
+        self.assertLess(html.index("Awaiting paired"), stamp)
         if "<div class='gradestrip'>" in html:
-            self.assertLess(html.index("How to read a card"),
+            self.assertLess(html.index("Awaiting paired"),
                             html.index("<div class='gradestrip'>"))
             self.assertLess(html.index("<div class='gradestrip'>"), stamp)
 
