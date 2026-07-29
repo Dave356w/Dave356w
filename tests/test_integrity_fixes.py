@@ -420,16 +420,17 @@ class SlateCompletenessTests(unittest.TestCase):
             "test build",
             slate_df=slate,
         )
-        # Title bar leads, cards next, how-to-read guide after the cards, and
-        # the record strip (when a ledger exists) at the very bottom. Match on
+        # Cards lead, how-to-read guide after them, the record strip (when a
+        # ledger exists) after that, and the model/build stamp last. Match on
         # element markup, not bare class names, which also appear in the CSS.
-        self.assertLess(html.index("<div class='lg-title'>"),
-                        html.index("Awaiting paired"))
         self.assertLess(html.index("Awaiting paired"),
                         html.index("How to read a card"))
+        stamp = html.index("<div class='lg-title'>")
+        self.assertLess(html.index("How to read a card"), stamp)
         if "<div class='gradestrip'>" in html:
             self.assertLess(html.index("How to read a card"),
                             html.index("<div class='gradestrip'>"))
+            self.assertLess(html.index("<div class='gradestrip'>"), stamp)
 
 
 class RecentStarterEraTests(unittest.TestCase):

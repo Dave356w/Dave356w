@@ -2687,12 +2687,13 @@ def _tier_word(pctile):
 
 def _pct_bar(pctile, kind):
     """Percentile slider (0-100). kind 'h' (hitter, ember) or 'p' (pitcher,
-    steel). Fill length is the percentile; hue carries whose favor it is."""
+    steel). Fill length is the percentile; hue carries whose favor it is. The
+    bar is the whole reading -- the numeric percentile is deliberately not
+    printed beside it. An empty track means no percentile was available."""
     if pctile is None:
-        return "<span class='sl na'></span><span class='pn'>—</span>"
+        return "<span class='sl na'></span>"
     w = max(0.0, min(100.0, float(pctile)))
-    return (f"<span class='sl {kind}'><i style='width:{w:.0f}%'></i></span>"
-            f"<span class='pn'>{round(w)}</span>")
+    return f"<span class='sl {kind}'><i style='width:{w:.0f}%'></i></span>"
 
 
 def _spotlight_html(hitters, n=3, thresh=70):
@@ -2704,8 +2705,8 @@ def _spotlight_html(hitters, n=3, thresh=70):
     if not top:
         return ""
     pills = "".join(f"<span class='pill'>"
-                    f"{_mlb_player_link(h['name'], h.get('player_id'), _last(h['name']))} "
-                    f"<b>{round(h['xw_pctile'])}</b></span>" for h in top)
+                    f"{_mlb_player_link(h['name'], h.get('player_id'), _last(h['name']))}"
+                    f"</span>" for h in top)
     return f"<div class='spot'><span class='sl-lab'>Standouts</span>{pills}</div>"
 
 
@@ -2818,8 +2819,8 @@ def _lineup_details(side_d):
     if side_d["opp_xw"] is not None:
         parts.append(f"xwOBA {f3(side_d['opp_xw'])}")
     summ = " · ".join(parts) if parts else ""
-    head = ("<tr><th></th><th class='nm'>Hitter</th><th>Pos</th><th class='r'>xwOBA %ile</th>"
-            "<th class='r mach'>xwOBA</th></tr>")
+    # No header row: the columns (order, name, position, percentile bar, xwOBA)
+    # read without labels, and the legend below the cards carries the key.
     body = "".join(_hitter_row_html(i + 1, hr) for i, hr in enumerate(side_d["hitters"]))
     if not body:
         body = "<tr><td class='na' colspan='5'>lineup unavailable</td></tr>"
@@ -2829,7 +2830,7 @@ def _lineup_details(side_d):
         f"<span class='tl'>{_esc(side_d['opp_abbr'])} lineup</span>"
         f"<span class='st {st_cls}'>{st_lab}</span>"
         f"<span class='lw mach'>{summ}</span></summary>"
-        f"<div class='lu-scroll'><table class='lu'>{head}{body}</table></div></details>")
+        f"<div class='lu-scroll'><table class='lu'>{body}</table></div></details>")
 
 
 def _sp_stat_cell(lab, val, fmt, sub=None, heat=""):
@@ -3428,8 +3429,9 @@ def _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
 
 
 def _legend_head(model_label, built_txt):
-    """Slim title bar shown above the cards; the how-to-read guide moved to
-    the bottom of the page (_legend_guide) so the cards lead."""
+    """Slim model/build stamp. It sits at the FOOT of the page, under the
+    how-to-read guide and the record strip, so nothing stands between the top
+    of the page and the cards -- the topbar brand already names the page."""
     date = SLATE_DATE
     head = model_label
     if built_txt:
@@ -3448,7 +3450,8 @@ def _legend_guide():
         "<div class='lg-keys'>"
         "<span class='k'><i class='sw warm'></i>warmer / longer bar = better for hitters</span>"
         "<span class='k'><i class='sw cool'></i>cooler / longer bar = better for the pitcher</span>"
-        "<span class='k'><b>xwOBA %ile</b> league rank from 0–100; higher is better</span>"
+        "<span class='k'><b>xwOBA %ile</b> bar length is the league rank from "
+        "0–100; higher is better</span>"
         "</div>"
         "<div class='lg-notes'>"
         "<span><b>Standouts</b> are the lineup's highest-ranked bats.</span>"
@@ -3789,8 +3792,6 @@ details[open] summary .chev{transform:rotate(90deg)}
 
 .lu-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
 table.lu{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
-table.lu th{font:600 12px/1.4 var(--sans);letter-spacing:.1em;text-transform:uppercase;color:var(--faint);
-  text-align:right;padding:2px 6px 4px;border-bottom:1px solid var(--line-2);white-space:nowrap}
 table.lu td{font:400 14px/1.4 var(--mono);text-align:right;padding:4px 6px;
   border-bottom:1px solid var(--line-2);white-space:nowrap}
 table.lu tr:last-child td{border-bottom:0}
@@ -3818,7 +3819,6 @@ td.bar{width:86px;padding:4px 8px 4px 2px}
   border:1px solid var(--line-2);vertical-align:middle;overflow:hidden;position:relative}
 .sl i{display:block;height:100%;border-radius:var(--r-s) 0 0 var(--r-s)}
 .sl.h i{background:rgba(var(--warm),.85)} .sl.p i{background:rgba(var(--cool),.85)}
-.pn{font:600 13px/1 var(--mono);margin-left:8px;font-variant-numeric:tabular-nums;color:var(--muted)}
 
 /* starter percentile bars + quality tier */
 .sp-bars{margin-top:9px}
@@ -3835,7 +3835,6 @@ td.bar{width:86px;padding:4px 8px 4px 2px}
 .spot .sl-lab{font:600 12px/1.4 var(--sans);letter-spacing:.1em;text-transform:uppercase;color:var(--faint)}
 .spot .pill{font:600 13px/1.3 var(--mono);color:var(--ink);background:var(--surface-2);
   border:1px solid var(--line-2);border-radius:var(--r-pill);padding:2px 9px;font-variant-numeric:tabular-nums}
-.spot .pill b{color:rgba(var(--warm-tx),1)}
 
 /* model-vs-market verdict — its own full-width row beneath the odds, at every
    width. The prose grows downward instead of stealing width from the numbers. */
@@ -3844,9 +3843,11 @@ td.bar{width:86px;padding:4px 8px 4px 2px}
 .verdict.edge{border-left-color:rgba(var(--lean),1);background:rgba(var(--amberbg),.10)}
 .verdict.edge .l{color:rgba(var(--lean-tx),1)} .verdict.edge .vt{color:var(--ink)}
 
-/* hitter row: percentile column + name cell */
-td.pct{width:150px;white-space:nowrap}
-table.lu td.nm,table.lu th.nm,table.lu td.pos{text-align:left}
+/* hitter row: percentile column + name cell. The column is the 88px bar plus
+   the cell's own gutters -- it carried a printed percentile until that was
+   dropped, and the freed width goes to the name column. */
+td.pct{width:104px;white-space:nowrap}
+table.lu td.nm,table.lu td.pos{text-align:left}
 /* Qualified so it outranks `table.lu td`'s mono face (0,1,2): hitter names are
    sans, the numbers around them stay mono. A bare `td.nm` never won this. */
 table.lu td.nm{font:400 14px/1.4 var(--sans);max-width:170px;
@@ -3916,16 +3917,14 @@ tr.mach{display:table-row}
   /* Lineup fits inside the card instead of scrolling: trim the gutters, shrink
      the percentile bar, and let the name -- the one elastic column -- wrap
      instead of truncating. Every column the desktop card shows is kept. */
-  table.lu th,table.lu td{padding:4px 3px}
+  table.lu td{padding:4px 3px}
   /* `table.lu td` is (0,1,2); a bare `td.nm` is (0,1,1) and loses the
      white-space battle no matter where it sits. Match the qualifier. */
-  table.lu th{white-space:normal}
   table.lu td.nm{max-width:none;white-space:normal}
-  td.ord,table.lu th:first-child{width:18px;padding-left:0}
+  td.ord{width:18px;padding-left:0}
   td.pct{width:auto}
   td.pos{font-size:12px}
   .sl{width:46px}
-  .pn{margin-left:5px;font-size:12.5px}
 }
 
 /* ============================================================
@@ -4625,17 +4624,18 @@ def render_combined_html(xw_df, pl_df, pitcher_rows_df, built_txt,
                                   opp_hitters_df=opp_hitters_df, detail_df=detail_df,
                                   lg_ops=lg_ops, slate_df=slate_df, lineup_df=lineup_df,
                                   league_baseline=league_baseline, odds=odds, streaks=streaks)
-    head = _legend_head("MLB matchup leans — Statcast xwOBA", built_txt)
-    # Cards lead; the how-to-read guide and the record strip sit below them.
-    footer = _legend_guide() + records_strip_html()
+    # Cards lead. The how-to-read guide, the record strip and the model/build
+    # stamp all sit below them, in that order.
+    footer = (_legend_guide() + records_strip_html()
+              + _legend_head("MLB matchup leans — Statcast xwOBA", built_txt))
     if not games:
-        inner = head + "<div class='legend'><div class='lg-title'>No paired probables yet — " \
-                       "probables/lineups not posted. Check back closer to first pitch.</div></div>" + footer
+        inner = "<div class='legend'><div class='lg-title'>No paired probables yet — " \
+                "probables/lineups not posted. Check back closer to first pitch.</div></div>" + footer
         return html_document(inner, built_txt, extra_js=score_refresh_js())
     strength_scale = lean_strength_scale(_slate_deltas(games))
     logo_assets, logo_css = _logo_assets(games)
     ctx = {**(market_context_records() or {}), "logo_ids": set(logo_assets)}
-    body = logo_css + head + build_combined(games, strength_scale, ctx) + footer
+    body = logo_css + build_combined(games, strength_scale, ctx) + footer
     return html_document(body, built_txt, extra_js=score_refresh_js())
 
 

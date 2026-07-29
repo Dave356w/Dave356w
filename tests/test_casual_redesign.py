@@ -516,6 +516,63 @@ class RenderTests(unittest.TestCase):
         self.assertNotIn("class='lean", html)
 
 
+class UnlabeledPercentileTests(unittest.TestCase):
+    """Percentiles are shown as bar length only, and the lineup table runs
+    without a header row. Both are display decisions: the ranking that orders
+    the Standouts pills and sizes the bars is unchanged, so no lean moves."""
+
+    def _card(self):
+        g, _ = RenderTests()._cards()
+        return b.cmb_card(g, None)
+
+    def test_bar_carries_no_printed_percentile(self):
+        self.assertEqual(b._pct_bar(72, "h"),
+                         "<span class='sl h'><i style='width:72%'></i></span>")
+        # A missing percentile is an empty track, not a placeholder character.
+        self.assertEqual(b._pct_bar(None, "h"), "<span class='sl na'></span>")
+        html = self._card()
+        self.assertIn("class='sl h'", html)     # bars survive the number's removal
+        self.assertIn("class='sl p'", html)
+        self.assertNotIn("class='pn'", html)
+        self.assertNotIn(".pn{", b.CSS)         # rule deleted with its markup
+
+    def test_standouts_pill_is_name_only(self):
+        hitters = [dict(name="Mookie Betts", xw_pctile=95, player_id=605141)]
+        pill = b._spotlight_html(hitters, n=3, thresh=70)
+        self.assertIn("Standouts", pill)
+        self.assertIn("Betts", pill)
+        self.assertNotIn("95", re.sub(r"<[^>]+>", "", pill))
+        self.assertNotIn("<b>", pill)
+
+    def test_percentile_still_ranks_and_gates_the_pills(self):
+        # Removing the printed number must not disturb selection or ordering.
+        # Pills print surnames, so the three must not share one.
+        hitters = [dict(name="Some Gamma", xw_pctile=40),
+                   dict(name="Some Beta", xw_pctile=80),
+                   dict(name="Some Alpha", xw_pctile=99)]
+        text = re.sub(r"<[^>]+>", " ", b._spotlight_html(hitters, n=3, thresh=70))
+        self.assertLess(text.index("Alpha"), text.index("Beta"))
+        self.assertNotIn("Gamma", text)          # below the 70 threshold
+
+    def test_lineup_table_has_no_header_row(self):
+        html = self._card()
+        self.assertIn("<table class='lu'>", html)
+        self.assertNotIn("xwOBA %ile</th>", html)
+        self.assertNotIn("<th", html.split("<table class='lu'>")[1])
+        self.assertNotIn("table.lu th", b.CSS)   # rules deleted with the markup
+        # The columns themselves stay: order, name, position, bar, raw xwOBA.
+        row = html.split("<table class='lu'>")[1].split("</tr>")[0]
+        for cls in ("class='ord'", "class='nm'", "class='pos'", "class='pct r'"):
+            self.assertIn(cls, row)
+
+    def test_legend_still_explains_the_bar(self):
+        # The '%ile' label is gone from the table, so the guide has to say
+        # what the bar length means -- it is the only place left that does.
+        guide = b._legend_guide()
+        self.assertIn("xwOBA %ile", guide)
+        self.assertIn("bar length", guide)
+
+
 class LeanDescriptionTests(unittest.TestCase):
     """The read sentence is the card's single lean explanation."""
 
@@ -603,7 +660,7 @@ class MobileLayoutTests(unittest.TestCase):
         html = self._html()
         self.assertNotIn("as of build", html)
         self.assertNotIn("mcell note", html)
-        # The page header still carries the build time exactly once.
+        # The page footer still carries the build time exactly once.
         self.assertIn("built 9:00 AM PT", b._legend_head("MLB matchup leans", "9:00 AM PT"))
 
     def test_lineups_open_by_default(self):
@@ -615,7 +672,7 @@ class MobileLayoutTests(unittest.TestCase):
         # A 460px min-width forced horizontal scroll inside a ~314px card.
         self.assertNotIn("min-width:460px", b.CSS)
         m = _mobile_rules()
-        self.assertEqual(m["table.lu th,table.lu td"]["padding"], "4px 3px")
+        self.assertEqual(m["table.lu td"]["padding"], "4px 3px")
         # The bar shrinks so the name column has room to fit on one line.
         self.assertLess(int(m[".sl"]["width"].rstrip("px")), 88)
         # The name is the one elastic column: it wraps rather than truncating,
