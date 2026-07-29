@@ -396,15 +396,20 @@ class RenderTests(unittest.TestCase):
         self.assertIn("class='game-state final'", html)
         self.assertIn(">FINAL</span>", html)
 
-    def test_condensed_footer_keeps_only_casual_guide(self):
-        html = b._legend_guide()
-        self.assertIn("How to read a card", html)
-        self.assertIn("warmer / longer bar", html)
-        self.assertIn("xwOBA %ile", html)
-        self.assertIn("Model vs market", html)
-        self.assertIn("platoon advantage", html)
-        self.assertNotIn("role-filtered bullpen", html)
-        self.assertNotIn("0.010 xwOBA", html)
+    def test_footer_carries_no_how_to_read_guide(self):
+        # The guide is gone entirely -- the card is expected to read on its own.
+        self.assertFalse(hasattr(b, "_legend_guide"))
+        html = b.render_combined_html(
+            pd.DataFrame(columns=["game_pk", "side"]), pd.DataFrame(),
+            pd.DataFrame(), "9:00 AM")
+        for gone in ("How to read a card", "warmer / longer bar",
+                     "xwOBA %ile", "highest-ranked bats", "Starter quality",
+                     "marks a platoon advantage"):
+            self.assertNotIn(gone, html)
+        # Its CSS went with it; `.lg-keys` stays for the empty-slate page.
+        for dead in (".lg-lead", ".lg-notes", ".sw{"):
+            self.assertNotIn(dead, b.CSS)
+        self.assertIn(".lg-keys{", b.CSS)
 
     def test_read_names_the_opposing_starter(self):
         # away offense faces the HOME starter; home offense the AWAY starter.
@@ -565,12 +570,49 @@ class UnlabeledPercentileTests(unittest.TestCase):
         for cls in ("class='ord'", "class='nm'", "class='pos'", "class='pct r'"):
             self.assertIn(cls, row)
 
-    def test_legend_still_explains_the_bar(self):
-        # The '%ile' label is gone from the table, so the guide has to say
-        # what the bar length means -- it is the only place left that does.
-        guide = b._legend_guide()
-        self.assertIn("xwOBA %ile", guide)
-        self.assertIn("bar length", guide)
+
+class PlatoonHandMarkerTests(unittest.TestCase):
+    """The batting-hand letter doubles as the platoon-advantage marker: warm
+    when this batter holds the edge over the starter, muted otherwise. It
+    replaced a separate ◆ that only ever rendered next to the same letter."""
+
+    def _card(self):
+        g, _ = RenderTests()._cards()
+        return b.cmb_card(g, None)
+
+    def _row(self, name):
+        html = self._card()
+        return next(r for r in html.split("<tr>") if f"title='{name}'" in r)
+
+    def test_diamond_marker_is_gone(self):
+        html = self._card()
+        self.assertNotIn("◆", html)
+        self.assertNotIn("class='adv mach'", html)
+
+    def test_advantaged_hand_is_accented_and_titled(self):
+        # Ohtani is the fixture's one platoon-advantaged bat.
+        row = self._row("Ohtani")
+        self.assertIn("<span class='b adv' title='platoon advantage vs this SP'>L</span>",
+                      row)
+
+    def test_unadvantaged_hand_stays_muted_and_untitled(self):
+        row = self._row("Betts")
+        self.assertIn("<span class='b'>R</span>", row)
+        self.assertNotIn("platoon advantage", row)
+
+    def test_hand_omitted_entirely_when_unknown(self):
+        hr = dict(name="No Hand", player_id=None, pos="LF", bats="", xw=.300,
+                  xw_pctile=50, adv=False, ops=None, pa=0, low=False,
+                  mx=None, edge=None)
+        self.assertNotIn("<span class='b", b._hitter_row_html(1, hr))
+        # ...and an advantage with no recorded hand still has nothing to mark.
+        self.assertNotIn("adv", b._hitter_row_html(1, dict(hr, adv=True)))
+
+    def test_accent_rule_beats_the_muted_base(self):
+        # `td.nm .b.adv` (0,3,1) must outrank `td.nm .b` (0,2,1), and it must
+        # use the contrast-audited text twin, not the bar-fill token.
+        self.assertIn("td.nm .b.adv{color:rgba(var(--warm-tx),1)", b.CSS)
+        self.assertLess(b.CSS.index("td.nm .b{"), b.CSS.index("td.nm .b.adv{"))
 
 
 class LeanDescriptionTests(unittest.TestCase):
@@ -880,12 +922,11 @@ class AccentTextContrastTests(unittest.TestCase):
                         f"{label} {token} {tx} on {surface}: {ratio:.2f}:1")
 
     def test_fills_and_bars_keep_the_base_accents(self):
-        # The twins are darker. If they leak into the percentile bars or the
-        # legend swatches the chart hues shift, which is the thing this split
-        # exists to prevent.
+        # The twins are darker. If they leak into the percentile bars the chart
+        # hues shift, which is the thing this split exists to prevent. (The
+        # legend swatches this also covered went with the how-to-read guide.)
         self.assertIn(".sl.h i{background:rgba(var(--warm),.85)}", b.CSS)
         self.assertIn(".sl.p i{background:rgba(var(--cool),.85)}", b.CSS)
-        self.assertIn(".sw.warm{background:rgba(var(--warm),.85)}", b.CSS)
         self.assertIn("background:rgba(var(--cool),.10)", b.CSS)
 
     def test_no_accent_is_still_used_as_a_bare_text_colour(self):
@@ -1096,8 +1137,16 @@ class GameClockTests(unittest.TestCase):
         self.assertEqual(b._game_time_pt("2026-07-28T23:05:00Z"), "4:05 PM")
         self.assertEqual(b._game_time_pt(""), "")
 
-    def test_zone_is_declared_once_in_the_legend(self):
-        self.assertIn("times are Pacific", b._legend_guide())
+    def test_zone_is_declared_once_in_the_footer_stamp(self):
+        # The how-to-read guide used to carry this; when it was deleted the
+        # clause moved to the stamp rather than being dropped, because bare
+        # local clocks with no stated local are ambiguous.
+        stamp = b._legend_head("MLB matchup leans", "9:00 AM")
+        self.assertIn("first pitch times Pacific", stamp)
+        html = b.render_combined_html(
+            pd.DataFrame(columns=["game_pk", "side"]), pd.DataFrame(),
+            pd.DataFrame(), "9:00 AM")
+        self.assertEqual(html.count("first pitch times Pacific"), 1)
 
     def test_build_stamp_keeps_its_zone(self):
         # A timestamp without a zone is ambiguous; a slate of local first
@@ -1185,8 +1234,11 @@ class CardCopyTests(unittest.TestCase):
         )
         self.assertNotIn("class='lean", no_edge)
 
-    def test_legend_prose_is_em_dash_free(self):
-        self.assertNotIn("—", self._visible(b._legend_guide()))
+    def test_footer_stamp_prose_is_em_dash_free(self):
+        # The stamp's own copy, minus the model label it is handed -- that
+        # label is a fixed title ("... — Statcast xwOBA"), not prose.
+        stamp = self._visible(b._legend_head("MLB matchup leans", "9:00 AM"))
+        self.assertNotIn("—", stamp)
 
 
 if __name__ == "__main__":

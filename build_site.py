@@ -2550,8 +2550,10 @@ def _fmt_pt_clock(dt):
     """Bare wall clock for a game row -- no zone suffix.
 
     Every clock on the page is Pacific and the page says so once, in the
-    legend, rather than repeating ` PT` on every card. The build stamp dropped
-    its suffix too -- one zone, stated once, is the whole convention."""
+    footer stamp (`_legend_head`), rather than repeating ` PT` on every card.
+    The build stamp dropped its suffix too -- one zone, stated once, is the
+    whole convention. Delete that clause and every time on the page becomes
+    ambiguous."""
     return dt.strftime("%I:%M %p").lstrip("0")
 
 
@@ -2793,20 +2795,31 @@ def _verdict_html(fav, odds, away_abbr, home_abbr, ctx=None):
 
 
 def _hitter_row_html(i, hr):
-    """One batting-order row: name + Statcast percentile bar, raw xwOBA, and the
-    ◆ platoon-advantage marker."""
+    """One batting-order row: name + batting hand, Statcast percentile bar, and
+    raw xwOBA.
+
+    The hand letter is also the platoon-advantage marker. It takes the hitter
+    bar's warm accent when this batter holds the platoon edge over the starter
+    and stays muted otherwise, so one glyph that has to be on the row anyway
+    carries both facts -- replacing a separate ◆ that only ever appeared
+    alongside it.
+    """
     nm_text = _esc(hr["name"])
     nm_link = _mlb_player_link(hr["name"], hr.get("player_id"))
-    b = f"<span class='b'>{hr['bats']}</span>" if hr["bats"] else ""
-    adv = ("<span class='adv mach' title='platoon advantage vs this SP'>◆</span>"
-           if hr["adv"] else "")
+    if hr["bats"]:
+        adv = bool(hr["adv"])
+        cls = "b adv" if adv else "b"
+        title = " title='platoon advantage vs this SP'" if adv else ""
+        b = f"<span class='{cls}'{title}>{hr['bats']}</span>"
+    else:
+        b = ""
     bar = _pct_bar(hr.get("xw_pctile"), "h")
     backfill = bool(hr.get("xw_team_backfill"))
     xw_title = " title='team-average backfill: player absent from Savant'" if backfill else ""
     xw_mark = "<span class='pa'>*</span>" if backfill else ""
     xw_c = f"<td class='r mach'{xw_title}>{f3(hr['xw'])}{xw_mark}</td>"
     return (f"<tr><td class='ord'>{i}</td>"
-            f"<td class='nm' title='{nm_text}'>{nm_link}{adv}{b}</td>"
+            f"<td class='nm' title='{nm_text}'>{nm_link}{b}</td>"
             f"<td class='pos'>{_esc(hr['pos'])}</td>"
             f"<td class='pct r'>{bar}</td>{xw_c}</tr>")
 
@@ -3429,41 +3442,23 @@ def _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
 
 
 def _legend_head(model_label, built_txt):
-    """Slim model/build stamp. It sits at the FOOT of the page, under the
-    how-to-read guide and the record strip, so nothing stands between the top
-    of the page and the cards -- the topbar brand already names the page."""
+    """Slim model/build stamp, the last thing on the page.
+
+    It also declares the clock zone, and is the only thing that does.
+    `_fmt_pt_clock` prints bare wall clocks on the cards on the understanding
+    that the page states the zone exactly once; the how-to-read guide used to
+    be that once, so when the guide was deleted the clause moved here rather
+    than being dropped. A slate of bare local times with no stated local is
+    ambiguous in a way the rest of the de-cluttering was not.
+    """
     date = SLATE_DATE
     head = model_label
     if built_txt:
         head += f" · built {built_txt}"
     elif date:
         head += f" · {date}"
-    return f"<div class='legend'><div class='lg-title'>{head}</div></div>"
-
-
-def _legend_guide():
-    return (
-        "<div class='legend'>"
-        "<div class='lg-lead'><b>How to read a card:</b> the <b>lean</b> names the model's "
-        "favored side; <b>slight / clear / strong</b> shows its relative strength. "
-        "It estimates matchup advantage, not the final score.</div>"
-        "<div class='lg-keys'>"
-        "<span class='k'><i class='sw warm'></i>warmer / longer bar = better for hitters</span>"
-        "<span class='k'><i class='sw cool'></i>cooler / longer bar = better for the pitcher</span>"
-        "<span class='k'><b>xwOBA %ile</b> bar length is the league rank from "
-        "0–100; higher is better</span>"
-        "</div>"
-        "<div class='lg-notes'>"
-        "<span><b>Standouts</b> are the lineup's highest-ranked bats.</span>"
-        "<span><b>Starter quality</b> uses xwOBA allowed and K−BB%; higher is better.</span>"
-        "<span><b>Model vs market</b> shows whether the lean agrees with the DK favorite; "
-        "disagree means the model favors the underdog.</span>"
-        "<span><b>◆</b> marks a platoon advantage over the starter.</span>"
-        "<span>On a live game the <b>diamond</b> shows runners on base and the "
-        "dots below it the outs.</span>"
-        "<span class='wide'>DraftKings moneylines via ESPN at build time; first pitch "
-        "times are Pacific; cards are ordered by first pitch.</span>"
-        "</div></div>")
+    return (f"<div class='legend'><div class='lg-title'>{head}"
+            "<em> · first pitch times Pacific</em></div></div>")
 
 
 FONT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "fonts")
@@ -3610,17 +3605,10 @@ body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.45 var(--sans);
 .legend{margin:2px 2px 14px}
 .lg-title{font-size:14.5px;font-weight:650;letter-spacing:.01em;margin-bottom:7px}
 .lg-title em{font-style:normal;color:var(--muted);font-weight:500}
-.lg-lead{font-size:13px;line-height:1.5;color:var(--muted);max-width:82ch;margin-bottom:9px}
-.lg-lead b{color:var(--ink);font-weight:700}
+/* `.lg-keys` outlived the how-to-read guide: the empty-slate page still uses
+   it for its one "no games scheduled" line. */
 .lg-keys{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:13px;color:var(--muted)}
 .lg-keys .k{display:inline-flex;align-items:center;gap:6px}
-.lg-notes{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px 18px;
-  margin-top:8px;font-size:13px;line-height:1.4;color:var(--faint)}
-.lg-notes b{color:var(--muted);font-weight:700}
-.lg-notes i{font-style:normal;color:var(--muted)}
-.lg-notes .wide{grid-column:1/-1}
-.sw{width:11px;height:11px;border-radius:var(--r-s);display:inline-block}
-.sw.warm{background:rgba(var(--warm),.85)} .sw.cool{background:rgba(var(--cool),.85)}
 
 /* One continuous scoreboard, not a stack of separate cards. The slate is a
    single surface and games are divided by a hairline -- the list reads top to
@@ -3853,7 +3841,10 @@ table.lu td.nm,table.lu td.pos{text-align:left}
 table.lu td.nm{font:400 14px/1.4 var(--sans);max-width:170px;
   overflow:hidden;text-overflow:ellipsis}
 td.nm .b{font:400 12px/1 var(--mono);color:var(--muted);margin-left:4px}
-td.nm .adv{color:rgba(var(--warm-tx),1);font-size:12.5px;margin-left:2px}
+/* The hand letter IS the platoon marker: it takes the hitter bar's accent when
+   this batter holds the edge over the starter. `--warm-tx` is that accent's
+   contrast-audited text twin -- the bar fill token is not legible as type. */
+td.nm .b.adv{color:rgba(var(--warm-tx),1);font-weight:700}
 
 /* Model machinery — always shown (analyst is the default and only view). The
    per-element display types match how the old Analyst toggle revealed them. */
@@ -3910,8 +3901,6 @@ tr.mach{display:table-row}
   .mcell .v{font-size:14px}
   .mcell .v .mv{display:block;font-size:12px}
   .verdict{padding:7px 12px}
-  .lg-notes{grid-template-columns:1fr}
-  .lg-notes .wide{grid-column:auto}
   .spstats{overflow-x:auto;-webkit-overflow-scrolling:touch}
   .stat{min-width:88px}
   /* Lineup fits inside the card instead of scrolling: trim the gutters, shrink
@@ -4624,9 +4613,8 @@ def render_combined_html(xw_df, pl_df, pitcher_rows_df, built_txt,
                                   opp_hitters_df=opp_hitters_df, detail_df=detail_df,
                                   lg_ops=lg_ops, slate_df=slate_df, lineup_df=lineup_df,
                                   league_baseline=league_baseline, odds=odds, streaks=streaks)
-    # Cards lead. The how-to-read guide, the record strip and the model/build
-    # stamp all sit below them, in that order.
-    footer = (_legend_guide() + records_strip_html()
+    # Cards lead. The record strip and the model/build stamp sit below them.
+    footer = (records_strip_html()
               + _legend_head("MLB matchup leans — Statcast xwOBA", built_txt))
     if not games:
         inner = "<div class='legend'><div class='lg-title'>No paired probables yet — " \
