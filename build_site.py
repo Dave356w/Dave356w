@@ -2935,6 +2935,20 @@ def _score_text(score):
     return str(int(value)) if pd.notna(value) else None
 
 
+def _lost(g, side):
+    """True when this side finished behind. Final games only.
+
+    A trailing team in a live game has not lost anything yet, so the dimming
+    waits for the final -- which is also what makes it readable as a result
+    rather than as a current state. A tie or a missing score dims neither."""
+    if str(g.get("abstract_state") or "").lower() != "final":
+        return False
+    other = "home" if side == "away" else "away"
+    mine = pd.to_numeric(g.get(f"{side}_score"), errors="coerce")
+    theirs = pd.to_numeric(g.get(f"{other}_score"), errors="coerce")
+    return bool(pd.notna(mine) and pd.notna(theirs) and mine < theirs)
+
+
 def _team_meta_span(g, side):
     """Render the pregame streak, replaced by the score for live/final games."""
     streak = g.get(f"{side}_streak")
@@ -2944,7 +2958,8 @@ def _team_meta_span(g, side):
         score = _score_text(g.get(f"{side}_score"))
         title = "live score" if state == "live" else "final score"
         text = score if score is not None else "—"
-        return (f"<span class='team-meta score {side}'{data} title='{title}'>"
+        cls = f"team-meta score {side}" + (" lost" if _lost(g, side) else "")
+        return (f"<span class='{cls}'{data} title='{title}'>"
                 f"{text}</span>")
     if not streak:
         return f"<span class='team-meta streak {side}' data-streak='' hidden></span>"
@@ -3604,9 +3619,17 @@ body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.45 var(--sans);
 .sw{width:11px;height:11px;border-radius:var(--r-s);display:inline-block}
 .sw.warm{background:rgba(var(--warm),.85)} .sw.cool{background:rgba(var(--cool),.85)}
 
-.grid{display:flex;flex-direction:column;gap:8px}
-.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
-  box-shadow:var(--shadow);overflow:hidden}
+/* One continuous scoreboard, not a stack of separate cards. The slate is a
+   single surface and games are divided by a hairline -- the list reads top to
+   bottom in one pass instead of as a dozen boxed objects, which is what an
+   8px gap plus a border plus a shadow per game was doing. The container keeps
+   the radius, the border and the shadow; the game gives all three up. `clip`
+   rounds the first and last summary backgrounds off at the corners. */
+.grid{display:flex;flex-direction:column;background:var(--surface);
+  border:1px solid var(--line);border-radius:var(--r);
+  box-shadow:var(--shadow);overflow:clip}
+.card{background:transparent;border:0;border-radius:0;box-shadow:none}
+.card + .card{border-top:1px solid var(--line)}
 
 /* ---------- collapsed scoreboard row ---------- */
 .game-card{margin:0}
@@ -3621,13 +3644,13 @@ body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.45 var(--sans);
 .teams{display:grid;grid-template-columns:minmax(0,1fr) minmax(120px,.68fr) minmax(0,1fr);
   align-items:center;gap:14px;width:100%;min-width:0;padding-right:22px}
 .summary-team{display:grid;align-items:center;gap:8px;min-width:0}
-.summary-team.away{grid-template-columns:42px minmax(0,1fr) auto;
+.summary-team.away{grid-template-columns:46px minmax(0,1fr) auto;
   grid-template-areas:"logo club meta"}
-.summary-team.home{grid-template-columns:auto minmax(0,1fr) 42px;
+.summary-team.home{grid-template-columns:auto minmax(0,1fr) 46px;
   grid-template-areas:"meta club logo"}
 .summary-team .clogo,.summary-logo-fallback{grid-area:logo}
-.summary-team .clogo{width:42px;height:42px;margin:0;vertical-align:middle}
-.summary-logo-fallback{display:grid;width:42px;height:42px;place-items:center;
+.summary-team .clogo{width:46px;height:46px;margin:0;vertical-align:middle}
+.summary-logo-fallback{display:grid;width:46px;height:46px;place-items:center;
   border:1px solid var(--line);border-radius:var(--r-pill);background:var(--surface-2);
   color:var(--muted);font:800 16.5px/1 var(--sans)}
 .summary-club{grid-area:club;min-width:0;overflow:hidden;text-overflow:ellipsis;
@@ -3645,7 +3668,16 @@ body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.45 var(--sans);
   color:var(--ink);transform:translateY(-50%) rotate(180deg)}
 .teams .team-meta{font:600 13px/1 var(--mono);color:var(--muted);letter-spacing:0;
   grid-area:meta;margin:0;vertical-align:middle;white-space:nowrap}
-.teams .score{font-size:18px;font-weight:800;color:var(--ink)}
+/* The score is the one thing a scoreboard exists to show, so it carries
+   the largest type on the row -- roughly the club name doubled. It sits
+   in the meta slot under the club, so the row grows to fit rather than
+   anything having to move. */
+.teams .score{font-size:28px;font-weight:800;color:var(--ink);
+  line-height:1.05;letter-spacing:-.01em}
+/* The loser's number recedes so a final reads as a result before any digit is
+   parsed. --faint is the site's lightest text tone and is held to 4.5:1 on
+   both surfaces; at this size it is large text (3:1), so it clears with room. */
+.teams .score.lost{color:var(--faint)}
 .game-no{font:700 13px/1 var(--mono);color:var(--muted);vertical-align:middle}
 .game-state{display:inline-block;padding:3px 6px;border:1px solid var(--line);
   border-radius:var(--r-s);font:750 12px/1 var(--sans);letter-spacing:.08em;
@@ -3854,17 +3886,17 @@ tr.mach{display:table-row}
   .teams{grid-template-columns:minmax(0,1fr) 92px minmax(0,1fr);
     gap:7px;padding-right:17px}
   .summary-team{gap:2px 6px}
-  .summary-team.away{grid-template-columns:30px minmax(0,1fr);
+  .summary-team.away{grid-template-columns:36px minmax(0,1fr);
     grid-template-areas:"logo club" "logo meta"}
-  .summary-team.home{grid-template-columns:minmax(0,1fr) 30px;
+  .summary-team.home{grid-template-columns:minmax(0,1fr) 36px;
     grid-template-areas:"club logo" "meta logo"}
   .summary-team.away .team-meta{justify-self:start}
   .summary-team.home .team-meta{justify-self:end;text-align:right}
-  .summary-team .clogo,.summary-logo-fallback{width:30px;height:30px}
+  .summary-team .clogo,.summary-logo-fallback{width:36px;height:36px}
   .summary-logo-fallback{font-size:14px}
   .summary-club{font-size:14px}
   .teams .team-meta{font-size:12px}
-  .teams .score{font-size:16px}
+  .teams .score{font-size:24px}
   .summary-center{gap:3px}
   .summary-time{font-size:14px;white-space:nowrap}
   .summary-market{font-size:12px}
@@ -4047,12 +4079,17 @@ def score_refresh_js():
   document.querySelectorAll('.teams[data-game-pk]').forEach(function(el){{
     headers[String(el.getAttribute('data-game-pk'))]=el;
   }});
-  function setMeta(el,score,state){{
+  function setMeta(el,score,state,otherScore){{
     if(!el) return;
     if(state==='Live'||state==='Final'){{
       el.hidden=false;
       el.textContent=(score===null||score===undefined)?'—':String(score);
-      el.className='team-meta score '+(el.classList.contains('home')?'home':'away');
+      // This rewrites className wholesale, so the loser class has to be
+      // recomputed here or a refresh would silently undo the dimming.
+      var lost=state==='Final'&&score!==null&&score!==undefined
+        &&otherScore!==null&&otherScore!==undefined&&Number(score)<Number(otherScore);
+      el.className='team-meta score '+(el.classList.contains('home')?'home':'away')
+        +(lost?' lost':'');
       el.title=state==='Live'?'live score':'final score';
     }}else{{
       var streak=el.getAttribute('data-streak')||'';
@@ -4094,8 +4131,9 @@ def score_refresh_js():
     var state=status.abstractGameState||'Preview';
     var teams=game.teams||{{}};
     setBaseOut(header.querySelector('.bo'),game.linescore||{{}},state==='Live');
-    setMeta(header.querySelector('.team-meta.away'),(teams.away||{{}}).score,state);
-    setMeta(header.querySelector('.team-meta.home'),(teams.home||{{}}).score,state);
+    var awayScore=(teams.away||{{}}).score,homeScore=(teams.home||{{}}).score;
+    setMeta(header.querySelector('.team-meta.away'),awayScore,state,homeScore);
+    setMeta(header.querySelector('.team-meta.home'),homeScore,state,awayScore);
     var inProgress=state==='Live'||state==='Final';
     var summaryTime=header.querySelector('.summary-time');
     var summaryMarket=header.querySelector('.summary-market');
