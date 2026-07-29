@@ -557,10 +557,18 @@ class MobileLayoutTests(unittest.TestCase):
 
     def test_scoreboard_keeps_team_center_team_columns(self):
         m = _mobile_rules()
-        self.assertEqual(
-            m[".teams"]["grid-template-columns"],
-            "minmax(0,1fr) 82px minmax(0,1fr)",
-        )
+        # Three columns, the middle one fixed: team / centre / team. The centre
+        # width tracks the type scale -- it has to hold "7:05 PM ET" on one
+        # line, which measures 84px at the Comfortable scale (JetBrains Mono
+        # 14px, headless Chromium). Assert the shape and the floor, not a
+        # frozen literal, so a type change fails on the thing that matters.
+        cols = m[".teams"]["grid-template-columns"].split()
+        self.assertEqual(cols[0], "minmax(0,1fr)")
+        self.assertEqual(cols[2], "minmax(0,1fr)")
+        self.assertGreaterEqual(int(cols[1].rstrip("px")), 84,
+                                "centre column cannot hold the time on one line")
+        self.assertEqual(m[".summary-time"].get("white-space"), "nowrap",
+                         "the time can still wrap if the column ever narrows")
         self.assertIn(".game-card[open]>.game-summary", b.CSS)
         self.assertIn(".summary-chevron", b.CSS)
         self.assertNotIn(".lean", m)
@@ -604,12 +612,18 @@ class StarterBlockTests(unittest.TestCase):
                          "div.sp still open where the lineup begins")
 
     def test_starter_name_rule_stays_scoped_to_the_starter(self):
-        # The 16px/700 rule is the starter's alone; the hitter cell keeps its
-        # own smaller sans face. That rule has to be qualified -- a bare
-        # `td.nm` (0,1,1) loses to `table.lu td`'s mono (0,1,2), which is what
-        # closing div.sp exposed.
-        self.assertIn(".sp .nm{font:700 16px/1.2 var(--sans)}", b.CSS)
-        self.assertIn("table.lu td.nm{font:400 12.5px/1.4 var(--sans)", b.CSS)
+        # The starter's name rule is his alone; the hitter cell keeps its own
+        # smaller sans face. That rule has to be qualified -- a bare `td.nm`
+        # (0,1,1) loses to `table.lu td`'s mono (0,1,2), which is what closing
+        # div.sp exposed. Sizes move with the type scale, so what is asserted
+        # is the qualifier and the ordering, not the literals.
+        starter = re.search(r"\.sp \.nm\{font:700 ([\d.]+)px/", b.CSS)
+        hitter = re.search(r"table\.lu td\.nm\{font:400 ([\d.]+)px/1\.4 var\(--sans\)",
+                           b.CSS)
+        self.assertIsNotNone(starter, "starter name rule missing or unqualified")
+        self.assertIsNotNone(hitter, "hitter name cell lost its sans qualifier")
+        self.assertGreater(float(starter.group(1)), float(hitter.group(1)),
+                           "starter name no longer outsizes the hitter cell")
         self.assertNotIn("\ntd.nm{font:", b.CSS)
 
 
