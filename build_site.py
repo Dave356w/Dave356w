@@ -4297,9 +4297,9 @@ def market_context_records():
 # never against the full graded pool, which mixes the pre/post-v5 scales.
 # Display-only -- the lean math, MODEL_TAG, and ledger are untouched.
 #
-# Last-resort cutoffs, used only when neither the scale-compatible ledger rows
-# nor tonight's own slate reach LEAN_STRENGTH_MIN -- in practice only on the
-# first build of a brand-new scale family with a tiny slate.
+# Prior cutoffs. No longer a last-resort branch: they are the prior that the
+# observed quantiles are shrunk toward, so they always contribute and their
+# influence decays smoothly as the pool grows (see lean_strength).
 # Provenance: p33/p80 of |xw_net| over the 24 xw+plat_consol_v8/v9 ledger rows
 # as of 2026-07-28 (0.0151 / 0.0325), rounded. The previous literal here was
 # the *pre-v5 unshrunk* p33/p80 (0.021, 0.060), left in place across the v5,
@@ -4307,9 +4307,37 @@ def market_context_records():
 # v9's observed maximum |xw_net| of 0.0462 it made "strong" unreachable for
 # every game in the family. Invalidated by any MODEL_TAG bump that changes the
 # delta scale -- i.e. whenever _SCALE_FAMILIES gains a new entry. Recompute
-# from the new family's rows, or delete this and let the dynamic scale run.
+# from the new family's rows; shrinkage bounds the damage of a stale prior but
+# does not remove it.
 LEAN_STRENGTH_FALLBACK = (0.015, 0.032)   # slight < ~p33 <= clear < ~p80 <= strong
-LEAN_STRENGTH_MIN = 30
+
+# Pseudo-count for shrinking the observed p33/p80 toward LEAN_STRENGTH_FALLBACK.
+# This replaced a hard `pool >= 30` gate that switched between frozen and
+# dynamic cutoffs in one step: on the real v8/v9/v10 distribution that gate
+# moved p80 by up to 0.0096 on the single row that tripped it, flipping a
+# game's rendered label with no change to its lean.
+#
+# Chosen by benchmark over 60 seeded pool-growth paths resampled from the real
+# scale pool, scoring continuity (largest single-row cutoff step) against
+# fidelity (|cutoff - population quantile| at a realistic pool size). Both
+# matter: continuity alone is degenerate, since K -> inf freezes the prior and
+# scores perfectly while ignoring the ledger.
+#
+#     K      max step    |bias| n=300    (current hard gate: 0.00961 / 0.00151)
+#     30     0.00502     0.00123
+#     100    0.00218     0.00088   <- adopted
+#     400    0.00136     0.00185
+#
+# 100 cuts the worst step 4.4x AND lands nearer the population quantile than
+# the gate did, because shrinkage also damps sampling noise in the quantile
+# itself. Larger K is smoother but drifts back toward a prior whose p80 is off
+# by 0.0037. K=30 -- the old gate reinterpreted as a pseudo-count, the obvious
+# first guess -- was measured *worse than the gate* on label stability.
+#
+# NOT XWOBA_SHRINK_K. Same numeral, unrelated quantity: that one is a
+# pseudo-sample of plate appearances for shrinking a rate, this one is a
+# pseudo-sample of games for shrinking a quantile. Do not sync them.
+LEAN_STRENGTH_PRIOR_N = 100
 
 
 def lean_strength_scale(slate_deltas=None):
@@ -4325,8 +4353,9 @@ def lean_strength_scale(slate_deltas=None):
     `slate_deltas` (tonight's own |Δxw|, same units by construction) tops up the
     pool so a fresh family is ranked on its own units from its first build.
 
-    Returns None (-> LEAN_STRENGTH_FALLBACK) only when the combined pool is
-    still below LEAN_STRENGTH_MIN."""
+    Returns every scale-compatible row it finds, at any size -- a thin pool is
+    handled by shrinking its quantiles toward the prior in `lean_strength`, not
+    by discarding it. Returns None only when there is no pool at all."""
     parts = []
     led = load_ledger_df()
     if led is not None and "xw_net" in led.columns:
@@ -4339,7 +4368,7 @@ def lean_strength_scale(slate_deltas=None):
     if not parts:
         return None
     arr = np.sort(np.concatenate(parts))
-    return arr if arr.size >= LEAN_STRENGTH_MIN else None
+    return arr if arr.size else None
 
 
 def _slate_deltas(games):
@@ -4361,16 +4390,29 @@ def _slate_deltas(games):
 
 
 def lean_strength(delta, scale):
-    """(label, pctile|None) for a lean magnitude |Δxw|. Ranks against `scale`
-    (sorted |xw_net| history); fixed p33/p80 cutoffs when the ledger is thin."""
+    """(label, pctile|None) for a lean magnitude |Δxw|.
+
+    Cutoffs are the pool's own p33/p80 shrunk toward `LEAN_STRENGTH_FALLBACK`
+    by pool size, `c = (n·c_obs + K·c_prior)/(n + K)` -- the same
+    empirical-Bayes form the model already uses for xwOBA, applied to a
+    quantile instead of a rate. A one-row change in the pool moves a cutoff by
+    a bounded amount at every size, so no build can relabel a game purely by
+    crossing a sample-count threshold. With no pool at all the cutoffs are
+    exactly the prior, which is the n=0 limit of the same expression rather
+    than a separate branch.
+    """
     if delta is None or pd.isna(delta):
         return None, None
     delta = abs(float(delta))
-    if scale is not None and getattr(scale, "size", 0) >= LEAN_STRENGTH_MIN:
-        pct = 100.0 * float(np.searchsorted(scale, delta, side="right")) / scale.size
-        c1, c2 = float(np.quantile(scale, 1 / 3)), float(np.quantile(scale, 0.80))
+    n = int(getattr(scale, "size", 0)) if scale is not None else 0
+    p1, p2 = LEAN_STRENGTH_FALLBACK
+    if n:
+        pct = 100.0 * float(np.searchsorted(scale, delta, side="right")) / n
+        w = n / (n + LEAN_STRENGTH_PRIOR_N)
+        c1 = w * float(np.quantile(scale, 1 / 3)) + (1.0 - w) * p1
+        c2 = w * float(np.quantile(scale, 0.80)) + (1.0 - w) * p2
     else:
-        pct, (c1, c2) = None, LEAN_STRENGTH_FALLBACK
+        pct, c1, c2 = None, p1, p2
     lab = "slight" if delta < c1 else ("clear" if delta < c2 else "strong")
     return lab, pct
 
