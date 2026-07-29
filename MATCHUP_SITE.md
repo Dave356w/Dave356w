@@ -21,6 +21,92 @@ overall×league-platoon prior and is reliability-gated. Lean is xwOBA-driven;
 the platoon lens is still computed and graded into the ledger for auditing but
 is no longer surfaced on the cards (the display is xwOBA-only).
 
+---
+
+## The current model — `xw+plat_consol_v10`
+
+**Read this section for what the code does today.** Everything below it is a
+changelog: each version note describes a *delta* against its predecessor, and
+several of those deltas have since been superseded. Where a version note and
+this section disagree, this section and the source are right.
+
+For one side of one game — the pitching side's staff against the opposing
+lineup — the build computes:
+
+**1. Lineup.** Posted Savant lineup is authoritative. Missing slots are filled
+from the active-roster top-PA pool (`posted` / `partial_filled` / `projected`);
+a posted hitter absent from the season leaderboard keeps his slot and receives
+the team's PA-weighted xwOBA (`xwOBA_team_backfill`).
+
+**2. Shrinkage.** Every hitter's season xwOBA is regressed toward the league
+baseline by his PA with a fixed pseudo-sample, `x* = (n·x + 100·prior)/(n+100)`
+(`XWOBA_SHRINK_K = 100`). A deviation keeps `n/(n+100)` of its raw size: 50% at
+100 PA, 75% at 300, ~86% at 600. A team-backfilled hitter is already an
+aggregate and is **not** shrunk again.
+
+**3. Two lineup composites**, both weighted by expected PA per batting-order
+slot (`LINEUP_SLOT_PA`, 4.61 leadoff → 3.76 for the 9-hole):
+
+- `B_0` — the neutral composite, taken before any handedness term.
+- `B_SP` — after a flat **±0.010** (`PLATOON_XWOBA_ADJ`) is applied to each
+  *one-sided* hitter according to whether he holds the platoon edge over
+  tonight's starter. Switch hitters get **0** (their season line already is
+  their advantage-state number) and are still marked ◆.
+- `platoon_delta_sp = B_SP − B_0`.
+
+**4. Two pitching inputs**, each shrunk with the same `K = 100`:
+
+- `P_SP` — the probable starter's season xwOBA-allowed, shrunk by BF.
+- `P_BP` — a role-filtered bullpen pool: active roster minus the probable,
+  keeping pitchers with start share ≤ `0.35` and ≤ `3.0` IP per appearance
+  (loose enough to retain bulk relievers, tight enough to drop rotation arms).
+  Each reliever is shrunk individually, then averaged by estimated relief
+  workload (`team BF × (1 − start share)`). Needs ≥ 3 qualifying pitchers
+  (`BULLPEN_MIN_PITCHERS`).
+
+**5. Expected starter workload.** A normal starter blends his last-five start
+average with his season IP/start, regressed toward `SP_IP_PRIOR = 5.2` and
+clipped to `[3.0, 7.0]`. An opener — repeated short starts, or a reliever
+spot-start profile — is clipped to `[0.33, 3.0]` instead.
+
+**6. Sequential matchup.** The two phases are computed separately and averaged
+on their share of **plate appearances**, using BF/IP measured from the same
+season role call:
+
+```
+M_SP = B_SP · P_SP / L          M_BP = B_0 · P_BP / L
+
+q    = (IP_SP·r_SP) / (IP_SP·r_SP + (9 − IP_SP)·r_BP)
+M    = q·M_SP + (1 − q)·M_BP            edge = M − L
+```
+
+Both phase values are per-PA rates, so an innings share would be the wrong
+denominator. When either BF/IP is unavailable the weight degrades continuously
+to the innings share `IP_SP / 9` — the identical number whenever `r_SP = r_BP`,
+so there is no threshold.
+
+**7. The lean.** `xw_net = home_off_edge − away_off_edge` (the away-SP row
+carries the *home* offense's edge). Its sign is the lean; an exact zero is an
+**abstention**, not a home pick. Full precision is retained through the
+decision — three decimals are a display format only, and a nonzero delta too
+small to show renders `<0.001`.
+
+**8. Degradation.** If either side lacks a valid bullpen aggregate, the starter
+phase is still shown but the game's full-game lean is **suppressed** and the
+side is marked `pitching_basis=starter_only_no_fullgame_lean`. v10 never treats
+a probable starter as nine innings.
+
+Not in the lean: the platoon-OPS lens (computed, graded, ledger-only) and the
+pitch-mix shadow arm (off by default). Both are described below.
+
+---
+
+## Version history
+
+Each note below is the delta that version introduced, kept for provenance —
+ledger rows are immutable and a row's `model_tag` is only interpretable against
+the version note that produced it.
+
 Historical model version `xw+plat_consol_v2` added:
 
 - **Lineup partial fill** — valid posted Savant hitters are kept in order and
@@ -224,8 +310,14 @@ because it could include rotation pitchers and double-count the probable.
 
 Daily snapshots persist the neutral and starter-adjusted lineup composites,
 starter and bullpen xwOBA, expected innings and shares, each phase matchup, the
-sequential matchup/edge, and the pitching basis. v9 starts isolated
-`RECORD_TAGS` and `SCALE_TAGS` families; v8 results remain historical only.
+sequential matchup/edge, and the pitching basis.
+
+v9 started a new `RECORD_TAGS` family, isolated from v8 — but it **shares v8's
+`SCALE_TAGS` family**, because v9 differs from v8 by exactly one term,
+`v9 − v8 = −(1 − q)·platoon_delta_sp·P_BP/L`, which leaves `|xw_net|` units
+untouched. (An earlier draft of this section claimed v9 isolated *both*
+families; the code never did that, and v10 later joined v9's record family too.
+See the table in `CLAUDE.md` for the authoritative mapping.)
 
 ### PA-share phase weighting (v10)
 
@@ -340,12 +432,13 @@ with no cells lands on a multiplier of exactly 1.0 — the degradation is
 continuous, with no coverage threshold.
 
 **Why it is dark.** At the build's usual `K = 100`, residual cell noise moves a
-game delta by about 0.013 xwOBA against a current-family median `|xw_net|` of
-0.0195 — two thirds of a typical lean, injected as noise. Holding that to ~19%
-needs `K ≈ 600`, at which point even an 80-point raw cell deviation moves a
-lineup composite by 0.0008. Whether the arm can escape that squeeze depends on
-the true dispersion of batter × pitch-type skill, which has not been measured
-here.
+game delta by about 0.013 xwOBA against a median `|xw_net|` of **0.0188** over
+the 28 v8/v9/v10 scale-family rows as of 2026-07-28 — **69%** of a typical
+lean, injected as noise. Holding that to ~19% needs `K ≈ 600`, at which point
+even an 80-point raw cell deviation moves a lineup composite by 0.0008. Whether
+the arm can escape that squeeze depends on the true dispersion of
+batter × pitch-type skill, which has not been measured here. (Recompute the
+median on any `SCALE_TAGS` change — this ratio is the entire gate.)
 
 `python pitch_arsenal_probe.py` is that measurement: it decomposes the observed
 cell dispersion into sampling and between-player components (implying a `K`),
@@ -427,24 +520,27 @@ Switch hitters appear in 67.4% of lineups (mean 0.97 per side) and were 17.7% of
 all tagged-advantage bats, so exempting them removes a systematic upward bias
 rather than a rounding effect.
 
-`MODEL_TAG` is deliberately **not** bumped, for the original adjustment or for
-the switch-hitter exemption that followed it. Note the two questions this leaves
-answered differently:
+**Versioning — resolved.** `MODEL_TAG` was deliberately *not* bumped for the
+original adjustment or for the switch-hitter exemption that followed it, which
+left prediction math changing twice *inside* `xw+plat_consol_v7`: the adjustment
+flipped 5.7% of leans against no adjustment, and the exemption flipped a further
+3.9% against the shipped adjustment. The 45 v7 rows in the ledger therefore
+share one win-loss line while having been produced by three different models,
+and the flips land on exactly the games a marginal record is most sensitive to.
 
-- **Units** (`SCALE_TAGS`) are genuinely unchanged — median `|xw_net|` moves
-  0.02672 → 0.02642, so v7 rows before and after these changes measure the delta
-  on the same scale and pool correctly for `lean_strength_scale()`.
-- **Record compatibility** (`RECORD_TAGS`) is *not* preserved by that argument.
-  Prediction math changed twice inside `xw+plat_consol_v7`: the adjustment
-  itself flipped 5.7% of leans against no adjustment, and the switch-hitter
-  exemption flipped a further 3.9% against the shipped adjustment. Rows dumped
-  in each of those three periods share one v7 win-loss line while having been
-  produced by three different models, and the flips land on exactly the games
-  the ledger's marginal record is most sensitive to. This is a knowing exception
-  to the "bump on any prediction-math change" rule in `CLAUDE.md`, not an
-  oversight; bumping to v8 (new record family, inherited scale family) is the
-  change that would fix it, and the case for doing so is now stronger than it
-  was for the first change alone.
+That was recorded here as a knowing exception to the "bump on any
+prediction-math change" rule, with the note that bumping to v8 was the fix. **v8
+duly landed** (fixed `K = 100`), and v9 and v10 after it, so the current model is
+four families clear of the problem. The v7 rows remain immutable and remain
+internally heterogeneous — read that family's 22-23 line with that caveat, and
+do not treat it as one model's record. The units argument still holds: median
+`|xw_net|` moved only 0.02672 → 0.02642 across the two changes, so v7 rows do
+pool correctly for `lean_strength_scale()` within their own scale family.
+
+The lasting lesson is the one now at the top of `CLAUDE.md`: a bump costs a
+reset of the graded sample, which is a real price, but carrying three models
+under one tag costs the ability to read the record at all — and that price is
+paid silently.
 
 ## Files
 

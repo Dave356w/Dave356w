@@ -1,5 +1,23 @@
 # F5 (1st-5-innings) market capture — validation & first results
 
+> **Historical document (2026-07-21 data, v5-era model; current model is v10).**
+> The market-capture mechanics, the data-quality audit, and the mapping fit are
+> unchanged and still describe today's code. Two things have moved:
+>
+> - **The "v6 promotion gate" below was never taken up.** At the time, v6 was
+>   planned as a unified vs-hand-xwOBA lens, and this document pre-registered a
+>   gate for it: beat `ops_net`'s r = 0.26 against ε on held-out games. v6
+>   shipped as something else entirely — the expected-IP starter/bullpen
+>   blend — and the unified vs-hand-xwOBA lens has still not been built. The
+>   gate stands unclaimed for whatever eventually implements that idea; it is
+>   *not* a gate v6 passed.
+> - **The platoon lens left the cards.** It is still computed and graded into
+>   the ledger for auditing, but the display is xwOBA-only, so the "load-bearing"
+>   framing below describes an analytical finding, not what the site shows.
+>
+> The n=203 figures are as of 2026-07-21. The ledger now holds 310 graded rows;
+> see `docs/build_logic_validation.md` for the refreshed vs-market read.
+
 **What this adds.** DK "1st 5 Innings Moneyline" open/close per ledger row
 (`f5_open_*_ml`, `f5_close_*_ml`, `f5_close_p_home`), extracted from the same
 ESPN event already joined and score-verified by `attach_market`. The platoon
@@ -57,10 +75,16 @@ Pending rows never receive F5 closes (`run_market_update.py` invariant).
 This is *validation, not edge*: agreeing with the market's composition
 estimate shows the signal is real; beating the close remains the profit
 standard. Notably the handedness-split lens — not the season-aggregate xwOBA
-lens — carries the F5-composition signal, which sharpens the case for the
-planned unified vs-hand-xwOBA lens (v6) and gives it a pre-registrable
-promotion gate: **v6's net must beat ops_net's r = 0.26 against ε on
-held-out games.**
+lens — carries the F5-composition signal, which sharpens the case for a unified
+vs-hand-xwOBA lens and gives it a pre-registrable promotion gate: **its net
+must beat `ops_net`'s r = 0.26 against ε on held-out games.**
+
+> **Status.** That lens was pencilled in as "v6" when this was written. It was
+> never built — v6 became the expected-IP starter/bullpen blend. The gate above
+> remains open and applies to whatever implements the vs-hand-xwOBA idea, which
+> as of v10 is still nothing. The nearest live relative is the pitch-mix shadow
+> arm (`docs/pitch_mix_theory.md`), which is a different decomposition and
+> carries its own separate gate.
 
 ## Standing caveats
 

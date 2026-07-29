@@ -34,45 +34,92 @@ prediction math. Two separate tag families gate two different questions:
 - `SCALE_TAGS` — do these rows measure `xw_net` on the same scale? Units
   compatibility. Governs `lean_strength_scale()` only.
 
-These are different equivalence relations and can disagree. v6 is a new
-prediction family (bullpen blend) but inherits v5's empirical-Bayes shrinkage,
-so it shares v5's delta units. Pre-v5 tags do not: shrinkage halved the scale
-(median `|xw_net|` .036 → .018). v7 changes the shrinkage estimator and starts
-new record and scale families. v8 replaces the per-build batter/pitcher
-estimates with fixed `K=100`, widening the delta distribution and again
-starting new record and scale families. v9 splits starter and bullpen matchup
-phases so the starter-handedness lineup adjustment applies only to expected
-starter innings; it starts isolated record and scale families.
+These are different equivalence relations and they do disagree. The authority is
+`_RECORD_FAMILIES` / `_SCALE_FAMILIES` in `build_site.py` (records mirrored in
+`grade_leans.py`) — not this table, which is a reading aid. Current model is
+**v10**.
+
+| tag | what changed | record family | scale family |
+|---|---|---|---|
+| v2 | baseline | 2 | 2 |
+| v3 | pregame lock only, math identical to v2 | 2+3 | 3 |
+| v4 | slot-PA lineup weighting | 4 | 4 |
+| v5 | empirical-Bayes xwOBA shrinkage (halved the scale, median `\|xw_net\|` .036 → .018) | 5 | 5+6 |
+| v6 | expected-IP starter/bullpen blend; inherits v5 shrinkage | 6 | 5+6 |
+| v7 | centre-matched shrinkage moments; full precision; zero = abstention | 7 | 7 |
+| v8 | fixed `K=100` shrinkage, widening the delta distribution | 8 | 8+9+10 |
+| v9 | starter/bullpen phases split; handedness applies to starter innings only | 9+10 | 8+9+10 |
+| v10 | phases weighted by PA share (measured BF/IP) not innings share | 9+10 | 8+9+10 |
+
+Two entries earn their keep as precedent. **v6 shares v5's units but not its
+record line** — a new prediction family can inherit a scale. **v10 shares both
+of v9's** — the PA-share reweight is a convex combination of the same two
+phases, so units are untouched, and it flips 0 of 14 leans on measured rates,
+so the win-loss line is shared rather than reset for the eighth time in a month.
+A bump does not automatically mean isolation; argue it.
+
+Known latent gap: v3's scale family is `(3,)` because `_SCALE_FAMILIES` has no
+v3 entry, though v3's math is identical to v2 and the two must share units.
+Inert — `SCALE_TAGS` only ever derives from the *current* tag — so it is
+recorded, not patched.
 
 When you bump `MODEL_TAG`, decide both questions explicitly in the PR body.
 Silence defaults to a new record family and inherited units — which is wrong
-about half the time.
+about half the time. And when you bump it, grep for the tag: it must live in
+exactly one place per module. See the workflow-pin anti-pattern below.
 
 Display-only changes do not bump `MODEL_TAG`. Card layout, copy, CSS, legend
 text: no bump. Anything that moves a lean, a delta, or a grade: bump.
 
 ## Anti-patterns with instances in this repo
 
-- **Threshold cliffs.** The old
+Each entry names a real commit in this repo. Resolved ones are kept as
+precedent — they are how the fix is known to look.
+
+**Live — not yet fixed**
+
+- **One value, three homes.** `.github/workflows/build.yml` pinned `MODEL_TAG`,
+  `RECORD_TAGS`, and `SCALE_TAGS` job-level while both modules also defaulted
+  them. The v10 commit bumped the modules and missed the workflow; the env wins,
+  so CI ran v10's PA-share weighting and stamped every row `v9`. The 14 rows
+  built 2026-07-28 carry v10 math under a v9 tag and are immutable. Detectable
+  only because they hold a non-null `sp_bf_per_ip`, which no genuine v9 row has.
+  A config value that duplicates a code default will drift; delete the copy
+  rather than syncing it.
+- **Threshold cliffs (one still live).** The old
   `use = fam if len(fam) >= 60 else pooled` scale selector switched
-  discontinuously and mixed incompatible units. `SCALE_TAGS` now removes that
-  branch. If a selector has a hard `>= N`, ask what happens on the build where
-  it trips. Degrade continuously or don't degrade.
+  discontinuously and mixed incompatible units; `SCALE_TAGS` removed that
+  branch. But `lean_strength_scale()` still returns `None` below
+  `LEAN_STRENGTH_MIN = 30` and falls back to `LEAN_STRENGTH_FALLBACK`, and the
+  two disagree right now: the 28 scale-family rows have p80 **0.0357** against
+  the frozen **0.032**, so a game at `|Δ| = 0.033` renders **strong** today (pool
+  below 30 → frozen cutoffs) and **clear** the moment a slate tops the pool past
+  30 (→ dynamic cutoffs). Display-only, but it is the same cliff. If a selector
+  has a hard `>= N`, ask what happens on the build where it trips.
 - **Constants frozen from data.** `LEAN_STRENGTH_FALLBACK` was a literal copy of
   the pooled p33/p80 at the time it was written, and stayed there through two
-  model versions that changed the distribution underneath it. If a constant was
-  read off the ledger, comment where it came from and what would invalidate it.
+  model versions that changed the distribution underneath it. It has since been
+  re-derived for the v8/v9/v10 scale, but it is still a literal and will go
+  stale again on the next scale family. If a constant was read off the ledger,
+  comment where it came from and what would invalidate it.
 - **Deleting controls as clutter.** The walk-forward Pythagorean control arm was
   added, then removed in a UI declutter three commits later. Controls establish
   whether the model beats a trivial baseline. If a control is visually noisy,
-  move it to the ledger as a column — do not delete it.
-- **Public claims the data can't support.** `grades.html` asserts all rows
-  locked before first pitch; `lock_status` is null on 149 of 244 rows. Before
-  adding a methodology claim to a rendered page, confirm every row it covers
-  carries the evidence.
-- **Internal and public artifacts disagreeing.** `data/ledger_report.txt`
-  reports per-family records and says the current family has no graded games.
-  The site publishes a single pooled record. When you change one, change the
+  move it to the ledger as a column — do not delete it. Still absent; the only
+  live control is the always-home baseline in `ledger_report.txt`.
+
+**Resolved — keep as precedent**
+
+- **Public claims the data can't support.** `grades.html` asserted every row
+  locked before first pitch while `lock_status` was null on the pre-v3 rows.
+  Fixed by `_lock_provenance()`, which now states the split instead of the
+  whole — currently "168 of 317 rows carry a pregame lock timestamp; 149 legacy
+  rows predate that instrumentation." Report provenance, don't assert coverage.
+- **Internal and public artifacts disagreeing.** `data/ledger_report.txt` once
+  said the current family had no graded games while the site published a pooled
+  record. Both now render from the same ledger through
+  `RECORD_TAGS` — the report shows the current family plus immutable per-family
+  history, the site shows the pooled headline. When you change one, change the
   other or state in the PR why they should differ.
 
 ## No-lookahead
