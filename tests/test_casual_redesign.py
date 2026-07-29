@@ -54,6 +54,77 @@ class LeanStrengthTests(unittest.TestCase):
         # .0462, so "strong" was unreachable for the entire family.
         self.assertLess(b.LEAN_STRENGTH_FALLBACK[1], 0.0462)
 
+    # --- cutoff continuity (the p33/p80 gate that used to sit at pool >= 30) --
+
+    def _c2(self, scale):
+        """The clear/strong boundary lean_strength is *actually* using, found by
+        bisection on its own output. Deliberately does not recompute the
+        formula, so the test fails if the implementation stops matching it."""
+        lo, hi = 0.0, 1.0
+        for _ in range(80):
+            mid = (lo + hi) / 2
+            if b.lean_strength(mid, scale)[0] == "strong":
+                hi = mid
+            else:
+                lo = mid
+        return hi
+
+    # Pool geometry matters for these two: the shipped cliff only bites when the
+    # observed p80 sits ABOVE the frozen 0.032 prior, which is the real
+    # v8/v9/v10 situation (observed 0.0357). linspace(0.002, 0.06, 40) has p80
+    # 0.0353 at n=29, reproducing that within 0.0004. A pool whose p80 falls
+    # below 0.032 hides the bug -- an earlier draft of these tests used one and
+    # passed against the unfixed code.
+    CLIFF_POOL = (0.002, 0.06, 40)
+
+    def _pool(self):
+        import numpy as _np
+        lo, hi, n = self.CLIFF_POOL
+        return _np.sort(_np.linspace(lo, hi, n))
+
+    def test_no_cutoff_jump_at_the_old_gate(self):
+        # The old `pool >= 30` switch moved p80 in one step on the row that
+        # tripped it. Growing the pool across that point must now be smooth.
+        pool = self._pool()
+        cuts = [self._c2(pool[:n]) for n in range(25, 36)]
+        steps = [abs(y - x) for x, y in zip(cuts, cuts[1:])]
+        self.assertLess(max(steps), 0.002, f"cutoff jumped: {steps}")
+        # and the n=0 -> n=1 transition is continuous too (no branch there)
+        self.assertLess(abs(self._c2(pool[:1]) - self._c2(None)), 0.002)
+
+    def test_one_row_relabels_only_a_narrow_band(self):
+        # A moving cutoff must eventually cross any fixed delta -- that is not
+        # the bug. The bug was how *wide* the band relabelled by a single row
+        # was: the gate swapped the 0.032 prior for a ~0.0365 observed p80 in
+        # one step, relabelling every game in between at once. Measure the band
+        # instead of demanding no game ever changes.
+        import numpy as _np
+        pool = self._pool()
+        grid = _np.linspace(0.001, 0.05, 200)
+        labs = lambda s: [b.lean_strength(d, s)[0] for d in grid]
+        worst = max(sum(x != y for x, y in zip(labs(pool[:n]), labs(pool[:n + 1])))
+                    for n in range(5, 39))
+        # shipped cliff relabels ~18/200 on the row that trips the gate
+        self.assertLessEqual(worst, 5, f"a single row relabelled {worst}/200 probes")
+
+    def test_empty_pool_equals_the_prior_exactly(self):
+        # n=0 is the limit of the shrinkage expression, not a separate branch.
+        c1, c2 = b.LEAN_STRENGTH_FALLBACK
+        self.assertEqual(b.lean_strength(c1 - 1e-9, None)[0], "slight")
+        self.assertEqual(b.lean_strength(c2 - 1e-9, None)[0], "clear")
+        self.assertEqual(b.lean_strength(c2 + 1e-9, None)[0], "strong")
+
+    def test_large_pool_converges_toward_observed_quantiles(self):
+        # Shrinkage must decay: at a big pool the cutoffs track the data, not
+        # the prior. Guards against a K so large the ledger never takes over.
+        import numpy as _np
+        pool = _np.sort(_np.linspace(0.10, 0.30, 4000))   # far from the prior
+        w = 4000 / (4000 + b.LEAN_STRENGTH_PRIOR_N)
+        self.assertGreater(w, 0.97)
+        # a delta below the observed p33 must read "slight" despite the prior
+        # cutoffs (0.015/0.032) sitting far below this pool entirely
+        self.assertEqual(b.lean_strength(0.11, pool)[0], "slight")
+
     def test_ranked_against_scale(self):
         scale = np.sort(np.array([round(0.01 * i, 2) for i in range(1, 11)] * 4, float))
         lab, pct = b.lean_strength(0.10, scale)
@@ -82,14 +153,17 @@ class LeanStrengthTests(unittest.TestCase):
         self.assertLess(scale.max(), 0.02)
 
     def test_scale_thin_pool_no_allgraded_fallback(self):
-        # Too few scale-compatible rows -> None (fixed cutoffs), NOT a fallback
-        # to the 200 incompatible pre-v5 rows.
+        # A thin pool must still never reach for the 200 incompatible pre-v5
+        # rows. It is kept (and shrunk toward the prior downstream) rather than
+        # discarded, so assert its *contents*, not its size against a gate.
         rows = ([("xw+plat_consol_v6", 0.015)] * 10
                 + [("xw+plat_consol_v2", 0.040)] * 200)
         from unittest import mock
         with mock.patch.object(b, "load_ledger_df", return_value=self._ledger(rows)), \
                 mock.patch.object(b, "SCALE_TAGS", ("xw+plat_consol_v5", "xw+plat_consol_v6")):
-            self.assertIsNone(b.lean_strength_scale())
+            scale = b.lean_strength_scale()
+        self.assertEqual(scale.size, 10)
+        self.assertLess(scale.max(), 0.02)   # never the 0.040 pre-v5 units
 
     def test_scale_counts_pending_rows(self):
         # |xw_net| is a pregame quantity: a magnitude scale needs no outcome.
@@ -104,16 +178,22 @@ class LeanStrengthTests(unittest.TestCase):
         self.assertEqual(scale.size, 40)
 
     def test_slate_deltas_top_up_thin_ledger(self):
-        # A fresh scale family: 24 ledger rows is under the minimum on its own,
-        # but tonight's own deltas are the same units and carry it over.
+        # A fresh scale family: tonight's own deltas are the same units and
+        # join the ledger rows in one pool.
         rows = [("xw+plat_consol_v9", 0.02)] * 24
         from unittest import mock
         with mock.patch.object(b, "load_ledger_df", return_value=self._ledger(rows)), \
                 mock.patch.object(b, "SCALE_TAGS", ("xw+plat_consol_v9",)):
+            bare = b.lean_strength_scale()
+            topped = b.lean_strength_scale([0.03] * 12)
+        self.assertEqual(bare.size, 24)
+        self.assertEqual(topped.size, 36)
+
+    def test_empty_pool_is_none(self):
+        from unittest import mock
+        with mock.patch.object(b, "load_ledger_df", return_value=None):
             self.assertIsNone(b.lean_strength_scale())
-            scale = b.lean_strength_scale([0.03] * 12)
-        self.assertIsNotNone(scale)
-        self.assertEqual(scale.size, 36)
+            self.assertIsNone(b.lean_strength_scale([]))
 
     def test_v8_v9_v10_share_a_scale_family(self):
         # v9 - v8 is one term worth ~6% of matchup dispersion and flips no

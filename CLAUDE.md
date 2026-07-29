@@ -86,16 +86,6 @@ precedent — they are how the fix is known to look.
   only because they hold a non-null `sp_bf_per_ip`, which no genuine v9 row has.
   A config value that duplicates a code default will drift; delete the copy
   rather than syncing it.
-- **Threshold cliffs (one still live).** The old
-  `use = fam if len(fam) >= 60 else pooled` scale selector switched
-  discontinuously and mixed incompatible units; `SCALE_TAGS` removed that
-  branch. But `lean_strength_scale()` still returns `None` below
-  `LEAN_STRENGTH_MIN = 30` and falls back to `LEAN_STRENGTH_FALLBACK`, and the
-  two disagree right now: the 28 scale-family rows have p80 **0.0357** against
-  the frozen **0.032**, so a game at `|Δ| = 0.033` renders **strong** today (pool
-  below 30 → frozen cutoffs) and **clear** the moment a slate tops the pool past
-  30 (→ dynamic cutoffs). Display-only, but it is the same cliff. If a selector
-  has a hard `>= N`, ask what happens on the build where it trips.
 - **Constants frozen from data.** `LEAN_STRENGTH_FALLBACK` was a literal copy of
   the pooled p33/p80 at the time it was written, and stayed there through two
   model versions that changed the distribution underneath it. It has since been
@@ -110,6 +100,22 @@ precedent — they are how the fix is known to look.
 
 **Resolved — keep as precedent**
 
+- **Threshold cliffs.** Two instances, same shape. The old
+  `use = fam if len(fam) >= 60 else pooled` scale selector switched
+  discontinuously and mixed incompatible units; `SCALE_TAGS` removed that
+  branch. Then `lean_strength_scale()` was found returning `None` below
+  `LEAN_STRENGTH_MIN = 30`, so the cutoffs swapped the frozen
+  `LEAN_STRENGTH_FALLBACK` for the pool's own p33/p80 in one step — worth up to
+  0.0096 on p80, relabelling every game in the crossed band with no change to
+  any lean. Fixed by deleting the gate and shrinking the observed quantiles
+  toward the prior by pool size, `c = (n·c_obs + K·c_prior)/(n + K)` — the
+  empirical-Bayes form already used for xwOBA, applied to a quantile. The
+  prior stops being a branch and becomes the `n = 0` limit of one expression.
+  **The general lesson:** when a selector has a hard `>= N`, the fix is usually
+  not a better `N` — it is to make `N` a weight so nothing switches. And pick
+  the weight by benchmark: the obvious `K = 30` (the old gate reinterpreted)
+  measured *worse than the gate* on label stability; `K = 100` cut the worst
+  single-row step 4.4× and landed nearer the population quantile.
 - **Public claims the data can't support.** `grades.html` asserted every row
   locked before first pitch while `lock_status` was null on the pre-v3 rows.
   Fixed by `_lock_provenance()`, which now states the split instead of the
