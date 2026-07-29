@@ -948,8 +948,10 @@ class ShapeScaleTests(unittest.TestCase):
     def test_containers_and_inline_marks_do_not_swap_tiers(self):
         # Spot-check the two ends of the scale so a future edit cannot
         # quietly give a badge a container radius.
-        self.assertIn(".card{background:var(--surface);border:1px solid var(--line);"
-                      "border-radius:var(--r)", b.CSS)
+        # `.grid` is the container now -- the slate is one surface and the
+        # games inside it are hairline-separated rather than boxed.
+        self.assertIn("border:1px solid var(--line);border-radius:var(--r);", b.CSS)
+        self.assertIn(".card{background:transparent;border:0;border-radius:0", b.CSS)
         self.assertIn("border-radius:var(--r-s);padding:1px 6px}", b.CSS)
 
 

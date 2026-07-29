@@ -3604,9 +3604,17 @@ body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.45 var(--sans);
 .sw{width:11px;height:11px;border-radius:var(--r-s);display:inline-block}
 .sw.warm{background:rgba(var(--warm),.85)} .sw.cool{background:rgba(var(--cool),.85)}
 
-.grid{display:flex;flex-direction:column;gap:8px}
-.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
-  box-shadow:var(--shadow);overflow:hidden}
+/* One continuous scoreboard, not a stack of separate cards. The slate is a
+   single surface and games are divided by a hairline -- the list reads top to
+   bottom in one pass instead of as a dozen boxed objects, which is what an
+   8px gap plus a border plus a shadow per game was doing. The container keeps
+   the radius, the border and the shadow; the game gives all three up. `clip`
+   rounds the first and last summary backgrounds off at the corners. */
+.grid{display:flex;flex-direction:column;background:var(--surface);
+  border:1px solid var(--line);border-radius:var(--r);
+  box-shadow:var(--shadow);overflow:clip}
+.card{background:transparent;border:0;border-radius:0;box-shadow:none}
+.card + .card{border-top:1px solid var(--line)}
 
 /* ---------- collapsed scoreboard row ---------- */
 .game-card{margin:0}
@@ -3621,13 +3629,13 @@ body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.45 var(--sans);
 .teams{display:grid;grid-template-columns:minmax(0,1fr) minmax(120px,.68fr) minmax(0,1fr);
   align-items:center;gap:14px;width:100%;min-width:0;padding-right:22px}
 .summary-team{display:grid;align-items:center;gap:8px;min-width:0}
-.summary-team.away{grid-template-columns:42px minmax(0,1fr) auto;
+.summary-team.away{grid-template-columns:46px minmax(0,1fr) auto;
   grid-template-areas:"logo club meta"}
-.summary-team.home{grid-template-columns:auto minmax(0,1fr) 42px;
+.summary-team.home{grid-template-columns:auto minmax(0,1fr) 46px;
   grid-template-areas:"meta club logo"}
 .summary-team .clogo,.summary-logo-fallback{grid-area:logo}
-.summary-team .clogo{width:42px;height:42px;margin:0;vertical-align:middle}
-.summary-logo-fallback{display:grid;width:42px;height:42px;place-items:center;
+.summary-team .clogo{width:46px;height:46px;margin:0;vertical-align:middle}
+.summary-logo-fallback{display:grid;width:46px;height:46px;place-items:center;
   border:1px solid var(--line);border-radius:var(--r-pill);background:var(--surface-2);
   color:var(--muted);font:800 16.5px/1 var(--sans)}
 .summary-club{grid-area:club;min-width:0;overflow:hidden;text-overflow:ellipsis;
@@ -3645,7 +3653,12 @@ body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.45 var(--sans);
   color:var(--ink);transform:translateY(-50%) rotate(180deg)}
 .teams .team-meta{font:600 13px/1 var(--mono);color:var(--muted);letter-spacing:0;
   grid-area:meta;margin:0;vertical-align:middle;white-space:nowrap}
-.teams .score{font-size:18px;font-weight:800;color:var(--ink)}
+/* The score is the one thing a scoreboard exists to show, so it carries
+   the largest type on the row -- roughly the club name doubled. It sits
+   in the meta slot under the club, so the row grows to fit rather than
+   anything having to move. */
+.teams .score{font-size:28px;font-weight:800;color:var(--ink);
+  line-height:1.05;letter-spacing:-.01em}
 .game-no{font:700 13px/1 var(--mono);color:var(--muted);vertical-align:middle}
 .game-state{display:inline-block;padding:3px 6px;border:1px solid var(--line);
   border-radius:var(--r-s);font:750 12px/1 var(--sans);letter-spacing:.08em;
@@ -3854,17 +3867,17 @@ tr.mach{display:table-row}
   .teams{grid-template-columns:minmax(0,1fr) 92px minmax(0,1fr);
     gap:7px;padding-right:17px}
   .summary-team{gap:2px 6px}
-  .summary-team.away{grid-template-columns:30px minmax(0,1fr);
+  .summary-team.away{grid-template-columns:36px minmax(0,1fr);
     grid-template-areas:"logo club" "logo meta"}
-  .summary-team.home{grid-template-columns:minmax(0,1fr) 30px;
+  .summary-team.home{grid-template-columns:minmax(0,1fr) 36px;
     grid-template-areas:"club logo" "meta logo"}
   .summary-team.away .team-meta{justify-self:start}
   .summary-team.home .team-meta{justify-self:end;text-align:right}
-  .summary-team .clogo,.summary-logo-fallback{width:30px;height:30px}
+  .summary-team .clogo,.summary-logo-fallback{width:36px;height:36px}
   .summary-logo-fallback{font-size:14px}
   .summary-club{font-size:14px}
   .teams .team-meta{font-size:12px}
-  .teams .score{font-size:16px}
+  .teams .score{font-size:24px}
   .summary-center{gap:3px}
   .summary-time{font-size:14px;white-space:nowrap}
   .summary-market{font-size:12px}
