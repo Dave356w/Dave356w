@@ -2506,7 +2506,7 @@ def clamp(x, a, b):
 def edge_color(edge, ksign=1):
     if edge is None:
         return "var(--faint)"
-    return "rgba(var(--warm),1)" if edge * ksign >= 0 else "rgba(var(--cool),1)"
+    return "rgba(var(--warm-tx),1)" if edge * ksign >= 0 else "rgba(var(--cool-tx),1)"
 
 
 def f3(v):
@@ -3466,6 +3466,26 @@ CSS = r"""/* ============================================================
   --warm:198,84,44;             /* ember  -- offense-favorable  */
   --cool:52,116,168;            /* steel  -- pitcher-favorable  */
   --lean:176,124,16;            /* amber  -- lean pill / links  */
+  /* Text-only twins of the three accents. The accents above were picked as
+     fills and borders, but they are also set as `color` on the tier pills,
+     the LIVE badge, the read-line emphasis, the verdict label and the ledger
+     badges -- all 9-13.5px, and most of them sitting on a .08-.12 tint of
+     their own hue, which lifts the background toward the text. Measured in
+     headless Chromium at 390px over the composited tint: warm 3.94:1 on the
+     `.B` strip and 4.01:1 on its own tier tint, cool 3.90:1 under the LIVE
+     badge, lean 3.12:1 on the amber verdict -- all short of 4.5:1, in light
+     only (dark passed everywhere, so there the twins alias the accents).
+     These are the same hue and saturation darkened in HLS until every
+     background each one lands on -- both bare surfaces and a .08/.10/.12
+     wash of its own hue over either -- clears 4.5:1. The .12 case is the
+     binding one; solving against .08 alone left the ledger W/L badges at
+     3.86:1. Use them wherever an accent
+     is the `color`; keep the base tokens for fills, borders and bar hues so
+     the percentile bars and legend swatches do not shift.
+     tests/test_casual_redesign.py measures both. */
+  --warm-tx:164,69,36;
+  --cool-tx:46,103,149;
+  --lean-tx:130,92,12;
   --amberbg:246,196,86;
   --chip-fg:#1b1e25;
   --mono:ui-monospace,"SF Mono","Cascadia Mono",Menlo,Consolas,monospace;
@@ -3488,6 +3508,9 @@ CSS = r"""/* ============================================================
   --bg:#0f1418; --surface:#171d24; --surface-2:#131920; --ink:#e7ecef;
   --muted:#96a2ad; --faint:#7f8b97; --line:#242e38; --line-2:#1c242c;
   --warm:236,122,72; --cool:96,158,208; --lean:244,196,96; --amberbg:244,196,96;
+  /* Dark already clears 4.5:1 on every accent-as-text pair, so the text
+     twins alias the accents rather than introducing a second palette. */
+  --warm-tx:236,122,72; --cool-tx:96,158,208; --lean-tx:244,196,96;
   --chip-fg:#e7ecef;
   --shadow:0 1px 2px rgba(0,0,0,.45),0 14px 32px -22px rgba(0,0,0,.8);
 }}
@@ -3495,6 +3518,9 @@ html[data-theme="dark"]{
   --bg:#0f1418; --surface:#171d24; --surface-2:#131920; --ink:#e7ecef;
   --muted:#96a2ad; --faint:#7f8b97; --line:#242e38; --line-2:#1c242c;
   --warm:236,122,72; --cool:96,158,208; --lean:244,196,96; --amberbg:244,196,96;
+  /* Dark already clears 4.5:1 on every accent-as-text pair, so the text
+     twins alias the accents rather than introducing a second palette. */
+  --warm-tx:236,122,72; --cool-tx:96,158,208; --lean-tx:244,196,96;
   --chip-fg:#e7ecef;
   --shadow:0 1px 2px rgba(0,0,0,.45),0 14px 32px -22px rgba(0,0,0,.8);
 }
@@ -3578,7 +3604,7 @@ body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 var(--sans);
 .game-state{display:inline-block;padding:3px 6px;border:1px solid var(--line);
   border-radius:var(--r-s);font:750 9px/1 var(--sans);letter-spacing:.08em;
   vertical-align:middle;color:var(--muted);background:var(--surface-2)}
-.game-state.live{color:rgba(var(--cool),1);border-color:rgba(var(--cool),.35);
+.game-state.live{color:rgba(var(--cool-tx),1);border-color:rgba(var(--cool),.35);
   background:rgba(var(--cool),.10)}
 
 /* Base-out state: three bases on a diamond over three out dots, the scoreboard
@@ -3645,7 +3671,7 @@ body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 var(--sans);
 .player-link{color:inherit;text-decoration:underline;
   text-decoration-color:rgba(var(--lean),.5);text-decoration-thickness:1px;
   text-underline-offset:2px}
-.player-link:hover{color:rgba(var(--lean),1);text-decoration-color:currentColor}
+.player-link:hover{color:rgba(var(--lean-tx),1);text-decoration-color:currentColor}
 .player-link:focus-visible{
   outline:2px solid rgba(var(--lean),1);outline-offset:2px}
 .hand{font:500 10px/1.4 var(--mono);color:var(--muted);border:1px solid var(--line);border-radius:var(--r-s);padding:0 4px}
@@ -3664,7 +3690,7 @@ body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 var(--sans);
 .tier,.flag{font:600 9.5px/1.4 var(--sans);letter-spacing:.06em;text-transform:uppercase;
   border-radius:var(--r-s);padding:1px 6px;white-space:nowrap}
 .flag{color:var(--muted);border:1px solid var(--line)}
-.flag.warn{color:rgba(var(--warm),1);border-color:rgba(var(--warm),.45)}
+.flag.warn{color:rgba(var(--warm-tx),1);border-color:rgba(var(--warm),.45)}
 .flag.mute{color:var(--faint)}
 
 /* ---------- lineup: order rail + shared-axis edge bars ---------- */
@@ -3675,8 +3701,8 @@ details.lineup summary::-webkit-details-marker{display:none}
 details.lineup summary:focus-visible{outline:2px solid rgba(var(--lean),1);outline-offset:2px}
 summary .tl{font:700 11px/1.4 var(--sans);letter-spacing:.12em;text-transform:uppercase}
 summary .st{font:600 10px/1.4 var(--sans);letter-spacing:.08em;border-radius:var(--r-s);padding:1px 6px}
-summary .st.posted{color:rgba(var(--cool),1);border:1px solid rgba(var(--cool),.45)}
-summary .st.partial{color:rgba(var(--lean),1);border:1px solid rgba(var(--amberbg),.5)}
+summary .st.posted{color:rgba(var(--cool-tx),1);border:1px solid rgba(var(--cool),.45)}
+summary .st.partial{color:rgba(var(--lean-tx),1);border:1px solid rgba(var(--amberbg),.5)}
 summary .st.projected{color:var(--faint);border:1px solid var(--line)}
 summary .lw{margin-left:auto;font:500 11px/1.4 var(--mono);color:var(--muted);font-variant-numeric:tabular-nums}
 summary .chev{font-size:10px;color:var(--faint);transition:transform .12s}
@@ -3707,7 +3733,7 @@ td.bar{width:86px;padding:4px 8px 4px 2px}
 .read{margin:0;padding:12px 16px;font:500 13.5px/1.5 var(--sans);color:var(--ink);
   border-bottom:1px solid var(--line-2)}
 .read b{font-weight:700}
-.read .warmtx{color:rgba(var(--warm),1)} .read .cooltx{color:rgba(var(--cool),1)}
+.read .warmtx{color:rgba(var(--warm-tx),1)} .read .cooltx{color:rgba(var(--cool-tx),1)}
 
 /* percentile slider (fill length = percentile; hue = whose favor) */
 .sl{display:inline-block;width:88px;height:9px;border-radius:var(--r-s);background:var(--surface-2);
@@ -3722,23 +3748,23 @@ td.bar{width:86px;padding:4px 8px 4px 2px}
 .spct .lab{font:600 9.5px/1.4 var(--sans);letter-spacing:.06em;text-transform:uppercase;
   color:var(--muted);min-width:64px}
 /* `.tier` type + box metrics are shared with `.flag` up in the SP block. */
-.tier.elite{color:rgba(var(--cool),1);border:1px solid rgba(var(--cool),.5);background:rgba(var(--cool),.10)}
+.tier.elite{color:rgba(var(--cool-tx),1);border:1px solid rgba(var(--cool),.5);background:rgba(var(--cool),.10)}
 .tier.solid{color:var(--muted);border:1px solid var(--line)}
-.tier.below{color:rgba(var(--warm),1);border:1px solid rgba(var(--warm),.5);background:rgba(var(--warm),.08)}
+.tier.below{color:rgba(var(--warm-tx),1);border:1px solid rgba(var(--warm),.5);background:rgba(var(--warm),.08)}
 
 /* spotlight (top bats by percentile) */
 .spot{display:flex;flex-wrap:wrap;align-items:baseline;gap:5px 8px;margin:12px 0 2px}
 .spot .sl-lab{font:600 9.5px/1.4 var(--sans);letter-spacing:.1em;text-transform:uppercase;color:var(--faint)}
 .spot .pill{font:600 11px/1.3 var(--mono);color:var(--ink);background:var(--surface-2);
   border:1px solid var(--line-2);border-radius:var(--r-pill);padding:2px 9px;font-variant-numeric:tabular-nums}
-.spot .pill b{color:rgba(var(--warm),1)}
+.spot .pill b{color:rgba(var(--warm-tx),1)}
 
 /* model-vs-market verdict — its own full-width row beneath the odds, at every
    width. The prose grows downward instead of stealing width from the numbers. */
 .verdict{padding:7px 16px;border-top:1px solid var(--line-2);border-left:3px solid var(--line)}
 .verdict .l{color:var(--muted)} .verdict .vt{font:600 12px/1.4 var(--sans);color:var(--muted);margin-top:2px}
 .verdict.edge{border-left-color:rgba(var(--lean),1);background:rgba(var(--amberbg),.10)}
-.verdict.edge .l{color:rgba(var(--lean),1)} .verdict.edge .vt{color:var(--ink)}
+.verdict.edge .l{color:rgba(var(--lean-tx),1)} .verdict.edge .vt{color:var(--ink)}
 
 /* hitter row: percentile column + name cell */
 td.pct{width:150px;white-space:nowrap}
@@ -3748,7 +3774,7 @@ table.lu td.nm,table.lu th.nm,table.lu td.pos{text-align:left}
 table.lu td.nm{font:400 12.5px/1.4 var(--sans);max-width:170px;
   overflow:hidden;text-overflow:ellipsis}
 td.nm .b{font:400 9px/1 var(--mono);color:var(--muted);margin-left:4px}
-td.nm .adv{color:rgba(var(--warm),1);font-size:10px;margin-left:2px}
+td.nm .adv{color:rgba(var(--warm-tx),1);font-size:10px;margin-left:2px}
 
 /* Model machinery — always shown (analyst is the default and only view). The
    per-element display types match how the old Analyst toggle revealed them. */
@@ -3817,6 +3843,22 @@ tr.mach{display:table-row}
   .sl{width:46px}
   .pn{margin-left:5px;font-size:10px}
 }
+
+/* ============================================================
+   Touch targets (pointer axis, not width)
+   ------------------------------------------------------------
+   Measured in headless Chromium at 390px: the theme button rendered 28px
+   tall and every lineup disclosure 32px, against a 44px floor (iOS HIG) /
+   48dp (Material). The collapsed game row already clears it at 82px.
+   Gated on `pointer:coarse` rather than a width breakpoint because it is
+   the input device, not the viewport, that sets the floor -- a touch laptop
+   at 1200px needs it and a 400px desktop window does not. Padding does the
+   growing, so the type and the layout are untouched.
+   ============================================================ */
+@media (pointer:coarse){
+  .theme{min-height:44px;padding:7px 14px}
+  details.lineup summary{padding-top:14px;padding-bottom:12px}
+}
 """
 
 CSS_GRADES = r"""
@@ -3825,11 +3867,11 @@ CSS_GRADES = r"""
   font:600 12px/1.4 var(--mono);color:var(--ink);font-variant-numeric:tabular-nums}
 .gradestrip .lab{font:600 9.5px/1 var(--sans);text-transform:uppercase;letter-spacing:.09em;color:var(--muted)}
 .gradestrip .muted{color:var(--muted);font-weight:500}
-.gradestrip a{color:rgba(var(--lean),1);text-decoration:none;margin-left:auto;font:600 12px/1 var(--sans);white-space:nowrap}
+.gradestrip a{color:rgba(var(--lean-tx),1);text-decoration:none;margin-left:auto;font:600 12px/1 var(--sans);white-space:nowrap}
 .gradestrip a:hover{text-decoration:underline}
 
 .backlink{font:600 12px/1 var(--sans);margin:0 2px 12px}
-.backlink a{color:rgba(var(--lean),1);text-decoration:none}
+.backlink a{color:rgba(var(--lean-tx),1);text-decoration:none}
 .backlink a:hover{text-decoration:underline}
 
 /* ---------- grades page: masthead ---------- */
@@ -3847,8 +3889,8 @@ CSS_GRADES = r"""
 .gr-stat .v{font:600 19px/1.2 var(--mono);font-variant-numeric:tabular-nums;
   color:var(--chip-fg);margin-top:3px}
 .gr-stat .s{font:400 10.5px/1.35 var(--mono);color:var(--muted);margin-top:2px}
-.gr-stat .v.cool{color:rgba(var(--cool),1)}
-.gr-stat .v.warm{color:rgba(var(--warm),1)}
+.gr-stat .v.cool{color:rgba(var(--cool-tx),1)}
+.gr-stat .v.warm{color:rgba(var(--warm-tx),1)}
 .gr-note{font:500 11px/1.55 var(--mono);color:var(--faint);margin:0 2px 14px}
 .gr-note b{color:var(--muted);font-weight:700}
 
@@ -3883,12 +3925,12 @@ tr.gr-day .rec{float:right;color:var(--muted)}
 /* ---------- badges ---------- */
 .wlt{display:inline-block;min-width:17px;text-align:center;font:700 10.5px/1 var(--mono);
   padding:3px 6px;border-radius:var(--r-s)}
-.wlt.W{color:rgba(var(--cool),1);background:rgba(var(--cool),.12);border:1px solid rgba(var(--cool),.3)}
-.wlt.L{color:rgba(var(--warm),1);background:rgba(var(--warm),.12);border:1px solid rgba(var(--warm),.3)}
+.wlt.W{color:rgba(var(--cool-tx),1);background:rgba(var(--cool),.12);border:1px solid rgba(var(--cool),.3)}
+.wlt.L{color:rgba(var(--warm-tx),1);background:rgba(var(--warm),.12);border:1px solid rgba(var(--warm),.3)}
 .wlt.T{color:var(--muted);background:var(--surface-2);border:1px solid var(--line)}
 .wlt.none{color:var(--faint);background:transparent;border:1px dashed var(--line)}
 .st{font:600 9.5px/1 var(--sans);letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
-.st.void{color:rgba(var(--warm),.9)}
+.st.void{color:rgba(var(--warm-tx),.9)}
 
 /* ---------- phone: each row becomes a labelled block ----------
    The table used to carry min-width:760px, so every phone view of the ledger
