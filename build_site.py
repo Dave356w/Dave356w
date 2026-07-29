@@ -2935,6 +2935,20 @@ def _score_text(score):
     return str(int(value)) if pd.notna(value) else None
 
 
+def _lost(g, side):
+    """True when this side finished behind. Final games only.
+
+    A trailing team in a live game has not lost anything yet, so the dimming
+    waits for the final -- which is also what makes it readable as a result
+    rather than as a current state. A tie or a missing score dims neither."""
+    if str(g.get("abstract_state") or "").lower() != "final":
+        return False
+    other = "home" if side == "away" else "away"
+    mine = pd.to_numeric(g.get(f"{side}_score"), errors="coerce")
+    theirs = pd.to_numeric(g.get(f"{other}_score"), errors="coerce")
+    return bool(pd.notna(mine) and pd.notna(theirs) and mine < theirs)
+
+
 def _team_meta_span(g, side):
     """Render the pregame streak, replaced by the score for live/final games."""
     streak = g.get(f"{side}_streak")
@@ -2944,7 +2958,8 @@ def _team_meta_span(g, side):
         score = _score_text(g.get(f"{side}_score"))
         title = "live score" if state == "live" else "final score"
         text = score if score is not None else "—"
-        return (f"<span class='team-meta score {side}'{data} title='{title}'>"
+        cls = f"team-meta score {side}" + (" lost" if _lost(g, side) else "")
+        return (f"<span class='{cls}'{data} title='{title}'>"
                 f"{text}</span>")
     if not streak:
         return f"<span class='team-meta streak {side}' data-streak='' hidden></span>"
@@ -3659,6 +3674,10 @@ body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.45 var(--sans);
    anything having to move. */
 .teams .score{font-size:28px;font-weight:800;color:var(--ink);
   line-height:1.05;letter-spacing:-.01em}
+/* The loser's number recedes so a final reads as a result before any digit is
+   parsed. --faint is the site's lightest text tone and is held to 4.5:1 on
+   both surfaces; at this size it is large text (3:1), so it clears with room. */
+.teams .score.lost{color:var(--faint)}
 .game-no{font:700 13px/1 var(--mono);color:var(--muted);vertical-align:middle}
 .game-state{display:inline-block;padding:3px 6px;border:1px solid var(--line);
   border-radius:var(--r-s);font:750 12px/1 var(--sans);letter-spacing:.08em;
@@ -4060,12 +4079,17 @@ def score_refresh_js():
   document.querySelectorAll('.teams[data-game-pk]').forEach(function(el){{
     headers[String(el.getAttribute('data-game-pk'))]=el;
   }});
-  function setMeta(el,score,state){{
+  function setMeta(el,score,state,otherScore){{
     if(!el) return;
     if(state==='Live'||state==='Final'){{
       el.hidden=false;
       el.textContent=(score===null||score===undefined)?'—':String(score);
-      el.className='team-meta score '+(el.classList.contains('home')?'home':'away');
+      // This rewrites className wholesale, so the loser class has to be
+      // recomputed here or a refresh would silently undo the dimming.
+      var lost=state==='Final'&&score!==null&&score!==undefined
+        &&otherScore!==null&&otherScore!==undefined&&Number(score)<Number(otherScore);
+      el.className='team-meta score '+(el.classList.contains('home')?'home':'away')
+        +(lost?' lost':'');
       el.title=state==='Live'?'live score':'final score';
     }}else{{
       var streak=el.getAttribute('data-streak')||'';
@@ -4107,8 +4131,9 @@ def score_refresh_js():
     var state=status.abstractGameState||'Preview';
     var teams=game.teams||{{}};
     setBaseOut(header.querySelector('.bo'),game.linescore||{{}},state==='Live');
-    setMeta(header.querySelector('.team-meta.away'),(teams.away||{{}}).score,state);
-    setMeta(header.querySelector('.team-meta.home'),(teams.home||{{}}).score,state);
+    var awayScore=(teams.away||{{}}).score,homeScore=(teams.home||{{}}).score;
+    setMeta(header.querySelector('.team-meta.away'),awayScore,state,homeScore);
+    setMeta(header.querySelector('.team-meta.home'),homeScore,state,awayScore);
     var inProgress=state==='Live'||state==='Final';
     var summaryTime=header.querySelector('.summary-time');
     var summaryMarket=header.querySelector('.summary-market');

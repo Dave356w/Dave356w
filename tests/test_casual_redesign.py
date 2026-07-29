@@ -785,6 +785,58 @@ class TouchTargetTests(unittest.TestCase):
         self.assertIn("padding-bottom:12px", block)
 
 
+class LosingScoreTests(unittest.TestCase):
+    """The loser's number recedes, so a final reads as a result at a glance.
+
+    Final only: a trailing team in a live game has not lost anything yet, and
+    dimming it would read as a verdict on a game still being played."""
+
+    def _g(self, state, away, home):
+        return dict(abstract_state=state, away_score=away, home_score=home,
+                    away_streak="W3", home_streak="L1")
+
+    def test_final_dims_only_the_loser(self):
+        g = self._g("Final", 6, 5)
+        self.assertFalse(b._lost(g, "away"))
+        self.assertTrue(b._lost(g, "home"))
+        self.assertIn("score away'", b._team_meta_span(g, "away"))
+        self.assertIn("score home lost'", b._team_meta_span(g, "home"))
+
+    def test_shutout_dims_the_zero(self):
+        g = self._g("Final", 0, 14)
+        self.assertTrue(b._lost(g, "away"))
+        self.assertFalse(b._lost(g, "home"))
+
+    def test_live_game_dims_nothing(self):
+        # 4-7 in the 8th is not a loss.
+        g = self._g("Live", 4, 7)
+        for side in ("away", "home"):
+            self.assertFalse(b._lost(g, side))
+            self.assertNotIn("lost", b._team_meta_span(g, side))
+
+    def test_tie_and_missing_score_dim_nothing(self):
+        for g in (self._g("Final", 5, 5), self._g("Final", None, 3),
+                  self._g("Final", None, None)):
+            for side in ("away", "home"):
+                self.assertFalse(b._lost(g, side))
+
+    def test_dim_survives_a_client_score_refresh(self):
+        # setMeta rewrites className wholesale. If it does not recompute the
+        # class, the first background refresh silently undoes every dim on the
+        # page -- which is exactly the kind of thing that ships unnoticed.
+        js = b.score_refresh_js()
+        self.assertIn("(lost?' lost':'')", js)
+        self.assertIn("Number(score)<Number(otherScore)", js)
+        # and the caller has to hand it the other side's score to compare with
+        self.assertIn("setMeta(header.querySelector('.team-meta.away'),"
+                      "awayScore,state,homeScore)", js)
+
+    def test_dim_uses_the_faint_text_token(self):
+        # --faint is the one tone already held to a contrast ratio by
+        # ReadabilityTests; a bespoke grey here would not be.
+        self.assertIn(".teams .score.lost{color:var(--faint)}", b.CSS)
+
+
 class HiddenAttributeTests(unittest.TestCase):
     """`hidden` has to beat component display rules.
 
