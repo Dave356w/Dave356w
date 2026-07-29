@@ -271,6 +271,35 @@ dimensional grounds; with 11 graded rows in the family, the ledger cannot and
 will not resolve whether it improves accuracy. The persisted `*_bf_per_ip`
 columns make the realised ratios auditable from the first live build.
 
+**Audited against the first live build (2026-07-28).** That build reached
+StatsAPI and persisted real role lines for 14 of 16 games, so the sweep above
+can now be replaced with a measurement of the realised ratios:
+
+| quantity | swept bound | realised |
+|---|---|---|
+| starter/bullpen BF/IP ratio | 0.95–1.10 assumed | 0.913 – 1.082 (median 0.986, n=28 sides) |
+| sd of `xw_net` shift, v10 − v9 | 0.0004–0.0009 | 0.00038 |
+| shift vs median `\|xw_net\|` | 1.6–3.4% | 2.3% (median `\|xw_net\|` 0.0164) |
+| lean flips | 0 of 12 | **0 of 14** |
+
+The realised ratio sits just below 1 rather than at it — a starter faces
+slightly *fewer* batters per inning than his own bullpen does — and 4 of 28
+sides fall below the swept band's 0.95 floor, so the band was marginally
+optimistic at the low end. The conclusion is unchanged and now rests on
+measured rates instead of an assumed range: v9 and v10 agree on every
+decision, so `RECORD_TAGS` pooling them is correct.
+
+**Tag provenance caveat for these rows.** Those 14 games are stamped
+`xw+plat_consol_v9` in the ledger, not v10, because
+`.github/workflows/build.yml` pinned `MODEL_TAG` job-level and the v10 commit
+updated only the module defaults. CI therefore ran v10's PA-share weighting
+under a v9 tag. The workflow no longer pins the tags — the modules are the
+single source of truth — but the affected rows are immutable and stay v9.
+They are identifiable by carrying a non-null `sp_bf_per_ip`, which no genuine
+v9 row has. Because the two tags share a `RECORD_TAGS` family this costs the
+records nothing; it is recorded here so the ledger's lineage column is not
+read as more precise than it is.
+
 `python compare_v8_v9.py` recalculates the v8 shadow and v9 sequential formula
 from identical persisted inputs, then reports lean flips, `xw_net` changes,
 expected-IP buckets, openers, bullpen-heavy games, market disagreement, and
