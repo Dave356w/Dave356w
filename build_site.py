@@ -27,7 +27,8 @@
 #     exit WITHOUT writing index.html, so CI skips the deploy and the last
 #     good page stays live. A legitimate empty slate (off-day) writes a
 #     friendly "no games" page instead (a successful build).
-#   - index.html carries a "built HH:MM ET" line beside the slate date.
+#   - index.html carries a "built HH:MM" line beside the slate date; every
+#     clock on the site is Pacific and the legend is where that is stated.
 # ============================================================
 
 import base64
@@ -2548,9 +2549,9 @@ def _fmt_ml(v):
 def _fmt_pt_clock(dt):
     """Bare wall clock for a game row -- no zone suffix.
 
-    Every first pitch on the page is Pacific and the page says so once, in the
-    legend, rather than repeating ` PT` on every card. The build stamp keeps
-    its suffix: that one is a timestamp, not a schedule."""
+    Every clock on the page is Pacific and the page says so once, in the
+    legend, rather than repeating ` PT` on every card. The build stamp dropped
+    its suffix too -- one zone, stated once, is the whole convention."""
     return dt.strftime("%I:%M %p").lstrip("0")
 
 
@@ -3930,6 +3931,9 @@ CSS_GRADES = r"""
 .gr-h1{font:800 19px/1.15 var(--sans);letter-spacing:-.01em;margin:0 0 5px}
 .gr-lead{font:500 14px/1.55 var(--sans);color:var(--muted);max-width:80ch;margin:0}
 .gr-lead b{color:var(--ink);font-weight:700}
+/* `9:34 PM · 2026-07-28` is one token. Left to wrap it breaks at the
+   date's own hyphen, so a phone renders `2026-` over `07-28`. */
+.gr-lead .stamp{white-space:nowrap}
 
 /* ---------- summary: one stat strip, same idiom as a card's SP stat row ---------- */
 .gr-summary{display:flex;flex-wrap:wrap;margin:0 0 9px;background:var(--surface);
@@ -3939,10 +3943,11 @@ CSS_GRADES = r"""
 .gr-stat .l{font:600 12px/1.4 var(--sans);letter-spacing:.14em;text-transform:uppercase;color:var(--faint)}
 .gr-stat .v{font:600 19px/1.2 var(--mono);font-variant-numeric:tabular-nums;
   color:var(--chip-fg);margin-top:3px}
-.gr-stat .s{font:400 12.5px/1.35 var(--mono);color:var(--muted);margin-top:2px}
+.gr-stat .s{font:400 12.5px/1.35 var(--sans);font-variant-numeric:tabular-nums;
+  color:var(--muted);margin-top:2px}
 .gr-stat .v.cool{color:rgba(var(--cool-tx),1)}
 .gr-stat .v.warm{color:rgba(var(--warm-tx),1)}
-.gr-note{font:500 13px/1.55 var(--mono);color:var(--faint);margin:0 2px 14px}
+.gr-note{font:500 13px/1.55 var(--sans);color:var(--faint);margin:0 2px 14px}
 .gr-note b{color:var(--muted);font-weight:700}
 
 /* ---------- ledger table ---------- */
@@ -3951,6 +3956,11 @@ CSS_GRADES = r"""
    never. `clip` still rounds off the table corners. */
 .gr-tablewrap{background:var(--surface);border:1px solid var(--line);
   border-radius:var(--r);box-shadow:var(--shadow);overflow:clip}
+/* Mono is for figures that line up in a column -- the lean deltas, the finals,
+   the W/L badges -- and nothing else. The prose around them (the methodology
+   note, the pitcher matchups, the day headers, the stat captions) is sans:
+   at the Comfortable scale the note alone ran to a full screen of monospace
+   on a phone, which reads as a code block rather than a sentence. */
 table.gr{border-collapse:collapse;width:100%;table-layout:auto;
   font:500 14px/1.35 var(--mono);font-variant-numeric:tabular-nums}
 table.gr th{font:600 12px/1 var(--sans);text-transform:uppercase;letter-spacing:.12em;color:var(--faint);
@@ -3960,7 +3970,7 @@ table.gr td{padding:9px 12px;border-bottom:1px solid var(--line-2);white-space:n
 table.gr tbody tr:last-child td{border-bottom:none}
 table.gr tbody tr.gr-row:hover td{background:var(--surface-2)}
 table.gr tr.void td{opacity:.45}
-table.gr .sp{display:block;margin-top:2px;font:400 12.5px/1.3 var(--mono);color:var(--faint)}
+table.gr .sp{display:block;margin-top:2px;font:400 12.5px/1.3 var(--sans);color:var(--faint)}
 .gr-game{font:650 14px/1.3 var(--sans)}
 .gr-game .at{color:var(--faint);font-weight:500}
 
@@ -3968,7 +3978,8 @@ table.gr .sp{display:block;margin-top:2px;font:400 12.5px/1.3 var(--mono);color:
    without it. Sticks under the column head (28px = its padded line box). */
 tr.gr-day th{position:sticky;top:28px;z-index:1;background:var(--surface-2);
   padding:6px 12px;border-top:1px solid var(--line);border-bottom:1px solid var(--line-2);
-  font:700 12.5px/1.4 var(--mono);letter-spacing:.02em;text-transform:none;color:var(--muted)}
+  font:700 12.5px/1.4 var(--sans);font-variant-numeric:tabular-nums;
+  letter-spacing:.02em;text-transform:none;color:var(--muted)}
 tr.gr-day .d{color:var(--ink)}
 tr.gr-day .n{color:var(--faint);font-weight:500}
 tr.gr-day .rec{float:right;color:var(--muted)}
@@ -4467,7 +4478,8 @@ def render_grades_html(built_txt):
     n_void = int((led["status"] == "void").sum())
     head = ("<div class='gr-head'><h1 class='gr-h1'>Grading ledger</h1>"
             "<div class='gr-lead'>Every lean this model has published, graded "
-            f"against the final score. Built {built_txt}.</div></div>")
+            f"against the final score. Built <span class='stamp'>{built_txt}"
+            "</span>.</div></div>")
 
     g = _display_grades(led)
     stats, notes = [], []
@@ -4584,7 +4596,7 @@ def _lineup_status_columns(lineup_df):
 def _built_text_now():
     now_pt = datetime.now(PT)
     return (now_pt.strftime("%I:%M %p").lstrip("0")
-            + now_pt.strftime(" PT · %Y-%m-%d"))
+            + now_pt.strftime(" · %Y-%m-%d"))
 
 
 def write_grades_page(built_txt=None):
