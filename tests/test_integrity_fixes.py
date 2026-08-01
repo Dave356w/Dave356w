@@ -1400,6 +1400,94 @@ class MarketContextRecordsTests(unittest.TestCase):
         self.assertEqual(ctx, {})
 
 
+class BaselineControlTests(unittest.TestCase):
+    """The grades page publishes a record; these are what it is measured against."""
+
+    COLS = ["full_away", "full_home", "close_p_home"]
+
+    def _g(self, rows):
+        return pd.DataFrame(rows, columns=self.COLS)
+
+    def test_home_and_market_controls_over_the_same_rows(self):
+        rows = [
+            (2, 4, 0.60),   # home won, home favored  -> home W, chalk W
+            (5, 1, 0.60),   # away won, home favored  -> home L, chalk L
+            (5, 1, 0.40),   # away won, away favored  -> home L, chalk W
+            (1, 3, 0.40),   # home won, away favored  -> home W, chalk L
+            (6, 2, 0.45),   # away won, away favored  -> home L, chalk W
+        ]
+        ctl = dict((k, (w, l)) for k, w, l in build_site._baseline_controls(self._g(rows)))
+        self.assertEqual(ctl["home"], (2, 3))
+        self.assertEqual(ctl["market"], (3, 2))
+
+    def test_a_pick_em_close_counts_as_a_home_favorite(self):
+        # p_home == .5 has to fall on one side; the verdict context already
+        # reads >= .5 as home-favored, so the control must agree with it.
+        ctl = dict((k, (w, l)) for k, w, l in
+                   build_site._baseline_controls(self._g([(1, 3, 0.50)])))
+        self.assertEqual(ctl["market"], (1, 0))
+
+    def test_rows_without_a_close_are_scored_by_the_home_control_only(self):
+        rows = [(1, 3, float("nan")), (1, 3, 0.60)]
+        ctl = dict((k, (w, l)) for k, w, l in build_site._baseline_controls(self._g(rows)))
+        self.assertEqual(ctl["home"], (2, 0))
+        self.assertEqual(ctl["market"], (1, 0))
+
+    def test_unplayed_and_tied_rows_score_nothing(self):
+        rows = [(float("nan"), float("nan"), 0.60), (3, 3, 0.60)]
+        self.assertEqual(build_site._baseline_controls(self._g(rows)), [])
+
+    def test_market_control_is_omitted_when_no_row_carries_a_close(self):
+        g = pd.DataFrame([(1, 3)], columns=["full_away", "full_home"])
+        self.assertEqual([k for k, _, _ in build_site._baseline_controls(g)], ["home"])
+
+    def test_page_shows_the_controls_next_to_the_record(self):
+        ledger = pd.DataFrame([
+            dict(game_pk=1, game_date="2026-07-20", away="A", home="B",
+                 away_sp="P1", home_sp="P2", status="graded",
+                 model_tag="xw+plat_consol_v10", xw_lean="B", xw_delta=.01,
+                 xw_full="W", xw_f5="W", full_away=2, full_home=4,
+                 close_p_home=.6, lock_status="pregame"),
+            dict(game_pk=2, game_date="2026-07-21", away="C", home="D",
+                 away_sp="P3", home_sp="P4", status="graded",
+                 model_tag="xw+plat_consol_v10", xw_lean="C", xw_delta=.02,
+                 xw_full="W", xw_f5="W", full_away=5, full_home=3,
+                 close_p_home=.6, lock_status="pregame"),
+        ])
+        with mock.patch.object(build_site, "load_ledger_df", return_value=ledger):
+            page = build_site.render_grades_html("test build")
+        self.assertIn("Always home", page)
+        self.assertIn("Always chalk", page)
+        self.assertIn("controls on the same graded rows", page)
+
+
+class LockProvenanceTests(unittest.TestCase):
+    def _led(self, statuses):
+        return pd.DataFrame({"lock_status": pd.Series(statuses, dtype="object")})
+
+    def test_late_snapshots_are_not_counted_as_legacy_rows(self):
+        led = self._led(["pregame", "pregame_recovered", None,
+                         "legacy_unverified", "late_snapshot"])
+        self.assertEqual(build_site._lock_provenance(led), (2, 2, 1))
+
+    def test_a_ledger_without_the_column_is_wholly_unverified(self):
+        led = pd.DataFrame({"game_pk": [1, 2, 3]})
+        self.assertEqual(build_site._lock_provenance(led), (0, 3, 0))
+
+    def test_page_states_late_snapshots_separately(self):
+        ledger = pd.DataFrame([
+            dict(game_pk=1, game_date="2026-07-20", away="A", home="B",
+                 away_sp="P1", home_sp="P2", status="graded",
+                 model_tag="xw+plat_consol_v10", xw_lean="B", xw_delta=.01,
+                 xw_full="W", xw_f5="W", full_away=2, full_home=4,
+                 lock_status="late_snapshot"),
+        ])
+        with mock.patch.object(build_site, "load_ledger_df", return_value=ledger):
+            page = build_site.render_grades_html("test build")
+        self.assertIn("1 snapshotted after first pitch", page)
+        self.assertNotIn("1 legacy rows", page)
+
+
 class ModelTagProvenanceTests(unittest.TestCase):
     """The ledger's lineage stamp must describe the math that produced the row.
 

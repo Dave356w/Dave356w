@@ -618,9 +618,15 @@ Grades are also rendered into the site: the main page shows a **records
 strip** for the complete model lineage, linking to the ledger.
 **`grades.html`** preserves that combined headline and shows every game's
 xwOBA lean, closing ML, final score, and full-game W/L/T grade, with pending
-and void rows included. The public page intentionally omits model-family
-history and per-row model labels; those remain available in the underlying
-ledger and Actions report. Both pages render purely from
+and void rows included. Two trivial-strategy **controls** sit in the same
+summary strip as the model's own record, scored on the identical graded rows:
+*always home* (the null hypothesis for any side-picking model, and the
+full-game twin of the F5 home baseline in `ledger_report.txt`) and *always
+chalk* (the devigged closing favourite — the strategy the model has to beat,
+since the closing line is free). The chalk control is defined only on rows
+carrying a close, so it prints its own `n`. The public page intentionally
+omits model-family history and per-row model labels; those remain available in
+the underlying ledger and Actions report. Both pages render purely from
 `data/mlb_lean_ledger.csv`; grading runs before the build in CI (with a second
 pass after it to ingest the day's fresh dumps), so the page reflects last
 night's results in the same run.
