@@ -92,13 +92,19 @@ precedent — they are how the fix is known to look.
   re-derived for the v8/v9/v10 scale, but it is still a literal and will go
   stale again on the next scale family. If a constant was read off the ledger,
   comment where it came from and what would invalidate it.
-- **Deleting controls as clutter.** The walk-forward Pythagorean control arm was
-  added, then removed in a UI declutter three commits later. Controls establish
-  whether the model beats a trivial baseline. If a control is visually noisy,
-  move it to the ledger as a column — do not delete it. Still absent; the only
-  live control is the always-home baseline in `ledger_report.txt`.
 
 **Resolved — keep as precedent**
+
+- **Deleting controls as clutter.** The walk-forward Pythagorean control arm was
+  added, then removed in a UI declutter three commits later, leaving the
+  always-home F5 baseline in `ledger_report.txt` as the only control anywhere —
+  and none at all on the public page, which published `200-151 (.570)` with
+  nothing to read it against. Fixed by `_baseline_controls()`: always-home and
+  always-chalk, scored on the identical graded rows, muted tiles in the same
+  strip as the record. They are what makes the headline a result — the model's
+  .570 against .504 always-home and .563 always-chalk. Controls establish
+  whether the model beats a trivial baseline; if one is visually noisy, mute it
+  or move it to the ledger as a column — do not delete it.
 
 - **Threshold cliffs.** Two instances, same shape. The old
   `use = fam if len(fam) >= 60 else pooled` scale selector switched
@@ -121,6 +127,13 @@ precedent — they are how the fix is known to look.
   Fixed by `_lock_provenance()`, which now states the split instead of the
   whole — currently "168 of 317 rows carry a pregame lock timestamp; 149 legacy
   rows predate that instrumentation." Report provenance, don't assert coverage.
+  The same entry recurred one level down: `_lock_provenance()` counted the
+  unverified remainder *by subtraction* and the page labelled all of it
+  "legacy rows predate that instrumentation", which would have described a
+  `late_snapshot` row — instrumented and failed — as uninstrumented. Zero such
+  rows exist today, so it was a claim waiting to go wrong rather than a live
+  one. Now each outcome is counted from its own label. A count you derived by
+  subtracting cannot carry a name you did not measure.
 - **Internal and public artifacts disagreeing.** `data/ledger_report.txt` once
   said the current family had no graded games while the site published a pooled
   record. Both now render from the same ledger through

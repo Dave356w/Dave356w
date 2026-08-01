@@ -3967,6 +3967,9 @@ CSS_GRADES = r"""
   color:var(--muted);margin-top:2px}
 .gr-stat .v.cool{color:rgba(var(--cool-tx),1)}
 .gr-stat .v.warm{color:rgba(var(--warm-tx),1)}
+/* Controls sit in the same strip as the model's own record but must not read
+   as a headline: same geometry, muted weight and colour. */
+.gr-stat .v.dim{color:var(--muted);font-weight:500}
 .gr-note{font:500 13px/1.55 var(--sans);color:var(--faint);margin:0 2px 14px}
 .gr-note b{color:var(--muted);font-weight:700}
 
@@ -4240,6 +4243,42 @@ def _display_grades(led):
     incremental lineage, so the displayed record combines them into a single
     record per market (audit slicing still lives in _record_grades)."""
     return led[led["status"] == "graded"]
+
+
+def _baseline_controls(g):
+    """Trivial-strategy records over the same graded rows, as (label, W, L).
+
+    A .570 headline means nothing without something to beat. Two controls,
+    both scored on the identical rows the model's record is scored on:
+
+      home    -- always take the home side. The null hypothesis for any
+                 side-picking model; also the shape of the F5 control already
+                 in data/ledger_report.txt, so the page and the report agree.
+      market  -- always take the devigged closing favourite. The strategy the
+                 model has to beat to be worth anything, since the closing
+                 line is free. Only defined on rows that carry a close, so it
+                 reports its own n and the caller states it.
+
+    Display-only, and best-effort: a control whose inputs are missing is
+    omitted rather than approximated. Returns [] when nothing is scorable."""
+    def col(name):
+        """Numeric column, or an all-NaN one when the ledger predates it."""
+        return pd.to_numeric(g[name], errors="coerce") if name in g.columns \
+            else pd.Series(np.nan, index=g.index)
+
+    fa, fh = col("full_away"), col("full_home")
+    played = fa.notna() & fh.notna() & (fa != fh)
+    if not played.any():
+        return []
+    home_won = fh > fa
+    out = [("home", int((home_won & played).sum()),
+            int((~home_won & played).sum()))]
+    p_home = col("close_p_home")
+    m = played & p_home.notna()
+    if m.any():
+        hit = ((p_home >= 0.5) == home_won) & m
+        out.append(("market", int(hit.sum()), int((m & ~hit).sum())))
+    return out
 
 
 # Minimum graded games in a (lean side × agree/disagree) bucket before its
@@ -4518,19 +4557,27 @@ def _grades_day_header(date, day, ncols):
 
 
 def _lock_provenance(led):
-    """(verified, unverified) rows for the pregame-lock claim.
+    """(verified, legacy, late) rows for the pregame-lock claim.
 
     The page asserted every row locked before first pitch. `lock_status` is
     null on every row that predates the instrumentation, and those rows carry
     no `snapshot_utc`/`scheduled_start_utc` either, so nothing in the ledger
     substantiates the claim for them. Report the split instead of asserting
-    the whole."""
+    the whole.
+
+    Three outcomes, not two. `grade_leans._lock_status` also emits
+    `late_snapshot` for a row whose snapshot postdates first pitch — a row
+    that is instrumented and failed, which is the opposite of an
+    uninstrumented one. Counting the remainder as legacy would assert
+    provenance the ledger contradicts, so each is counted from its own
+    label."""
     n = len(led)
     if "lock_status" not in led.columns:
-        return 0, n
-    verified = int(led["lock_status"].astype("string")
-                   .str.startswith("pregame", na=False).sum())
-    return verified, n - verified
+        return 0, n, 0
+    st = led["lock_status"].astype("string")
+    verified = int(st.str.startswith("pregame", na=False).sum())
+    legacy = int((st.isna() | st.eq("legacy_unverified")).sum())
+    return verified, legacy, n - verified - legacy
 
 
 def render_grades_html(built_txt):
@@ -4580,13 +4627,34 @@ def render_grades_html(built_txt):
                      tone="cool" if m["z"] > 0 else "warm")
         notes.append("xwOBA graded full-game vs devigged DK closing ML (ESPN capture); "
                      "z and flat ROI are the primary metrics")
+        # Controls. The model's record is unreadable without them: .570 is a
+        # result only relative to what always-home and always-chalk got on the
+        # same games. Muted so they read as the yardstick, not as headlines.
+        ctl_labels = {"home": "Always home", "market": "Always chalk"}
+        shown = []
+        for key, w, l in _baseline_controls(g):
+            if not (w + l):
+                continue
+            sub = f"{w / (w + l):.3f}"
+            if w + l != len(g):
+                sub += f" · n={w + l}"
+            stat(ctl_labels[key], f"{w}-{l}", sub, tone="dim")
+            shown.append(key)
+        ctl_what = {"home": "always the home side",
+                    "market": "always the devigged closing favourite"}
+        if shown:
+            notes.append("controls on the same graded rows — "
+                         + ", ".join(ctl_what[k] for k in shown))
         # Provenance, not a blanket claim: state how many rows the ledger can
         # actually show locked pregame.
-        verified, unverified = _lock_provenance(led)
+        verified, legacy, late = _lock_provenance(led)
         lock = f"<b>{verified}</b> of <b>{len(led)}</b> rows carry a pregame lock timestamp"
-        notes.append(lock + (f"; {unverified} legacy rows predate that "
-                             "instrumentation and are unverified"
-                             if unverified else ""))
+        if legacy:
+            lock += (f"; {legacy} legacy rows predate that instrumentation "
+                     "and are unverified")
+        if late:
+            lock += f"; {late} snapshotted after first pitch"
+        notes.append(lock)
         summary = ("<div class='gr-summary'>" + "".join(stats) + "</div>"
                    + (f"<div class='gr-note'>{'. '.join(notes)}.</div>" if notes else ""))
 
