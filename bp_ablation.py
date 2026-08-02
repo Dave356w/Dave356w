@@ -88,9 +88,15 @@ def ml_to_prob(ml):
 
 
 def devig(p_home, p_away):
-    """Proportional (multiplicative) de-vig -- the convention close_p_home uses."""
+    """Proportional (multiplicative) de-vig -- the convention close_p_home uses.
+
+    A one-sided quote yields NaN, not the raw price. Returning the vigged
+    number there would quietly feed a ~4.6% overround into CLV as if it were
+    a fair probability. No such row exists in the ledger today; this keeps it
+    that way by construction rather than by luck.
+    """
     total = p_home + p_away
-    return p_home.where(total.isna() | total.eq(0), p_home / total)
+    return p_home.div(total).where(total.notna() & total.gt(0))
 
 
 # ------------------------------------------------------------------ variants ---

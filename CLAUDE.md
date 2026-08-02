@@ -152,7 +152,7 @@ receive closing lines (`run_market_update.py` invariant). Do not relax either.
 
 ```
 python validate_data_files.py     # CSV conflict markers — has failed twice in prod
-python -m pytest tests/ -q        # 246 tests; CI does NOT run these yet
+python -m pytest tests/ -q        # 248 tests; CI does NOT run these yet
 ```
 
 CI has no test step and `requirements.txt` has no pytest. Until that is fixed,

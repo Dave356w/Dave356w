@@ -34,6 +34,24 @@ class DevigTest(unittest.TestCase):
         self.assertGreater(both.sum(), 0)
         self.assertLess((recon[both] - shipped[both]).abs().max(), 1e-9)
 
+    def test_one_sided_quote_is_nan_not_the_vigged_price(self):
+        """Returning the raw price here would feed the overround into CLV."""
+        ph = bp_ablation.ml_to_prob(pd.Series([-200.0, -200.0]))
+        pa = bp_ablation.ml_to_prob(pd.Series([np.nan, 170.0]))
+        out = bp_ablation.devig(ph, pa)
+        self.assertTrue(pd.isna(out.iloc[0]))
+        self.assertAlmostEqual(out.iloc[1], ph.iloc[1] / (ph.iloc[1] + pa.iloc[1]))
+        self.assertLess(out.iloc[1], ph.iloc[1])   # de-vig removes the overround
+
+    def test_ledger_has_no_one_sided_quotes(self):
+        d = pd.read_csv("data/mlb_lean_ledger.csv")
+        for h, a in (("open_home_ml", "open_away_ml"),
+                     ("f5_open_home_ml", "f5_open_away_ml"),
+                     ("close_home_ml", "close_away_ml")):
+            H = pd.to_numeric(d[h], errors="coerce").notna()
+            A = pd.to_numeric(d[a], errors="coerce").notna()
+            self.assertEqual(int((H ^ A).sum()), 0, f"{h}/{a}")
+
     def test_ml_to_prob_signs(self):
         p = bp_ablation.ml_to_prob(pd.Series([-200.0, 100.0, 150.0]))
         self.assertAlmostEqual(p.iloc[0], 200 / 300)
