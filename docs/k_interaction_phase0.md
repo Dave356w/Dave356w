@@ -177,21 +177,49 @@ inflate the starter-phase PA count by ~44%.
 
 Per deliverable 6, neither is touched.
 
-**K-1. `lg_K%` is the all-pitcher league rate, used as the reference for a
-starter.** `build_site.py:2866-2869` documents the provenance: league K% comes
-from the PA-weighted batter leaderboard, justified as symmetric because "every
-batter K/BB is a pitcher K/BB". That symmetry argument is correct and gives the
-*all-pitcher* rate. `mx_K%` divides a **starter's** K% by it. Bullpen K% runs
-above starter K%, so the SP-vs-batter league rate is lower than the all-pitcher
-rate, and `mx_K% = B·P/L` is biased high for every starter by that ratio.
+**K-1. WITHDRAWN — this was not a bug, and the proposed fix was itself the bug.**
 
-This is the exact bias the module's own docstring warns about (PDF l. 7:
-"lambda is the SP-vs-batter league K%, NOT all-pitcher") and what the brief's
-Phase 2 item 2 asks to check — and it is already present, independent of this
-layer. Display-only: `mx_K%` and `edge_K%` never reach `xw_net`. Magnitude is
-not quantified here because `.savant_cache/` is gitignored and keyed by slate
-date; measuring it requires a live pull and would be reported against today's
-slate only, never backfilled (see `CLAUDE.md` §No-lookahead).
+An earlier revision of this document claimed `lg_K%` was wrong: that because it
+comes from the PA-weighted batter leaderboard it is the *all-pitcher* rate, and
+that dividing a **starter's** K% by it biases `mx_K% = B·P/L` high. It cited the
+module's docstring (PDF l. 7, "lambda is the SP-vs-batter league K%, NOT
+all-pitcher") as support. **That claim was wrong. `build_site.py:2866-2869` is
+correct as written and must not be changed.**
+
+λ in an odds-ratio matchup estimate is *defined* as the rate a neutral opponent
+posts, which is forced by the identity `log5(p_b, λ, λ) = p_b` — verified to
+1e-12 across the K% range. The neutral opponent for a season rate measured
+against all pitchers is the average **pitcher**, not the average **starter**.
+Both inputs are season rates against a representative opponent mix, so the
+common reference is the overall league rate — exactly what the symmetry argument
+at `:2867` derives.
+
+Substituting an SP-only λ redefines neutral and inflates every estimate:
+
+```
+lineup season K% .2129 vs an exactly-average starter (K% .2050)
+  lambda = overall league .2213  ->  .1971   correct: below the season rate,
+                                              because that rate is vs all
+                                              pitchers incl. high-K relievers
+  lambda = SP-only        .2050  ->  .2129   wrong: treats an average starter
+                                              as neutral, returning the season
+                                              rate unchanged
+```
+
+Against a real starter the shift is +0.0128 to +0.0248 depending on the assumed
+SP-only rate. The "fix" would have introduced the bias it claimed to remove.
+
+The empirical premise was also false. Probable starters are a selected
+population, so they do not run below league K%: measured over 779 slate rows,
+probable-SP K% averages **22.49% against a stored league 22.13%, i.e. +0.36pp
+above**, not below. "Bullpen K% runs high" is true of the reliever pool and does
+not transfer to the probables the model actually faces.
+
+Guarded by `tests/test_k_interaction_probe.py::LambdaReferenceTest` so the
+change is not re-proposed. The lesson is the one `CLAUDE.md` already states:
+*verify, don't recall* — this claim was carried over from the module's docstring
+and reasoned about, but not tested against the identity or the data until after
+it had been written down twice.
 
 **K-2. `K − BB%` composite on the SP card.** `build_site.py:2873` and `:3339`
 compute `pit_K% − pit_BB%` for a percentile bar. The brief prohibits a K-BB%
@@ -229,13 +257,19 @@ lean impact, shipped B*P/L vs K%-interacted (377 games):
 Two findings, and they point opposite ways.
 
 **K% is orthogonal to blended xwOBA at lineup level.** `r = -0.018`; the
-residual sd equals the raw sd to three decimals. Holding the number the model
-already has fixed removes *none* of the variation in lineup K%. The mechanism is
-the power/whiff tradeoff cancelling at composite level — high-K lineups carry
-higher xwOBAcon, and the two effects offset almost exactly in the blend. So the
-premise behind a K% layer is sound: there is a full 2.18pp of lineup K%
-variation the shipped model cannot see, and at −3.3 pts per 1pp that is not a
-rounding error.
+residual sd equals the raw sd to three decimals. The mechanism is the
+power/whiff tradeoff cancelling at composite level — high-K lineups carry higher
+xwOBAcon, and the two effects offset almost exactly in the blend.
+
+**Read this carefully, because it is easy to over-read** (and was, in the first
+draft of this section). Orthogonality does *not* mean there is hidden signal
+here. It means the opposite of redundancy, which is a weaker statement: knowing
+a lineup's blended xwOBA tells you nothing about its K%, and vice versa. Since
+the model predicts offense *through* xwOBA, a variable uncorrelated with xwOBA
+has demonstrated no ability to predict what the model predicts. What
+orthogonality establishes is only that a K%×K% **interaction** is not already
+absorbed by the blend — it makes an interaction effect *possible*, not
+*present*.
 
 **Routing it through log5 nonetheless barely moves the lean.** Correlation
 0.997, median shift 1.91 pts against a median lean of 24.84. Every flip above
@@ -250,10 +284,16 @@ the distinction the brief's Phase 5 item 2 asks about — larger leans as signal
 vs. double-counting — resolved before any integration, and it says the layer as
 specified buys 1.91 pts of movement for four new dependencies.
 
-The honest reading is that the promising direction is not the log5 interaction
-at all. It is that lineup K% is an orthogonal axis the model currently ignores
-entirely — which is an argument for decomposing the batter branch, not for
-multiplying an opportunity term onto it.
+Taken together the two results close the question rather than open it.
+Orthogonality said an interaction was *possible*; the lean impact measured that
+interaction and found it worth 1.91 pts with no decisive flip. There is no third
+reading in which K% is a latent edge — the one channel by which it could have
+reached the lean has been measured, and it is small.
+
+The residual open question is narrower than "use K%": whether K% predicts *runs*
+beyond what xwOBA captures, through sequencing or productive outs. That is a
+different dependent variable, not measurable from these columns, and nothing
+here speaks to it. It should not be cited as encouragement.
 
 ## What would have to be true to proceed
 

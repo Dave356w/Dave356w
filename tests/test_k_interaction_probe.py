@@ -51,6 +51,55 @@ class Log5Test(unittest.TestCase):
         self.assertAlmostEqual(kp.log5(b, q, lam, damp=1.0), r / (1 + r), places=12)
 
 
+class LambdaReferenceTest(unittest.TestCase):
+    """Guards `lg_K%` against a "fix" that would introduce a bias.
+
+    An earlier revision of docs/k_interaction_phase0.md filed the overall
+    league K% at build_site.py:2866-2869 as a bug, on the grounds that
+    `mx_K%` divides a *starter's* K% by an *all-pitcher* rate. That was wrong,
+    and the proposed replacement -- an SP-only lambda -- is the actual error.
+    These tests encode why, because the argument for it is superficially
+    convincing and will be made again.
+    """
+
+    LG = 0.2213   # overall league K%: all-pitcher == all-batter, symmetric
+
+    def test_lambda_is_defined_by_the_neutral_opponent_identity(self):
+        """log5(b, L, L) == b forces what L must be: the average *pitcher*."""
+        for b in np.linspace(0.12, 0.34, 12):
+            self.assertAlmostEqual(kp.log5(b, self.LG, self.LG), b, places=12)
+
+    def test_average_starter_must_come_in_below_the_season_rate(self):
+        """A season K% is vs all pitchers, relievers included, and relievers
+        strike out more. So an average *starter* must suppress it, not leave
+        it alone. Overall-lambda does this; SP-only-lambda does not.
+        """
+        b, sp_only = 0.2129, 0.2050          # lineup rate, avg-SP rate
+        correct = kp.log5(b, sp_only, self.LG)
+        wrong = kp.log5(b, sp_only, sp_only)
+        self.assertLess(correct, b)
+        self.assertAlmostEqual(wrong, b, places=12)
+
+    def test_sp_only_lambda_inflates_every_estimate(self):
+        """Quantifies the damage: +1.3 to +2.5pp on a realistic matchup."""
+        b, p = 0.2129, 0.2600
+        base = kp.log5(b, p, self.LG)
+        for sp_only in (0.200, 0.205, 0.210):
+            self.assertGreater(kp.log5(b, p, sp_only) - base, 0.012)
+
+    def test_probable_starters_do_not_run_below_league(self):
+        """The empirical premise was false too. Measured over the committed
+        slates, probable SPs sit *above* the stored league rate, because
+        probables are a selected population. "Bullpen K% runs high" is true of
+        the reliever pool and does not transfer to the arms the model faces.
+        """
+        try:
+            df = kp.load_sides()
+        except SystemExit:
+            self.skipTest("no slate CSVs available")
+        self.assertGreater(df["p_k"].mean(), df["lg_k"].mean())
+
+
 class BbeShareTest(unittest.TestCase):
     def test_never_negative_over_the_full_cross_product(self):
         """The specific failure the multiplicative form exists to prevent.
