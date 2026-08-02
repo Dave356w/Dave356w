@@ -4327,8 +4327,13 @@ def market_context_records():
 # Prior cutoffs. No longer a last-resort branch: they are the prior that the
 # observed quantiles are shrunk toward, so they always contribute and their
 # influence decays smoothly as the pool grows (see lean_strength).
-# Provenance: p33/p80 of |xw_net| over the 24 xw+plat_consol_v8/v9 ledger rows
-# as of 2026-07-28 (0.0151 / 0.0325), rounded. The previous literal here was
+# Provenance: p33/p80 of |xw_net| over the 24 ledger rows on this scale as of
+# 2026-07-28 (0.0151 / 0.0325), rounded. All 24 were tagged v9 -- an earlier
+# wording here said "v8/v9", but no xw+plat_consol_v8 row has ever been graded
+# into the ledger (v8 shipped for one morning; its 11 rows were still pending
+# when v9 landed, so the pregame refresh rebuilt and re-stamped them). The v8
+# entries in _SCALE_FAMILIES match zero rows and are history, not a live pool.
+# The previous literal here was
 # the *pre-v5 unshrunk* p33/p80 (0.021, 0.060), left in place across the v5,
 # v7 and v8 shrinkage changes that moved the distribution underneath it; with
 # v9's observed maximum |xw_net| of 0.0462 it made "strong" unreachable for
@@ -4336,6 +4341,13 @@ def market_context_records():
 # delta scale -- i.e. whenever _SCALE_FAMILIES gains a new entry. Recompute
 # from the new family's rows; shrinkage bounds the damage of a stale prior but
 # does not remove it.
+#
+# Pool growth is NOT an invalidation: this is a prior, and re-deriving it from
+# the same family it is shrunk against would make it the data. Measured
+# 2026-08-02 at n=99 the family's own p33/p80 is 0.0127 / 0.0343, so the prior
+# is off by ~0.0023 on each and the shrunk cutoffs land at 0.0139 / 0.0331 --
+# within the 0.00218 worst-case single-row step K=100 was chosen for. Leave it
+# until the scale family changes.
 LEAN_STRENGTH_FALLBACK = (0.015, 0.032)   # slight < ~p33 <= clear < ~p80 <= strong
 
 # Pseudo-count for shrinking the observed p33/p80 toward LEAN_STRENGTH_FALLBACK.

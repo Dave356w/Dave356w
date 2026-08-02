@@ -1,9 +1,33 @@
+import os
+import re
 import unittest
 
 import numpy as np
 import pandas as pd
 
 import bp_ablation
+from grade_leans import RECORD_TAGS
+
+LEDGER_REPORT = os.path.join("data", "ledger_report.txt")
+
+
+def _reported_xwoba_full_record():
+    """(W, L, T) parsed off the 'xwOBA lean full:' line of the ledger report.
+
+    The report is the artifact the replay is cross-checked against, so it is
+    the authority for the expected number -- reading it keeps the check honest
+    as the ledger grows instead of pinning a snapshot of it.
+    """
+    with open(LEDGER_REPORT, encoding="utf-8") as fh:
+        text = fh.read()
+    m = re.search(r"^xwOBA lean\s+full:\s*(\d+)-(\d+)(?:-(\d+))?", text, re.M)
+    if not m:
+        raise AssertionError(
+            f"{LEDGER_REPORT} has no 'xwOBA lean full:' line to check against; "
+            "regenerate it with `python grade_leans.py`"
+        )
+    w, l, t = m.group(1), m.group(2), m.group(3)
+    return int(w), int(l), int(t or 0)
 
 
 def _row(**kw):
@@ -129,19 +153,31 @@ class GradeTest(unittest.TestCase):
         self.assertTrue(pd.isna(g.iloc[3]))       # no lean, no grade
 
     def test_record_reproduces_ledger_report(self):
-        """with-BP full-game record must match data/ledger_report.txt (39-32).
+        """with-BP full-game record must match data/ledger_report.txt.
 
         This is the cross-check that the replay scores the shipped model, not
-        some near-miss of it.
+        some near-miss of it. The expected record is READ FROM THE REPORT, not
+        written here: this assertion previously froze the record as a literal
+        (39-32) and went stale the moment the Actions bot graded another slate,
+        failing for a reason that had nothing to do with the replay. A number
+        copied out of the ledger belongs in the ledger.
+
+        A failure now means one of the two things it should mean: the replay
+        has drifted off the shipped model, or data/ledger_report.txt was not
+        regenerated from the ledger committed beside it.
         """
         d = pd.read_csv("data/mlb_lean_ledger.csv")
+        reported = _reported_xwoba_full_record()
         with_bp, _, ok = bp_ablation.variants(d)
         side = bp_ablation.side_of(with_bp)
         g = bp_ablation.grade(side,
                               pd.to_numeric(d["full_away"], errors="coerce"),
                               pd.to_numeric(d["full_home"], errors="coerce"))
-        w, l, t, _ = bp_ablation.record(g[ok])
-        self.assertEqual((w, l, t), (39, 32, 0))
+        # The report scores graded rows of the current record family; the
+        # replay scores every row carrying the phase decomposition. Intersect
+        # so the two are counted over one row set rather than assumed equal.
+        scored = ok & d["status"].eq("graded") & d["model_tag"].isin(RECORD_TAGS)
+        self.assertEqual(bp_ablation.record(g[scored])[:3], reported)
 
     def test_scoring_agrees_with_shipped_grades(self):
         d = pd.read_csv("data/mlb_lean_ledger.csv")

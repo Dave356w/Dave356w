@@ -63,6 +63,18 @@ v3 entry, though v3's math is identical to v2 and the two must share units.
 Inert — `SCALE_TAGS` only ever derives from the *current* tag — so it is
 recorded, not patched.
 
+Second, same category: **v8 has no rows.** The table above and `_SCALE_FAMILIES`
+both treat v8 as a member of the current scale pool, but no `xw+plat_consol_v8`
+row has ever been graded into the ledger. v8 shipped for a single morning
+(2026-07-27); its 11 rows were all still `pending` when v9 landed, so the
+pregame refresh rebuilt them under v9 math and re-stamped them — legitimate,
+and the reason `MODEL_FAMILY_TAGS`' v8 line never prints. So `SCALE_TAGS`
+matching v8 selects nothing, and `compare_v8_v9.py` compares against a version
+that never survived into a graded row. Inert, so recorded rather than patched:
+the map is the authority on a historical question and deleting the entry would
+lose the answer. What it means in practice is that "the v8/v9/v10 scale pool"
+is the v9/v10 pool, and any provenance note claiming v8 rows is wrong.
+
 When you bump `MODEL_TAG`, decide both questions explicitly in the PR body.
 Silence defaults to a new record family and inherited units — which is wrong
 about half the time. And when you bump it, grep for the tag: it must live in
@@ -78,22 +90,40 @@ precedent — they are how the fix is known to look.
 
 **Live — not yet fixed**
 
+- **Constants frozen from data.** `LEAN_STRENGTH_FALLBACK` was a literal copy of
+  the pooled p33/p80 at the time it was written, and stayed there through two
+  model versions that changed the distribution underneath it. It has since been
+  re-derived for the current scale family, but it is still a literal and will go
+  stale again on the next scale family. If a constant was read off the ledger,
+  comment where it came from and what would invalidate it. Note the asymmetry
+  the comment there now spells out: a *scale-family* change invalidates it, but
+  mere pool growth does not — it is a prior, and re-deriving it from the family
+  it is shrunk against would make it the data. At n=99 the drift is 0.0023 on
+  each cutoff, inside the step size `LEAN_STRENGTH_PRIOR_N` was benchmarked for.
+
+**Resolved — keep as precedent**
+
 - **One value, three homes.** `.github/workflows/build.yml` pinned `MODEL_TAG`,
   `RECORD_TAGS`, and `SCALE_TAGS` job-level while both modules also defaulted
   them. The v10 commit bumped the modules and missed the workflow; the env wins,
   so CI ran v10's PA-share weighting and stamped every row `v9`. The 14 rows
   built 2026-07-28 carry v10 math under a v9 tag and are immutable. Detectable
   only because they hold a non-null `sp_bf_per_ip`, which no genuine v9 row has.
-  A config value that duplicates a code default will drift; delete the copy
-  rather than syncing it.
-- **Constants frozen from data.** `LEAN_STRENGTH_FALLBACK` was a literal copy of
-  the pooled p33/p80 at the time it was written, and stayed there through two
-  model versions that changed the distribution underneath it. It has since been
-  re-derived for the v8/v9/v10 scale, but it is still a literal and will go
-  stale again on the next scale family. If a constant was read off the ledger,
-  comment where it came from and what would invalidate it.
+  Fixed in `2f5d922` by **deleting** the pins rather than syncing them, leaving
+  a comment where they were that says why the block is empty — otherwise the
+  next person re-adds them. A config value that duplicates a code default will
+  drift; delete the copy rather than syncing it.
 
-**Resolved — keep as precedent**
+- **Freezing a measured number into a test.** Same shape as the constants entry
+  above, one level out: `test_record_reproduces_ledger_report` asserted the
+  ablation replay scored `39-32`, a literal copied out of `ledger_report.txt`.
+  The Actions bot graded more slates, the real record moved to `45-37`, and the
+  suite failed for a reason with nothing to do with the replay — the one gate
+  this repo has, red on arrival. Fixed by *reading* the expected record off the
+  report it names and intersecting the two row sets, so the assertion still
+  fails for its real causes (replay drift, or a report not regenerated beside
+  its ledger) and never for arithmetic the bot did overnight. A test that
+  cross-checks two artifacts should read both, never memorise one.
 
 - **Deleting controls as clutter.** The walk-forward Pythagorean control arm was
   added, then removed in a UI declutter three commits later, leaving the
@@ -101,10 +131,19 @@ precedent — they are how the fix is known to look.
   and none at all on the public page, which published `200-151 (.570)` with
   nothing to read it against. Fixed by `_baseline_controls()`: always-home and
   always-chalk, scored on the identical graded rows, muted tiles in the same
-  strip as the record. They are what makes the headline a result — the model's
-  .570 against .504 always-home and .563 always-chalk. Controls establish
-  whether the model beats a trivial baseline; if one is visually noisy, mute it
-  or move it to the ledger as a column — do not delete it.
+  strip as the record. They are what makes the headline a result: at the time
+  of that fix the pooled line read .570 against .504 always-home and .563
+  always-chalk. Controls establish whether the model beats a trivial baseline;
+  if one is visually noisy, mute it or move it to the ledger as a column — do
+  not delete it.
+
+  Read those three numbers as of that commit, not as standing facts — the page
+  scores `RECORD_TAGS`, so the headline reset when v9 started a new family. On
+  2026-08-02 the current family reads **45-37 (.549)** over 82 graded games,
+  against **42-40 (.512)** always-home and **49-33 (.598)** always-chalk. The
+  model is ahead of the coin-flip control and behind the closing line on a
+  sample far too small to separate them — which is the controls doing their
+  job. Do not quote a control figure from this file; recompute it.
 
 - **Threshold cliffs.** Two instances, same shape. The old
   `use = fam if len(fam) >= 60 else pooled` scale selector switched
@@ -152,13 +191,21 @@ receive closing lines (`run_market_update.py` invariant). Do not relax either.
 
 ```
 python validate_data_files.py     # CSV conflict markers — has failed twice in prod
-python -m pytest tests/ -q        # 248 tests; CI does NOT run these yet
+python -m pytest tests/ -q        # CI does NOT run these yet
 ```
 
 CI has no test step and `requirements.txt` has no pytest. Until that is fixed,
 running the suite locally is the only gate. If you touch `build_site.py`,
 `grade_leans.py`, or `market_backfill.py`, run both commands and paste the
 output in the PR.
+
+`tests/test_ledger_invariants.py` runs against the committed ledger rather than
+constructed frames: phase algebra (`mx = q·mx_sp + (1−q)·mx_bp`, shares summing
+to 1, one league baseline behind every phase edge), the PA-share weight against
+measured BF/IP, the v7 abstention rule, grades against the linescores beside
+them, and the no-lookahead invariant on pending rows. It asserts no counts or
+records — a violation there is a writer bug, not a stale expectation. Any new
+assertion added to it must hold that line.
 
 Do not commit `data/` by hand — the Actions bot owns it. Do not commit
 `public/`.
