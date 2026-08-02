@@ -1,19 +1,19 @@
-LEAN LEDGER — 71 graded games  [xw+plat_consol_v9 + xw+plat_consol_v10]
-xwOBA lean   full: 39-32  (0.549)   F5: 29-31-11  (0.483)
-platoon lean full: 27-28  (0.491)   F5: 22-23-10  (0.489)   (reliable-only, n=55)
-xwOBA on same subset  full: 32-23  (0.582)   F5: 25-20-10  (0.556)
+LEAN LEDGER — 82 graded games  [xw+plat_consol_v9 + xw+plat_consol_v10]
+xwOBA lean   full: 45-37  (0.549)   F5: 34-33-15  (0.507)
+platoon lean full: 32-32  (0.500)   F5: 27-24-13  (0.529)   (reliable-only, n=64)
+xwOBA on same subset  full: 38-26  (0.594)   F5: 30-21-13  (0.588)
 xwOBA F5 by |Δ| tercile:
-  low  9-11-4  (0.450)   (Δ 0.000–0.012, n=24)
-  mid  9-9-5  (0.500)   (Δ 0.013–0.025, n=23)
-  hi   11-11-2  (0.500)   (Δ 0.025–0.046, n=24)
-DIVERGE h2h (F5): xwOBA 7 — platoon 4  (n=13)
-home F5 baseline: 0.567  (n=60)
-weight fit: 60 usable F5 decisions (gate 120)
+  low  11-12-5  (0.478)   (Δ 0.000–0.013, n=28)
+  mid  11-10-6  (0.524)   (Δ 0.013–0.025, n=27)
+  hi   12-11-4  (0.522)   (Δ 0.025–0.046, n=27)
+DIVERGE h2h (F5): xwOBA 8 — platoon 5  (n=16)
+home F5 baseline: 0.567  (n=67)
+weight fit: 67 usable F5 decisions (gate 120)
 model-family history (never pooled into the current-family fit):
   v2/v3   n=189  xw full 110-79  (0.582)  F5 89-75-25  (0.543)
   v4      n= 14  xw full 8-6  (0.571)  F5 6-7-1  (0.462)
   v5      n= 32  xw full 20-12  (0.625)  F5 17-7-8  (0.708)
   v6      n=  3  xw full 2-1  (0.667)  F5 1-1-1  (0.500)
   v7      n= 45  xw full 22-23  (0.489)  F5 24-12-9  (0.667)
-  v9/v10  n= 71  xw full 39-32  (0.549)  F5 29-31-11  (0.483)
+  v9/v10  n= 82  xw full 45-37  (0.549)  F5 34-33-15  (0.507)
   xw+plat_consol_v1 n=  1  xw full 0-1  (0.000)  F5 0-0-1
