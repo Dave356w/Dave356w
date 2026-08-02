@@ -433,7 +433,8 @@ continuous, with no coverage threshold.
 
 **Why it is dark.** At the build's usual `K = 100`, residual cell noise moves a
 game delta by about 0.013 xwOBA against a median `|xw_net|` of **0.0188** over
-the 28 v8/v9/v10 scale-family rows as of 2026-07-28 — **69%** of a typical
+the 28 scale-family rows as of 2026-07-28 (all tagged v9; the family's v8 entry
+has never matched a ledger row) — **69%** of a typical
 lean, injected as noise. Holding that to ~19% needs `K ≈ 600`, at which point
 even an 80-point raw cell deviation moves a lineup composite by 0.0008. Whether
 the arm can escape that squeeze depends on the true dispersion of
