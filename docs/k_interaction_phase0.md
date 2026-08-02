@@ -200,6 +200,61 @@ for both BBE% and run value. The prohibition is about the layer, and this is a
 pre-existing display element outside it — recorded so the two are not later
 confused, not proposed for change.
 
+## Measured: does K% carry information the blended number lacks?
+
+`k_interaction_probe.py` answers the one question that decides whether any of
+this is worth building. It runs on committed `data/leans_*_xw.csv` — no Savant
+fetch, no `.savant_cache/` dependency, no historical reconstruction — and moves
+nothing. `python k_interaction_probe.py`, 779 game-sides / 377 games:
+
+```
+sensitivity  d(xwOBA)/d(K%) per 1pp:
+   xwOBAcon=0.340  -3.07 pts     xwOBAcon=0.370  -3.34 pts
+   xwOBAcon=0.400  -3.62 pts
+
+DECIDING MEASUREMENT -- lineup K% spread at fixed blended xwOBA (n=779):
+   raw sd of lineup K%           2.177 pp
+   residual sd, xwOBA held fixed 2.177 pp
+   r(K%, xwOBA) = -0.0180   variance explained 0.0%
+
+lean impact, shipped B*P/L vs K%-interacted (377 games):
+   median |xw_net|  A 24.84 pts   B 23.32 pts
+   corr 0.99675   median |shift| 1.91 pts   sign flips 2.39%
+      |xw_net_A| <.005 (noise)  n=  44  flips 18.18%
+      |xw_net_A| .005-.0186     n= 106  flips  0.94%
+      |xw_net_A| .0186-.047     n= 154  flips  0.00%
+      |xw_net_A| >.047          n=  73  flips  0.00%
+```
+
+Two findings, and they point opposite ways.
+
+**K% is orthogonal to blended xwOBA at lineup level.** `r = -0.018`; the
+residual sd equals the raw sd to three decimals. Holding the number the model
+already has fixed removes *none* of the variation in lineup K%. The mechanism is
+the power/whiff tradeoff cancelling at composite level — high-K lineups carry
+higher xwOBAcon, and the two effects offset almost exactly in the blend. So the
+premise behind a K% layer is sound: there is a full 2.18pp of lineup K%
+variation the shipped model cannot see, and at −3.3 pts per 1pp that is not a
+rounding error.
+
+**Routing it through log5 nonetheless barely moves the lean.** Correlation
+0.997, median shift 1.91 pts against a median lean of 24.84. Every flip above
+`|xw_net| = .0186` is absent; the .005–.0186 band flips once in 106. The flips
+concentrate where the lean was already noise (18% of the 44 games under .005,
+which is close to what coin-flipping a near-zero net would give).
+
+Both are true because `B·P/L` is *already* a multiplicative interaction, and
+`log5(p_b, p_p, λ) ≈ p_b·p_p/λ` to first order. The information K% carries is
+real and independent; the *interaction form* is not what was missing. This is
+the distinction the brief's Phase 5 item 2 asks about — larger leans as signal
+vs. double-counting — resolved before any integration, and it says the layer as
+specified buys 1.91 pts of movement for four new dependencies.
+
+The honest reading is that the promising direction is not the log5 interaction
+at all. It is that lineup K% is an orthogonal axis the model currently ignores
+entirely — which is an argument for decomposing the batter branch, not for
+multiplying an opportunity term onto it.
+
 ## What would have to be true to proceed
 
 Not a plan, and not authorization — the conditions a revised brief would need to
@@ -217,6 +272,23 @@ answer:
 
 Until 1-4 are settled, Phase 1's tests would be testing a module against inputs
 this repository cannot produce.
+
+The measurement above reprioritises these. Condition 1 (an xwOBAcon source) is
+no longer the blocker it looked like — the probe inverts for it from rates the
+slate CSVs already carry, and that inversion is round-trip tested. Condition 4
+is now answered by evidence rather than by argument: multiply-on-top buys 1.91
+pts, so if this is built it is built as a replacement.
+
+**Third premise correction, found while testing.** The brief asks to assert
+`bbe_share` has no negatives over K% ∈ [0,.60] × BB% ∈ [0,.30] × HBP% ∈ [0,.05],
+calling that "the specific failure the multiplicative form exists to prevent."
+On that grid the subtractive `1 - k - bb - hbp` never goes negative either — the
+corner sums to 0.95, bottoming out at +0.05. Going negative needs
+`k + bb + hbp > 1`, outside the stated range and outside anything baseball
+produces. The multiplicative form remains the right choice because it is closed
+under [0,1] with no range precondition to remember, but it is chosen for
+robustness, not because the cited failure occurs. Recorded in
+`tests/test_k_interaction_probe.py::test_brief_grid_does_not_actually_reach_the_negative_corner`.
 
 ## Model-tag consequence
 
