@@ -202,8 +202,8 @@ precedent — they are how the fix is known to look.
   bucket off the rows (`"xwOBA"`), the caller looked it up under
   `MODEL_RATE_LABEL` with an `or "Model"` fallback that only fires on *mixed*
   metrics, so both missed and `z +1.09 (+3.14u)` — "the primary metrics" —
-  silently vanished from two pages instead of raising. Fixed by
-  `market_backfill.metric_label()`: one derivation, read off `model_metric` with
+  silently vanished from two pages instead of raising. Fixed in `2d369c4`
+  by `market_backfill.metric_label()`: one derivation, read off `model_metric` with
   the tag prefix as the legacy fallback, used by both the bucket and every
   lookup so a mismatch is now unrepresentable. A build-time constant must never
   name historical rows — the metric is a property of the rows, and the tag flips
