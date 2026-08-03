@@ -1558,6 +1558,11 @@ class ModelTagProvenanceTests(unittest.TestCase):
                              "model_metric": ["wOBA", "wOBA"]})
         self.assertEqual(market_backfill.metric_label(woba), "wOBA")
 
+        # The abandoned split lineage remains nameable as immutable history,
+        # even when an older dump lacks the explicit model_metric column.
+        split = pd.DataFrame({"model_tag": ["split+plat_consol_v1"]})
+        self.assertEqual(market_backfill.metric_label(split), "wOBA/xwOBA")
+
         # Mixed history must not claim either metric.
         self.assertEqual(
             market_backfill.metric_label(

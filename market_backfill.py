@@ -323,7 +323,11 @@ def metric_label(df, mixed="Model"):
     if tag is None:
         return "xwOBA"
     tag = pd.Series(tag).astype(str).reset_index(drop=True)
-    from_tag = np.where(tag.str.startswith("woba+"), "wOBA", "xwOBA")
+    from_tag = np.select(
+        [tag.str.startswith("woba+"), tag.str.startswith("split+")],
+        ["wOBA", "wOBA/xwOBA"],
+        default="xwOBA",
+    )
     metric = df.get("model_metric")
     if metric is None:
         labels = pd.Series(from_tag)

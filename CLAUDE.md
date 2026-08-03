@@ -52,11 +52,19 @@ These are different equivalence relations and they do disagree. The authority is
 | v9 | starter/bullpen phases split; handedness applies to starter innings only | 9+10 | 8+9+10 |
 | v10 | phases weighted by PA share (measured BF/IP) not innings share | 9+10 | 8+9+10 |
 | wOBA v1 | observed wOBA replaces xwOBA in every active rate input; v10 construction fixed | wOBA v1 | wOBA v1 |
+| split v1 | one-slate wOBA-lineup/xwOBA-arms test; abandoned before grading | split v1 | split v1 |
 
 The wOBA forward test is intentionally isolated in both namespaces. Observed
 wOBA changes the predictions and its sampling distribution is not the xwOBA
 delta scale. Internal `xwOBA`/`xw_*` dump and ledger keys remain a compatibility
 schema for immutable history; new rows must carry `model_metric=wOBA`.
+
+`split v1` remains an isolated historical namespace because its dump and
+pending ledger rows existed before full wOBA was restored. It is not an active
+alternative and shares neither records nor delta scale with wOBA v1. Current
+wOBA dumps ingest after split dumps, so any same-day pending split snapshot is
+re-stamped into the restored lineage before first pitch; settled rows remain
+immutable.
 
 Two entries earn their keep as precedent. **v6 shares v5's units but not its
 record line** — a new prediction family can inherit a scale. **v10 shares both

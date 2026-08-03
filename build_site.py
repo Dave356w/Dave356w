@@ -135,6 +135,10 @@ _RECORD_FAMILIES = {
     # Observed wOBA replaces xwOBA in every active rate input while the rest of
     # v10's construction stays fixed. This is a new prediction family.
     "woba+plat_consol_v1": ("woba+plat_consol_v1",),
+    # Short-lived wOBA-lineup/xwOBA-arms experiment. It is retained only so
+    # immutable dumps and ledger rows remain recognised after full wOBA was
+    # restored; it never pools with the active wOBA record.
+    "split+plat_consol_v1": ("split+plat_consol_v1",),
 }
 RECORD_TAGS = tuple(
     t.strip() for t in os.environ.get(
@@ -175,6 +179,9 @@ _SCALE_FAMILIES = {
     # wOBA has a different sampling distribution from xwOBA, so it cannot
     # share magnitude cutoffs with any xwOBA lineage.
     "woba+plat_consol_v1": ("woba+plat_consol_v1",),
+    # The mixed-metric delta has its own units. Historical recognition does
+    # not make it compatible with the active full-wOBA scale.
+    "split+plat_consol_v1": ("split+plat_consol_v1",),
 }
 SCALE_TAGS = tuple(
     t.strip() for t in os.environ.get(

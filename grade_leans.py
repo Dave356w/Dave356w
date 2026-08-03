@@ -88,6 +88,9 @@ _RECORD_FAMILIES = {
     "xw+plat_consol_v9": ("xw+plat_consol_v9", "xw+plat_consol_v10"),
     "xw+plat_consol_v10": ("xw+plat_consol_v9", "xw+plat_consol_v10"),
     "woba+plat_consol_v1": ("woba+plat_consol_v1",),
+    # Historical one-slate experiment; isolated from the restored full-wOBA
+    # family but still recognised by the immutable ledger.
+    "split+plat_consol_v1": ("split+plat_consol_v1",),
 }
 RECORD_TAGS = tuple(
     t.strip() for t in os.environ.get(
@@ -103,6 +106,7 @@ MODEL_FAMILY_TAGS = (
     ("v8", ("xw+plat_consol_v8",)),
     ("v9/v10", ("xw+plat_consol_v9", "xw+plat_consol_v10")),
     ("wOBA v1", ("woba+plat_consol_v1",)),
+    ("split v1", ("split+plat_consol_v1",)),
 )
 N_FIT_MIN   = 120
 _FINAL  = {"Final", "Game Over", "Completed Early"}
@@ -368,8 +372,11 @@ def rows_from_dump(xw_df, pl_df):
         dump_model_metric = a.get("model_metric")
         if dump_model_metric is None or (isinstance(dump_model_metric, float)
                                          and pd.isna(dump_model_metric)):
+            tag = str(dump_model_tag)
             dump_model_metric = (
-                "wOBA" if str(dump_model_tag).startswith("woba+") else "xwOBA"
+                "wOBA/xwOBA" if tag.startswith("split+")
+                else "wOBA" if tag.startswith("woba+")
+                else "xwOBA"
             )
         out.append(dict(
             game_pk=gpk, game_date=str(a.get("game_date")), away=away_team, home=home_team,
@@ -463,15 +470,16 @@ def ingest(led):
     n_new = n_ref = n_late = n_legacy = 0
     if "model_metric" in led.columns:
         led["model_metric"] = led["model_metric"].astype(object)
-    # Historical xwOBA dumps remain immutable. New wOBA dumps are ingested
-    # after them so a same-day pending xwOBA snapshot can be refreshed into the
-    # new wOBA lineage before first pitch; graded rows are never touched.
+    # Historical xwOBA and split dumps remain immutable. Current wOBA dumps are
+    # ingested last so a same-day pending snapshot from either older lineage is
+    # refreshed into full wOBA before first pitch; graded rows are never touched.
     dump_paths = (
         sorted(glob.glob(os.path.join(DATA_DIR, "leans_*_xw.csv")))
+        + sorted(glob.glob(os.path.join(DATA_DIR, "leans_*_split.csv")))
         + sorted(glob.glob(os.path.join(DATA_DIR, "leans_*_woba.csv")))
     )
     for xw_path in dump_paths:
-        pl_path = re.sub(r"_(?:xw|woba)\.csv$", "_pl.csv", xw_path)
+        pl_path = re.sub(r"_(?:xw|split|woba)\.csv$", "_pl.csv", xw_path)
         xw = pd.read_csv(xw_path)
         pl = pd.read_csv(pl_path) if os.path.exists(pl_path) else None
         for row in rows_from_dump(xw, pl):

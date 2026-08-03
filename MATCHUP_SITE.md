@@ -40,6 +40,15 @@ scale families; it is never pooled with v9/v10 history. Legacy dump/ledger
 columns such as `xw_net` remain only as a compatibility schema and every new
 row carries `model_metric=wOBA`.
 
+The short-lived `split+plat_consol_v1` experiment changed the pitching side
+back to xwOBA after treating a pitcher's weak cross-season residual correlation
+as evidence against full wOBA. That test followed individual pitchers, while
+park and defense are team context and both team membership and defensive
+personnel change between seasons. It therefore could not rule out useful
+same-season context. Full wOBA was restored before any split row graded; the
+split tag and dump remain recognised only as immutable history, isolated from
+both the wOBA record and scale families.
+
 For one side of one game — the pitching side's staff against the opposing
 lineup — the build computes:
 
