@@ -305,6 +305,37 @@ def attach_market(df, col=COL, verbose=True):
 
 
 # --------------------------------------------------------------- analysis ---
+def metric_label(df, mixed="Model"):
+    """Name of the primary rate behind a set of ledger rows, read off the rows.
+
+    The metric is a property of the rows being rendered, never of the running
+    build: every public surface here draws pooled history, so a build-time
+    constant would relabel 381 xwOBA games "wOBA" the morning the tag flips.
+    `model_metric` is authoritative; rows written before that column existed
+    fall back to their tag prefix. A frame spanning both metrics gets `mixed`.
+
+    One home for the derivation, deliberately: build_site's display surfaces,
+    the ledger report, and the vs-market summary all need the same answer, and
+    a lookup keyed on one copy while another copy names the bucket is exactly
+    how the vs-market cell went missing.
+    """
+    tag = df.get("model_tag")
+    if tag is None:
+        return "xwOBA"
+    tag = pd.Series(tag).astype(str).reset_index(drop=True)
+    from_tag = np.where(tag.str.startswith("woba+"), "wOBA", "xwOBA")
+    metric = df.get("model_metric")
+    if metric is None:
+        labels = pd.Series(from_tag)
+    else:
+        metric = pd.Series(metric).reset_index(drop=True)
+        labels = metric.where(metric.notna(), pd.Series(from_tag)).astype(str)
+    uniq = labels.dropna().unique().tolist()
+    if not uniq:
+        return "xwOBA"
+    return uniq[0] if len(uniq) == 1 else mixed
+
+
 def vs_market_summary(df, col=COL, verbose=True):
     """Vs-market scoreboard for both models. Returns dict for grades.html chips."""
     d = df[df["close_p_home"].notna()].copy()
@@ -312,11 +343,7 @@ def vs_market_summary(df, col=COL, verbose=True):
                            d[col["home"]], d[col["away"]])
     d["fav"] = np.where(d["close_p_home"] >= 0.5, d[col["home"]], d[col["away"]])
     out = {}
-    metrics = (d.get("model_metric", pd.Series(dtype=object))
-               .dropna().astype(str).unique().tolist())
-    primary_label = (metrics[0] if len(metrics) == 1
-                     else "Model" if len(metrics) > 1 else "xwOBA")
-    specs = [(primary_label, d, col["xw_team"]),
+    specs = [(metric_label(d), d, col["xw_team"]),
              ("platoon", d[d[col["pl_reliable"]] == True], col["pl_team"])]  # noqa: E712
     for label, rows, key in specs:
         rows = rows[rows[key].notna()]

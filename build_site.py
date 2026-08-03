@@ -69,9 +69,12 @@ BATTING_ORDER_COL = "batting_order"
 MODEL_RATE_SOURCE_COL = "woba"
 MODEL_RATE_LABEL = "wOBA"
 MODEL_RATE_INTERNAL_COL = "xwOBA"  # stable legacy dump/ledger schema only
+# True only for a posted hitter absent from the season Savant leaderboard, who
+# therefore carries the active team's PA-weighted rate. Purely an in-process
+# frame column -- it reaches no dump, ledger, or audit schema -- so it carries
+# one name, not an alias pair. An alias would drift the way the workflow's
+# MODEL_TAG pin did.
 MODEL_RATE_TEAM_BACKFILL_COL = "wOBA_team_backfill"
-# Backward-compatible constant name used by the established pipeline/tests.
-XWOBA_TEAM_BACKFILL_COL = MODEL_RATE_TEAM_BACKFILL_COL
 # Expected plate appearances per game by batting-order slot. A lineup turns over
 # from the top, so the leadoff man bats ~4.6 times while the 9-hole bats ~3.8 --
 # roughly a 22% spread in in-game exposure across the order. We weight lineup
@@ -773,7 +776,7 @@ def resolve_lineup(game_pk, side, team_id, batter_stat, return_meta=False,
     missing, backfilled = [], []
     for pid in posted:
         stat = batter_stat.get(pid) or {}
-        if bool(stat.get(XWOBA_TEAM_BACKFILL_COL)):
+        if bool(stat.get(MODEL_RATE_TEAM_BACKFILL_COL)):
             backfilled.append(pid)
         elif pd.isna(pd.to_numeric(stat.get("xwOBA"), errors="coerce")):
             missing.append(pid)
@@ -786,7 +789,7 @@ def resolve_lineup(game_pk, side, team_id, batter_stat, return_meta=False,
                 "xwOBA": team_xwoba,
                 "PA": 0.0,
                 "BBE": 0.0,
-                XWOBA_TEAM_BACKFILL_COL: True,
+                MODEL_RATE_TEAM_BACKFILL_COL: True,
             }
 
     resolved = fill_lineup_from_roster(team_id, posted, batter_stat, LINEUP_SIZE)
@@ -1165,7 +1168,7 @@ def build_tables(slate, lineups, batter_stat, pitcher_stat, batter_bb, pitcher_b
             if table == "stat":
                 pit_rows.append({**base, "table_type": "pitchers", "Pos.": "P",
                                  **{c: src.get(c) for c in STAT_COLS}, "PA": src.get("PA"),
-                                 XWOBA_TEAM_BACKFILL_COL: False,
+                                 MODEL_RATE_TEAM_BACKFILL_COL: False,
                                  "player_id": pid, "bats": bio.get("bats"),
                                  "throws": bio.get("throws")})
             else:
@@ -1187,10 +1190,10 @@ def build_tables(slate, lineups, batter_stat, pitcher_stat, batter_bb, pitcher_b
                 base = {**meta, "table_index": tidx, "Name": nm,
                         BATTING_ORDER_COL: slot, "sp_side": sp_side, "is_sp": False}
                 if table == "stat":
-                    backfill_value = src.get(XWOBA_TEAM_BACKFILL_COL)
+                    backfill_value = src.get(MODEL_RATE_TEAM_BACKFILL_COL)
                     pit_rows.append({**base, "table_type": "pitchers", "Pos.": pos,
                                      **{c: src.get(c) for c in STAT_COLS}, "PA": src.get("PA"),
-                                     XWOBA_TEAM_BACKFILL_COL:
+                                     MODEL_RATE_TEAM_BACKFILL_COL:
                                          (bool(backfill_value)
                                           if pd.notna(backfill_value) else False),
                                      "player_id": pid, "bats": bio.get("bats"),
@@ -1214,7 +1217,7 @@ def build_tables(slate, lineups, batter_stat, pitcher_stat, batter_bb, pitcher_b
     pdf = pd.DataFrame(pit_rows)
     if not pdf.empty:
         pdf = pdf[META + ["Pos.", BATTING_ORDER_COL] + STAT_COLS
-                  + ["PA", XWOBA_TEAM_BACKFILL_COL, "player_id", "bats", "throws",
+                  + ["PA", MODEL_RATE_TEAM_BACKFILL_COL, "player_id", "bats", "throws",
                      "sp_side", "is_sp"]]
     bdf = pd.DataFrame(bb_rows)
     if not bdf.empty:
@@ -1796,17 +1799,9 @@ def aggregate_lineup(H, rate_cols, weighted=True, shrink_prior=None, shrink_k=No
             # instead of applying player-level shrinkage a second time.
             if c == XWOBA_SHRINK_COL and shrink_prior is not None and "PA" in g.columns:
                 vals = shrink_xwoba(g[c], g["PA"], shrink_prior, shrink_k)
-                # Accept the legacy flag in constructed/historical frames;
-                # production wOBA rows use wOBA_team_backfill.
-                backfill_col = next(
-                    (name for name in (XWOBA_TEAM_BACKFILL_COL,
-                                       "xwOBA_team_backfill")
-                     if name in g.columns),
-                    None,
-                )
-                if backfill_col is not None:
+                if MODEL_RATE_TEAM_BACKFILL_COL in g.columns:
                     backfilled = (
-                        pd.Series(g[backfill_col])
+                        pd.Series(g[MODEL_RATE_TEAM_BACKFILL_COL])
                         .reset_index(drop=True)
                         .fillna(False)
                         .astype(bool)
@@ -2523,8 +2518,19 @@ TEAM_LABELS = {
 
 # ---------- heatmap tints (casual-UI layer; numbers unchanged) ----------
 HEAT_ALPHA_MAX = 0.30
+# |dev| from league at full colour saturation. Calibrated on the xwOBA spread
+# and NOT re-derived for wOBA -- recorded here rather than patched, because one
+# slate is not a distribution. Measured on 2026-08-03, the only day built under
+# both metrics (n=13 xwOBA sides vs 14 wOBA): the starter-allowed rate widens
+# materially (sd 0.0161 -> 0.0215, mean |dev| 0.0121 -> 0.0166), because it is
+# one pitcher's observed outcome rather than an expectation, so xwOBA_sp=0.035
+# saturates sooner -- 14% of starter cells fully tinted against 8%, mean
+# saturation 0.34 -> 0.44. The lineup composite barely moves (sd 0.0089 both
+# ways): nine shrunk hitters average the extra variance away, so xwOBA_bat is
+# roughly still in calibration. Display-only, no MODEL_TAG implication. Widen
+# xwOBA_sp only off a real wOBA sample, not off this one.
 HEAT_DOMAINS = {"xwOBA_sp": 0.035, "K-BB%": 7.0,
-                "OPS": 0.080, "ERA": 1.50, "xwOBA_bat": 0.045}   # |dev| at full saturation
+                "OPS": 0.080, "ERA": 1.50, "xwOBA_bat": 0.045}
 
 
 def heat_style(val, lg, domain, hi="warm"):
@@ -2662,7 +2668,7 @@ def _hitters_for(opp_hitters_df, detail_df, gpk, fp, lg_ops,
         edge = (mx - lg_ops) if (mx is not None and lg_ops is not None
                                  and pd.notna(lg_ops)) else None
         xw_raw = _f(r.get("xwOBA"))
-        backfill_value = r.get(XWOBA_TEAM_BACKFILL_COL)
+        backfill_value = r.get(MODEL_RATE_TEAM_BACKFILL_COL)
         team_backfill = bool(backfill_value) if pd.notna(backfill_value) else False
         adv_tag = r.get(PLATOON_ADV_COL)
         if adv_tag is None or not pd.notna(adv_tag):
@@ -4446,27 +4452,32 @@ def market_context_records():
 # Prior cutoffs. No longer a last-resort branch: they are the prior that the
 # observed quantiles are shrunk toward, so they always contribute and their
 # influence decays smoothly as the pool grows (see lean_strength).
-# Provenance: p33/p80 of |xw_net| over the 24 ledger rows on this scale as of
-# 2026-07-28 (0.0151 / 0.0325), rounded. All 24 were tagged v9 -- an earlier
-# wording here said "v8/v9", but no xw+plat_consol_v8 row has ever been graded
-# into the ledger (v8 shipped for one morning; its 11 rows were still pending
-# when v9 landed, so the pregame refresh rebuilt and re-stamped them). The v8
-# entries in _SCALE_FAMILIES match zero rows and are history, not a live pool.
-# The previous literal here was
-# the *pre-v5 unshrunk* p33/p80 (0.021, 0.060), left in place across the v5,
-# v7 and v8 shrinkage changes that moved the distribution underneath it; with
-# v9's observed maximum |xw_net| of 0.0462 it made "strong" unreachable for
-# every game in the family. Invalidated by any MODEL_TAG bump that changes the
-# delta scale -- i.e. whenever _SCALE_FAMILIES gains a new entry. Recompute
-# from the new family's rows; shrinkage bounds the damage of a stale prior but
-# does not remove it.
+# STALE BY ITS OWN RULE, KNOWINGLY. Provenance: p33/p80 of |xw_net| over the 24
+# ledger rows on the *xwOBA v9/v10* scale as of 2026-07-28 (0.0151 / 0.0325),
+# rounded. All 24 were tagged v9 -- an earlier wording here said "v8/v9", but no
+# xw+plat_consol_v8 row has ever been graded into the ledger (v8 shipped for one
+# morning; its 11 rows were still pending when v9 landed, so the pregame refresh
+# rebuilt and re-stamped them). The v8 entries in _SCALE_FAMILIES match zero rows
+# and are history, not a live pool. The literal before that was the *pre-v5
+# unshrunk* p33/p80 (0.021, 0.060), left in place across the v5, v7 and v8
+# shrinkage changes that moved the distribution underneath it; with v9's observed
+# maximum |xw_net| of 0.0462 it made "strong" unreachable for every game.
 #
-# Pool growth is NOT an invalidation: this is a prior, and re-deriving it from
-# the same family it is shrunk against would make it the data. Measured
-# 2026-08-02 at n=99 the family's own p33/p80 is 0.0127 / 0.0343, so the prior
-# is off by ~0.0023 on each and the shrunk cutoffs land at 0.0139 / 0.0331 --
-# within the 0.00218 worst-case single-row step K=100 was chosen for. Leave it
-# until the scale family changes.
+# The rule this block has always stated: invalidated by any MODEL_TAG bump that
+# changes the delta scale -- i.e. whenever _SCALE_FAMILIES gains a new entry.
+# wOBA v1 added one, so these two numbers are now a prior carried over from a
+# retired family. It is not re-derived here because there is nothing yet to
+# re-derive from: measured 2026-08-03 the wOBA v1 pool is n=6, whose own p33/p80
+# (0.0145 / 0.0371) is noise at that size, and freezing it would be the very
+# anti-pattern this comment exists to prevent. Shrinkage plus the slate top-up
+# in lean_strength_scale() bounds the damage meanwhile -- at n=6 the shrunk
+# cutoffs are 0.0150 / 0.0323, essentially the prior.
+#
+# WHAT TO DO: once the wOBA v1 pool passes ~60 graded-or-pending rows, recompute
+# p33/p80 from that family alone and replace these literals, then update this
+# provenance. Pool growth is otherwise NOT an invalidation -- this is a prior,
+# and re-deriving it from the same family it is shrunk against every build would
+# make it the data.
 LEAN_STRENGTH_FALLBACK = (0.015, 0.032)   # slight < ~p33 <= clear < ~p80 <= strong
 
 # Pseudo-count for shrinking the observed p33/p80 toward LEAN_STRENGTH_FALLBACK.
@@ -4583,19 +4594,24 @@ def records_strip_html():
     if g.empty:
         inner = "<span class='muted'>no graded games yet</span>"
     else:
-        bits = [f"{MODEL_RATE_LABEL} full {_rec_txt(g['xw_full'])}"]
-        # xwOBA vs-market (z / flat ROI) — mirrors the grades-page core card;
+        # Label the pooled record with the metric those rows were predicted
+        # under, not MODEL_RATE_LABEL. This strip renders every graded family;
+        # on the morning the tag flipped it read "wOBA full 217-164" over 381
+        # games of which zero were wOBA.
+        from market_backfill import metric_label
+        label = metric_label(g)
+        bits = [f"{label} full {_rec_txt(g['xw_full'])}"]
+        # vs-market (z / flat ROI) — mirrors the grades-page core card;
         # market columns are absent until the first market run.
         if "close_p_home" in g.columns and g["close_p_home"].notna().any():
             try:
                 from market_backfill import vs_market_summary
-                summary = vs_market_summary(g, verbose=False)
-                m = summary.get(MODEL_RATE_LABEL) or summary.get("Model")
+                m = vs_market_summary(g, verbose=False).get(label)
             except Exception as e:  # noqa: BLE001
                 log(f"vs-market strip degraded: {e!r}")
                 m = None
             if m:
-                bits.append(f"{MODEL_RATE_LABEL} vs mkt z {m['z']:+.2f} ({m['roi_units']:+.2f}u)")
+                bits.append(f"{label} vs mkt z {m['z']:+.2f} ({m['roi_units']:+.2f}u)")
         inner = " <span class='muted'>·</span> ".join(bits)
     return ("<div class='gradestrip'><span class='lab'>Record</span>"
             f"<span>{inner}</span><span class='grade-links'>"
@@ -4745,10 +4761,15 @@ def render_grades_html(built_txt):
     else:
         pend_sub = f"{n_pend} pending" + (f" · {n_void} void" if n_void else "")
         stat("Graded", str(len(g)), pend_sub)
-        b, p = _rec_parts(g["xw_full"]); stat(f"{MODEL_RATE_LABEL} · full", b, p)
+        # Metric read off the graded rows, not the running build -- this page
+        # pools every family, so it is "xwOBA" until wOBA rows actually grade.
+        from market_backfill import metric_label
+        label = metric_label(g)
+        b, p = _rec_parts(g["xw_full"]); stat(f"{label} · full", b, p)
         # vs-market scoreboard (closing DK MLs attached by grade_leans.py via
         # market_backfill; columns absent until the first market run). z leads
-        # the cell -- it is the primary metric, per the note below.
+        # the cell -- it is the primary metric, per the note below. The bucket
+        # is keyed by the same metric_label call, so the lookup cannot miss.
         if "close_p_home" in g.columns and g["close_p_home"].notna().any():
             try:
                 from market_backfill import vs_market_summary
@@ -4756,12 +4777,12 @@ def render_grades_html(built_txt):
             except Exception as e:  # noqa: BLE001
                 log(f"vs-market summary degraded: {e!r}")
                 mkt = {}
-            m = mkt.get(MODEL_RATE_LABEL) or mkt.get("Model")
+            m = mkt.get(label)
             if m:
-                stat(f"{MODEL_RATE_LABEL} · vs mkt", f"z {m['z']:+.2f}",
+                stat(f"{label} · vs mkt", f"z {m['z']:+.2f}",
                      f"{m['w']}-{m['n'] - m['w']} · {m['roi_units']:+.2f}u flat",
                      tone="cool" if m["z"] > 0 else "warm")
-        notes.append(f"{MODEL_RATE_LABEL} graded full-game vs devigged DK closing ML (ESPN capture); "
+        notes.append(f"{label} graded full-game vs devigged DK closing ML (ESPN capture); "
                      "z and flat ROI are the primary metrics")
         # Controls. The model's record is unreadable without them: .570 is a
         # result only relative to what always-home and always-chalk got on the
@@ -4813,15 +4834,20 @@ def render_grades_html(built_txt):
 
 
 def render_team_grades_html(built_txt):
-    """Render the current model-rate record split by MLB club."""
+    """Render the displayed ledger lineage's record split by MLB club."""
     nav = ("<div class='backlink ledger-nav'>"
            "<a href='grades.html'>← full ledger</a>"
            "<a href='index.html'>today's leans →</a></div>")
+    led = load_ledger_df()
+    # Same rule as the other two public surfaces: this page pools every graded
+    # family, so it is named for the rows it shows, not for tonight's build.
+    from market_backfill import metric_label
+    label = (MODEL_RATE_LABEL if led is None
+             else metric_label(_display_grades(led)))
     head = ("<div class='gr-head'><h1 class='gr-h1'>Performance by team</h1>"
-            f"<div class='gr-lead'>{MODEL_RATE_LABEL} full-game accuracy for every MLB club, "
+            f"<div class='gr-lead'>{label} full-game accuracy for every MLB club, "
             "split by whether the model leaned on that team or against it. "
             f"Built <span class='stamp'>{built_txt}</span>.</div></div>")
-    led = load_ledger_df()
     if led is None:
         empty = ("<div class='legend'><div class='lg-title'>No graded data yet — "
                  "team performance appears after the first CI run.</div></div>")
