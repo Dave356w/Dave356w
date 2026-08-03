@@ -1,7 +1,8 @@
 # MLB matchup-leans static site
 
 A render-free static site that publishes daily MLB probable-pitcher vs
-opponent-lineup **leans** (Statcast wOBA + platoon-OPS), built from the
+opponent-lineup **leans** (Statcast wOBA lineups vs xwOBA arms, + platoon-OPS),
+built from the
 `Shrunk_mlb_matchup_render_consolidated` Colab notebook and deployed to GitHub
 Pages on a schedule.
 
@@ -9,36 +10,57 @@ It pulls everything through keyless APIs (no browser, no secrets):
 
 - **MLB StatsAPI** — slate, probables, rosters, bio, vL/vR splits, league baselines
 - **Baseball Savant `gf?game_pk=`** — posted lineups (JSON)
-- **Baseball Savant CSV leaderboards** — custom (wOBA/xBA/xSLG/EV/LA/HardHit/K/BB) + batted-ball, cached once per day
+- **Baseball Savant CSV leaderboards** — custom, cached once per day; the
+  primary rate is fetched **per side** (`woba` for batters, `xwoba` for
+  pitchers) plus xBA/xSLG/EV/LA/HardHit/K/BB, and batted-ball
 
 The model uses a phase-specific multiplicative-ratio matchup anchored on league
-average (`M = B·P/L`, additive for EV/LA), with `edge = M − L` as the signal.
+average, with `edge = M − L_bat` as the signal. Because the two sides are
+measured on different metrics, each contributes a ratio to the league mean of
+its own: `M = L_bat·(B/L_bat)·(P/L_pit) = B·P/L_pit` (additive for EV/LA). With
+one metric on both sides the anchors coincide and this is exactly the
+historical `B·P/L`, so it is a generalisation, not a branch.
 The starter phase uses the lineup adjusted for the probable starter's hand; the
 bullpen phase currently uses the neutral lineup. This is a relative-rate
 heuristic, not the probability-odds form of log5. The platoon lens regresses
 each side's vs-hand OPS toward an
-overall×league-platoon prior and is reliability-gated. Lean is wOBA-driven;
+overall×league-platoon prior and is reliability-gated. The lean is driven by
+the primary rate;
 the platoon lens is still computed and graded into the ledger for auditing but
-is no longer surfaced on the cards (the display is wOBA-only).
+is no longer surfaced on the cards.
 
 ---
 
-## The current model — `woba+plat_consol_v1`
+## The current model — `split+plat_consol_v1`
 
 **Read this section for what the code does today.** Everything below it is a
 changelog: each version note describes a *delta* against its predecessor, and
 several of those deltas have since been superseded. Where a version note and
 this section disagree, this section and the source are right.
 
-This forward test keeps v10's construction fixed and changes the primary rate
-only: every active batter, probable-starter, reliever/bullpen, league prior,
-team backfill, percentile, and optional pitch-mix cell is observed Statcast
-**wOBA**, never xwOBA. The model retains `K = 100` and the ±0.010 platoon term
-so the input statistic is the isolated change being tested. Because observed
-wOBA has a different sampling distribution, the tag starts new record and
-scale families; it is never pooled with v9/v10 history. Legacy dump/ledger
-columns such as `xw_net` remain only as a compatibility schema and every new
-row carries `model_metric=wOBA`.
+This lineage keeps v10's construction fixed and chooses the primary rate **per
+side**: every batter, team backfill and batter percentile is observed Statcast
+**wOBA**; every probable-starter, reliever/bullpen, pitcher percentile and
+pitch-mix cell is **xwOBA**. Each side shrinks toward, and forms its ratio
+against, the league mean of its own metric (`league_baseline["xwOBA"]` is the
+batter anchor and keeps the legacy key; `league_baseline["xwOBA_pit"]` is the
+pitcher anchor).
+
+Why: on matched 2025→2026 seasons the `wOBA − xwOBA` residual repeats for
+batters (r=+0.239, p=0.022, n=91) but not for pitchers (r=−0.117, n=41). A
+hitter's placement, speed and home park are real and recur; a pitcher's
+wOBA-allowed is mostly the defence behind him, which is DIPS. Predicting next
+season's wOBA the blend `(1−w)·xwOBA + w·wOBA` peaks at w=1 for batters and
+w=0 for pitchers, so wOBA v1's w=1-everywhere took the worst point on the
+pitching side. Full derivation and caveats in the constants block at the top of
+`build_site.py`.
+
+The model retains `K = 100` and the ±0.010 platoon term, so the metric choice
+is the isolated change. The tag starts new record and scale families: the arms
+change so leans move, and the delta is now a mixed-metric quantity sharing
+units with neither pure lineage. Legacy dump/ledger columns such as `xw_net`
+remain only as a compatibility schema and every new row carries
+`model_metric`.
 
 For one side of one game — the pitching side's staff against the opposing
 lineup — the build computes:
@@ -49,7 +71,7 @@ a posted hitter absent from the season leaderboard keeps his slot and receives
 the team's PA-weighted wOBA (`wOBA_team_backfill`).
 
 **2. Shrinkage.** Every hitter's season wOBA is regressed toward the league
-baseline by his PA with a fixed pseudo-sample, `x* = (n·x + 100·prior)/(n+100)`
+**wOBA** baseline by his PA with a fixed pseudo-sample, `x* = (n·x + 100·prior)/(n+100)`
 (`XWOBA_SHRINK_K = 100`). A deviation keeps `n/(n+100)` of its raw size: 50% at
 100 PA, 75% at 300, ~86% at 600. A team-backfilled hitter is already an
 aggregate and is **not** shrunk again.
@@ -66,7 +88,8 @@ slot (`LINEUP_SLOT_PA`, 4.61 leadoff → 3.76 for the 9-hole):
 
 **4. Two pitching inputs**, each shrunk with the same `K = 100`:
 
-- `P_SP` — the probable starter's season wOBA-allowed, shrunk by BF.
+- `P_SP` — the probable starter's season **xwOBA**-allowed, shrunk by BF
+  toward the league xwOBA baseline.
 - `P_BP` — a role-filtered bullpen pool: active roster minus the probable,
   keeping pitchers with start share ≤ `0.35` and ≤ `3.0` IP per appearance
   (loose enough to retain bulk relievers, tight enough to drop rotation arms).
@@ -84,11 +107,16 @@ on their share of **plate appearances**, using BF/IP measured from the same
 season role call:
 
 ```
-M_SP = B_SP · P_SP / L          M_BP = B_0 · P_BP / L
+M_SP = B_SP · P_SP / L_pit      M_BP = B_0 · P_BP / L_pit
 
 q    = (IP_SP·r_SP) / (IP_SP·r_SP + (9 − IP_SP)·r_BP)
-M    = q·M_SP + (1 − q)·M_BP            edge = M − L
+M    = q·M_SP + (1 − q)·M_BP            edge = M − L_bat
 ```
+
+`L_pit` is league xwOBA (the pitching metric) and `L_bat` is league wOBA. Only
+the ratio denominator differs by side — **every** edge is still taken against
+the one offensive anchor, which is why `mx − edge` recovers a single baseline
+for all three phases (`tests/test_ledger_invariants.py`).
 
 Both phase values are per-PA rates, so an innings share would be the wrong
 denominator. When either BF/IP is unavailable the weight degrades continuously
@@ -96,7 +124,8 @@ to the innings share `IP_SP / 9` — the identical number whenever `r_SP = r_BP`
 so there is no threshold.
 
 **7. The lean.** Legacy-schema field `xw_net = home_off_edge − away_off_edge`
-(despite the name, it contains a wOBA delta in this lineage; the away-SP row
+(despite the name, it contains a mixed wOBA-lineup/xwOBA-arm delta on the
+offensive wOBA scale in this lineage; the away-SP row
 carries the *home* offense's edge). Its sign is the lean; an exact zero is an
 **abstention**, not a home pick. Full precision is retained through the
 decision — three decimals are a display format only, and a nonzero delta too
