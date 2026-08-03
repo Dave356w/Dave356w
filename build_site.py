@@ -60,54 +60,15 @@ REQUEST_DELAY = 0.25
 
 # Column carrying a hitter's 1-9 batting-order slot through the pipeline.
 BATTING_ORDER_COL = "batting_order"
-# The primary rate is chosen PER SIDE, because the two sides answer different
-# questions. Measured on matched 2025->2026 Savant seasons:
-#
-#   year-over-year r        batters (n=91)   pitchers (n=41)
-#   wOBA - xwOBA residual      +0.239 *         -0.117
-#   wOBA  self                 +0.338 *         +0.182
-#   xwOBA self                 +0.534 *         +0.542 *      (* p < 0.05)
-#
-# The hitter residual repeats: what wOBA keeps and xwOBA discards -- placement,
-# speed, and the hitter's home park -- is partly real, repeatable skill, so
-# wOBA is the better lineup input. The pitcher residual does not repeat, which
-# is DIPS: a pitcher exerts little control over balls in play, so his
-# wOBA-allowed is mostly the defense behind him. Predicting next season's wOBA
-# from this season's, the blend (1-w)*xwOBA + w*wOBA is monotone in OPPOSITE
-# directions on the two sides:
-#
-#   w        0.0     0.25    0.5     0.75    1.0
-#   batters  +.288   +.310   +.327   +.337   +.338   <- best at pure wOBA
-#   pitchers +.438   +.380   +.314   +.246   +.182   <- best at pure xwOBA
-#
-# wOBA v1 used w=1 on both sides, which picked the worst available point on the
-# pitching side (r +.438 -> +.182). On the pitcher half, xwOBA beats wOBA in
-# 99.9% of bootstrap resamples (gap +0.256, 95% CI [+0.084, +0.442]).
-#
-# Caveats kept deliberately visible: both pools are qualified-player
-# leaderboards over two seasons, so this selects for durable regulars, and part
-# of the hitter residual is home-park persistence rather than player skill --
-# which this model cannot use correctly on the road, having no park term. That
-# is an argument for adding one, not against wOBA on the lineup.
-#
-# The internal column name stays "xwOBA" on both sides -- it is the legacy
-# dump/ledger schema, not a claim about the statistic. Every new row carries
-# model_metric so the rows say what they actually are.
-BATTER_RATE_SOURCE_COL = "woba"
-BATTER_RATE_LABEL = "wOBA"
-PITCHER_RATE_SOURCE_COL = "xwoba"
-PITCHER_RATE_LABEL = "xwOBA"
-MODEL_RATE_LABEL = f"{BATTER_RATE_LABEL}/{PITCHER_RATE_LABEL}"  # bat/pit, for display
+# wOBA is the active model input for this forward-test lineage. The pipeline's
+# old xwOBA-shaped dump/ledger keys are intentionally retained below as a
+# compatibility schema so historical xwOBA rows remain readable; every new
+# dump also carries model_metric="wOBA" to make the underlying statistic
+# explicit. These constants define the source of truth for all active batter,
+# starter, bullpen, league-prior, percentile, and pitch-mix inputs.
+MODEL_RATE_SOURCE_COL = "woba"
+MODEL_RATE_LABEL = "wOBA"
 MODEL_RATE_INTERNAL_COL = "xwOBA"  # stable legacy dump/ledger schema only
-# Pitcher-side league anchor. The batter anchor keeps the legacy key
-# (league_baseline["xwOBA"] is league wOBA in this lineage); the pitching term
-# is a ratio to league xwOBA and needs its own. See matchup_value.
-PITCHER_RATE_BASELINE_KEY = "xwOBA_pit"
-
-
-def rate_source_col(player_type):
-    """Savant leaderboard column this lineage reads for `player_type`."""
-    return BATTER_RATE_SOURCE_COL if player_type == "batter" else PITCHER_RATE_SOURCE_COL
 # True only for a posted hitter absent from the season Savant leaderboard, who
 # therefore carries the active team's PA-weighted rate. Purely an in-process
 # frame column -- it reaches no dump, ledger, or audit schema -- so it carries
@@ -135,28 +96,11 @@ USE_TEAM_LOGOS = os.environ.get("USE_TEAM_LOGOS", "1") != "0"
 LOGO_CDN = "https://www.mlbstatic.com/team-logos"
 DATA_DIR = os.environ.get("DATA_DIR", "data")            # grading ledger home
 LEDGER_PATH = os.path.join(DATA_DIR, "mlb_lean_ledger.csv")
-MODEL_TAG = os.environ.get("MODEL_TAG", "split+plat_consol_v1")  # keep in sync with grade_leans.py
-# A tag prefix is a claim about which statistic produced the row, so it is
-# checked against what this build actually fetches rather than trusted. The
-# v10 workflow-pin incident stamped 14 rows with a tag whose math never ran;
-# a metric mismatch is the same failure one level up and must not be silent.
-TAG_PREFIX_METRICS = {
-    "xw+": ("xwOBA", "xwOBA"),
-    "woba+": ("wOBA", "wOBA"),
-    "split+": ("wOBA", "xwOBA"),      # wOBA lineup, xwOBA arms
-}
-_prefix = next((p for p in TAG_PREFIX_METRICS if MODEL_TAG.startswith(p)), None)
-if _prefix is None:
-    raise RuntimeError(f"MODEL_TAG {MODEL_TAG!r} has no known metric prefix")
-if TAG_PREFIX_METRICS[_prefix] != (BATTER_RATE_LABEL, PITCHER_RATE_LABEL):
+MODEL_TAG = os.environ.get("MODEL_TAG", "woba+plat_consol_v1")  # keep in sync with grade_leans.py
+if not MODEL_TAG.startswith("woba+"):
     raise RuntimeError(
-        f"MODEL_TAG {MODEL_TAG!r} claims metrics {TAG_PREFIX_METRICS[_prefix]}, "
-        f"but this build fetches ({BATTER_RATE_LABEL}, {PITCHER_RATE_LABEL})"
+        "This build fetches observed wOBA; refusing to stamp it with a non-wOBA MODEL_TAG"
     )
-# Lean-dump filename suffix, derived from the tag rather than written twice:
-# xw+ -> leans_<date>_xw.csv, woba+ -> _woba, split+ -> _split. grade_leans
-# owns the *historical* list of suffixes to ingest; this is only the current one.
-DUMP_SUFFIX = _prefix.rstrip("+")
 _RECORD_FAMILIES = {
     # v3 changed only ledger locking/identity; its prediction math is v2.
     "xw+plat_consol_v3": ("xw+plat_consol_v2", "xw+plat_consol_v3"),
@@ -191,8 +135,9 @@ _RECORD_FAMILIES = {
     # Observed wOBA replaces xwOBA in every active rate input while the rest of
     # v10's construction stays fixed. This is a new prediction family.
     "woba+plat_consol_v1": ("woba+plat_consol_v1",),
-    # Per-side metric: wOBA lineup, xwOBA arms. The arms change, so leans move
-    # and this cannot share wOBA v1's win-loss line -- a new record family.
+    # Short-lived wOBA-lineup/xwOBA-arms experiment. It is retained only so
+    # immutable dumps and ledger rows remain recognised after full wOBA was
+    # restored; it never pools with the active wOBA record.
     "split+plat_consol_v1": ("split+plat_consol_v1",),
 }
 RECORD_TAGS = tuple(
@@ -234,9 +179,8 @@ _SCALE_FAMILIES = {
     # wOBA has a different sampling distribution from xwOBA, so it cannot
     # share magnitude cutoffs with any xwOBA lineage.
     "woba+plat_consol_v1": ("woba+plat_consol_v1",),
-    # The delta is now a mixed-metric quantity: a wOBA-scale lineup composite
-    # against an xwOBA-scale pitching term. It shares units with neither pure
-    # lineage, so it starts its own scale family rather than inheriting either.
+    # The mixed-metric delta has its own units. Historical recognition does
+    # not make it compatible with the active full-wOBA scale.
     "split+plat_consol_v1": ("split+plat_consol_v1",),
 }
 SCALE_TAGS = tuple(
@@ -244,11 +188,9 @@ SCALE_TAGS = tuple(
         "SCALE_TAGS", ",".join(_SCALE_FAMILIES.get(MODEL_TAG, (MODEL_TAG,)))
     ).split(",") if t.strip()
 )
-def statcast_selections(player_type):
-    """Savant custom-leaderboard selections, with this side's primary rate."""
-    return ["pa", "k_percent", "bb_percent", rate_source_col(player_type),
-            "xba", "xslg",
-            "exit_velocity_avg", "launch_angle_avg", "hard_hit_percent"]
+STATCAST_SELECTIONS = ["pa", "k_percent", "bb_percent", MODEL_RATE_SOURCE_COL,
+                       "xba", "xslg",
+                       "exit_velocity_avg", "launch_angle_avg", "hard_hit_percent"]
 
 # Batted-ball direction/tendency rates with true league-wide anchors.
 BATTED_RATE_COLS_FOR_BASELINE = ["GB%", "FB%", "LD%", "PU%", "Pull%", "Straight%", "Oppo%"]
@@ -490,23 +432,22 @@ def get_slate(slate_date, sport_id=1):
 
 def load_stat_lookups(player_type):
     """player_type in {'batter','pitcher'} -> (stat dict, bbprofile dict, custom df)."""
-    src = rate_source_col(player_type)
-    sel = ",".join(statcast_selections(player_type))
+    sel = ",".join(STATCAST_SELECTIONS)
     cust = cached_csv(
         f"https://baseballsavant.mlb.com/leaderboard/custom?year={SEASON}"
         f"&type={player_type}&min=1&selections={sel}&csv=true",
-        # Namespaced by the column actually requested, so a cache written by a
-        # different lineage on the same day can never be reused for this one.
-        f"custom_{src}_{player_type}")
+        # New namespace prevents a same-day xwOBA-only cache from being reused
+        # after this lineage switches the requested Savant column to wOBA.
+        f"custom_woba_v1_{player_type}")
     bb = cached_csv(
         f"https://baseballsavant.mlb.com/leaderboard/batted-ball?type={player_type}"
         f"&year={SEASON}&min=1&csv=true",
         f"battedball_{player_type}")
 
-    # Map this side's primary rate into the established schema. The internal
-    # name stays xwOBA on both sides solely so old dumps, ledger readers, and
-    # audit tooling remain compatible; `src` is what was actually fetched.
-    REN_STAT = {src: MODEL_RATE_INTERNAL_COL,
+    # Map observed Savant wOBA into the established primary-rate schema. The
+    # internal name stays xwOBA solely so old dumps, ledger readers, and audit
+    # tooling remain compatible; MODEL_RATE_SOURCE_COL is the fetched value.
+    REN_STAT = {MODEL_RATE_SOURCE_COL: MODEL_RATE_INTERNAL_COL,
                 "xba": "xBA", "xslg": "xSLG", "exit_velocity_avg": "EV",
                 "launch_angle_avg": "LA°", "hard_hit_percent": "Hard Hit%",
                 "k_percent": "K%", "bb_percent": "BB%", "pa": "PA"}
@@ -1081,10 +1022,7 @@ def build_pitching_plans(slate_df, recent_profiles, pitcher_stat,
     """Expected-IP + role-filtered bullpen plan for every probable-pitcher side."""
     plans = {}
     classifications = opener_classifications(recent_profiles)
-    # The bullpen pool is pitchers, so it shrinks toward the pitcher-side mean.
-    prior = _f((league_baseline or {}).get(PITCHER_RATE_BASELINE_KEY))
-    if prior is None:
-        prior = _f((league_baseline or {}).get("xwOBA"))
+    prior = _f((league_baseline or {}).get("xwOBA"))
     shrink_k = XWOBA_SHRINK_K
     roles_by_team = {}
     bullpen_by_pair = {}
@@ -1140,7 +1078,7 @@ def build_pitching_plans(slate_df, recent_profiles, pitcher_stat,
             if bullpen is not None:
                 log(
                     f"  sequential pitching: pid={pid} team={tid} basis={basis} "
-                    f"exp_ip={expected_ip:.2f} rp_{PITCHER_RATE_LABEL}="
+                    f"exp_ip={expected_ip:.2f} rp_{MODEL_RATE_LABEL}="
                     f"{bullpen.get('xwOBA'):.3f} "
                     f"(n_rp={bullpen.get('pitcher_count')})"
                 )
@@ -1296,7 +1234,7 @@ def build_tables(slate, lineups, batter_stat, pitcher_stat, batter_bb, pitcher_b
 
 
 def compute_league_baseline(batter_cust):
-    _LB_MAP = {BATTER_RATE_SOURCE_COL: MODEL_RATE_INTERNAL_COL,
+    _LB_MAP = {MODEL_RATE_SOURCE_COL: MODEL_RATE_INTERNAL_COL,
                "xba": "xBA", "xslg": "xSLG", "k_percent": "K%", "bb_percent": "BB%",
                "exit_velocity_avg": "EV", "launch_angle_avg": "LA°", "hard_hit_percent": "Hard Hit%"}
     league_baseline = {}
@@ -1349,22 +1287,8 @@ def fetch_all(slate_date):
         league_baseline[c] = (
             float(np.average(vals, weights=wts)) if vals else np.nan
         )
-    # Pitcher-side anchor. The pitching term is a ratio to league xwOBA, so it
-    # needs its own league mean -- reusing the batter anchor (league wOBA) would
-    # bias every pitching edge by the gap between the two metrics' league means.
-    _pw = pd.to_numeric(pitcher_cust.get("pa"), errors="coerce")
-    _pv = pd.to_numeric(pitcher_cust.get(PITCHER_RATE_SOURCE_COL), errors="coerce")
-    if _pv is not None and _pw is not None:
-        _pm = _pv.notna() & _pw.notna() & (_pw > 0)
-        league_baseline[PITCHER_RATE_BASELINE_KEY] = (
-            float(np.average(_pv[_pm], weights=_pw[_pm])) if _pm.any() else np.nan
-        )
-    else:
-        league_baseline[PITCHER_RATE_BASELINE_KEY] = np.nan
-
     shown_baselines = {
-        BATTER_RATE_LABEL: league_baseline.get(MODEL_RATE_INTERNAL_COL),
-        f"{PITCHER_RATE_LABEL} (pit)": league_baseline.get(PITCHER_RATE_BASELINE_KEY),
+        MODEL_RATE_LABEL: league_baseline.get(MODEL_RATE_INTERNAL_COL),
         **{k: league_baseline.get(k) for k in
            ["Hard Hit%", "K%", "EV", "GB%", "FB%", "Pull%"]},
     }
@@ -1375,15 +1299,10 @@ def fetch_all(slate_date):
     # the shrinkage reproducible across builds and retains more of the observed
     # distribution's tails than the larger v7 per-pool estimates.
     if USE_XWOBA_SHRINK:
-        # One prior per side: each rate is regressed toward the league mean of
-        # its OWN metric. Shrinking a pitcher's xwOBA toward league wOBA would
-        # drag every arm by the gap between the two.
-        prior_bat = league_baseline.get("xwOBA")
-        prior_pit = league_baseline.get(PITCHER_RATE_BASELINE_KEY)
+        prior = league_baseline.get("xwOBA")
         k_bat = k_pit = XWOBA_SHRINK_K
-        log(f"  shrink: prior_bat={prior_bat} ({BATTER_RATE_LABEL}) "
-            f"prior_pit={prior_pit} ({PITCHER_RATE_LABEL}) | "
-            f"K_bat={k_bat:.0f} (fixed) | K_pit={k_pit:.0f} (fixed)")
+        log(f"  {MODEL_RATE_LABEL} shrink: prior={prior} | K_bat={k_bat:.0f} (fixed) "
+            f"| K_pit={k_pit:.0f} (fixed)")
 
         # Display-only percentile reference distributions (qualified regulars),
         # stashed on league_baseline so the render layer can rank a player's
@@ -1393,10 +1312,8 @@ def fetch_all(slate_date):
         g = _est_team_games(pd.to_numeric(batter_cust.get("pa"), errors="coerce")) if batter_cust is not None else None
         qual_bat = PCTILE_QUAL_BAT * g if g else None
         qual_pit = PCTILE_QUAL_PIT * g if g else None
-        ref_bat, qb = build_pctile_ref(batter_cust, prior_bat, k_bat, qual_bat,
-                                       BATTER_RATE_SOURCE_COL)
-        ref_pit, qp = build_pctile_ref(pitcher_cust, prior_pit, k_pit, qual_pit,
-                                       PITCHER_RATE_SOURCE_COL)
+        ref_bat, qb = build_pctile_ref(batter_cust, prior, k_bat, qual_bat)
+        ref_pit, qp = build_pctile_ref(pitcher_cust, prior, k_pit, qual_pit)
         league_baseline["_pctile_ref_bat"] = ref_bat
         league_baseline["_pctile_ref_pit"] = ref_pit
         # K-BB% reference (pitchers), raw: K-BB stabilizes fast and the model
@@ -1666,22 +1583,12 @@ def platoon_xwoba_offsets(g):
                       for b, t in zip(g["bats"], g[SP_THROWS_COL])], dtype=float)
 
 
-def matchup_value(B, P, stat, L, L_pit=None):
-    """Relative-rate matchup anchored on league average.
-
-    The general form is `M = L_out · (B/L_bat) · (P/L_pit)`: each side
-    contributes a scale-free ratio to the league mean OF ITS OWN metric, and
-    the result is expressed on the offensive (batter) scale, so `edge = M - L`
-    stays a wOBA-scale quantity. With `L_pit` absent or equal to `L` this is
-    exactly the historical `B·P/L` -- the two-metric case is a generalisation,
-    not a branch, so nothing switches when the metrics happen to agree.
-    """
+def matchup_value(B, P, stat, L):
     if pd.isna(B) or pd.isna(P) or pd.isna(L):
         return np.nan
     if stat in ADD_STATS:
         return B + P - L
-    Lp = L if L_pit is None or pd.isna(L_pit) else L_pit
-    return (B * P / Lp) if Lp else np.nan
+    return (B * P / L) if L else np.nan
 
 
 def coerce_numeric(df, cols):
@@ -1785,19 +1692,16 @@ def _est_team_games(pa_series):
     return g if np.isfinite(g) and g > 0 else None
 
 
-def build_pctile_ref(cust, prior, k, qual_pa, src_col=None):
-    """Sorted array of the shrunk primary rate for qualified regulars in a
-    custom leaderboard. `src_col` is that side's Savant column (batters and
-    pitchers read different ones in this lineage) and `prior` must be the
-    matching side's league mean. `qual_pa` is an absolute PA/BF threshold
-    (caller derives it from team-games so batters and pitchers share one games
-    estimate). Returns (sorted_array | None, qual_pa | None); falls back to the
-    whole (min=1) pool if qualifying leaves too few for a stable scale."""
-    src_col = src_col or BATTER_RATE_SOURCE_COL
+def build_pctile_ref(cust, prior, k, qual_pa):
+    """Sorted array of shrunk xwOBA for qualified regulars in a custom
+    leaderboard. `qual_pa` is an absolute PA/BF threshold (caller derives it
+    from team-games so batters and pitchers share one games estimate). Returns
+    (sorted_array | None, qual_pa | None); falls back to the whole (min=1) pool
+    if qualifying leaves too few for a stable scale."""
     cols = getattr(cust, "columns", [])
-    if cust is None or src_col not in cols or "pa" not in cols:
+    if cust is None or MODEL_RATE_SOURCE_COL not in cols or "pa" not in cols:
         return None, None
-    xw = pd.to_numeric(cust[src_col], errors="coerce")
+    xw = pd.to_numeric(cust[MODEL_RATE_SOURCE_COL], errors="coerce")
     pa = pd.to_numeric(cust["pa"], errors="coerce")
     base = xw.notna() & pa.notna() & (pa > 0)
     m = (base & (pa >= qual_pa)) if qual_pa else base
@@ -1955,9 +1859,6 @@ def aggregate_lineup(H, rate_cols, weighted=True, shrink_prior=None, shrink_k=No
 
 
 def build_matchup(P, agg, rate_cols, league_baseline, shrink_prior=None, shrink_k=None):
-    """`shrink_prior` regresses the STARTER's rate, so callers must pass the
-    pitcher-side league mean -- the lineup composite was already shrunk toward
-    the batter-side mean in aggregate_lineup."""
     if P.empty or agg.empty:
         return pd.DataFrame()
     Pk = P.set_index(["game_pk", "Name"])
@@ -1993,17 +1894,11 @@ def build_matchup(P, agg, rate_cols, league_baseline, shrink_prior=None, shrink_
                 # The generic opp_xwOBA remains the starter-adjusted alias.
                 ov = vs_sp
             L = league_baseline.get(c, np.nan)
-            # Only the primary rate is measured on two different metrics; every
-            # other column comes from one leaderboard pair and keeps one anchor.
-            L_pit = (league_baseline.get(PITCHER_RATE_BASELINE_KEY)
-                     if c == XWOBA_SHRINK_COL else None)
             rec[f"pit_{c}"] = float(pv) if pd.notna(pv) else np.nan
             rec[f"opp_{c}"] = ov
             rec[f"lg_{c}"] = L
-            if c == XWOBA_SHRINK_COL:
-                rec["lg_xwOBA_pit"] = L_pit
             M = matchup_value(float(pv) if pd.notna(pv) else np.nan,
-                              float(ov) if pd.notna(ov) else np.nan, c, L, L_pit)
+                              float(ov) if pd.notna(ov) else np.nan, c, L)
             rec[f"mx_{c}"] = float(M) if pd.notna(M) else np.nan
             rec[f"edge_{c}"] = float(M - L) if pd.notna(M) and pd.notna(L) else np.nan
             if c == XWOBA_SHRINK_COL:
@@ -2016,17 +1911,12 @@ def build_matchup(P, agg, rate_cols, league_baseline, shrink_prior=None, shrink_
 
 
 def build_xwoba_matchup(pitchers_df, league_baseline):
-    # Each side shrinks toward the league mean of its own metric.
-    prior_bat = league_baseline.get(XWOBA_SHRINK_COL) if USE_XWOBA_SHRINK else None
-    prior_pit = (league_baseline.get(PITCHER_RATE_BASELINE_KEY)
-                 if USE_XWOBA_SHRINK else None)
-    if prior_pit is None or pd.isna(prior_pit):
-        prior_pit = prior_bat
+    prior = league_baseline.get(XWOBA_SHRINK_COL) if USE_XWOBA_SHRINK else None
     pitcher_rows_df, opp_hitters_df = segment_pitcher_blocks(pitchers_df, STATCAST_RATE_COLS)
     opp_lineup_agg_df = aggregate_lineup(opp_hitters_df, STATCAST_RATE_COLS, weighted=USE_WEIGHTED,
-                                         shrink_prior=prior_bat, shrink_k=XWOBA_SHRINK_K)
+                                         shrink_prior=prior, shrink_k=XWOBA_SHRINK_K)
     matchup_df = build_matchup(pitcher_rows_df, opp_lineup_agg_df, STATCAST_RATE_COLS, league_baseline,
-                               shrink_prior=prior_pit, shrink_k=XWOBA_SHRINK_K)
+                               shrink_prior=prior, shrink_k=XWOBA_SHRINK_K)
     return matchup_df, pitcher_rows_df, opp_hitters_df
 
 
@@ -2052,7 +1942,6 @@ def attach_pitch_mix_shadow(matchup_df, pitcher_rows_df, opp_hitters_df,
     lg_type = pitch_arsenal.league_by_pitch_type(batter_arsenal)
     cells, overall = pitch_arsenal.batter_relative_cells(batter_arsenal, lg_type)
     L = league_baseline.get(XWOBA_SHRINK_COL, np.nan)
-    L_pit = league_baseline.get(PITCHER_RATE_BASELINE_KEY, np.nan)
 
     pit_ids = {}
     if pitcher_rows_df is not None and not pitcher_rows_df.empty:
@@ -2093,7 +1982,7 @@ def attach_pitch_mix_shadow(matchup_df, pitcher_rows_df, opp_hitters_df,
     b_sp = pd.to_numeric(out.get("opp_xwOBA_vs_sp"), errors="coerce")
     starter = pd.to_numeric(out.get("starter_xwOBA"), errors="coerce")
     out["opp_xwOBA_mix"] = b_sp * out["mix_mult"]
-    mx = [matchup_value(b, p, "xwOBA", L, L_pit)
+    mx = [matchup_value(b, p, "xwOBA", L)
           for b, p in zip(out["opp_xwOBA_mix"], starter)]
     out["mx_xwOBA_sp_mix"] = mx
     out["edge_xwOBA_sp_mix"] = [
@@ -2102,8 +1991,7 @@ def attach_pitch_mix_shadow(matchup_df, pitcher_rows_df, opp_hitters_df,
 
 
 def sequential_xwoba_phases(b_neutral, b_vs_sp, starter, bullpen, league,
-                            expected_sp_ip, sp_bf_per_ip=None, bp_bf_per_ip=None,
-                            league_pit=None):
+                            expected_sp_ip, sp_bf_per_ip=None, bp_bf_per_ip=None):
     """Return the v10 starter, bullpen, and workload-weighted matchup phases.
 
     The starter-handedness lineup adjustment belongs only to the starter
@@ -2132,10 +2020,8 @@ def sequential_xwoba_phases(b_neutral, b_vs_sp, starter, bullpen, league,
             q = ip_sp / GAME_INNINGS
     bp_share = 1.0 - q if pd.notna(q) else np.nan
 
-    # Both phases are pitching rates, so both take the pitcher-side anchor;
-    # the edges below stay against `league`, the offensive (batter) anchor.
-    mx_sp = matchup_value(b_vs_sp, starter, "xwOBA", league, league_pit)
-    mx_bp = matchup_value(b_neutral, bullpen, "xwOBA", league, league_pit)
+    mx_sp = matchup_value(b_vs_sp, starter, "xwOBA", league)
+    mx_bp = matchup_value(b_neutral, bullpen, "xwOBA", league)
     mx = (
         q * mx_sp + bp_share * mx_bp
         if pd.notna(q) and pd.notna(mx_sp) and pd.notna(mx_bp)
@@ -2198,10 +2084,6 @@ def apply_pitching_plans(matchup_df, pitching_plans, league_baseline):
             out[col] = default
 
     league = _f((league_baseline or {}).get("xwOBA"))
-    # Offensive anchor for the edges; pitching anchor for the ratio numerators.
-    league_pit = _f((league_baseline or {}).get(PITCHER_RATE_BASELINE_KEY))
-    if league_pit is None:
-        league_pit = league
     for idx, row in out.iterrows():
         key = (int(row["game_pk"]), row["side"])
         plan = (pitching_plans or {}).get(key) or {}
@@ -2245,7 +2127,6 @@ def apply_pitching_plans(matchup_df, pitching_plans, league_baseline):
         phases = sequential_xwoba_phases(
             b_neutral, b_vs_sp, starter, bullpen, league, expected_ip,
             sp_bf_per_ip=sp_rate, bp_bf_per_ip=bp_rate,
-            league_pit=league_pit,
         )
         for col, value in phases.items():
             out.at[idx, col] = value
@@ -3002,7 +2883,7 @@ def _lineup_details(side_d):
     st_cls = {"posted": "posted", "partial_filled": "partial", "projected": "projected"}.get(st, "projected")
     parts = []
     if side_d["opp_xw"] is not None:
-        parts.append(f"{BATTER_RATE_LABEL} {f3(side_d['opp_xw'])}")
+        parts.append(f"{MODEL_RATE_LABEL} {f3(side_d['opp_xw'])}")
     summ = " · ".join(parts) if parts else ""
     # No header row: the columns (order, name, position, percentile bar, xwOBA)
     # read without labels, and the legend below the cards carries the key.
@@ -3049,7 +2930,7 @@ def _side_html(sp_abbr, d, league_baseline):
     xera_sub = (f"season {f2(d['era_season'])}"
                 if d.get("era_season") is not None else None)
     stats = (
-        _sp_stat_cell(f"{PITCHER_RATE_LABEL} agn", d["pit_xw"], f3,
+        _sp_stat_cell(f"{MODEL_RATE_LABEL} agn", d["pit_xw"], f3,
                       f"lg {f3(lg['xwOBA'])}" if lg["xwOBA"] is not None else None,
                       heat=heat_style(d["pit_xw"], lg["xwOBA"], HEAT_DOMAINS["xwOBA_sp"]))
         + _sp_stat_cell("K-BB%", kbb, f1,
@@ -3059,7 +2940,7 @@ def _side_html(sp_abbr, d, league_baseline):
                         heat=heat_style(d.get("xera"), lg["ERA"], HEAT_DOMAINS["ERA"])))
     tier_lab, tier_cls = _tier_word(d.get("pit_xw_pctile"))
     tier = f"<span class='tier {tier_cls}'>{tier_lab}</span>" if tier_lab else ""
-    bars = (f"<div class='spct'><span class='lab'>{PITCHER_RATE_LABEL}</span>{_pct_bar(d.get('pit_xw_pctile'), 'p')}</div>"
+    bars = (f"<div class='spct'><span class='lab'>{MODEL_RATE_LABEL}</span>{_pct_bar(d.get('pit_xw_pctile'), 'p')}</div>"
             f"<div class='spct'><span class='lab'>K − BB%</span>{_pct_bar(d.get('kbb_pctile'), 'p')}</div>")
     exp_ip = _f(d.get("expected_sp_ip"))
     pitching_note = (
@@ -4591,23 +4472,19 @@ def market_context_records():
 #
 # The rule this block has always stated: invalidated by any MODEL_TAG bump that
 # changes the delta scale -- i.e. whenever _SCALE_FAMILIES gains a new entry.
-# wOBA v1 added one and split v1 has now added another, so these two numbers
-# are a prior carried over from a retired family and the split pool starts at
-# n=0 (only tonight's slate top-up feeds it on day one).
+# wOBA v1 added one, so these two numbers are now a prior carried over from a
+# retired family. It is not re-derived here because there is nothing yet to
+# re-derive from: measured 2026-08-03 the wOBA v1 pool is n=6, whose own p33/p80
+# (0.0145 / 0.0371) is noise at that size, and freezing it would be the very
+# anti-pattern this comment exists to prevent. Shrinkage plus the slate top-up
+# in lean_strength_scale() bounds the damage meanwhile -- at n=6 the shrunk
+# cutoffs are 0.0150 / 0.0323, essentially the prior.
 #
-# Unlike the wOBA v1 case, the prior is probably a BETTER fit here than it was
-# there, by accident: it was derived from the v9 xwOBA family, and the split
-# puts the arms back on xwOBA. Spliced from the one slate built under both
-# metrics, split net deltas have median |net| 0.0291 against v9/v10's 0.0306
-# and wOBA v1's 0.0178. That is n=5 and is recorded as an observation, NOT as
-# grounds to keep the literal on purpose -- it is still a retired family's
-# number.
-#
-# WHAT TO DO: once the split v1 pool passes ~60 graded-or-pending rows,
-# recompute p33/p80 from that family alone and replace these literals, then
-# update this provenance. Pool growth is otherwise NOT an invalidation -- this
-# is a prior, and re-deriving it from the same family it is shrunk against
-# every build would make it the data.
+# WHAT TO DO: once the wOBA v1 pool passes ~60 graded-or-pending rows, recompute
+# p33/p80 from that family alone and replace these literals, then update this
+# provenance. Pool growth is otherwise NOT an invalidation -- this is a prior,
+# and re-deriving it from the same family it is shrunk against every build would
+# make it the data.
 LEAN_STRENGTH_FALLBACK = (0.015, 0.032)   # slight < ~p33 <= clear < ~p80 <= strong
 
 # Pseudo-count for shrinking the observed p33/p80 toward LEAN_STRENGTH_FALLBACK.
@@ -5203,8 +5080,7 @@ def main():
             for col, series in lu_cols.items():
                 frame[col] = frame["game_pk"].map(series)
     os.makedirs(DATA_DIR, exist_ok=True)
-    matchup_df.to_csv(os.path.join(DATA_DIR, f"leans_{SLATE_DATE}_{DUMP_SUFFIX}.csv"),
-                      index=False)
+    matchup_df.to_csv(os.path.join(DATA_DIR, f"leans_{SLATE_DATE}_woba.csv"), index=False)
     if matchup_platoon_df is not None and not matchup_platoon_df.empty:
         matchup_platoon_df.to_csv(os.path.join(DATA_DIR, f"leans_{SLATE_DATE}_pl.csv"), index=False)
 

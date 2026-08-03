@@ -52,33 +52,19 @@ These are different equivalence relations and they do disagree. The authority is
 | v9 | starter/bullpen phases split; handedness applies to starter innings only | 9+10 | 8+9+10 |
 | v10 | phases weighted by PA share (measured BF/IP) not innings share | 9+10 | 8+9+10 |
 | wOBA v1 | observed wOBA replaces xwOBA in every active rate input; v10 construction fixed | wOBA v1 | wOBA v1 |
-| split v1 | wOBA lineup, **xwOBA arms**; two league anchors | split v1 | split v1 |
+| split v1 | one-slate wOBA-lineup/xwOBA-arms test; abandoned before grading | split v1 | split v1 |
 
-The wOBA forward test was intentionally isolated in both namespaces. Observed
+The wOBA forward test is intentionally isolated in both namespaces. Observed
 wOBA changes the predictions and its sampling distribution is not the xwOBA
 delta scale. Internal `xwOBA`/`xw_*` dump and ledger keys remain a compatibility
-schema for immutable history; new rows must carry `model_metric`.
+schema for immutable history; new rows must carry `model_metric=wOBA`.
 
-**split v1 is the measured answer to which metric belongs on which side**, and
-wOBA-everywhere was half wrong. On matched 2025→2026 Savant seasons the
-`wOBA − xwOBA` residual repeats for batters (r=+0.239, p=0.022, n=91) and does
-not for pitchers (r=−0.117, n=41) — DIPS, in one number. Predicting next
-season's wOBA, the blend `(1−w)·xwOBA + w·wOBA` is monotone in *opposite*
-directions: batters peak at w=1 (r +0.288→+0.338), pitchers at w=0
-(r +0.438→+0.182). wOBA v1 used w=1 on both, picking the worst available point
-on the pitching side; xwOBA beats wOBA there in 99.9% of bootstrap resamples
-(gap +0.256, 95% CI [+0.084, +0.442]).
-
-Two consequences worth remembering. First, **the two sides now need two league
-anchors** — `M = L_out·(B/L_bat)·(P/L_pit)`, which reduces exactly to `B·P/L`
-when the metrics agree, so it is a generalisation and not a branch. Every edge
-is still taken against the offensive anchor, which is why the one-baseline
-phase invariant still holds. Second, **the split behaves like v10, not like
-wOBA v1**: spliced from the one slate built under both metrics it flips 0 of 5
-leans against v9/v10 and 1 of 5 against wOBA v1, with median |net| 0.0291 vs
-0.0306 and 0.0178. That is n=5 — recorded as an observation, not as grounds to
-have shared v9/v10's families. The lineup metric genuinely changed and has a
-measured basis, so both namespaces reset. Argue it again when there are rows.
+`split v1` remains an isolated historical namespace because its dump and
+pending ledger rows existed before full wOBA was restored. It is not an active
+alternative and shares neither records nor delta scale with wOBA v1. Current
+wOBA dumps ingest after split dumps, so any same-day pending split snapshot is
+re-stamped into the restored lineage before first pitch; settled rows remain
+immutable.
 
 Two entries earn their keep as precedent. **v6 shares v5's units but not its
 record line** — a new prediction family can inherit a scale. **v10 shares both
@@ -122,14 +108,13 @@ precedent — they are how the fix is known to look.
 - **Constants frozen from data.** `LEAN_STRENGTH_FALLBACK` was a literal copy of
   the pooled p33/p80 at the time it was written, and stayed there through two
   model versions that changed the distribution underneath it. It was re-derived
-  for the v9/v10 xwOBA family, and **wOBA v1 and then split v1 have each made it
-  stale again** — a new `_SCALE_FAMILIES` entry is exactly the invalidation its
-  own comment names, and that has now happened twice in a week. It is
-  deliberately not re-derived: the split pool starts at n=0, and freezing a
-  fresh literal off a handful of rows would be this anti-pattern with a fresher
-  date on it. Shrinkage plus the slate top-up hold the line meanwhile.
-  Recompute from the split family alone once it passes ~60 rows. If a constant
-  was read off the
+  for the v9/v10 xwOBA family, and **the wOBA v1 bump has now made it stale
+  again** — a new `_SCALE_FAMILIES` entry is exactly the invalidation its own
+  comment names. It is deliberately not re-derived yet: the wOBA pool is n=6,
+  whose p33/p80 is noise, and freezing that would be this anti-pattern with a
+  fresher date on it. Shrinkage plus the slate top-up hold the line meanwhile
+  (at n=6 the cutoffs are 0.0150/0.0323, i.e. the prior). Recompute from the
+  wOBA family alone once it passes ~60 rows. If a constant was read off the
   ledger, comment where it came from and what would invalidate it. Note the
   asymmetry the comment there spells out: a *scale-family* change invalidates
   it, but mere pool growth does not — it is a prior, and re-deriving it from the

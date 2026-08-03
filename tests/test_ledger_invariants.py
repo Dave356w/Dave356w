@@ -45,7 +45,7 @@ def _num(d, col):
 
 def _version(tag):
     """Trailing version for a recognised production lineage, else None."""
-    m = re.fullmatch(r"(xw|woba)\+plat_consol_v(\d+)", str(tag))
+    m = re.fullmatch(r"(xw|woba|split)\+plat_consol_v(\d+)", str(tag))
     return int(m.group(2)) if m else None
 
 
