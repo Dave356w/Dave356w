@@ -74,7 +74,18 @@ _USAGE_COLS = ("pitch_usage", "pitch_percent", "usage", "pitch_usage_pct")
 # Cell shrinkage pseudo-sample. 600 keeps ~15% of a 110-PA cell's deviation,
 # which holds the arm's contribution to a game delta near 0.0036 xwOBA (19% of
 # the median lean) instead of 0.0130 (67%) at K=100.
-MIX_SHRINK_K = 100.0
+#
+# This read 100.0 from 06b45e9 until it was caught on 2026-08-03, contradicting
+# both the arithmetic directly above it (110/(110+600) = 15%, the figure the
+# sentence quotes) and the module docstring's "deliberately far above the
+# build's XWOBA_SHRINK_K = 100". It was inert -- USE_PITCH_MIX_SHADOW is off by
+# default and the arm only ever writes mx_/edge_xwOBA_sp_mix shadow columns, so
+# no lean, delta or graded row was ever affected, and no MODEL_TAG bump is
+# involved. It would have gone live at 3.6x the documented noise budget the
+# moment the flag was flipped. A constant whose own comment states a different
+# number is not a judgement call; the comment and the docstring agree, so the
+# value was simply wrong.
+MIX_SHRINK_K = 600.0
 
 # Multiplier clamp. A hitter whose surviving deviation implies more than this
 # is a data artifact, not a matchup; the clamp keeps one bad cell from moving
