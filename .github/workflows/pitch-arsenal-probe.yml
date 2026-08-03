@@ -20,7 +20,7 @@ on:
         required: false
         default: '25'
       sd_pa:
-        description: 'Assumed sd of a single PA xwOBA -- every noise figure scales linearly with it'
+        description: 'Assumed sd of a single PA wOBA -- every noise figure scales linearly with it'
         required: false
         default: '0.85'
 

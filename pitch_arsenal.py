@@ -1,5 +1,5 @@
 """Pitch-mix matchup arm: the opposing lineup re-weighted by the starter's
-arsenal, as a multiplier on the lineup's shrunk xwOBA composite.
+arsenal, as a multiplier on the lineup's shrunk wOBA composite.
 
 Status: **shadow only.** `build_site.USE_PITCH_MIX_SHADOW` is off by default and
 nothing here touches a lean. It ships dark until `pitch_arsenal_probe.py` shows
@@ -8,7 +8,7 @@ the probe prints the measurement and the budget it has to clear.
 
 Why the naive construction does not work
 ----------------------------------------
-Three corrections separate this from "weight batter pitch-type xwOBA by the
+Three corrections separate this from "weight batter pitch-type wOBA by the
 pitcher's usage rates":
 
 1. **PA share, not usage share.** Usage is per pitch; the batter values are per
@@ -17,10 +17,10 @@ pitcher's usage rates":
    the pitcher's PA share per pitch type; `pitcher_pa_weights` falls back to
    usage only when PA is absent and flags it.
 
-2. **League-relative per pitch type, or the mix counts twice.** League xwOBA
-   against a slider is far below league xwOBA against a four-seamer, so a
+2. **League-relative per pitch type, or the mix counts twice.** League wOBA
+   against a slider is far below league wOBA against a four-seamer, so a
    slider-heavy arsenal drags any raw weighted average down on mix alone -- and
-   the starter's own xwOBA-allowed, which the matchup already multiplies in,
+   the starter's own wOBA-allowed, which the matchup already multiplies in,
    is low *because* he throws those sliders. Everything here is a ratio to
    league-at-that-pitch-type, normalised so a league-average hitter returns
    exactly 1.0 against any arsenal.
@@ -65,7 +65,10 @@ PITCHER_ARSENAL_URL = (
 _ID_COLS = ("player_id", "playerid", "pitcher", "batter", "mlbamid", "id")
 _TYPE_COLS = ("pitch_type", "pitchtype", "pitch")
 _PA_COLS = ("pa", "plate_appearances", "total_pa")
-_XWOBA_COLS = ("est_woba", "xwoba", "expected_woba", "est_woba_using_speedangle")
+# This forward test deliberately requires observed outcome wOBA. Do not fall
+# back to any expected-wOBA alias: that would silently mix xwOBA into one model
+# arm while the season batter/starter/bullpen paths use wOBA.
+_MODEL_WOBA_COLS = ("woba",)
 _USAGE_COLS = ("pitch_usage", "pitch_percent", "usage", "pitch_usage_pct")
 
 # Cell shrinkage pseudo-sample. 600 keeps ~15% of a 110-PA cell's deviation,
@@ -111,9 +114,9 @@ def normalize_arsenal(df):
     """
     cols = {k: _col(df, v) for k, v in (
         ("player_id", _ID_COLS), ("pitch_type", _TYPE_COLS), ("pa", _PA_COLS),
-        ("xwoba", _XWOBA_COLS), ("usage", _USAGE_COLS))}
+        ("xwoba", _MODEL_WOBA_COLS), ("usage", _USAGE_COLS))}
     empty = pd.DataFrame(columns=["player_id", "pitch_type", "pa", "xwoba", "usage"])
-    if not all(cols[k] for k in ("player_id", "pitch_type")):
+    if not all(cols[k] for k in ("player_id", "pitch_type", "xwoba")):
         return empty
     out = pd.DataFrame({
         "player_id": _num(df[cols["player_id"]]),
@@ -287,7 +290,7 @@ def fetch_arsenals(fetch, season, min_pa=25):
                        ("pitcher", PITCHER_ARSENAL_URL)):
         try:
             raw = fetch(url.format(season=season, min_pa=min_pa),
-                        f"arsenal_{label}")
+                        f"arsenal_woba_v1_{label}")
             out.append(normalize_arsenal(raw))
         except Exception:  # noqa: BLE001 -- caller logs; the arm just abstains
             out.append(normalize_arsenal(None))

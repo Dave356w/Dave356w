@@ -1,7 +1,10 @@
 # Build-logic validation — MLB matchup-lean model
 
-> **Historical document. Reviewed the v5 model on 2026-07-21; current model is
-> v10.** What still holds and what has been superseded:
+> **Historical document. Reviewed the v5 model on 2026-07-21 and refreshed for
+> xwOBA v10; the current forward test is `woba+plat_consol_v1`.** Its structural
+> checks still describe the inherited v10 construction, but every empirical
+> result here predates the wOBA substitution and is not evidence for that new
+> lineage. What still held at v10 and what had been superseded:
 >
 > | section | status against v10 |
 > |---|---|

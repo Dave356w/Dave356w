@@ -63,8 +63,9 @@ jobs:
     # of truth: build_site.py and grade_leans.py default to the same MODEL_TAG
     # and derive RECORD_TAGS/SCALE_TAGS from _RECORD_FAMILIES/_SCALE_FAMILIES,
     # so a version bump is one edit and the two equivalence relations stay
-    # wherever they are reasoned about. Override here only to re-run a past
-    # slate under its historical tag, and remove the override afterwards.
+    # wherever they are reasoned about. To re-run an older metric lineage,
+    # check out its historical commit; never relabel the current wOBA source
+    # with an xwOBA tag.
     steps:
       - uses: actions/checkout@v4
 

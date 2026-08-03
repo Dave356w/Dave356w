@@ -312,7 +312,11 @@ def vs_market_summary(df, col=COL, verbose=True):
                            d[col["home"]], d[col["away"]])
     d["fav"] = np.where(d["close_p_home"] >= 0.5, d[col["home"]], d[col["away"]])
     out = {}
-    specs = [("xwOBA", d, col["xw_team"]),
+    metrics = (d.get("model_metric", pd.Series(dtype=object))
+               .dropna().astype(str).unique().tolist())
+    primary_label = (metrics[0] if len(metrics) == 1
+                     else "Model" if len(metrics) > 1 else "xwOBA")
+    specs = [(primary_label, d, col["xw_team"]),
              ("platoon", d[d[col["pl_reliable"]] == True], col["pl_team"])]  # noqa: E712
     for label, rows, key in specs:
         rows = rows[rows[key].notna()]

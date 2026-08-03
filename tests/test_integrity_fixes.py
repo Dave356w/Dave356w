@@ -1512,6 +1512,30 @@ class ModelTagProvenanceTests(unittest.TestCase):
         self.assertIn(build_site.MODEL_TAG, build_site.RECORD_TAGS)
         self.assertIn(build_site.MODEL_TAG, build_site.SCALE_TAGS)
 
+    def test_every_active_rate_source_is_observed_woba(self):
+        self.assertEqual(build_site.MODEL_TAG, "woba+plat_consol_v1")
+        self.assertEqual(build_site.MODEL_RATE_SOURCE_COL, "woba")
+        self.assertEqual(build_site.MODEL_RATE_LABEL, "wOBA")
+        self.assertIn("woba", build_site.STATCAST_SELECTIONS)
+        self.assertNotIn("xwoba", build_site.STATCAST_SELECTIONS)
+        self.assertEqual(build_site.XWOBA_SHRINK_COL,
+                         build_site.MODEL_RATE_INTERNAL_COL)
+
+    def test_savant_woba_wins_even_if_export_also_contains_xwoba(self):
+        custom = pd.DataFrame({
+            "player_id": [123], "pa": [50],
+            "woba": [.401], "xwoba": [.201],
+        })
+        batted = pd.DataFrame({"id": [123], "bbe": [20]})
+        with mock.patch.object(build_site, "cached_csv",
+                               side_effect=[custom, batted]) as fetch:
+            stat, _, _ = build_site.load_stat_lookups("batter")
+        self.assertAlmostEqual(stat[123][build_site.MODEL_RATE_INTERNAL_COL], .401)
+        custom_url, cache_name = fetch.call_args_list[0].args
+        self.assertIn("selections=pa,k_percent,bb_percent,woba,", custom_url)
+        self.assertNotIn(",xwoba,", custom_url)
+        self.assertEqual(cache_name, "custom_woba_v1_batter")
+
     def test_workflow_does_not_pin_model_tags(self):
         with open(self.WORKFLOW, encoding="utf-8") as fh:
             lines = [ln.split("#", 1)[0] for ln in fh]
