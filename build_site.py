@@ -3939,12 +3939,14 @@ CSS_GRADES = r"""
   font:600 14px/1.4 var(--mono);color:var(--ink);font-variant-numeric:tabular-nums}
 .gradestrip .lab{font:600 12px/1 var(--sans);text-transform:uppercase;letter-spacing:.09em;color:var(--muted)}
 .gradestrip .muted{color:var(--muted);font-weight:500}
-.gradestrip a{color:rgba(var(--lean-tx),1);text-decoration:none;margin-left:auto;font:600 14px/1 var(--sans);white-space:nowrap}
+.gradestrip .grade-links{display:flex;align-items:center;gap:14px;margin-left:auto}
+.gradestrip a{color:rgba(var(--lean-tx),1);text-decoration:none;font:600 14px/1 var(--sans);white-space:nowrap}
 .gradestrip a:hover{text-decoration:underline}
 
 .backlink{font:600 14px/1 var(--sans);margin:0 2px 12px}
 .backlink a{color:rgba(var(--lean-tx),1);text-decoration:none}
 .backlink a:hover{text-decoration:underline}
+.backlink.ledger-nav{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px 18px}
 
 /* ---------- grades page: masthead ---------- */
 .gr-head{margin:0 2px 13px}
@@ -3996,6 +3998,14 @@ table.gr tr.void td{opacity:.45}
 table.gr .sp{display:block;margin-top:2px;font:400 12.5px/1.3 var(--sans);color:var(--faint)}
 .gr-game{font:650 14px/1.3 var(--sans)}
 .gr-game .at{color:var(--faint);font-weight:500}
+
+/* Team ledger reuses the responsive ledger table, but each metric cell keeps
+   the record, hit rate and sample size together so the percentage is never
+   detached from its denominator. */
+table.team-gr .tm-record{font-weight:700;color:var(--ink);margin-right:8px}
+table.team-gr .tm-accuracy{font-weight:650;color:rgba(var(--lean-tx),1)}
+table.team-gr .tm-n{font:500 12px/1 var(--sans);color:var(--faint);margin-left:6px}
+table.team-gr .team-code{font:700 15px/1.2 var(--mono);color:var(--ink)}
 
 /* Date group header -- the 300+ rows read as one undifferentiated scroll
    without it. Sticks under the column head (28px = its padded line box). */
@@ -4197,7 +4207,7 @@ def html_document(body, built_txt, title=None, extra_js=None):
 
 
 # ============================================================
-# GRADES -- records strip (index) + full ledger page (grades.html)
+# GRADES -- records strip + full ledger + per-team accuracy pages
 # Renders purely from data/mlb_lean_ledger.csv, which grade_leans.py
 # maintains and CI commits back to the repo; the grading pass runs
 # before this build so records are current as of the run.
@@ -4228,6 +4238,75 @@ def _rec_parts(s):
 def _rec_txt(s):
     base, pct = _rec_parts(s)
     return f"{base} ({pct})" if pct else base
+
+
+def _ledger_club_labels():
+    """Ledger abbreviation -> familiar club label for the 30 MLB clubs.
+
+    The model's display map follows StatsAPI's Arizona abbreviation (AZ),
+    while grade_leans.py persists ESPN/ledger-style ARI. Normalize that one
+    boundary here. Building the set from the existing club maps also keeps
+    exhibition abbreviations such as AME/NAT off the team page without a
+    second hand-maintained list of clubs.
+    """
+    out = {}
+    for full_name, stats_abbr in ABBR.items():
+        ledger_abbr = "ARI" if stats_abbr == "AZ" else stats_abbr
+        out[ledger_abbr] = TEAM_LABELS.get(full_name, full_name)
+    return out
+
+
+def _team_record_parts(frame):
+    """Raw W/L/T counts for one team-page slice."""
+    grade = frame["xw_full"]
+    return {
+        "n": int(len(frame)),
+        "w": int(grade.eq("W").sum()),
+        "l": int(grade.eq("L").sum()),
+        "t": int(grade.eq("T").sum()),
+    }
+
+
+def _team_performance_rows(led):
+    """Per-club xwOBA full-game accuracy over the displayed ledger lineage.
+
+    Each row has three mutually useful views: every prediction involving the
+    club, games where the club was the lean, and games where its opponent was
+    the lean. Only settled W/L/T decisions between two MLB clubs count; this
+    excludes pending/void rows, abstentions, and the All-Star exhibition.
+    """
+    clubs = _ledger_club_labels()
+    g = _display_grades(led)
+    if g.empty:
+        return []
+    valid = (g["xw_full"].isin(("W", "L", "T"))
+             & g["away"].isin(clubs) & g["home"].isin(clubs)
+             & (g["xw_lean"].eq(g["away"]) | g["xw_lean"].eq(g["home"])))
+    g = g[valid]
+    teams = sorted(set(g["away"]) | set(g["home"]))
+    rows = []
+    for team in teams:
+        all_games = g[g["away"].eq(team) | g["home"].eq(team)]
+        leaned_on = all_games[all_games["xw_lean"].eq(team)]
+        leaned_against = all_games[~all_games["xw_lean"].eq(team)]
+        rows.append({
+            "team": team,
+            "label": clubs[team],
+            "all": _team_record_parts(all_games),
+            "on": _team_record_parts(leaned_on),
+            "against": _team_record_parts(leaned_against),
+        })
+    return rows
+
+
+def _team_metric_cell(parts):
+    """Record + decision accuracy + n, with ties excluded from accuracy."""
+    w, l, t, n = (parts[k] for k in ("w", "l", "t", "n"))
+    record = f"{w}-{l}" + (f"-{t}" if t else "")
+    accuracy = f"{100 * w / (w + l):.1f}%" if w + l else "—"
+    return (f"<span class='tm-record'>{record}</span>"
+            f"<span class='tm-accuracy'>{accuracy}</span>"
+            f"<span class='tm-n'>n={n}</span>")
 
 
 def _record_grades(led):
@@ -4478,7 +4557,9 @@ def records_strip_html():
                 bits.append(f"xwOBA vs mkt z {m['z']:+.2f} ({m['roi_units']:+.2f}u)")
         inner = " <span class='muted'>·</span> ".join(bits)
     return ("<div class='gradestrip'><span class='lab'>Record</span>"
-            f"<span>{inner}</span><a href='grades.html'>full ledger →</a></div>")
+            f"<span>{inner}</span><span class='grade-links'>"
+            "<a href='grades.html'>full ledger →</a>"
+            "<a href='team-grades.html'>by team →</a></span></div>")
 
 
 def _wlt_badge(v):
@@ -4593,7 +4674,9 @@ def _lock_provenance(led):
 
 
 def render_grades_html(built_txt):
-    back = "<div class='backlink'><a href='index.html'>← today's leans</a></div>"
+    back = ("<div class='backlink ledger-nav'>"
+            "<a href='index.html'>← today's leans</a>"
+            "<a href='team-grades.html'>performance by team →</a></div>")
     led = load_ledger_df()
     if led is None:
         body = back + ("<div class='legend'><div class='lg-title'>Grading ledger · "
@@ -4685,6 +4768,75 @@ def render_grades_html(built_txt):
     return html_document(back + head + summary + table, built_txt, title="MLB lean grades")
 
 
+def render_team_grades_html(built_txt):
+    """Render the full-lineage xwOBA record split by MLB club."""
+    nav = ("<div class='backlink ledger-nav'>"
+           "<a href='grades.html'>← full ledger</a>"
+           "<a href='index.html'>today's leans →</a></div>")
+    head = ("<div class='gr-head'><h1 class='gr-h1'>Performance by team</h1>"
+            "<div class='gr-lead'>xwOBA full-game accuracy for every MLB club, "
+            "split by whether the model leaned on that team or against it. "
+            f"Built <span class='stamp'>{built_txt}</span>.</div></div>")
+    led = load_ledger_df()
+    if led is None:
+        empty = ("<div class='legend'><div class='lg-title'>No graded data yet — "
+                 "team performance appears after the first CI run.</div></div>")
+        return html_document(nav + head + empty, built_txt,
+                             title="MLB team performance")
+
+    rows = _team_performance_rows(led)
+    if not rows:
+        empty = "<div class='gr-note'>No graded MLB club decisions yet.</div>"
+        return html_document(nav + head + empty, built_txt,
+                             title="MLB team performance")
+
+    # Summing the leaned-on slices counts each prediction exactly once. The
+    # all-games slices intentionally count it once under each participating
+    # club and are therefore not used for the page-level record.
+    total = {
+        key: sum(r["on"][key] for r in rows)
+        for key in ("n", "w", "l", "t")
+    }
+    base = f"{total['w']}-{total['l']}" + (f"-{total['t']}" if total["t"] else "")
+    accuracy = (f"{100 * total['w'] / (total['w'] + total['l']):.1f}%"
+                if total["w"] + total["l"] else "—")
+    summary = (
+        "<div class='gr-summary'>"
+        f"<div class='gr-stat'><div class='l'>MLB clubs</div><div class='v'>{len(rows)}</div></div>"
+        f"<div class='gr-stat'><div class='l'>Graded games</div><div class='v'>{total['n']}</div></div>"
+        f"<div class='gr-stat'><div class='l'>Overall record</div><div class='v'>{base}</div></div>"
+        f"<div class='gr-stat'><div class='l'>Accuracy</div><div class='v'>{accuracy}</div></div>"
+        "</div>"
+        "<div class='gr-note'><b>All games</b> counts the model's result for "
+        "every prediction involving that club; <b>leaned on</b> and "
+        "<b>leaned against</b> partition those games. Accuracy is W ÷ (W + L), "
+        "with ties shown in the record but excluded from the rate. Exhibition "
+        "teams are omitted, and small samples are descriptive rather than predictive.</div>"
+    )
+
+    body = []
+    for r in rows:
+        team = (f"<span class='team-code'>{_esc(r['team'])}</span>"
+                f"<span class='sp'>{_esc(r['label'])}</span>")
+        cells = [
+            ("c-game", "Team", team),
+            ("c-lean", "All", _team_metric_cell(r["all"])),
+            ("c-ml", "Picked", _team_metric_cell(r["on"])),
+            ("c-final", "Faded", _team_metric_cell(r["against"])),
+        ]
+        tds = "".join(
+            f"<td class='{cls}' data-l='{lab}'>{value}</td>"
+            for cls, lab, value in cells
+        )
+        body.append(f"<tr class='gr-row'>{tds}</tr>")
+    heads = ("Team", "All games", "Leaned on", "Leaned against")
+    table = ("<div class='gr-tablewrap'><table class='gr team-gr'><thead><tr>"
+             + "".join(f"<th>{h}</th>" for h in heads)
+             + f"</tr></thead><tbody>{''.join(body)}</tbody></table></div>")
+    return html_document(nav + head + summary + table, built_txt,
+                         title="MLB team performance")
+
+
 def render_combined_html(xw_df, pl_df, pitcher_rows_df, built_txt,
                          opp_hitters_df=None, detail_df=None, lg_ops=None,
                          slate_df=None, lineup_df=None,
@@ -4748,13 +4900,16 @@ def _built_text_now():
 
 
 def write_grades_page(built_txt=None):
-    """Render grades.html from the latest on-disk ledger without fetching a slate."""
+    """Render both public ledger views without fetching a slate."""
     built_txt = built_txt or _built_text_now()
     os.makedirs(OUT_DIR, exist_ok=True)
     grades_path = os.path.join(OUT_DIR, "grades.html")
     with open(grades_path, "w") as f:
         f.write(render_grades_html(built_txt))
-    log(f"Wrote {grades_path}")
+    team_grades_path = os.path.join(OUT_DIR, "team-grades.html")
+    with open(team_grades_path, "w") as f:
+        f.write(render_team_grades_html(built_txt))
+    log(f"Wrote {grades_path} and {team_grades_path}")
     return grades_path
 
 
