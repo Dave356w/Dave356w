@@ -80,6 +80,26 @@ leans against v9/v10 and 1 of 5 against wOBA v1, with median |net| 0.0291 vs
 have shared v9/v10's families. The lineup metric genuinely changed and has a
 measured basis, so both namespaces reset. Argue it again when there are rows.
 
+**Known cost of the split: it breaks a park symmetry both pure lineages had.**
+Tonight's park always cancels — it is common to both offenses and the lean is a
+difference of edges, so it comes out as a scalar and a game-level park factor
+would buy nothing. But the park bias inside the *season lines* only cancels
+when both sides carry the same dose. The matchup crosses teams (home offense =
+`B_home·P_awaySP`, away offense = `B_away·P_homeSP`) and park exposure is a
+team property, so under wOBA-everywhere each product carried one half-dose of
+each park and they cancelled; under xwOBA-everywhere neither carried any.
+Under the split the lineups carry park and the arms do not, the two products
+carry `f_H` and `f_A`, and the model tilts toward whichever club has the more
+hitter-friendly home park. Size unmeasured — it needs per-team park factors,
+which this repo has none of.
+
+This is **not** grounds to put the arms back on wOBA: that swaps first-order,
+measured accuracy (xwOBA predicts next-season pitcher wOBA at r=+0.438 against
+wOBA's +0.182) for a second-order park term. If measurement ever justifies a
+fix it is to park-neutralise the *hitter* inputs, restoring the symmetry while
+keeping the pitching accuracy. Neutralising one side only is what created this;
+do not repeat it in reverse.
+
 Two entries earn their keep as precedent. **v6 shares v5's units but not its
 record line** — a new prediction family can inherit a scale. **v10 shares both
 of v9's** — the PA-share reweight is a convex combination of the same two

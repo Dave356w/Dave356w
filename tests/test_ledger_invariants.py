@@ -23,6 +23,8 @@ import unittest
 import numpy as np
 import pandas as pd
 
+import market_backfill as mb
+
 LEDGER = os.path.join("data", "mlb_lean_ledger.csv")
 GAME_INNINGS = 9.0
 TOL = 1e-9
@@ -43,10 +45,22 @@ def _num(d, col):
     return pd.to_numeric(d[col], errors="coerce")
 
 
+# Lineage prefixes are derived from market_backfill, not restated here. This
+# regex hardcoded "(xw|woba)" and went red the moment the Actions bot wrote the
+# first split+plat_consol_v1 row -- a guard that fails for a reason unrelated to
+# the invariant it protects, which is the same shape as the frozen 39-32 record
+# this suite was fixed for once already. Adding a lineage is now one edit, in
+# market_backfill.TAG_PREFIX_LABELS.
+_LINEAGE_RE = re.compile(
+    r"(?:%s)\+plat_consol_v(\d+)"
+    % "|".join(re.escape(p.rstrip("+")) for p, _ in mb.TAG_PREFIX_LABELS)
+)
+
+
 def _version(tag):
     """Trailing version for a recognised production lineage, else None."""
-    m = re.fullmatch(r"(xw|woba)\+plat_consol_v(\d+)", str(tag))
-    return int(m.group(2)) if m else None
+    m = _LINEAGE_RE.fullmatch(str(tag))
+    return int(m.group(1)) if m else None
 
 
 class LedgerShapeTest(unittest.TestCase):

@@ -84,11 +84,41 @@ BATTING_ORDER_COL = "batting_order"
 # pitching side (r +.438 -> +.182). On the pitcher half, xwOBA beats wOBA in
 # 99.9% of bootstrap resamples (gap +0.256, 95% CI [+0.084, +0.442]).
 #
-# Caveats kept deliberately visible: both pools are qualified-player
-# leaderboards over two seasons, so this selects for durable regulars, and part
-# of the hitter residual is home-park persistence rather than player skill --
-# which this model cannot use correctly on the road, having no park term. That
-# is an argument for adding one, not against wOBA on the lineup.
+# Caveat kept deliberately visible: both pools are qualified-player
+# leaderboards over two seasons, so this selects for durable regulars.
+#
+# PARK: THE SPLIT BREAKS A SYMMETRY BOTH PURE LINEAGES HAD. Read this before
+# "fixing" it in either direction, because two obvious readings are both wrong.
+#
+# Tonight's park always cancels, in every lineage. It is common to both
+# offenses, and the lean is a difference of edges, so a factor k gives
+# (k*M_home - L) - (k*M_away - L) = k*(M_home - M_away): the anchors drop out
+# and k is a scalar on the net. A game-level park factor cannot flip a lean and
+# would buy nothing.
+#
+# What does NOT always cancel is the park bias baked into the season lines. The
+# matchup CROSSES teams -- the home offense term is B_home*P_awaySP, the away
+# offense term is B_away*P_homeSP -- and park exposure is a property of a team
+# (~half of any of its players' PA/BF). Writing f_H for a half-dose of tonight's
+# park and f_A for the visitor's:
+#
+#   lineage                B_home  P_awaySP  home-off   away-off   cancels?
+#   xwOBA everywhere (v10)   ~1       ~1        ~1         ~1       yes, no park
+#   wOBA everywhere (v1)     f_H      f_A     f_H*f_A    f_A*f_H    yes, symmetric
+#   split v1 (here)          f_H      ~1        f_H        f_A      NO
+#
+# xwOBA prices every batted ball at a league-average park, so the arms now carry
+# no park dose while the lineups still do. The two products no longer share a
+# factor, and the model tilts toward whichever club has the more hitter-friendly
+# home park. Size unmeasured -- it needs per-team park factors, which nothing
+# here has.
+#
+# This is NOT an argument to put the arms back on wOBA. That trade is first-order
+# accuracy (xwOBA predicts next-season pitcher wOBA at r=+0.438 vs +0.182) for a
+# second-order park term. The fix, if measurement justifies one, is to
+# park-neutralise the HITTER inputs: that restores the symmetry and keeps the
+# pitching accuracy. Neutralising one side only is what created this, so do not
+# do it again in reverse.
 #
 # The internal column name stays "xwOBA" on both sides -- it is the legacy
 # dump/ledger schema, not a claim about the statistic. Every new row carries
