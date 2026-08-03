@@ -6,13 +6,13 @@ import numpy as np
 import pandas as pd
 
 import bp_ablation
-from grade_leans import RECORD_TAGS
+import grade_leans
 
 LEDGER_REPORT = os.path.join("data", "ledger_report.txt")
 
 
 def _reported_xwoba_full_record():
-    """(W, L, T) parsed off the 'xwOBA lean full:' line of the ledger report.
+    """((W, L, T), tags) parsed from the committed ledger report.
 
     The report is the artifact the replay is cross-checked against, so it is
     the authority for the expected number -- reading it keeps the check honest
@@ -20,14 +20,26 @@ def _reported_xwoba_full_record():
     """
     with open(LEDGER_REPORT, encoding="utf-8") as fh:
         text = fh.read()
-    m = re.search(r"^xwOBA lean\s+full:\s*(\d+)-(\d+)(?:-(\d+))?", text, re.M)
-    if not m:
+    m = re.search(r"^(?:xwOBA|wOBA) lean\s+full:\s*(\d+)-(\d+)(?:-(\d+))?", text, re.M)
+    head = re.search(r"^LEAN LEDGER.*\[([^]]+)\]", text, re.M)
+    if m and head:
+        tags = tuple(t.strip() for t in head.group(1).split(" + ") if t.strip())
+    else:
+        # A newly isolated lineage has no primary record until its first game
+        # grades. Keep the cross-check alive against the latest phase-model
+        # family printed in history instead of failing on that expected gap.
+        m = re.search(
+            r"^\s+v9/v10\s+n=\s*\d+\s+xwOBA full\s+(\d+)-(\d+)(?:-(\d+))?",
+            text, re.M,
+        )
+        tags = dict(grade_leans.MODEL_FAMILY_TAGS).get("v9/v10", ())
+    if not m or not tags:
         raise AssertionError(
-            f"{LEDGER_REPORT} has no 'xwOBA lean full:' line to check against; "
+            f"{LEDGER_REPORT} has no ablatable model-family record; "
             "regenerate it with `python grade_leans.py`"
         )
     w, l, t = m.group(1), m.group(2), m.group(3)
-    return int(w), int(l), int(t or 0)
+    return (int(w), int(l), int(t or 0)), tags
 
 
 def _row(**kw):
@@ -167,7 +179,7 @@ class GradeTest(unittest.TestCase):
         regenerated from the ledger committed beside it.
         """
         d = pd.read_csv("data/mlb_lean_ledger.csv")
-        reported = _reported_xwoba_full_record()
+        reported, report_tags = _reported_xwoba_full_record()
         with_bp, _, ok = bp_ablation.variants(d)
         side = bp_ablation.side_of(with_bp)
         g = bp_ablation.grade(side,
@@ -176,7 +188,7 @@ class GradeTest(unittest.TestCase):
         # The report scores graded rows of the current record family; the
         # replay scores every row carrying the phase decomposition. Intersect
         # so the two are counted over one row set rather than assumed equal.
-        scored = ok & d["status"].eq("graded") & d["model_tag"].isin(RECORD_TAGS)
+        scored = ok & d["status"].eq("graded") & d["model_tag"].isin(report_tags)
         self.assertEqual(bp_ablation.record(g[scored])[:3], reported)
 
     def test_scoring_agrees_with_shipped_grades(self):

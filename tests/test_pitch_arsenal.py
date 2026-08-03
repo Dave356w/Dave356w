@@ -2,10 +2,10 @@
 
 The arm is shadow-only today, so these guard construction rather than
 performance. Two of them are the corrections that separate this from the naive
-"weight batter pitch-type xwOBA by usage rates" version: a league-average
+"weight batter pitch-type wOBA by usage rates" version: a league-average
 hitter must return exactly 1.0 against any arsenal (or the arsenal's mix
 effect is counted twice, once here and once in the starter's own
-xwOBA-allowed), and a hitter with no cells must land on 1.0 continuously
+wOBA-allowed), and a hitter with no cells must land on 1.0 continuously
 rather than at a coverage threshold.
 """
 import unittest
@@ -19,7 +19,16 @@ import pitch_arsenal as pa
 def _arsenal(rows):
     """rows: (player_id, pitch_type, pa, xwoba, usage)."""
     return pd.DataFrame(rows, columns=["player_id", "Pitch Type", "PA",
-                                       "est_woba", "pitch_usage"])
+                                       "woba", "pitch_usage"])
+
+
+class MetricSourceTests(unittest.TestCase):
+    def test_shadow_arm_requires_observed_woba(self):
+        self.assertEqual(pa._MODEL_WOBA_COLS, ("woba",))
+        # An xwOBA-only export must abstain instead of silently contaminating
+        # one arm of the wOBA forward test.
+        xw_only = LEAGUE.rename(columns={"woba": "xwoba"})
+        self.assertTrue(pa.normalize_arsenal(xw_only).empty)
 
 
 # A two-pitch league: sliders suppress offense, four-seamers do not. This is
@@ -188,7 +197,8 @@ class FetchTests(unittest.TestCase):
             seen.append((url, cache))
             return LEAGUE
         bat, pit = pa.fetch_arsenals(fetch, 2026, min_pa=30)
-        self.assertEqual([c for _, c in seen], ["arsenal_batter", "arsenal_pitcher"])
+        self.assertEqual([c for _, c in seen],
+                         ["arsenal_woba_v1_batter", "arsenal_woba_v1_pitcher"])
         self.assertTrue(all("year=2026" in u and "min=30" in u for u, _ in seen))
         self.assertFalse(bat.empty or pit.empty)
 

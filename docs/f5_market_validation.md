@@ -1,6 +1,7 @@
 # F5 (1st-5-innings) market capture — validation & first results
 
-> **Historical document (2026-07-21 data, v5-era model; current model is v10).**
+> **Historical document (2026-07-21 data, v5-era xwOBA model; current forward
+> test is `woba+plat_consol_v1`).**
 > The market-capture mechanics, the data-quality audit, and the mapping fit are
 > unchanged and still describe today's code. Two things have moved:
 >
@@ -12,7 +13,7 @@
 >   gate stands unclaimed for whatever eventually implements that idea; it is
 >   *not* a gate v6 passed.
 > - **The platoon lens left the cards.** It is still computed and graded into
->   the ledger for auditing, but the display is xwOBA-only, so the "load-bearing"
+>   the ledger for auditing, but the display is now wOBA-only, so the "load-bearing"
 >   framing below describes an analytical finding, not what the site shows.
 >
 > The n=203 figures are as of 2026-07-21. The ledger now holds 310 graded rows;

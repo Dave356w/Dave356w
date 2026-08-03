@@ -224,7 +224,7 @@ class PercentileTests(unittest.TestCase):
         pa = rng.integers(5, 650, n)
         true = rng.normal(.315, .030, n)
         obs = true + rng.normal(0, .35 / np.sqrt(np.maximum(pa, 1)), n)
-        self.cust = pd.DataFrame({"xwoba": obs, "pa": pa})
+        self.cust = pd.DataFrame({"woba": obs, "pa": pa})
 
     def test_shrinkage_pulls_small_sample_toward_middle(self):
         ref, _ = b.build_pctile_ref(self.cust, .312, 130.0, 300.0)
@@ -1236,7 +1236,7 @@ class CardCopyTests(unittest.TestCase):
 
     def test_footer_stamp_prose_is_em_dash_free(self):
         # The stamp's own copy, minus the model label it is handed -- that
-        # label is a fixed title ("... — Statcast xwOBA"), not prose.
+        # label is a fixed title ("... — Statcast wOBA"), not prose.
         stamp = self._visible(b._legend_head("MLB matchup leans", "9:00 AM"))
         self.assertNotIn("—", stamp)
 

@@ -14,13 +14,13 @@ because the original paste rendered its formula blocks as markdown headings.
 
 **Framing correction carried over from the original note:** the theory is
 stronger than the current one-sided arm, but it should be modelled as a
-pitch-type-conditioned *replacement* for aggregate xwOBA — not as another
-multiplier layered on top of aggregate batter and pitcher xwOBA. The shipped
+pitch-type-conditioned *replacement* for aggregate wOBA — not as another
+multiplier layered on top of aggregate batter and pitcher wOBA. The shipped
 shadow arm is a multiplier, which is the weaker form.
 
 ## What the model is actually estimating
 
-For batter `b`, pitcher `p`, and pitch type `t`, decompose expected xwOBA as
+For batter `b`, pitcher `p`, and pitch type `t`, decompose observed wOBA as
 
 ```
 g(x̂_bpt) = g(μ_t) + a_b + d_p + u_bt + v_pt
@@ -28,7 +28,7 @@ g(x̂_bpt) = g(μ_t) + a_b + d_p + u_bt + v_pt
 
 | term | meaning |
 |---|---|
-| `μ_t` | league xwOBA when a PA ends on pitch type `t` |
+| `μ_t` | league wOBA when a PA ends on pitch type `t` |
 | `a_b` | batter's general ability |
 | `d_p` | pitcher's general run-prevention ability |
 | `u_bt` | batter's pitch-type-specific residual |
@@ -50,15 +50,15 @@ pitcher distributes PAs across pitch types on which the batter and pitcher have
 different conditional strengths. A genuine `b × p × t` term would need
 substantial head-to-head history and would be hopelessly sparse.
 
-## Why it could beat aggregate xwOBA
+## Why it could beat aggregate wOBA
 
-Aggregate xwOBA treats two pitchers similarly when their overall results are
+Aggregate wOBA treats two pitchers similarly when their overall results are
 similar — an elite-slider/weak-fastball arm and an elite-fastball/weak-slider
 arm look alike. It likewise treats two equal-overall batters alike even if one
 destroys fastballs and struggles against sliders.
 
 The pitch-type model distinguishes those matchups. It can capture four things
-aggregate xwOBA discards: the pitcher's arsenal distribution, his quality within
+aggregate wOBA discards: the pitcher's arsenal distribution, his quality within
 each pitch type, the batter's relative performance by pitch type, and how the
 three line up in this specific matchup. That is a real theoretical advantage.
 
@@ -70,13 +70,13 @@ If only leaderboard summaries are available, the natural first approximation is
 x̂_bpt = μ_t · (B̃_bt / μ_t) · (P̃_pt / μ_t) = B̃_bt · P̃_pt / μ_t
 ```
 
-with `B̃_bt` the shrunk batter xwOBA against type `t` and `P̃_pt` the shrunk
-pitcher xwOBA allowed on type `t` — both shrunk toward **their own player's
+with `B̃_bt` the shrunk batter wOBA against type `t` and `P̃_pt` the shrunk
+pitcher wOBA allowed on type `t` — both shrunk toward **their own player's
 general level**, not directly toward league.
 
 The batter and pitcher ratios must be centred so their pitch-type cells
 reconstruct each player's aggregate ability. Otherwise the pitcher's arsenal
-quality and his overall xwOBA are counted twice. This is the single most
+quality and his overall wOBA are counted twice. This is the single most
 important constraint in these notes, and it is the one the shipped shadow arm
 implements (each cell regressed toward the hitter's own overall relative level).
 
@@ -86,13 +86,14 @@ A calibrated version is safer:
 log(x̂_bpt) = log(μ_t) + λ_B · log(R_bt) + λ_P · log(R_pt)
 ```
 
-with `λ_B` and `λ_P` estimated from data. Given a measured batter-side
-reliability of only 0.161, `λ_B` may need to sit considerably below 1.
+with `λ_B` and `λ_P` estimated from data. The prior xwOBA reliability estimate
+does not carry into this wOBA test; rerun the probe before choosing either
+coefficient, and expect `λ_B` may need to sit considerably below 1.
 
-## Aggregate xwOBA should remain the prior
+## Aggregate wOBA should remain the prior
 
-"Instead of aggregate xwOBA" must not mean discarding aggregate information.
-Aggregate xwOBA determines the player-level fallback:
+"Instead of aggregate wOBA" must not mean discarding aggregate information.
+Aggregate wOBA determines the player-level fallback:
 
 - No batter pitch-type data → the batter's aggregate level.
 - No pitcher pitch-type data → the pitcher's aggregate level.
@@ -159,12 +160,12 @@ This isolates whether any improvement comes from simply knowing the pitcher's
 mix, from batter-specific pitch response, from pitcher quality by pitch type, or
 from the combination. The pitcher component may prove more reliable than the
 batter component, because pitch shape and quality are repeatable pitcher skills
-— but much of that value may already sit in aggregate pitcher xwOBA, so only its
+— but much of that value may already sit in aggregate pitcher wOBA, so only its
 within-arsenal residual can add information.
 
 ## Bottom line
 
-The theory is valid and more complete than aggregate xwOBA alone. The clean
+The theory is valid and more complete than aggregate wOBA alone. The clean
 model is
 
 ```
@@ -177,7 +178,7 @@ weighted by a handedness-aware terminal-pitch distribution.
 
 The key empirical question is not whether batter and pitcher pitch-type numbers
 contain signal individually. It is whether the **joint, fully shrunk, time-safe
-prediction improves future PA-level xwOBA beyond the aggregate model.**
+prediction improves future PA-level wOBA beyond the aggregate model.**
 
 Given current batter reliability, expect one of three outcomes:
 

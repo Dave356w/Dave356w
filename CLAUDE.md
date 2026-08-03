@@ -31,13 +31,14 @@ prediction math. Two separate tag families gate two different questions:
 
 - `RECORD_TAGS` — may these rows share a win-loss line? Prediction-math
   compatibility. Governs `_record_grades()` and the weight fit.
-- `SCALE_TAGS` — do these rows measure `xw_net` on the same scale? Units
-  compatibility. Governs `lean_strength_scale()` only.
+- `SCALE_TAGS` — do these rows measure the primary-rate delta on the same
+  scale? (`xw_net` is the retained legacy ledger name.) Units compatibility.
+  Governs `lean_strength_scale()` only.
 
 These are different equivalence relations and they do disagree. The authority is
 `_RECORD_FAMILIES` / `_SCALE_FAMILIES` in `build_site.py` (records mirrored in
 `grade_leans.py`) — not this table, which is a reading aid. Current model is
-**v10**.
+**wOBA v1**.
 
 | tag | what changed | record family | scale family |
 |---|---|---|---|
@@ -50,6 +51,12 @@ These are different equivalence relations and they do disagree. The authority is
 | v8 | fixed `K=100` shrinkage, widening the delta distribution | 8 | 8+9+10 |
 | v9 | starter/bullpen phases split; handedness applies to starter innings only | 9+10 | 8+9+10 |
 | v10 | phases weighted by PA share (measured BF/IP) not innings share | 9+10 | 8+9+10 |
+| wOBA v1 | observed wOBA replaces xwOBA in every active rate input; v10 construction fixed | wOBA v1 | wOBA v1 |
+
+The wOBA forward test is intentionally isolated in both namespaces. Observed
+wOBA changes the predictions and its sampling distribution is not the xwOBA
+delta scale. Internal `xwOBA`/`xw_*` dump and ledger keys remain a compatibility
+schema for immutable history; new rows must carry `model_metric=wOBA`.
 
 Two entries earn their keep as precedent. **v6 shares v5's units but not its
 record line** — a new prediction family can inherit a scale. **v10 shares both

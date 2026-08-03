@@ -5,7 +5,7 @@
 # Render-free build of the Colab notebook
 # (Shrunk_mlb_matchup_render_consolidated.ipynb), turned into a one-shot
 # static-site generator: it pulls the slate via keyless APIs, builds the
-# xwOBA + platoon-OPS matchup tables, and writes a fully self-contained
+# wOBA + platoon-OPS matchup tables, and writes a fully self-contained
 # index.html (inline CSS, no external assets, dark-mode via
 # prefers-color-scheme) for GitHub Pages.
 #
@@ -14,7 +14,7 @@
 #   - Savant gf?game_pk=     : posted lineups (JSON)
 #   - Savant CSV leaderboards (cached once/day): custom + batted-ball
 #
-# Pipeline mirrors notebook cells 1 (fetch) -> 4 (xwOBA matchup) ->
+# Pipeline mirrors notebook cells 1 (fetch) -> 4 (primary-rate matchup) ->
 # 5 (platoon split) -> 6 (consolidated card render). The notebook's
 # clean/validate cells (2, 3) are skipped: they produced *_clean / *_strict
 # frames that the matchup/render cells never consume (the API build_tables
@@ -60,9 +60,18 @@ REQUEST_DELAY = 0.25
 
 # Column carrying a hitter's 1-9 batting-order slot through the pipeline.
 BATTING_ORDER_COL = "batting_order"
-# True only for a posted hitter who is absent from the season Savant
-# leaderboard and therefore carries the active team's PA-weighted xwOBA.
-XWOBA_TEAM_BACKFILL_COL = "xwOBA_team_backfill"
+# wOBA is the active model input for this forward-test lineage. The pipeline's
+# old xwOBA-shaped dump/ledger keys are intentionally retained below as a
+# compatibility schema so historical xwOBA rows remain readable; every new
+# dump also carries model_metric="wOBA" to make the underlying statistic
+# explicit. These constants define the source of truth for all active batter,
+# starter, bullpen, league-prior, percentile, and pitch-mix inputs.
+MODEL_RATE_SOURCE_COL = "woba"
+MODEL_RATE_LABEL = "wOBA"
+MODEL_RATE_INTERNAL_COL = "xwOBA"  # stable legacy dump/ledger schema only
+MODEL_RATE_TEAM_BACKFILL_COL = "wOBA_team_backfill"
+# Backward-compatible constant name used by the established pipeline/tests.
+XWOBA_TEAM_BACKFILL_COL = MODEL_RATE_TEAM_BACKFILL_COL
 # Expected plate appearances per game by batting-order slot. A lineup turns over
 # from the top, so the leadoff man bats ~4.6 times while the 9-hole bats ~3.8 --
 # roughly a 22% spread in in-game exposure across the order. We weight lineup
@@ -84,7 +93,11 @@ USE_TEAM_LOGOS = os.environ.get("USE_TEAM_LOGOS", "1") != "0"
 LOGO_CDN = "https://www.mlbstatic.com/team-logos"
 DATA_DIR = os.environ.get("DATA_DIR", "data")            # grading ledger home
 LEDGER_PATH = os.path.join(DATA_DIR, "mlb_lean_ledger.csv")
-MODEL_TAG = os.environ.get("MODEL_TAG", "xw+plat_consol_v10")  # keep in sync with grade_leans.py
+MODEL_TAG = os.environ.get("MODEL_TAG", "woba+plat_consol_v1")  # keep in sync with grade_leans.py
+if not MODEL_TAG.startswith("woba+"):
+    raise RuntimeError(
+        "This build fetches observed wOBA; refusing to stamp it with a non-wOBA MODEL_TAG"
+    )
 _RECORD_FAMILIES = {
     # v3 changed only ledger locking/identity; its prediction math is v2.
     "xw+plat_consol_v3": ("xw+plat_consol_v2", "xw+plat_consol_v3"),
@@ -116,6 +129,9 @@ _RECORD_FAMILIES = {
     # the eighth time in a month and buy nothing.
     "xw+plat_consol_v9": ("xw+plat_consol_v9", "xw+plat_consol_v10"),
     "xw+plat_consol_v10": ("xw+plat_consol_v9", "xw+plat_consol_v10"),
+    # Observed wOBA replaces xwOBA in every active rate input while the rest of
+    # v10's construction stays fixed. This is a new prediction family.
+    "woba+plat_consol_v1": ("woba+plat_consol_v1",),
 }
 RECORD_TAGS = tuple(
     t.strip() for t in os.environ.get(
@@ -153,13 +169,17 @@ _SCALE_FAMILIES = {
                           "xw+plat_consol_v10"),
     "xw+plat_consol_v10": ("xw+plat_consol_v8", "xw+plat_consol_v9",
                            "xw+plat_consol_v10"),
+    # wOBA has a different sampling distribution from xwOBA, so it cannot
+    # share magnitude cutoffs with any xwOBA lineage.
+    "woba+plat_consol_v1": ("woba+plat_consol_v1",),
 }
 SCALE_TAGS = tuple(
     t.strip() for t in os.environ.get(
         "SCALE_TAGS", ",".join(_SCALE_FAMILIES.get(MODEL_TAG, (MODEL_TAG,)))
     ).split(",") if t.strip()
 )
-STATCAST_SELECTIONS = ["pa", "k_percent", "bb_percent", "xwoba", "xba", "xslg",
+STATCAST_SELECTIONS = ["pa", "k_percent", "bb_percent", MODEL_RATE_SOURCE_COL,
+                       "xba", "xslg",
                        "exit_velocity_avg", "launch_angle_avg", "hard_hit_percent"]
 
 # Batted-ball direction/tendency rates with true league-wide anchors.
@@ -406,13 +426,19 @@ def load_stat_lookups(player_type):
     cust = cached_csv(
         f"https://baseballsavant.mlb.com/leaderboard/custom?year={SEASON}"
         f"&type={player_type}&min=1&selections={sel}&csv=true",
-        f"custom_{player_type}")
+        # New namespace prevents a same-day xwOBA-only cache from being reused
+        # after this lineage switches the requested Savant column to wOBA.
+        f"custom_woba_v1_{player_type}")
     bb = cached_csv(
         f"https://baseballsavant.mlb.com/leaderboard/batted-ball?type={player_type}"
         f"&year={SEASON}&min=1&csv=true",
         f"battedball_{player_type}")
 
-    REN_STAT = {"xwoba": "xwOBA", "xba": "xBA", "xslg": "xSLG", "exit_velocity_avg": "EV",
+    # Map observed Savant wOBA into the established primary-rate schema. The
+    # internal name stays xwOBA solely so old dumps, ledger readers, and audit
+    # tooling remain compatible; MODEL_RATE_SOURCE_COL is the fetched value.
+    REN_STAT = {MODEL_RATE_SOURCE_COL: MODEL_RATE_INTERNAL_COL,
+                "xba": "xBA", "xslg": "xSLG", "exit_velocity_avg": "EV",
                 "launch_angle_avg": "LA°", "hard_hit_percent": "Hard Hit%",
                 "k_percent": "K%", "bb_percent": "BB%", "pa": "PA"}
     stat = {}
@@ -683,11 +709,11 @@ def roster_lineup(team_id, batter_stat):
 
 
 def team_batter_xwoba(team_id, batter_stat, league_fallback=np.nan):
-    """PA-weighted xwOBA for Savant-listed active hitters on one team.
+    """PA-weighted active model rate for Savant-listed hitters on one team.
 
     Used only when a posted hitter is absent from the Savant leaderboard.
     The league prior is a last resort when no rostered hitter has a usable
-    xwOBA/PA pair.
+    wOBA/PA pair.
     """
     vals, weights = [], []
     for pid in roster_lineup(team_id, batter_stat):
@@ -1042,7 +1068,8 @@ def build_pitching_plans(slate_df, recent_profiles, pitcher_stat,
             if bullpen is not None:
                 log(
                     f"  sequential pitching: pid={pid} team={tid} basis={basis} "
-                    f"exp_ip={expected_ip:.2f} rp_xwOBA={bullpen.get('xwOBA'):.3f} "
+                    f"exp_ip={expected_ip:.2f} rp_{MODEL_RATE_LABEL}="
+                    f"{bullpen.get('xwOBA'):.3f} "
                     f"(n_rp={bullpen.get('pitcher_count')})"
                 )
             else:
@@ -1197,7 +1224,8 @@ def build_tables(slate, lineups, batter_stat, pitcher_stat, batter_bb, pitcher_b
 
 
 def compute_league_baseline(batter_cust):
-    _LB_MAP = {"xwoba": "xwOBA", "xba": "xBA", "xslg": "xSLG", "k_percent": "K%", "bb_percent": "BB%",
+    _LB_MAP = {MODEL_RATE_SOURCE_COL: MODEL_RATE_INTERNAL_COL,
+               "xba": "xBA", "xslg": "xSLG", "k_percent": "K%", "bb_percent": "BB%",
                "exit_velocity_avg": "EV", "launch_angle_avg": "LA°", "hard_hit_percent": "Hard Hit%"}
     league_baseline = {}
     _w = pd.to_numeric(batter_cust.get("pa"), errors="coerce")
@@ -1249,8 +1277,12 @@ def fetch_all(slate_date):
         league_baseline[c] = (
             float(np.average(vals, weights=wts)) if vals else np.nan
         )
-    log("  league baselines:", {k: league_baseline.get(k) for k in
-        ["xwOBA", "Hard Hit%", "K%", "EV", "GB%", "FB%", "Pull%"]})
+    shown_baselines = {
+        MODEL_RATE_LABEL: league_baseline.get(MODEL_RATE_INTERNAL_COL),
+        **{k: league_baseline.get(k) for k in
+           ["Hard Hit%", "K%", "EV", "GB%", "FB%", "Pull%"]},
+    }
+    log("  league baselines:", shown_baselines)
 
     # v8 uses one fixed pseudo-sample for every batter and pitcher xwOBA,
     # including each member of the bullpen pool. Keeping the value fixed makes
@@ -1259,7 +1291,7 @@ def fetch_all(slate_date):
     if USE_XWOBA_SHRINK:
         prior = league_baseline.get("xwOBA")
         k_bat = k_pit = XWOBA_SHRINK_K
-        log(f"  xwOBA shrink: prior={prior} | K_bat={k_bat:.0f} (fixed) "
+        log(f"  {MODEL_RATE_LABEL} shrink: prior={prior} | K_bat={k_bat:.0f} (fixed) "
             f"| K_pit={k_pit:.0f} (fixed)")
 
         # Display-only percentile reference distributions (qualified regulars),
@@ -1657,9 +1689,9 @@ def build_pctile_ref(cust, prior, k, qual_pa):
     (sorted_array | None, qual_pa | None); falls back to the whole (min=1) pool
     if qualifying leaves too few for a stable scale."""
     cols = getattr(cust, "columns", [])
-    if cust is None or "xwoba" not in cols or "pa" not in cols:
+    if cust is None or MODEL_RATE_SOURCE_COL not in cols or "pa" not in cols:
         return None, None
-    xw = pd.to_numeric(cust["xwoba"], errors="coerce")
+    xw = pd.to_numeric(cust[MODEL_RATE_SOURCE_COL], errors="coerce")
     pa = pd.to_numeric(cust["pa"], errors="coerce")
     base = xw.notna() & pa.notna() & (pa > 0)
     m = (base & (pa >= qual_pa)) if qual_pa else base
@@ -1764,9 +1796,17 @@ def aggregate_lineup(H, rate_cols, weighted=True, shrink_prior=None, shrink_k=No
             # instead of applying player-level shrinkage a second time.
             if c == XWOBA_SHRINK_COL and shrink_prior is not None and "PA" in g.columns:
                 vals = shrink_xwoba(g[c], g["PA"], shrink_prior, shrink_k)
-                if XWOBA_TEAM_BACKFILL_COL in g.columns:
+                # Accept the legacy flag in constructed/historical frames;
+                # production wOBA rows use wOBA_team_backfill.
+                backfill_col = next(
+                    (name for name in (XWOBA_TEAM_BACKFILL_COL,
+                                       "xwOBA_team_backfill")
+                     if name in g.columns),
+                    None,
+                )
+                if backfill_col is not None:
                     backfilled = (
-                        pd.Series(g[XWOBA_TEAM_BACKFILL_COL])
+                        pd.Series(g[backfill_col])
                         .reset_index(drop=True)
                         .fillna(False)
                         .astype(bool)
@@ -2830,7 +2870,7 @@ def _lineup_details(side_d):
     st_cls = {"posted": "posted", "partial_filled": "partial", "projected": "projected"}.get(st, "projected")
     parts = []
     if side_d["opp_xw"] is not None:
-        parts.append(f"xwOBA {f3(side_d['opp_xw'])}")
+        parts.append(f"{MODEL_RATE_LABEL} {f3(side_d['opp_xw'])}")
     summ = " · ".join(parts) if parts else ""
     # No header row: the columns (order, name, position, percentile bar, xwOBA)
     # read without labels, and the legend below the cards carries the key.
@@ -2877,7 +2917,7 @@ def _side_html(sp_abbr, d, league_baseline):
     xera_sub = (f"season {f2(d['era_season'])}"
                 if d.get("era_season") is not None else None)
     stats = (
-        _sp_stat_cell("xwOBA agn", d["pit_xw"], f3,
+        _sp_stat_cell(f"{MODEL_RATE_LABEL} agn", d["pit_xw"], f3,
                       f"lg {f3(lg['xwOBA'])}" if lg["xwOBA"] is not None else None,
                       heat=heat_style(d["pit_xw"], lg["xwOBA"], HEAT_DOMAINS["xwOBA_sp"]))
         + _sp_stat_cell("K-BB%", kbb, f1,
@@ -2887,7 +2927,7 @@ def _side_html(sp_abbr, d, league_baseline):
                         heat=heat_style(d.get("xera"), lg["ERA"], HEAT_DOMAINS["ERA"])))
     tier_lab, tier_cls = _tier_word(d.get("pit_xw_pctile"))
     tier = f"<span class='tier {tier_cls}'>{tier_lab}</span>" if tier_lab else ""
-    bars = (f"<div class='spct'><span class='lab'>xwOBA</span>{_pct_bar(d.get('pit_xw_pctile'), 'p')}</div>"
+    bars = (f"<div class='spct'><span class='lab'>{MODEL_RATE_LABEL}</span>{_pct_bar(d.get('pit_xw_pctile'), 'p')}</div>"
             f"<div class='spct'><span class='lab'>K − BB%</span>{_pct_bar(d.get('kbb_pctile'), 'p')}</div>")
     exp_ip = _f(d.get("expected_sp_ip"))
     pitching_note = (
@@ -4543,18 +4583,19 @@ def records_strip_html():
     if g.empty:
         inner = "<span class='muted'>no graded games yet</span>"
     else:
-        bits = [f"xwOBA full {_rec_txt(g['xw_full'])}"]
+        bits = [f"{MODEL_RATE_LABEL} full {_rec_txt(g['xw_full'])}"]
         # xwOBA vs-market (z / flat ROI) — mirrors the grades-page core card;
         # market columns are absent until the first market run.
         if "close_p_home" in g.columns and g["close_p_home"].notna().any():
             try:
                 from market_backfill import vs_market_summary
-                m = vs_market_summary(g, verbose=False).get("xwOBA")
+                summary = vs_market_summary(g, verbose=False)
+                m = summary.get(MODEL_RATE_LABEL) or summary.get("Model")
             except Exception as e:  # noqa: BLE001
                 log(f"vs-market strip degraded: {e!r}")
                 m = None
             if m:
-                bits.append(f"xwOBA vs mkt z {m['z']:+.2f} ({m['roi_units']:+.2f}u)")
+                bits.append(f"{MODEL_RATE_LABEL} vs mkt z {m['z']:+.2f} ({m['roi_units']:+.2f}u)")
         inner = " <span class='muted'>·</span> ".join(bits)
     return ("<div class='gradestrip'><span class='lab'>Record</span>"
             f"<span>{inner}</span><span class='grade-links'>"
@@ -4704,7 +4745,7 @@ def render_grades_html(built_txt):
     else:
         pend_sub = f"{n_pend} pending" + (f" · {n_void} void" if n_void else "")
         stat("Graded", str(len(g)), pend_sub)
-        b, p = _rec_parts(g["xw_full"]); stat("xwOBA · full", b, p)
+        b, p = _rec_parts(g["xw_full"]); stat(f"{MODEL_RATE_LABEL} · full", b, p)
         # vs-market scoreboard (closing DK MLs attached by grade_leans.py via
         # market_backfill; columns absent until the first market run). z leads
         # the cell -- it is the primary metric, per the note below.
@@ -4715,12 +4756,12 @@ def render_grades_html(built_txt):
             except Exception as e:  # noqa: BLE001
                 log(f"vs-market summary degraded: {e!r}")
                 mkt = {}
-            m = mkt.get("xwOBA")
+            m = mkt.get(MODEL_RATE_LABEL) or mkt.get("Model")
             if m:
-                stat("xwOBA · vs mkt", f"z {m['z']:+.2f}",
+                stat(f"{MODEL_RATE_LABEL} · vs mkt", f"z {m['z']:+.2f}",
                      f"{m['w']}-{m['n'] - m['w']} · {m['roi_units']:+.2f}u flat",
                      tone="cool" if m["z"] > 0 else "warm")
-        notes.append("xwOBA graded full-game vs devigged DK closing ML (ESPN capture); "
+        notes.append(f"{MODEL_RATE_LABEL} graded full-game vs devigged DK closing ML (ESPN capture); "
                      "z and flat ROI are the primary metrics")
         # Controls. The model's record is unreadable without them: .570 is a
         # result only relative to what always-home and always-chalk got on the
@@ -4754,9 +4795,12 @@ def render_grades_html(built_txt):
                    + (f"<div class='gr-note'>{'. '.join(notes)}.</div>" if notes else ""))
 
     show_ml = "close_home_ml" in led.columns and led["close_home_ml"].notna().any()
-    heads = (["Game", "xwOBA lean"]
-             + (["xw ML"] if show_ml else [])
-             + ["Final", "xw F"])
+    # The table includes immutable historical xwOBA rows and current wOBA rows,
+    # so its column headers are metric-neutral. The current-family summary
+    # above remains explicitly labelled wOBA.
+    heads = (["Game", "Model lean"]
+             + (["ML"] if show_ml else [])
+             + ["Final", "Result"])
     led = led.sort_values(["game_date", "game_pk"], ascending=[False, True])
     body = []
     for date, day in led.groupby("game_date", sort=False):
@@ -4769,12 +4813,12 @@ def render_grades_html(built_txt):
 
 
 def render_team_grades_html(built_txt):
-    """Render the full-lineage xwOBA record split by MLB club."""
+    """Render the current model-rate record split by MLB club."""
     nav = ("<div class='backlink ledger-nav'>"
            "<a href='grades.html'>← full ledger</a>"
            "<a href='index.html'>today's leans →</a></div>")
     head = ("<div class='gr-head'><h1 class='gr-h1'>Performance by team</h1>"
-            "<div class='gr-lead'>xwOBA full-game accuracy for every MLB club, "
+            f"<div class='gr-lead'>{MODEL_RATE_LABEL} full-game accuracy for every MLB club, "
             "split by whether the model leaned on that team or against it. "
             f"Built <span class='stamp'>{built_txt}</span>.</div></div>")
     led = load_ledger_df()
@@ -4847,7 +4891,7 @@ def render_combined_html(xw_df, pl_df, pitcher_rows_df, built_txt,
                                   league_baseline=league_baseline, odds=odds, streaks=streaks)
     # Cards lead. The record strip and the model/build stamp sit below them.
     footer = (records_strip_html()
-              + _legend_head("MLB matchup leans — Statcast xwOBA", built_txt))
+              + _legend_head(f"MLB matchup leans — Statcast {MODEL_RATE_LABEL}", built_txt))
     if not games:
         inner = "<div class='legend'><div class='lg-title'>No paired probables yet — " \
                 "probables/lineups not posted. Check back closer to first pitch.</div></div>" + footer
@@ -4938,7 +4982,7 @@ def main():
         log(f"Wrote {out_path}")
         return 0
 
-    log("Building xwOBA matchup ...")
+    log(f"Building {MODEL_RATE_LABEL} matchup ...")
     matchup_df, pitcher_rows_df, opp_hitters_df = build_xwoba_matchup(
         data["pitchers_df"], data["league_baseline"])
     matchup_df = apply_pitching_plans(
@@ -4948,7 +4992,7 @@ def main():
     if matchup_df is None or matchup_df.empty:
         # Probables/lineups not posted yet. Render a valid "check back" page
         # rather than failing -- this is a real pre-slate state, not a fetch error.
-        log("No xwOBA matchups built (probables not posted) -> check-back page.")
+        log(f"No {MODEL_RATE_LABEL} matchups built (probables not posted) -> check-back page.")
         html = render_combined_html(pd.DataFrame(columns=["game_pk", "side"]),
                                     pd.DataFrame(), pitcher_rows_df, built_txt)
         with open(out_path, "w") as f:
@@ -4996,13 +5040,14 @@ def main():
     for frame in (matchup_df, matchup_platoon_df):
         if frame is not None and not frame.empty:
             frame["model_tag"] = MODEL_TAG
+            frame["model_metric"] = MODEL_RATE_LABEL
             frame["snapshot_utc"] = snapshot_utc
             if "game_datetime_utc" in frame.columns:
                 frame["scheduled_start_utc"] = frame["game_datetime_utc"]
             for col, series in lu_cols.items():
                 frame[col] = frame["game_pk"].map(series)
     os.makedirs(DATA_DIR, exist_ok=True)
-    matchup_df.to_csv(os.path.join(DATA_DIR, f"leans_{SLATE_DATE}_xw.csv"), index=False)
+    matchup_df.to_csv(os.path.join(DATA_DIR, f"leans_{SLATE_DATE}_woba.csv"), index=False)
     if matchup_platoon_df is not None and not matchup_platoon_df.empty:
         matchup_platoon_df.to_csv(os.path.join(DATA_DIR, f"leans_{SLATE_DATE}_pl.csv"), index=False)
 

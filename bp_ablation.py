@@ -270,7 +270,7 @@ def absorption(no_bp, bp_part, close_home, mask):
     r2 = 1.0 - (resid @ resid) / ss_tot if ss_tot > 0 else float("nan")
 
     print(f"  close_p_home ~ nobp_net + bp_contribution     (n={len(y)}, R^2={r2:.3f})")
-    print("  coefficients are probability points per xwOBA point")
+    print("  coefficients are probability points per primary-rate point")
     for nm, b, s in zip(("intercept", "nobp_net", "bp_contrib"), beta, se):
         t = b / s if s > 0 else float("nan")
         print(f"    {nm:<11} {b:+9.4f}  (se {s:.4f}, t {t:+.2f})")
@@ -317,7 +317,7 @@ def run(ledger_path, care_about):
     print(f"  leans fired no-BP   : {int((eligible & side_n.ne('')).sum())}")
     print(f"  DISAGREEMENT SET    : {int(disagree.sum())} "
           f"({disagree.sum() / max(int(eligible.sum()), 1):.1%} of ablatable games)")
-    print(f"  median |bp contrib| : {bp_part[eligible].abs().median():.5f} xwOBA pts "
+    print(f"  median |bp contrib| : {bp_part[eligible].abs().median():.5f} rate pts "
           f"(vs median |xw_net| {with_bp[eligible].abs().median():.5f})")
     if 0 < disagree.sum() < 30:
         print(f"  !! only {int(disagree.sum())} games can differ at all -- every CLV number")

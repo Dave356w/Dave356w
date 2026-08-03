@@ -8,12 +8,12 @@ Run this on a machine that can reach Savant:
 
 It answers three questions and prints the budget each answer has to clear:
 
-1. **How big is the raw spread** of a hitter's league-relative xwOBA by pitch
+1. **How big is the raw spread** of a hitter's league-relative wOBA by pitch
    type, and how much of it is sampling noise? Method of moments on the cell
    PA distribution splits observed variance into within-PA (noise) and
    between-player (signal) components, which also implies the shrinkage `K`
    the arm should use -- the same estimator family the build retired in v8 for
-   the season xwOBA, used here only as a diagnostic.
+   the season wOBA, used here only as a diagnostic.
 
 2. **Is it stable year over year?** Season-to-season correlation of the same
    (batter, pitch type) deviation is the honest reliability proxy: the
@@ -39,7 +39,7 @@ import pandas as pd
 
 import pitch_arsenal as pa
 
-# sd of a single plate appearance's xwOBA. Most PAs are 0, a single ~0.9, a
+# sd of a single plate appearance's wOBA. Most PAs are 0, a single ~0.9, a
 # home run ~2.0. Override with --sd-pa once measured from pitch-level data;
 # every noise figure below scales linearly with it.
 SD_PA = 0.85

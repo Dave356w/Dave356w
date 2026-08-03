@@ -57,7 +57,13 @@ from market_backfill import MARKET_COLS, attach_market
 DATA_DIR    = os.environ.get("DATA_DIR", "data")
 LEDGER_PATH = os.path.join(DATA_DIR, "mlb_lean_ledger.csv")
 REPORT_PATH = os.path.join(DATA_DIR, "ledger_report.txt")
-MODEL_TAG   = os.environ.get("MODEL_TAG", "xw+plat_consol_v10")
+MODEL_TAG   = os.environ.get("MODEL_TAG", "woba+plat_consol_v1")
+MODEL_METRIC_LABEL = os.environ.get(
+    "MODEL_METRIC_LABEL",
+    "wOBA" if MODEL_TAG.startswith("woba+") else "xwOBA",
+)
+if MODEL_TAG.startswith("woba+") != (MODEL_METRIC_LABEL == "wOBA"):
+    raise RuntimeError("MODEL_TAG and MODEL_METRIC_LABEL describe different metrics")
 _RECORD_FAMILIES = {
     # v3 changed only ledger locking/identity; its prediction math is v2.
     "xw+plat_consol_v3": ("xw+plat_consol_v2", "xw+plat_consol_v3"),
@@ -81,6 +87,7 @@ _RECORD_FAMILIES = {
     # so they share one win-loss line rather than resetting the sample again.
     "xw+plat_consol_v9": ("xw+plat_consol_v9", "xw+plat_consol_v10"),
     "xw+plat_consol_v10": ("xw+plat_consol_v9", "xw+plat_consol_v10"),
+    "woba+plat_consol_v1": ("woba+plat_consol_v1",),
 }
 RECORD_TAGS = tuple(
     t.strip() for t in os.environ.get(
@@ -95,6 +102,7 @@ MODEL_FAMILY_TAGS = (
     ("v7", ("xw+plat_consol_v7",)),
     ("v8", ("xw+plat_consol_v8",)),
     ("v9/v10", ("xw+plat_consol_v9", "xw+plat_consol_v10")),
+    ("wOBA v1", ("woba+plat_consol_v1",)),
 )
 N_FIT_MIN   = 120
 _FINAL  = {"Final", "Game Over", "Completed Early"}
@@ -144,6 +152,7 @@ def _optbool(v):
 
 LEDGER_COLS = [
     "game_pk","game_date","away","home","away_sp","home_sp","model_tag",
+    "model_metric",
     "B_home","B_away","P_awaySP","P_homeSP","d_lineup","d_sp",
     "home_off_edge","away_off_edge","xw_net","xw_lean","xw_delta",
     "ops_net","ops_lean","ops_delta","ops_valid","consensus",
@@ -205,7 +214,7 @@ AUDIT_COLS = [
     "edge_xwoba_sp_mix_away", "edge_xwoba_sp_mix_home",
 ]
 MODEL_FIELDS = [
-    "game_date","away","home","away_sp","home_sp","model_tag",
+    "game_date","away","home","away_sp","home_sp","model_tag","model_metric",
     "B_home","B_away","P_awaySP","P_homeSP","d_lineup","d_sp",
     "home_off_edge","away_off_edge","xw_net","xw_lean","xw_delta",
     "ops_net","ops_lean","ops_delta","ops_valid","consensus",
@@ -356,9 +365,16 @@ def rows_from_dump(xw_df, pl_df):
         dump_model_tag = a.get("model_tag")
         if dump_model_tag is None or (isinstance(dump_model_tag, float) and pd.isna(dump_model_tag)):
             dump_model_tag = MODEL_TAG
+        dump_model_metric = a.get("model_metric")
+        if dump_model_metric is None or (isinstance(dump_model_metric, float)
+                                         and pd.isna(dump_model_metric)):
+            dump_model_metric = (
+                "wOBA" if str(dump_model_tag).startswith("woba+") else "xwOBA"
+            )
         out.append(dict(
             game_pk=gpk, game_date=str(a.get("game_date")), away=away_team, home=home_team,
             away_sp=a.get("pitcher"), home_sp=h.get("pitcher"), model_tag=str(dump_model_tag),
+            model_metric=str(dump_model_metric),
             B_home=B_home, B_away=B_away, P_awaySP=P_aSP, P_homeSP=P_hSP,
             d_lineup=d_lu, d_sp=d_sp,
             home_off_edge=home_off, away_off_edge=away_off,
@@ -445,8 +461,17 @@ def rows_from_dump(xw_df, pl_df):
 
 def ingest(led):
     n_new = n_ref = n_late = n_legacy = 0
-    for xw_path in sorted(glob.glob(os.path.join(DATA_DIR, "leans_*_xw.csv"))):
-        pl_path = xw_path.replace("_xw.csv", "_pl.csv")
+    if "model_metric" in led.columns:
+        led["model_metric"] = led["model_metric"].astype(object)
+    # Historical xwOBA dumps remain immutable. New wOBA dumps are ingested
+    # after them so a same-day pending xwOBA snapshot can be refreshed into the
+    # new wOBA lineage before first pitch; graded rows are never touched.
+    dump_paths = (
+        sorted(glob.glob(os.path.join(DATA_DIR, "leans_*_xw.csv")))
+        + sorted(glob.glob(os.path.join(DATA_DIR, "leans_*_woba.csv")))
+    )
+    for xw_path in dump_paths:
+        pl_path = re.sub(r"_(?:xw|woba)\.csv$", "_pl.csv", xw_path)
         xw = pd.read_csv(xw_path)
         pl = pd.read_csv(pl_path) if os.path.exists(pl_path) else None
         for row in rows_from_dump(xw, pl):
@@ -585,19 +610,19 @@ def report(led):
         say("no graded games yet.")
     else:
         say(f"LEAN LEDGER — {len(g)} graded games  [{' + '.join(RECORD_TAGS)}]")
-        say(f"xwOBA lean   full: {_rec(g['xw_full'])}   F5: {_rec(g['xw_f5'])}")
+        say(f"{MODEL_METRIC_LABEL} lean   full: {_rec(g['xw_full'])}   F5: {_rec(g['xw_f5'])}")
         ov = g[g["ops_valid"] == True]                                # noqa: E712
         if len(ov):
             say(f"platoon lean full: {_rec(ov['ops_full'])}   F5: {_rec(ov['ops_f5'])}   (reliable-only, n={len(ov)})")
-            say(f"xwOBA on same subset  full: {_rec(ov['xw_full'])}   F5: {_rec(ov['xw_f5'])}")
+            say(f"{MODEL_METRIC_LABEL} on same subset  full: {_rec(ov['xw_full'])}   F5: {_rec(ov['xw_f5'])}")
         if len(g) >= 9:
             g["_terc"] = pd.qcut(g["xw_delta"], 3, labels=["low", "mid", "hi"], duplicates="drop")
-            say("xwOBA F5 by |Δ| tercile:")
+            say(f"{MODEL_METRIC_LABEL} F5 by |Δ| tercile:")
             for lab, gg in g.groupby("_terc", observed=True):
                 say(f"  {lab:3}  {_rec(gg['xw_f5'])}   (Δ {gg['xw_delta'].min():.3f}–{gg['xw_delta'].max():.3f}, n={len(gg)})")
         dv = g[g["consensus"] == "DIVERGE"]
         if len(dv):
-            say(f"DIVERGE h2h (F5): xwOBA {int((dv['xw_f5']=='W').sum())} — "
+            say(f"DIVERGE h2h (F5): {MODEL_METRIC_LABEL} {int((dv['xw_f5']=='W').sum())} — "
                 f"platoon {int((dv['ops_f5']=='W').sum())}  (n={len(dv)})")
         f5d = g.dropna(subset=["f5_away", "f5_home"])
         dec = f5d[f5d["f5_home"] != f5d["f5_away"]]
@@ -621,9 +646,15 @@ def report(led):
     if families:
         say("model-family history (never pooled into the current-family fit):")
         for label, fam in families:
+            metrics = (fam.get("model_metric", pd.Series(dtype=object))
+                       .dropna().astype(str).unique().tolist())
+            metric = metrics[0] if len(metrics) == 1 else (
+                "wOBA" if all(str(t).startswith("woba+")
+                              for t in fam["model_tag"]) else "xwOBA"
+            )
             say(
                 f"  {label:7} n={len(fam):3}  "
-                f"xw full {_rec(fam['xw_full'])}  F5 {_rec(fam['xw_f5'])}"
+                f"{metric} full {_rec(fam['xw_full'])}  F5 {_rec(fam['xw_f5'])}"
             )
     txt = "\n".join(lines)
     print("=" * 60); print(txt); print("=" * 60)

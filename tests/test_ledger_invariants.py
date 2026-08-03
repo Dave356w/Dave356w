@@ -44,9 +44,9 @@ def _num(d, col):
 
 
 def _version(tag):
-    """Trailing integer of `xw+plat_consol_vN`, or None if it isn't that shape."""
-    m = re.fullmatch(r"xw\+plat_consol_v(\d+)", str(tag))
-    return int(m.group(1)) if m else None
+    """Trailing version for a recognised production lineage, else None."""
+    m = re.fullmatch(r"(xw|woba)\+plat_consol_v(\d+)", str(tag))
+    return int(m.group(2)) if m else None
 
 
 class LedgerShapeTest(unittest.TestCase):
