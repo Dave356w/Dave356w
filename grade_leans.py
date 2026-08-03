@@ -52,7 +52,7 @@ import numpy as np
 import pandas as pd
 import requests
 
-from market_backfill import MARKET_COLS, attach_market
+from market_backfill import MARKET_COLS, attach_market, metric_label
 
 DATA_DIR    = os.environ.get("DATA_DIR", "data")
 LEDGER_PATH = os.path.join(DATA_DIR, "mlb_lean_ledger.csv")
@@ -646,12 +646,7 @@ def report(led):
     if families:
         say("model-family history (never pooled into the current-family fit):")
         for label, fam in families:
-            metrics = (fam.get("model_metric", pd.Series(dtype=object))
-                       .dropna().astype(str).unique().tolist())
-            metric = metrics[0] if len(metrics) == 1 else (
-                "wOBA" if all(str(t).startswith("woba+")
-                              for t in fam["model_tag"]) else "xwOBA"
-            )
+            metric = metric_label(fam)
             say(
                 f"  {label:7} n={len(fam):3}  "
                 f"{metric} full {_rec(fam['xw_full'])}  F5 {_rec(fam['xw_f5'])}"

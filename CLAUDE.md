@@ -99,14 +99,26 @@ precedent — they are how the fix is known to look.
 
 - **Constants frozen from data.** `LEAN_STRENGTH_FALLBACK` was a literal copy of
   the pooled p33/p80 at the time it was written, and stayed there through two
-  model versions that changed the distribution underneath it. It has since been
-  re-derived for the current scale family, but it is still a literal and will go
-  stale again on the next scale family. If a constant was read off the ledger,
-  comment where it came from and what would invalidate it. Note the asymmetry
-  the comment there now spells out: a *scale-family* change invalidates it, but
-  mere pool growth does not — it is a prior, and re-deriving it from the family
-  it is shrunk against would make it the data. At n=99 the drift is 0.0023 on
-  each cutoff, inside the step size `LEAN_STRENGTH_PRIOR_N` was benchmarked for.
+  model versions that changed the distribution underneath it. It was re-derived
+  for the v9/v10 xwOBA family, and **the wOBA v1 bump has now made it stale
+  again** — a new `_SCALE_FAMILIES` entry is exactly the invalidation its own
+  comment names. It is deliberately not re-derived yet: the wOBA pool is n=6,
+  whose p33/p80 is noise, and freezing that would be this anti-pattern with a
+  fresher date on it. Shrinkage plus the slate top-up hold the line meanwhile
+  (at n=6 the cutoffs are 0.0150/0.0323, i.e. the prior). Recompute from the
+  wOBA family alone once it passes ~60 rows. If a constant was read off the
+  ledger, comment where it came from and what would invalidate it. Note the
+  asymmetry the comment there spells out: a *scale-family* change invalidates
+  it, but mere pool growth does not — it is a prior, and re-deriving it from the
+  family it is shrunk against would make it the data.
+
+  `HEAT_DOMAINS` is the same shape one level out and is now on notice too: its
+  saturation ranges were calibrated on the xwOBA spread, and the one slate built
+  under both metrics shows the starter-allowed rate widening (sd 0.0161 →
+  0.0215) while the lineup composite does not move (0.0089 both ways) — a
+  starter rate is one player's observed outcome, a lineup is nine shrunk ones
+  averaged. Recorded in a comment rather than patched: n=14 is one slate, not a
+  distribution. Display-only, so no `MODEL_TAG` implication either way.
 
 **Resolved — keep as precedent**
 
@@ -180,6 +192,22 @@ precedent — they are how the fix is known to look.
   rows exist today, so it was a claim waiting to go wrong rather than a live
   one. Now each outcome is counted from its own label. A count you derived by
   subtracting cannot carry a name you did not measure.
+
+  Third instance, and the sharpest: the wOBA v1 commit replaced the literal
+  `"xwOBA"` with `MODEL_RATE_LABEL` on the record strip, the grades headline and
+  the team page. All three render `_display_grades()` — *every* graded family
+  pooled — so the front page published **`wOBA full 217-164 (.570)`** over 381
+  games of which exactly zero were wOBA; the first wOBA row had not graded yet.
+  The same substitution broke the vs-market cell: `vs_market_summary()` keys its
+  bucket off the rows (`"xwOBA"`), the caller looked it up under
+  `MODEL_RATE_LABEL` with an `or "Model"` fallback that only fires on *mixed*
+  metrics, so both missed and `z +1.09 (+3.14u)` — "the primary metrics" —
+  silently vanished from two pages instead of raising. Fixed in `2d369c4`
+  by `market_backfill.metric_label()`: one derivation, read off `model_metric` with
+  the tag prefix as the legacy fallback, used by both the bucket and every
+  lookup so a mismatch is now unrepresentable. A build-time constant must never
+  name historical rows — the metric is a property of the rows, and the tag flips
+  a slate before the first row under it grades.
 - **Internal and public artifacts disagreeing.** `data/ledger_report.txt` once
   said the current family had no graded games while the site published a pooled
   record. Both now render from the same ledger through

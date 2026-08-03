@@ -257,8 +257,8 @@ The same v7 draft also removes two downstream discretization artifacts:
 
 Posted lineups are authoritative even when a call-up is absent from the season
 Savant leaderboard. The player remains in his posted batting-order slot and
-receives the active team's PA-weighted xwOBA as a transparent fallback
-(`xwOBA_team_backfill`); because that value is already a team aggregate, it is
+receives the active team's PA-weighted wOBA as a transparent fallback
+(`wOBA_team_backfill`); because that value is already a team aggregate, it is
 not run through player-level shrinkage again. Per-side backfill counts are
 carried from `lineup_resolution_audit.csv` into the lean dump and ledger audit
 columns. Other available player data, including StatsAPI bio and handedness

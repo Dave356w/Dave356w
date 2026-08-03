@@ -1,4 +1,5 @@
 import os
+import re
 import tempfile
 import unittest
 from unittest import mock
@@ -9,6 +10,7 @@ import pandas as pd
 import build_site
 import compare_v8_v9
 import grade_leans
+import market_backfill
 import schedule_gate
 
 
@@ -671,17 +673,17 @@ class PostedLineupBackfillTests(unittest.TestCase):
         self.assertAlmostEqual(batter_stat[999]["xwOBA"], expected)
         self.assertEqual(batter_stat[999]["PA"], 0)
         self.assertTrue(
-            batter_stat[999][build_site.XWOBA_TEAM_BACKFILL_COL]
+            batter_stat[999][build_site.MODEL_RATE_TEAM_BACKFILL_COL]
         )
 
     def test_team_backfill_bypasses_player_level_shrinkage(self):
         H = pd.DataFrame([
             dict(game_pk=1, faced_pitcher="SP", pitcher_side="away",
                  batting_side="home", xwOBA=.340, PA=0, BBE=0,
-                 batting_order=1, xwOBA_team_backfill=True),
+                 batting_order=1, wOBA_team_backfill=True),
             dict(game_pk=1, faced_pitcher="SP", pitcher_side="away",
                  batting_side="home", xwOBA=.300, PA=600, BBE=200,
-                 batting_order=2, xwOBA_team_backfill=False),
+                 batting_order=2, wOBA_team_backfill=False),
         ])
         prior, k = .317, 175.0
         out = build_site.aggregate_lineup(
@@ -1302,7 +1304,7 @@ class PlatoonXwobaAdjustmentTests(unittest.TestCase):
         H = pd.DataFrame([
             dict(game_pk=1, faced_pitcher="SP", pitcher_side="away",
                  batting_side="home", xwOBA=.340, PA=0, BBE=0, batting_order=1,
-                 xwOBA_team_backfill=True, bats="L", **{self.THR: "R"}),
+                 wOBA_team_backfill=True, bats="L", **{self.THR: "R"}),
         ])
         agg = build_site.aggregate_lineup(H, ["xwOBA"], weighted=True,
                                           shrink_prior=.317, shrink_k=175.0)
@@ -1535,6 +1537,108 @@ class ModelTagProvenanceTests(unittest.TestCase):
         self.assertIn("selections=pa,k_percent,bb_percent,woba,", custom_url)
         self.assertNotIn(",xwoba,", custom_url)
         self.assertEqual(cache_name, "custom_woba_v1_batter")
+
+    def test_pooled_record_is_named_for_its_rows_not_the_running_build(self):
+        """A public record labelled with MODEL_RATE_LABEL is a false claim.
+
+        The record strip, grades headline and team page all render
+        _display_grades -- every graded family pooled. On 2026-08-03 the tag
+        flipped to wOBA while all 381 graded rows were xwOBA, and those
+        surfaces published "wOBA full 217-164 (.570)" over zero wOBA games.
+        """
+        legacy = pd.DataFrame({"model_tag": ["xw+plat_consol_v9",
+                                             "xw+plat_consol_v10"]})
+        self.assertEqual(market_backfill.metric_label(legacy), "xwOBA")
+
+        # model_metric absent on every pre-wOBA row, so the tag must carry it.
+        legacy_nulls = legacy.assign(model_metric=[np.nan, None])
+        self.assertEqual(market_backfill.metric_label(legacy_nulls), "xwOBA")
+
+        woba = pd.DataFrame({"model_tag": ["woba+plat_consol_v1"] * 2,
+                             "model_metric": ["wOBA", "wOBA"]})
+        self.assertEqual(market_backfill.metric_label(woba), "wOBA")
+
+        # Mixed history must not claim either metric.
+        self.assertEqual(
+            market_backfill.metric_label(
+                pd.concat([legacy_nulls, woba], ignore_index=True)),
+            "Model",
+        )
+
+        # Filtered frames arrive with gaps in the index.
+        self.assertEqual(
+            market_backfill.metric_label(woba.set_axis([4, 17])), "wOBA")
+
+    def test_public_pages_do_not_name_a_metric_no_graded_row_used(self):
+        """End-to-end guard on the three surfaces that publish the record.
+
+        Ledger is all xwOBA, MODEL_RATE_LABEL is wOBA -- the exact 2026-08-03
+        state. No page may print "wOBA" over these rows.
+        """
+        ledger = pd.DataFrame([
+            dict(game_pk=1, game_date="2026-07-20", away="A", home="B",
+                 away_sp="P1", home_sp="P2", status="graded",
+                 model_tag="xw+plat_consol_v10", xw_lean="B", xw_delta=.01,
+                 xw_full="W", xw_f5="W", full_away=2, full_home=4,
+                 close_p_home=.6, close_home_ml=-140, close_away_ml=120,
+                 f5_away=1, f5_home=2, f5_close_p_home=np.nan,
+                 f5_close_home_ml=np.nan, f5_close_away_ml=np.nan,
+                 ops_valid=False, ops_lean=None, lock_status="pregame"),
+            dict(game_pk=2, game_date="2026-07-21", away="C", home="D",
+                 away_sp="P3", home_sp="P4", status="graded",
+                 model_tag="xw+plat_consol_v9", xw_lean="C", xw_delta=.02,
+                 xw_full="L", xw_f5="L", full_away=1, full_home=3,
+                 close_p_home=.6, close_home_ml=-140, close_away_ml=120,
+                 f5_away=0, f5_home=2, f5_close_p_home=np.nan,
+                 f5_close_home_ml=np.nan, f5_close_away_ml=np.nan,
+                 ops_valid=False, ops_lean=None, lock_status="pregame"),
+        ])
+        self.assertEqual(build_site.MODEL_RATE_LABEL, "wOBA")
+        with mock.patch.object(build_site, "load_ledger_df", return_value=ledger):
+            pages = {
+                "record strip": build_site.records_strip_html(),
+                "grades page": build_site.render_grades_html("test build"),
+                "team page": build_site.render_team_grades_html("test build"),
+            }
+        for name, page in pages.items():
+            self.assertIn("xwOBA", page, f"{name} lost its metric label")
+            # "wOBA" only ever as the tail of "xwOBA" -- a bare one is the bug.
+            self.assertIsNone(
+                re.search(r"(?<!x)wOBA", page),
+                f"{name} credits xwOBA rows to wOBA",
+            )
+        # The vs-market cell is looked up by that same label; a mismatch used
+        # to drop it silently rather than raise.
+        self.assertIn("vs mkt", pages["record strip"])
+        self.assertIn("vs mkt", pages["grades page"])
+
+    def test_vs_market_cell_key_matches_the_label_it_is_looked_up_by(self):
+        """The vs-market bucket and its lookup must share one derivation.
+
+        They did not: vs_market_summary keyed the bucket off the rows
+        ("xwOBA") while build_site looked it up under MODEL_RATE_LABEL
+        ("wOBA") with a "Model" fallback that only fires on mixed metrics.
+        Both missed, so the z / flat-ROI cell -- the primary metric -- silently
+        vanished from grades.html and the front strip instead of erroring.
+        """
+        d = pd.DataFrame({
+            "model_tag": ["xw+plat_consol_v10"] * 4,
+            "close_p_home": [.55, .48, .60, .42],
+            "close_home_ml": [-120, 105, -150, 115],
+            "close_away_ml": [100, -125, 130, -135],
+            "full_home": [5, 2, 6, 1], "full_away": [3, 4, 2, 3],
+            "f5_home": [3, 1, 4, 0], "f5_away": [1, 2, 1, 2],
+            "f5_close_p_home": [np.nan] * 4,
+            "f5_close_home_ml": [np.nan] * 4,
+            "f5_close_away_ml": [np.nan] * 4,
+            "xw_lean": ["HOU", "TOR", "HOU", "TOR"],
+            "home": ["HOU"] * 4, "away": ["TOR"] * 4,
+            "ops_valid": [False] * 4, "ops_lean": [None] * 4,
+        })
+        summary = market_backfill.vs_market_summary(d, verbose=False)
+        label = market_backfill.metric_label(d)
+        self.assertIn(label, summary)
+        self.assertIsNotNone(summary.get(label))
 
     def test_workflow_does_not_pin_model_tags(self):
         with open(self.WORKFLOW, encoding="utf-8") as fh:
