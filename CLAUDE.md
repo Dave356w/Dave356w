@@ -36,8 +36,7 @@ prediction math. Two separate tag families gate two different questions:
 
 These are different equivalence relations and they do disagree. The authority is
 `_RECORD_FAMILIES` / `_SCALE_FAMILIES` in `build_site.py` (records mirrored in
-`grade_leans.py`) — not this table, which is a reading aid. Current model is
-**v10**.
+`grade_leans.py`) — not this table, which is a reading aid.
 
 | tag | what changed | record family | scale family |
 |---|---|---|---|
@@ -206,13 +205,17 @@ receive closing lines (`run_market_update.py` invariant). Do not relax either.
 
 ```
 python validate_data_files.py     # CSV conflict markers — has failed twice in prod
-python -m pytest tests/ -q        # CI does NOT run these yet
+python -m pytest tests/ -q        # CI runs ONE of these files, not the suite
 ```
 
-CI has no test step and `requirements.txt` has no pytest. Until that is fixed,
-running the suite locally is the only gate. If you touch `build_site.py`,
-`grade_leans.py`, or `market_backfill.py`, run both commands and paste the
-output in the PR.
+`.github/workflows/bp-ablation-test.yml` runs `tests/test_bp_ablation.py` on
+every PR, installing pytest itself because `requirements.txt` still has none.
+That is the only automated gate: `test_integrity_fixes.py` and
+`test_ledger_invariants.py` — the two that actually cover the model — run
+nowhere but your machine. A green check on a PR therefore means one file
+passed, so do not read it as the suite passing. Run both commands locally and
+paste the output in the PR whenever you touch `build_site.py`,
+`grade_leans.py`, or `market_backfill.py`.
 
 `tests/test_ledger_invariants.py` runs against the committed ledger rather than
 constructed frames: phase algebra (`mx = q·mx_sp + (1−q)·mx_bp`, shares summing
