@@ -38,7 +38,7 @@ unusually bad against *this* pitch, over and above how good he is generally.
 A batter with no cell data therefore lands on a multiplier of exactly 1.0 and
 the arm abstains continuously -- there is no coverage threshold to trip.
 
-`MIX_SHRINK_K` is deliberately far above the build's `XWOBA_SHRINK_K = 100`:
+`MIX_SHRINK_K` is deliberately far above the build's `XWOBA_SHRINK_K_BAT = 100`:
 at K=100 the residual cell noise moves a game delta by ~0.013 xwOBA, about
 two thirds of the current-family median lean of 0.0195. See the probe for the
 noise budget behind the constant.

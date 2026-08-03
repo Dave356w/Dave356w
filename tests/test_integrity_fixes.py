@@ -756,9 +756,9 @@ class PitchingPlanTests(unittest.TestCase):
         with mock.patch.object(build_site, "pitcher_roster", return_value=[10, 11, 12]):
             out = build_site.bullpen_xwoba_aggregate(
                 1, 999, pitcher_stat, roles, prior=.317,
-                shrink_k=build_site.XWOBA_SHRINK_K,
+                shrink_k=build_site.XWOBA_SHRINK_K_PIT,
             )
-        k = build_site.XWOBA_SHRINK_K
+        k = build_site.XWOBA_SHRINK_K_PIT
         x10 = (200 * .280 + k * .317) / (200 + k)
         x11 = (100 * .340 + k * .317) / (100 + k)
         x12 = (50 * .370 + k * .317) / (50 + k)
@@ -1106,8 +1106,14 @@ class XwobaShrinkageTests(unittest.TestCase):
         s = float(build_site.shrink_xwoba([0.360], [150], prior, k).iloc[0])
         self.assertAlmostEqual(build_site._shrink_one(0.360, 150, prior, k), s, places=6)
 
-    def test_model_uses_fixed_100_for_batters_and_pitchers(self):
-        self.assertEqual(build_site.XWOBA_SHRINK_K, 100.0)
+    def test_model_uses_separate_fixed_k_per_population(self):
+        # v11: one K per population, not one K. The batter side keeps 100; the
+        # pitcher side is 300 because K = sigma_eps^2/sigma_talent^2 and the two
+        # populations share neither term (see the shrinkage block).
+        self.assertEqual(build_site.XWOBA_SHRINK_K_BAT, 100.0)
+        self.assertEqual(build_site.XWOBA_SHRINK_K_PIT, 300.0)
+        self.assertGreater(
+            build_site.XWOBA_SHRINK_K_PIT, build_site.XWOBA_SHRINK_K_BAT)
         with (
             mock.patch.object(
                 build_site, "segment_pitcher_blocks",
@@ -1124,11 +1130,11 @@ class XwobaShrinkageTests(unittest.TestCase):
 
         self.assertEqual(
             aggregate.call_args.kwargs["shrink_k"],
-            build_site.XWOBA_SHRINK_K,
+            build_site.XWOBA_SHRINK_K_BAT,
         )
         self.assertEqual(
             matchup.call_args.kwargs["shrink_k"],
-            build_site.XWOBA_SHRINK_K,
+            build_site.XWOBA_SHRINK_K_PIT,
         )
 
     def _lineup_H(self, rows):
@@ -1522,6 +1528,171 @@ class ModelTagProvenanceTests(unittest.TestCase):
                 f"{var} is pinned in build.yml; it overrides the module defaults "
                 "and silently drifts from them on the next version bump",
             )
+
+
+class PopulationShrinkagePriorTests(unittest.TestCase):
+    """v11: each population is regressed toward its own mean, not one global.
+
+    Pre-v11 the batter-board mean was the prior for hitters, starters and
+    relievers alike. Because the relief population sits ~19 points of xwOBA
+    below that mean and the starter population ~15 above it, thin-sample arms
+    on the two sides were pulled in opposite directions, each by ~K/n.
+    """
+
+    def _stat(self):
+        # xwOBA-allowed and BF for four pitchers: two pure starters, two pure
+        # relievers, with the relievers genuinely better, as the populations are.
+        return {
+            1: {"xwOBA": .340, "PA": 600},
+            2: {"xwOBA": .320, "PA": 500},
+            3: {"xwOBA": .300, "PA": 200},
+            4: {"xwOBA": .290, "PA": 180},
+        }
+
+    def _roles(self):
+        return {
+            1: {"start_share": 1.0}, 2: {"start_share": 1.0},
+            3: {"start_share": 0.0}, 4: {"start_share": 0.0},
+        }
+
+    def test_pools_separate_and_recombine_to_the_overall_mean(self):
+        p = build_site.league_pitcher_role_priors(self._stat(), self._roles())
+        self.assertAlmostEqual(p["sp"], (600 * .340 + 500 * .320) / 1100)
+        self.assertAlmostEqual(p["rp"], (200 * .300 + 180 * .290) / 380)
+        self.assertGreater(p["sp"], p["rp"])
+        # The identity that makes the split checkable: BF-weighting the two
+        # pool means back together must return the overall pitcher mean.
+        recombined = (p["sp"] * p["sp_bf"] + p["rp"] * p["rp_bf"]) / (p["sp_bf"] + p["rp_bf"])
+        self.assertAlmostEqual(recombined, p["overall"])
+
+    def test_swingman_splits_across_both_pools_without_a_threshold(self):
+        """A start share is a weight, so nobody sits on the wrong side of a cut."""
+        stat = {1: {"xwOBA": .340, "PA": 600}, 3: {"xwOBA": .300, "PA": 200},
+                9: {"xwOBA": .400, "PA": 100}}
+        roles = {1: {"start_share": 1.0}, 3: {"start_share": 0.0},
+                 9: {"start_share": 0.4}}
+        p = build_site.league_pitcher_role_priors(stat, roles)
+        self.assertAlmostEqual(p["sp"], (600 * .340 + 40 * .400) / 640)
+        self.assertAlmostEqual(p["rp"], (200 * .300 + 60 * .400) / 260)
+        # Nudging the share moves both pools continuously -- no step anywhere.
+        for lo, hi in ((0.39, 0.41), (0.0, 0.02), (0.98, 1.0)):
+            a = build_site.league_pitcher_role_priors(
+                stat, {**roles, 9: {"start_share": lo}})
+            b = build_site.league_pitcher_role_priors(
+                stat, {**roles, 9: {"start_share": hi}})
+            self.assertLess(abs(a["sp"] - b["sp"]), 1e-3)
+            self.assertLess(abs(a["rp"] - b["rp"]), 1e-3)
+
+    def test_per_pitcher_prior_is_his_own_role_mix(self):
+        priors = {"sp": .331, "rp": .297, "overall": .3163}
+        self.assertAlmostEqual(build_site.pitcher_shrink_prior(1.0, priors, .3163), .331)
+        self.assertAlmostEqual(build_site.pitcher_shrink_prior(0.0, priors, .3163), .297)
+        self.assertAlmostEqual(
+            build_site.pitcher_shrink_prior(0.5, priors, .3163), (.331 + .297) / 2)
+        # Unknown role -> the pitcher population, not the batter board.
+        self.assertAlmostEqual(build_site.pitcher_shrink_prior(None, priors, .999), .3163)
+        # No pitcher board at all -> the caller's fallback.
+        self.assertAlmostEqual(
+            build_site.pitcher_shrink_prior(None, {"sp": None, "rp": None, "overall": None}, .999),
+            .999)
+
+    def test_collapses_to_the_pre_v11_single_prior_when_pools_agree(self):
+        """The change must be a generalisation, not a different formula."""
+        priors = {"sp": .3163, "rp": .3163, "overall": .3163}
+        for share in (0.0, 0.25, 1.0, None):
+            self.assertAlmostEqual(
+                build_site.pitcher_shrink_prior(share, priors, .3163), .3163)
+
+    def test_reliever_is_not_dragged_toward_the_batter_mean(self):
+        """The concrete defect: a thin-sample reliever under the old prior."""
+        k, bf, obs = build_site.XWOBA_SHRINK_K_PIT, 120, .295
+        old = build_site._shrink_one(obs, bf, .3163, k)     # batter-board prior
+        new = build_site._shrink_one(obs, bf, .2972, k)     # relief population
+        self.assertGreater(old, new)
+        self.assertGreater(old - new, .010)
+        # ...and he is no longer pushed to the wrong side of his own population.
+        self.assertLess(new, .3163)
+
+    def test_bullpen_aggregate_uses_the_per_pitcher_prior(self):
+        pitcher_stat = {10: {"xwOBA": .300, "PA": 200}, 11: {"xwOBA": .310, "PA": 100},
+                        12: {"xwOBA": .290, "PA": 150}}
+        roles = {
+            10: {"appearances": 30, "start_share": 0.0, "avg_ip_per_appearance": 1.0,
+                 "batters_faced": 200},
+            11: {"appearances": 25, "start_share": 0.0, "avg_ip_per_appearance": 1.2,
+                 "batters_faced": 100},
+            12: {"appearances": 20, "start_share": 0.0, "avg_ip_per_appearance": 1.1,
+                 "batters_faced": 150},
+        }
+        k = build_site.XWOBA_SHRINK_K_PIT
+        with mock.patch.object(build_site, "pitcher_roster", return_value=[10, 11, 12]):
+            out = build_site.bullpen_xwoba_aggregate(
+                1, 999, pitcher_stat, roles, prior=.3163, shrink_k=k,
+                prior_by_pid={10: .2972, 11: .2972, 12: .2972},
+            )
+        x10 = (200 * .300 + k * .2972) / (200 + k)
+        x11 = (100 * .310 + k * .2972) / (100 + k)
+        x12 = (150 * .290 + k * .2972) / (150 + k)
+        self.assertAlmostEqual(
+            out["xwOBA"], (200 * x10 + 100 * x11 + 150 * x12) / 450)
+        # The whole pool sits below the batter-board prior it used to be
+        # dragged toward -- that is the bias this change removes.
+        self.assertLess(out["xwOBA"], .3163)
+
+    def test_starter_shrinks_toward_his_population_via_player_id(self):
+        P = pd.DataFrame([dict(
+            game_pk=1, Name="SP", game_date="2026-08-03", game_datetime_utc="",
+            matchup="A @ H", home_team="H", away_team="A", player_id=7,
+            xwOBA=.360, PA=500)])
+        agg = pd.DataFrame([dict(
+            game_pk=1, faced_pitcher="SP", pitcher_side="away", n_opp_hitters=9,
+            opp_xwOBA=.320, opp_xwOBA_neutral=.320, opp_xwOBA_vs_sp=.320,
+            platoon_delta_sp=0.0)])
+        k = build_site.XWOBA_SHRINK_K_PIT
+        out = build_site.build_matchup(
+            P, agg, ["xwOBA"], {"xwOBA": .3163}, shrink_prior=.3163, shrink_k=k,
+            shrink_prior_by_pid={7: .331})
+        self.assertAlmostEqual(
+            float(out.loc[0, "starter_xwOBA"]), (500 * .360 + k * .331) / (500 + k))
+
+    def test_shrink_xwoba_accepts_a_per_row_prior(self):
+        out = build_site.shrink_xwoba([.360, .300], [100, 100], [.331, .297], 300.0)
+        self.assertAlmostEqual(float(out.iloc[0]), (100 * .360 + 300 * .331) / 400)
+        self.assertAlmostEqual(float(out.iloc[1]), (100 * .300 + 300 * .297) / 400)
+
+    def test_row_with_no_prior_passes_through_unshrunk(self):
+        out = build_site.shrink_xwoba([.360, .300], [100, 100], [np.nan, .297], 300.0)
+        self.assertAlmostEqual(float(out.iloc[0]), .360)
+        self.assertAlmostEqual(float(out.iloc[1]), (100 * .300 + 300 * .297) / 400)
+
+    def test_denominator_is_not_split_by_phase(self):
+        """log5 keeps ONE league denominator; only the prior is per population.
+
+        Splitting `B*P/L` per phase would cancel the very reliever suppression
+        the model is supposed to predict, so this stays a single L -- the
+        ledger invariant that every phase edge recovers one baseline depends
+        on it.
+        """
+        phases = build_site.sequential_xwoba_phases(
+            b_neutral=.320, b_vs_sp=.325, starter=.340, bullpen=.295,
+            league=.3163, expected_sp_ip=5.5, sp_bf_per_ip=4.3, bp_bf_per_ip=4.3)
+        for phase in ("sp", "bp"):
+            self.assertAlmostEqual(
+                phases[f"mx_xwOBA_{phase}"] - phases[f"edge_xwOBA_{phase}"], .3163)
+
+
+class LeanStrengthScaleProvenanceTests(unittest.TestCase):
+    def test_fallback_matches_the_current_scale_family(self):
+        """The prior must belong to the units it is a prior for.
+
+        This is the constants-frozen-from-data anti-pattern: the cutoffs were
+        read off a delta distribution, and v11 narrows that distribution by
+        ~20%. Pinning the tie between the literal and the scale family means a
+        future scale bump that forgets to re-derive it fails here instead of
+        silently relabelling every game.
+        """
+        self.assertEqual(build_site.SCALE_TAGS, ("xw+plat_consol_v11",))
+        self.assertEqual(build_site.LEAN_STRENGTH_FALLBACK, (0.010, 0.027))
 
 
 if __name__ == "__main__":

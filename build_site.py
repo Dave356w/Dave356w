@@ -84,7 +84,7 @@ USE_TEAM_LOGOS = os.environ.get("USE_TEAM_LOGOS", "1") != "0"
 LOGO_CDN = "https://www.mlbstatic.com/team-logos"
 DATA_DIR = os.environ.get("DATA_DIR", "data")            # grading ledger home
 LEDGER_PATH = os.path.join(DATA_DIR, "mlb_lean_ledger.csv")
-MODEL_TAG = os.environ.get("MODEL_TAG", "xw+plat_consol_v10")  # keep in sync with grade_leans.py
+MODEL_TAG = os.environ.get("MODEL_TAG", "xw+plat_consol_v11")  # keep in sync with grade_leans.py
 _RECORD_FAMILIES = {
     # v3 changed only ledger locking/identity; its prediction math is v2.
     "xw+plat_consol_v3": ("xw+plat_consol_v2", "xw+plat_consol_v3"),
@@ -114,8 +114,18 @@ _RECORD_FAMILIES = {
     # therefore produced by models that agree on the decision and share a
     # win-loss line. Isolating v10 would reset the graded sample to zero for
     # the eighth time in a month and buy nothing.
+    #
+    # v11 shrinks each population toward its own mean (starters toward the
+    # starter population, relievers toward the relief population, hitters
+    # unchanged) and splits K into K_BAT=100 / K_PIT=300. Isolated for records:
+    # unlike v10 this is not a reweighting of the same terms, it changes the
+    # pitcher estimate itself. Replaying the 99 v9/v10 rows through the v11
+    # transform flips 4-6 leans depending on the assumed season BF, i.e. ~5% of
+    # decisions, against v10's 0 of 14 -- the two models disagree often enough
+    # that one win-loss line would be describing two different predictors.
     "xw+plat_consol_v9": ("xw+plat_consol_v9", "xw+plat_consol_v10"),
     "xw+plat_consol_v10": ("xw+plat_consol_v9", "xw+plat_consol_v10"),
+    "xw+plat_consol_v11": ("xw+plat_consol_v11",),
 }
 RECORD_TAGS = tuple(
     t.strip() for t in os.environ.get(
@@ -153,6 +163,12 @@ _SCALE_FAMILIES = {
                           "xw+plat_consol_v10"),
     "xw+plat_consol_v10": ("xw+plat_consol_v8", "xw+plat_consol_v9",
                            "xw+plat_consol_v10"),
+    # v11 is isolated for units too. K_pit 100 -> 300 plus a re-centred pitcher
+    # prior narrows the delta distribution by ~20% (replayed median |xw_net|
+    # 0.0186 -> 0.0147-0.0163 across the BF/prior grid). That is the same kind
+    # of move that made v5 and v7 their own scale families, and it is far
+    # outside the sub-1% term v8/v9 pool across.
+    "xw+plat_consol_v11": ("xw+plat_consol_v11",),
 }
 SCALE_TAGS = tuple(
     t.strip() for t in os.environ.get(
@@ -842,6 +858,123 @@ def load_team_pitcher_roles(team_id):
     return out
 
 
+_all_team_ids_cache = None
+
+
+def all_mlb_team_ids():
+    """Every MLB team id (StatsAPI), cached for the process.
+
+    Needed so the starter/relief shrinkage priors are league populations rather
+    than tonight's slate. A slate-dependent prior is the mistake
+    FULL_LEAGUE_PLATOON_BASELINES already fixed on the hitter side: the number a
+    player is regressed toward must not move because of who happens to play.
+    """
+    global _all_team_ids_cache
+    if _all_team_ids_cache is None:
+        data = _get_json("https://statsapi.mlb.com/api/v1/teams",
+                         {"sportId": SPORT_ID, "season": SEASON})
+        _all_team_ids_cache = sorted(
+            {int(t["id"]) for t in data.get("teams", []) if t.get("id") is not None}
+        )
+    return _all_team_ids_cache
+
+
+def league_pitcher_role_priors(pitcher_stat, role_stats_by_pid):
+    """BF-weighted league xwOBA-allowed for the starter and relief populations.
+
+    Every pitcher contributes his Savant BF to BOTH pools, split by his season
+    start share `s`: `s·BF` of starter work and `(1-s)·BF` of relief work. That
+    is deliberately a weight and not a classification -- there is no "is he a
+    starter" threshold to sit on the wrong side of, a swingman lands in both
+    pools in proportion, and the two pool means recombine to the overall mean by
+    construction, which is what makes `L = w_sp·L_sp + w_rp·L_rp` checkable.
+
+    Note this is a different question from `relief_pitcher_ids`, which uses a
+    role filter and an active roster. That answers "who pitches in relief for
+    this team tonight". This answers "what does the population of relief plate
+    appearances average", so it wants all of them and no roster.
+
+    Known residual: `start_share` is a share of APPEARANCES, not of BF, and a
+    swingman's starts are longer than his relief outings, so his starter work is
+    under-weighted here. StatsAPI's season line does not split BF by role, and
+    `bullpen_xwoba_aggregate` already uses the same appearance-share convention
+    as a BF proxy -- one convention, named, beats two estimators that disagree.
+    Pitchers who are purely one or the other (nearly all of them) are unaffected.
+
+    Returns a dict with `sp`/`rp`/`overall` means, their BF weights, and the
+    pitcher count; any pool with no weight comes back None.
+    """
+    sp_num = sp_den = rp_num = rp_den = 0.0
+    n_rated = n_roleless = 0
+    for pid, stat in (pitcher_stat or {}).items():
+        bf = _f((stat or {}).get("PA"))
+        xw = _f((stat or {}).get("xwOBA"))
+        if bf is None or bf <= 0 or xw is None:
+            continue
+        share = _f(((role_stats_by_pid or {}).get(int(pid)) or {}).get("start_share"))
+        if share is None:
+            # No role line (off the active roster, or StatsAPI missed him).
+            # There is no defensible way to weight his BF between the two
+            # pools, so he is counted in neither -- and `overall` is likewise
+            # the mean of the rated pitchers only. He is not lost: with no
+            # role mix to blend, `pitcher_shrink_prior` gives him `overall`.
+            n_roleless += 1
+            continue
+        share = float(np.clip(share, 0.0, 1.0))
+        n_rated += 1
+        sp_num += bf * share * xw
+        sp_den += bf * share
+        rp_num += bf * (1.0 - share) * xw
+        rp_den += bf * (1.0 - share)
+    sp = (sp_num / sp_den) if sp_den > 0 else None
+    rp = (rp_num / rp_den) if rp_den > 0 else None
+    den = sp_den + rp_den
+    overall = ((sp_num + rp_num) / den) if den > 0 else None
+    return {"sp": sp, "rp": rp, "overall": overall,
+            "sp_bf": sp_den, "rp_bf": rp_den,
+            "n_rated": n_rated, "n_roleless": n_roleless}
+
+
+def pitcher_shrink_prior(share, role_priors, fallback):
+    """The prior one pitcher is regressed toward, from his own role mix.
+
+    `prior = s·L_sp + (1-s)·L_rp` -- his observed rate is a BF-weighted mix of
+    starter and relief plate appearances, so the population mean it should be
+    regressed toward is the same mix. One expression, no tier: a pure starter is
+    the s=1 limit and a pure reliever the s=0 limit of it, and when the two pool
+    means are equal it collapses to exactly the pre-v11 single prior.
+
+    Falls back to the overall pitcher-population mean when the role mix is
+    unknown, and to `fallback` (the batter-board league mean) when the pitcher
+    board itself could not be pooled.
+    """
+    sp = (role_priors or {}).get("sp")
+    rp = (role_priors or {}).get("rp")
+    overall = (role_priors or {}).get("overall")
+    s = _f(share)
+    if s is not None and sp is not None and rp is not None:
+        s = float(np.clip(s, 0.0, 1.0))
+        return s * sp + (1.0 - s) * rp
+    if overall is not None:
+        return overall
+    return fallback
+
+
+def pitcher_shrink_priors(pitcher_stat, role_stats_by_pid, role_priors, fallback):
+    """{player_id: prior} for every pitcher on the leaderboard.
+
+    Built once so the starter path, the bullpen pool and the display percentile
+    reference all regress toward the same number for the same pitcher. A map
+    keyed by id, rather than a `start_share` column threaded through three
+    frames, is what keeps that a single source of truth.
+    """
+    out = {}
+    for pid in (pitcher_stat or {}):
+        share = ((role_stats_by_pid or {}).get(int(pid)) or {}).get("start_share")
+        out[int(pid)] = pitcher_shrink_prior(share, role_priors, fallback)
+    return out
+
+
 def relief_pitcher_ids(team_id, role_stats, probable_pid=None):
     """Active-roster pitchers whose season workload is primarily relief.
 
@@ -894,12 +1027,18 @@ def bf_per_ip(role):
 
 
 def bullpen_xwoba_aggregate(team_id, probable_pid, pitcher_stat, role_stats,
-                            prior, shrink_k):
+                            prior, shrink_k, prior_by_pid=None):
     """Role-filtered bullpen xwOBA with per-pitcher empirical-Bayes shrinkage.
 
     Talent is shrunk by each pitcher's Savant BF before aggregation. Usage
     weights approximate relief BF as season BF × (1 - start share), preventing
     a swingman's starter work from receiving full bullpen weight.
+
+    Each arm is regressed toward his OWN population prior (`prior_by_pid`, from
+    `pitcher_shrink_priors`), not toward the batter-board mean. Before v11 a
+    thin-sample reliever was pulled ~19 points of xwOBA toward a number drawn
+    from a population he is not in, which made shallow bullpens look worse than
+    they are. `prior` remains the fallback for an id the map does not cover.
     """
     weighted = []
     for pid in relief_pitcher_ids(team_id, role_stats, probable_pid):
@@ -918,7 +1057,8 @@ def bullpen_xwoba_aggregate(team_id, probable_pid, pitcher_stat, role_stats,
         usage_bf = (role_bf if role_bf is not None and role_bf > 0 else bf) * relief_share
         if usage_bf <= 0:
             continue
-        shrunk = _shrink_one(xw, bf, prior, shrink_k)
+        shrunk = _shrink_one(
+            xw, bf, (prior_by_pid or {}).get(int(pid), prior), shrink_k)
         if shrunk is not None and pd.notna(shrunk):
             weighted.append((pid, usage_bf, float(shrunk), bf_per_ip(role)))
     if len(weighted) < BULLPEN_MIN_PITCHERS:
@@ -987,7 +1127,8 @@ def build_pitching_plans(slate_df, recent_profiles, pitcher_stat,
     plans = {}
     classifications = opener_classifications(recent_profiles)
     prior = _f((league_baseline or {}).get("xwOBA"))
-    shrink_k = XWOBA_SHRINK_K
+    shrink_k = XWOBA_SHRINK_K_PIT
+    prior_by_pid = (league_baseline or {}).get("_xw_prior_pit") or {}
     roles_by_team = {}
     bullpen_by_pair = {}
 
@@ -1013,7 +1154,8 @@ def build_pitching_plans(slate_df, recent_profiles, pitcher_stat,
             if pair not in bullpen_by_pair:
                 try:
                     bullpen_by_pair[pair] = bullpen_xwoba_aggregate(
-                        tid, pid, pitcher_stat, roles_by_team.get(tid), prior, shrink_k
+                        tid, pid, pitcher_stat, roles_by_team.get(tid), prior,
+                        shrink_k, prior_by_pid=prior_by_pid,
                     )
                 except Exception as e:  # noqa: BLE001
                     log(f"  bullpen aggregate failed for team {tid}: {e!r}")
@@ -1252,15 +1394,50 @@ def fetch_all(slate_date):
     log("  league baselines:", {k: league_baseline.get(k) for k in
         ["xwOBA", "Hard Hit%", "K%", "EV", "GB%", "FB%", "Pull%"]})
 
-    # v8 uses one fixed pseudo-sample for every batter and pitcher xwOBA,
-    # including each member of the bullpen pool. Keeping the value fixed makes
-    # the shrinkage reproducible across builds and retains more of the observed
-    # distribution's tails than the larger v7 per-pool estimates.
+    # v11 shrinks each population toward its own mean with its own fixed
+    # pseudo-sample: hitters toward the batter board at K_BAT, every pitcher
+    # toward his own starter/relief role mix at K_PIT. Both K stay fixed so the
+    # transformation is reproducible across builds.
     if USE_XWOBA_SHRINK:
         prior = league_baseline.get("xwOBA")
-        k_bat = k_pit = XWOBA_SHRINK_K
-        log(f"  xwOBA shrink: prior={prior} | K_bat={k_bat:.0f} (fixed) "
-            f"| K_pit={k_pit:.0f} (fixed)")
+        k_bat, k_pit = XWOBA_SHRINK_K_BAT, XWOBA_SHRINK_K_PIT
+
+        # League-wide role lines, not slate-only: the population a pitcher is
+        # regressed toward must not move because of who is on tonight's card.
+        # Nearly every team is fetched by build_pitching_plans anyway and
+        # load_team_pitcher_roles is process-cached, so the marginal cost is the
+        # handful of clubs not playing.
+        role_lines = {}
+        try:
+            for tid in all_mlb_team_ids():
+                try:
+                    role_lines.update(load_team_pitcher_roles(tid) or {})
+                except Exception as e:  # noqa: BLE001
+                    log(f"  pitcher roles unavailable for team {tid}: {e!r}")
+        except Exception as e:  # noqa: BLE001
+            log(f"  team list unavailable ({e!r}) -> single-population pitcher prior")
+        role_priors = league_pitcher_role_priors(pitcher_stat, role_lines)
+        prior_pit = pitcher_shrink_priors(pitcher_stat, role_lines, role_priors, prior)
+        league_baseline["_xw_role_priors"] = role_priors
+        league_baseline["_xw_prior_pit"] = prior_pit
+
+        _sp, _rp, _ov = role_priors["sp"], role_priors["rp"], role_priors["overall"]
+        _fmt = lambda v: "n/a" if v is None else f"{v:.4f}"  # noqa: E731
+        log(f"  xwOBA shrink: K_bat={k_bat:.0f} K_pit={k_pit:.0f} (both fixed)")
+        log(f"    priors: bat={_fmt(prior)} | SP={_fmt(_sp)} | RP={_fmt(_rp)} "
+            f"| pit overall={_fmt(_ov)}  "
+            f"(rated {role_priors['n_rated']}, no role line {role_priors['n_roleless']})")
+        # Two population sanity checks, logged rather than gated -- a build must
+        # not fail on a leaderboard quirk, but a silent drift here would move
+        # every lean. (1) The pitcher board and the batter board measure the
+        # same plate appearances, so their means should agree; a gap is a
+        # leaderboard-coverage difference, not a real one. (2) SP minus RP is
+        # the effect this whole change exists to stop mis-assigning: implied
+        # ~34 points wide (.331 vs .297) on the v9/v10 rows.
+        if _ov is not None and prior is not None and pd.notna(prior):
+            log(f"    pitcher board vs batter board: {_ov - float(prior):+.4f}")
+        if _sp is not None and _rp is not None:
+            log(f"    SP - RP population gap: {_sp - _rp:+.4f}")
 
         # Display-only percentile reference distributions (qualified regulars),
         # stashed on league_baseline so the render layer can rank a player's
@@ -1271,7 +1448,8 @@ def fetch_all(slate_date):
         qual_bat = PCTILE_QUAL_BAT * g if g else None
         qual_pit = PCTILE_QUAL_PIT * g if g else None
         ref_bat, qb = build_pctile_ref(batter_cust, prior, k_bat, qual_bat)
-        ref_pit, qp = build_pctile_ref(pitcher_cust, prior, k_pit, qual_pit)
+        ref_pit, qp = build_pctile_ref(pitcher_cust, prior, k_pit, qual_pit,
+                                       prior_by_pid=prior_pit)
         league_baseline["_pctile_ref_bat"] = ref_bat
         league_baseline["_pctile_ref_pit"] = ref_pit
         # K-BB% reference (pitchers), raw: K-BB stabilizes fast and the model
@@ -1428,21 +1606,53 @@ WEIGHT_COL = "BBE"
 USE_WEIGHTED = True
 ADD_STATS = {"EV", "LA°"}
 
-# --- xwOBA empirical-Bayes shrinkage (v5+, fixed K in v8) ------------------
-# Season xwOBA (each hitter) and xwOBA-allowed (the starter) are regressed
-# toward the league xwOBA baseline by sample size before they drive the lean:
+# --- xwOBA empirical-Bayes shrinkage (v5+; per-population in v11) -----------
+# Season xwOBA (each hitter) and xwOBA-allowed (each pitcher) are regressed
+# toward a league prior by sample size before they drive the lean:
 #     x* = (n*x + K*prior) / (n + K)
-# so a small-sample bat or a starter with few batters faced is pulled toward
-# league-average rather than taken at face value. Both sides share one shrinkage
-# target (the league xwOBA baseline). v8 uses K=100 for both batters and
-# pitchers instead of estimating separate values from each day's leaderboards.
-# That preserves more of the observed deviations from league average and makes
-# the transformation stable and directly reproducible. Shrinkage touches only
-# xwOBA (the lean stat); the other columns and raw per-hitter card values are
-# untouched.
+# so a small-sample bat or a pitcher with few batters faced is pulled toward the
+# average rather than taken at face value. Shrinkage touches only xwOBA (the
+# lean stat); the other columns and raw per-hitter card values are untouched.
+#
+# v11 fixes what v5-v10 got wrong: WHICH average. Those versions shrank hitters,
+# starters and relievers alike toward the single batter-board mean (~.3163) and
+# used one K for all three. Both are wrong per population, and measurably so.
+# Measured over the 99 v9/v10 ledger rows (198 sides):
+#
+#   * the reliever population sits ~19 points BELOW the batter mean (the shrunk
+#     bullpen pools average .3040; de-shrunk at 120-260 BF that is .294-.299),
+#     while `L = q·L_sp + (1-q)·L_rp` with the model's own q̄=.560 puts the
+#     starter population ~15 points ABOVE it, near .331. One prior therefore
+#     regressed thin-sample starters toward better-than-average-starter and
+#     thin-sample relievers toward worse-than-average-reliever -- opposite
+#     biases, each scaling as 1/n, and so NOT cancelling between two sides whose
+#     bullpen depth or expected starter workload differ.
+#   * the symptom in the ledger: the PA-weighted staff rate q·P_sp + (1-q)·P_bp
+#     averaged .3096 against a league mean of .3163, with 69% of slate sides
+#     below it. Every staff on the slate cannot be better than league average;
+#     somebody throws the other innings.
+#
+# So the prior is now the mean of the population a pitcher is actually drawn
+# from -- see `league_pitcher_role_priors`. The DENOMINATOR of `B*P/L` is
+# deliberately NOT split: `B*P/L` is log5, P is already measured against
+# league-average batters, and a reliever's low P *is* the real suppression the
+# model should predict. Splitting the denominator per phase would cancel exactly
+# the effect it is supposed to capture, so every phase edge still comes off one
+# league baseline (see tests/test_ledger_invariants.py).
+#
+# K is now per population too. K = sigma_eps^2 / sigma_talent^2, and the two
+# populations do not share either term. Estimated off the observed spread of
+# shrunk slate starters (sd .0246 over 198 sides, de-shrunk at 350-650 BF), the
+# pitcher side implies K_pit of 412-882 for a per-PA xwOBA noise sd of .45-.50
+# -- i.e. every plausible estimate is far above the old 100. K_PIT is set to 300
+# rather than to the point estimate: it is the conservative end of that range,
+# it keeps the change to one direction, and the estimate leans on an assumed
+# sigma_eps that the leaderboards would have to confirm. Revisit it against a
+# measured per-PA noise sd, not against a record at n<100.
 USE_XWOBA_SHRINK = True
 XWOBA_SHRINK_COL = "xwOBA"
-XWOBA_SHRINK_K = 100.0
+XWOBA_SHRINK_K_BAT = 100.0
+XWOBA_SHRINK_K_PIT = 300.0
 
 # Pitch-mix shadow arm (pitch_arsenal.py). OFF by default and inert when on:
 # it writes shadow columns for forward testing and never moves a lean, so no
@@ -1604,12 +1814,27 @@ def shrink_xwoba(x, n, prior, k):
     Series in / positionally-reindexed Series out (aligns with wmean's reset
     index). A missing rate or n<=0 collapses to the prior. Pass-through when
     shrinkage is disabled or k/prior are unusable.
+
+    `prior` may be a scalar (one population, e.g. the hitters) or a per-row
+    sequence (each row regressed toward its own population, e.g. the pitcher
+    board under v11 role priors). A row whose prior is missing passes through
+    unshrunk rather than collapsing to something arbitrary.
     """
     xs = pd.to_numeric(pd.Series(x).reset_index(drop=True), errors="coerce")
-    if not USE_XWOBA_SHRINK or k is None or not np.isfinite(k) or prior is None or not np.isfinite(prior):
+    if not USE_XWOBA_SHRINK or k is None or not np.isfinite(k) or prior is None:
         return xs
+    if np.ndim(prior) == 0:
+        if not np.isfinite(prior):
+            return xs
+        ps = pd.Series(float(prior), index=xs.index)
+    else:
+        ps = pd.to_numeric(pd.Series(prior).reset_index(drop=True), errors="coerce")
+        ps = ps.reindex(xs.index)
+        if not ps.notna().any():
+            return xs
     ns = pd.to_numeric(pd.Series(n).reset_index(drop=True), errors="coerce").fillna(0.0).clip(lower=0.0)
-    return (ns * xs.fillna(prior) + k * prior) / (ns + k)
+    out = (ns * xs.where(xs.notna(), ps) + k * ps) / (ns + k)
+    return out.where(ps.notna(), xs)
 
 
 def _shrink_one(x, n, prior, k):
@@ -1650,24 +1875,40 @@ def _est_team_games(pa_series):
     return g if np.isfinite(g) and g > 0 else None
 
 
-def build_pctile_ref(cust, prior, k, qual_pa):
+def build_pctile_ref(cust, prior, k, qual_pa, prior_by_pid=None):
     """Sorted array of shrunk xwOBA for qualified regulars in a custom
     leaderboard. `qual_pa` is an absolute PA/BF threshold (caller derives it
     from team-games so batters and pitchers share one games estimate). Returns
     (sorted_array | None, qual_pa | None); falls back to the whole (min=1) pool
-    if qualifying leaves too few for a stable scale."""
+    if qualifying leaves too few for a stable scale.
+
+    `prior_by_pid` supplies the v11 per-population priors for the pitcher board.
+    The reference has to be shrunk exactly the way the value ranked against it
+    was, or the percentile compares two different transformations of the same
+    stat -- a starter regressed toward the starter mean, ranked inside a pool
+    regressed toward the batter mean, would read high for the wrong reason."""
     cols = getattr(cust, "columns", [])
     if cust is None or "xwoba" not in cols or "pa" not in cols:
         return None, None
     xw = pd.to_numeric(cust["xwoba"], errors="coerce")
     pa = pd.to_numeric(cust["pa"], errors="coerce")
+    priors = prior
+    if prior_by_pid and "player_id" in cols:
+        pid = pd.to_numeric(cust["player_id"], errors="coerce")
+        priors = pd.to_numeric(
+            pid.map(lambda p: prior_by_pid.get(int(p)) if pd.notna(p) else None),
+            errors="coerce",
+        )
+        if prior is not None and np.ndim(prior) == 0 and np.isfinite(prior):
+            priors = priors.fillna(float(prior))
     base = xw.notna() & pa.notna() & (pa > 0)
     m = (base & (pa >= qual_pa)) if qual_pa else base
     if int(m.sum()) < PCTILE_MIN_POOL:      # qualifier too strict this early -> pool everyone
         m, qual_pa = base, None
     if int(m.sum()) < PCTILE_MIN_POOL:
         return None, None
-    arr = np.sort(pd.to_numeric(shrink_xwoba(xw[m], pa[m], prior, k), errors="coerce")
+    p_masked = priors[m] if isinstance(priors, pd.Series) else priors
+    arr = np.sort(pd.to_numeric(shrink_xwoba(xw[m], pa[m], p_masked, k), errors="coerce")
                   .dropna().to_numpy())
     return (arr if arr.size else None), qual_pa
 
@@ -1816,7 +2057,8 @@ def aggregate_lineup(H, rate_cols, weighted=True, shrink_prior=None, shrink_k=No
     return pd.DataFrame(out)
 
 
-def build_matchup(P, agg, rate_cols, league_baseline, shrink_prior=None, shrink_k=None):
+def build_matchup(P, agg, rate_cols, league_baseline, shrink_prior=None, shrink_k=None,
+                  shrink_prior_by_pid=None):
     if P.empty or agg.empty:
         return pd.DataFrame()
     Pk = P.set_index(["game_pk", "Name"])
@@ -1836,12 +2078,18 @@ def build_matchup(P, agg, rate_cols, league_baseline, shrink_prior=None, shrink_
                "opp_team": opp_team, "n_opp": int(a["n_opp_hitters"])}
         for c in rate_cols:
             pv = pd.to_numeric(pr.get(c), errors="coerce")
-            # Regress the starter's xwOBA-allowed toward the league prior by
-            # batters faced (PA), so a short-sample starter isn't taken at face
-            # value. This shrunk value drives the lean and the SP card display.
+            # Regress the starter's xwOBA-allowed toward his own population
+            # prior by batters faced (PA), so a short-sample starter isn't taken
+            # at face value. This shrunk value drives the lean and the SP card
+            # display. `shrink_prior_by_pid` carries the v11 role-mix priors;
+            # `shrink_prior` is the fallback for an uncovered id.
             if c == XWOBA_SHRINK_COL and shrink_prior is not None:
+                _pid = pd.to_numeric(pr.get("player_id"), errors="coerce")
+                _prior = shrink_prior
+                if shrink_prior_by_pid and pd.notna(_pid):
+                    _prior = shrink_prior_by_pid.get(int(_pid), shrink_prior)
                 pv = _shrink_one(pv, pd.to_numeric(pr.get("PA"), errors="coerce"),
-                                 shrink_prior, shrink_k)
+                                 _prior, shrink_k)
             ov = a.get(f"opp_{c}")
             if c == XWOBA_SHRINK_COL:
                 neutral = a.get("opp_xwOBA_neutral")
@@ -1869,12 +2117,18 @@ def build_matchup(P, agg, rate_cols, league_baseline, shrink_prior=None, shrink_
 
 
 def build_xwoba_matchup(pitchers_df, league_baseline):
+    # Two populations, two priors, two K. Hitters are regressed toward the
+    # batter-board mean at K_BAT; the starter toward his own starter/relief role
+    # mix at K_PIT. The denominator of B*P/L stays the single league baseline --
+    # see the shrinkage block for why splitting it would be wrong.
     prior = league_baseline.get(XWOBA_SHRINK_COL) if USE_XWOBA_SHRINK else None
+    prior_by_pid = league_baseline.get("_xw_prior_pit") if USE_XWOBA_SHRINK else None
     pitcher_rows_df, opp_hitters_df = segment_pitcher_blocks(pitchers_df, STATCAST_RATE_COLS)
     opp_lineup_agg_df = aggregate_lineup(opp_hitters_df, STATCAST_RATE_COLS, weighted=USE_WEIGHTED,
-                                         shrink_prior=prior, shrink_k=XWOBA_SHRINK_K)
+                                         shrink_prior=prior, shrink_k=XWOBA_SHRINK_K_BAT)
     matchup_df = build_matchup(pitcher_rows_df, opp_lineup_agg_df, STATCAST_RATE_COLS, league_baseline,
-                               shrink_prior=prior, shrink_k=XWOBA_SHRINK_K)
+                               shrink_prior=prior, shrink_k=XWOBA_SHRINK_K_PIT,
+                               shrink_prior_by_pid=prior_by_pid)
     return matchup_df, pitcher_rows_df, opp_hitters_df
 
 
@@ -3294,7 +3548,7 @@ def _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
     # returns None and the bars fall back to em-dashes.
     _lb0 = league_baseline or {}
     _prior = _f(_lb0.get("xwOBA"))
-    _k_bat = XWOBA_SHRINK_K
+    _k_bat = XWOBA_SHRINK_K_BAT
     _ref_bat = _lb0.get("_pctile_ref_bat")
     _ref_pit = _lb0.get("_pctile_ref_pit")
     _ref_kbb = _lb0.get("_pctile_ref_kbb")
@@ -4343,12 +4597,29 @@ def market_context_records():
 # does not remove it.
 #
 # Pool growth is NOT an invalidation: this is a prior, and re-deriving it from
-# the same family it is shrunk against would make it the data. Measured
-# 2026-08-02 at n=99 the family's own p33/p80 is 0.0127 / 0.0343, so the prior
-# is off by ~0.0023 on each and the shrunk cutoffs land at 0.0139 / 0.0331 --
-# within the 0.00218 worst-case single-row step K=100 was chosen for. Leave it
-# until the scale family changes.
-LEAN_STRENGTH_FALLBACK = (0.015, 0.032)   # slight < ~p33 <= clear < ~p80 <= strong
+# the same family it is shrunk against would make it the data.
+#
+# RE-DERIVED FOR v11, and the derivation is weaker than the one it replaces --
+# read this before trusting the numbers. v11's per-population priors and
+# K_pit=300 narrow the delta distribution by ~20%, which invalidated the v9/v10
+# literal (0.015/0.032) exactly as the paragraph above says a scale-family
+# change does. But v11 has no graded rows to measure, and the historical Savant
+# leaderboard state needed to rebuild past slates under v11 is not recoverable
+# (see MATCHUP_SITE.md on no-lookahead), so these cutoffs come from REPLAYING
+# the 99 v9/v10 ledger rows through the v11 transform algebraically: each
+# pitcher term is de-shrunk from K=100 toward the old prior and re-shrunk at
+# K=300 toward its population prior, which is exact given the pitcher's BF.
+# Season BF and the two population means are not in the ledger, so the replay
+# was swept over a 3x3 grid (starter BF 350-650, reliever BF 120-260, SP/RP
+# priors .3296-.3340 / .2937-.2993). Across all nine cells p33 landed in
+# 0.0090-0.0106 and p80 in 0.0255-0.0277; the means, rounded, are below.
+#
+# So: a measured prior for a distribution nobody has observed yet. Replace it
+# with the real p33/p80 once the v11 family has a meaningful pool -- earlier
+# than you would for a normally-derived prior, because grid-mean-of-a-replay is
+# a weaker provenance than "read off the ledger". LEAN_STRENGTH_PRIOR_N=100
+# bounds the damage in the meantime; it does not remove it.
+LEAN_STRENGTH_FALLBACK = (0.010, 0.027)   # slight < ~p33 <= clear < ~p80 <= strong
 
 # Pseudo-count for shrinking the observed p33/p80 toward LEAN_STRENGTH_FALLBACK.
 # This replaced a hard `pool >= 30` gate that switched between frozen and
@@ -4373,7 +4644,7 @@ LEAN_STRENGTH_FALLBACK = (0.015, 0.032)   # slight < ~p33 <= clear < ~p80 <= str
 # by 0.0037. K=30 -- the old gate reinterpreted as a pseudo-count, the obvious
 # first guess -- was measured *worse than the gate* on label stability.
 #
-# NOT XWOBA_SHRINK_K. Same numeral, unrelated quantity: that one is a
+# NOT XWOBA_SHRINK_K_BAT. Same numeral, unrelated quantity: that one is a
 # pseudo-sample of plate appearances for shrinking a rate, this one is a
 # pseudo-sample of games for shrinking a quantile. Do not sync them.
 LEAN_STRENGTH_PRIOR_N = 100

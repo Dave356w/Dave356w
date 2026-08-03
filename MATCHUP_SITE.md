@@ -38,11 +38,13 @@ from the active-roster top-PA pool (`posted` / `partial_filled` / `projected`);
 a posted hitter absent from the season leaderboard keeps his slot and receives
 the team's PA-weighted xwOBA (`xwOBA_team_backfill`).
 
-**2. Shrinkage.** Every hitter's season xwOBA is regressed toward the league
-baseline by his PA with a fixed pseudo-sample, `x* = (n·x + 100·prior)/(n+100)`
-(`XWOBA_SHRINK_K = 100`). A deviation keeps `n/(n+100)` of its raw size: 50% at
-100 PA, 75% at 300, ~86% at 600. A team-backfilled hitter is already an
-aggregate and is **not** shrunk again.
+**2. Shrinkage.** Every hitter's season xwOBA is regressed toward the **batter**
+league baseline by his PA with a fixed pseudo-sample,
+`x* = (n·x + 100·prior)/(n+100)` (`XWOBA_SHRINK_K_BAT = 100`). A deviation keeps
+`n/(n+100)` of its raw size: 50% at 100 PA, 75% at 300, ~86% at 600. A
+team-backfilled hitter is already an aggregate and is **not** shrunk again.
+Pitchers use a different prior and a different `K` — see *Per-population
+shrinkage (v11)*.
 
 **3. Two lineup composites**, both weighted by expected PA per batting-order
 slot (`LINEUP_SLOT_PA`, 4.61 leadoff → 3.76 for the 9-hole):
@@ -277,6 +279,9 @@ the player-distribution tails than v7's typically larger separate constants.
 
 This changes both prediction math and `|xw_net|` units, so v8 starts new
 `RECORD_TAGS` and `SCALE_TAGS` families without rewriting historical rows.
+
+(v8's single `K` and single prior are what v11 replaces; the formula is
+unchanged, only *which* prior and *which* `K` each population gets.)
 
 ### Sequential starter/bullpen matchup (v9)
 
@@ -659,6 +664,53 @@ Every CI run, `grade_leans.py`:
   terciles, DIVERGE head-to-head, and — once 120 graded F5 decisions
   accumulate — a pitching-vs-lineup logit weight fit), followed by immutable
   record lines for every historical model family.
+
+### Per-population shrinkage (v11)
+
+Model version `xw+plat_consol_v11` keeps the v9/v10 phase construction and
+changes only the estimator underneath it. v5-v10 regressed hitters, starters
+and relievers alike toward one number — the PA-weighted batter-board mean —
+with one `K`. Neither is right per population:
+
+- **Prior.** Measured over the 99 v9/v10 ledger rows, the relief population
+  sits ~19 points of xwOBA *below* the batter mean, and `L = q·L_sp + (1−q)·L_rp`
+  at the model's own q̄ = .560 puts the starter population ~15 points *above*
+  it. One prior therefore regressed a thin-sample starter toward
+  better-than-average-starter and a thin-sample reliever toward
+  worse-than-average-reliever — opposite biases, each scaling as `K/n`, which
+  do not cancel between two sides of unequal bullpen depth or starter workload.
+  The symptom: the PA-weighted staff rate `q·P_SP + (1−q)·P_BP` averaged .3096
+  against a league mean of .3163, with 69% of slate sides below it. Every staff
+  on a slate cannot be better than league average.
+
+  v11 pools the Savant pitcher board into starter and relief populations,
+  weighting each pitcher's BF by his season start share so a swingman lands in
+  both in proportion and there is no role threshold to sit on
+  (`league_pitcher_role_priors`). Each pitcher is then regressed toward his own
+  role mix, `prior = s·L_sp + (1−s)·L_rp` (`pitcher_shrink_prior`) — one
+  expression whose `s=1` and `s=0` limits are the two pure cases, and which
+  collapses to the pre-v11 single prior when the pools agree. Role lines are
+  fetched for all 30 clubs, not the slate's, for the same reason
+  `FULL_LEAGUE_PLATOON_BASELINES` exists.
+
+- **K.** `K = σ²_ε/σ²_talent`, and the populations share neither term.
+  Estimated off the observed spread of shrunk slate starters (sd .0246 over 198
+  sides), the pitcher side implies `K_pit` of 412-882 for a per-PA xwOBA noise
+  sd of .45-.50 — every plausible estimate far above 100. v11 sets
+  `XWOBA_SHRINK_K_BAT = 100`, `XWOBA_SHRINK_K_PIT = 300`: the conservative end
+  of that range, since the estimate leans on an assumed σ_ε.
+
+The **denominator is deliberately not split.** `B·P/L` is log5: `P` is already
+measured against league-average batters, and a reliever's low `P` *is* the
+suppression the model should predict. A per-phase denominator would cancel
+exactly that effect, so every phase edge still comes off one league baseline
+(`tests/test_ledger_invariants.py`).
+
+Replaying the 99 v9/v10 rows through the v11 transform flips 4-6 leans (~5% of
+decisions) and narrows median `|xw_net|` from .0186 to .0147-.0163, so v11
+starts new `RECORD_TAGS` **and** `SCALE_TAGS` families. `LEAN_STRENGTH_FALLBACK`
+was re-derived from that replay and should be replaced with measured p33/p80
+once the family has a real pool.
 
 The ledger persists by being committed: the workflow's `Commit ledger` step
 pushes `data/` back to `main` on each run (the `contents: write` permission).

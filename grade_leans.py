@@ -57,7 +57,7 @@ from market_backfill import MARKET_COLS, attach_market
 DATA_DIR    = os.environ.get("DATA_DIR", "data")
 LEDGER_PATH = os.path.join(DATA_DIR, "mlb_lean_ledger.csv")
 REPORT_PATH = os.path.join(DATA_DIR, "ledger_report.txt")
-MODEL_TAG   = os.environ.get("MODEL_TAG", "xw+plat_consol_v10")
+MODEL_TAG   = os.environ.get("MODEL_TAG", "xw+plat_consol_v11")
 _RECORD_FAMILIES = {
     # v3 changed only ledger locking/identity; its prediction math is v2.
     "xw+plat_consol_v3": ("xw+plat_consol_v2", "xw+plat_consol_v3"),
@@ -79,8 +79,14 @@ _RECORD_FAMILIES = {
     # but a BF/IP-ratio sweep over 0.95-1.10 flips 0 of 12 leans and shifts
     # xw_net by 1.6-3.4% of its median magnitude: v9 and v10 decisions agree,
     # so they share one win-loss line rather than resetting the sample again.
+    # v11 regresses each population toward its own mean (starter, relief and
+    # hitter pools no longer share one prior) and splits the shrinkage
+    # pseudo-sample into K_BAT=100 / K_PIT=300. Replaying the v9/v10 rows
+    # through it flips ~5% of leans, so it is isolated: unlike v10 the two
+    # models disagree on decisions and cannot share a win-loss line.
     "xw+plat_consol_v9": ("xw+plat_consol_v9", "xw+plat_consol_v10"),
     "xw+plat_consol_v10": ("xw+plat_consol_v9", "xw+plat_consol_v10"),
+    "xw+plat_consol_v11": ("xw+plat_consol_v11",),
 }
 RECORD_TAGS = tuple(
     t.strip() for t in os.environ.get(
@@ -95,6 +101,7 @@ MODEL_FAMILY_TAGS = (
     ("v7", ("xw+plat_consol_v7",)),
     ("v8", ("xw+plat_consol_v8",)),
     ("v9/v10", ("xw+plat_consol_v9", "xw+plat_consol_v10")),
+    ("v11", ("xw+plat_consol_v11",)),
 )
 N_FIT_MIN   = 120
 _FINAL  = {"Final", "Game Over", "Completed Early"}

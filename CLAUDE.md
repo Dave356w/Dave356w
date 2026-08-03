@@ -50,6 +50,13 @@ These are different equivalence relations and they do disagree. The authority is
 | v8 | fixed `K=100` shrinkage, widening the delta distribution | 8 | 8+9+10 |
 | v9 | starter/bullpen phases split; handedness applies to starter innings only | 9+10 | 8+9+10 |
 | v10 | phases weighted by PA share (measured BF/IP) not innings share | 9+10 | 8+9+10 |
+| v11 | per-population shrinkage: each pitcher regressed toward his own starter/relief role mix, `K` split into `K_BAT=100` / `K_PIT=300` | 11 | 11 |
+
+Current model is **v11**, and it is the counter-example to v10: a bump that
+does isolate on both questions. Replaying the 99 v9/v10 rows through the v11
+transform flips ~5% of leans (v10 flipped 0 of 14), so the win-loss line
+resets; and it narrows median `|xw_net|` from .0186 to .0147-.0163, so the
+units reset too. Argue the bump either way — but argue it from a replay.
 
 Two entries earn their keep as precedent. **v6 shares v5's units but not its
 record line** — a new prediction family can inherit a scale. **v10 shares both
@@ -92,14 +99,22 @@ precedent — they are how the fix is known to look.
 
 - **Constants frozen from data.** `LEAN_STRENGTH_FALLBACK` was a literal copy of
   the pooled p33/p80 at the time it was written, and stayed there through two
-  model versions that changed the distribution underneath it. It has since been
-  re-derived for the current scale family, but it is still a literal and will go
-  stale again on the next scale family. If a constant was read off the ledger,
-  comment where it came from and what would invalidate it. Note the asymmetry
-  the comment there now spells out: a *scale-family* change invalidates it, but
-  mere pool growth does not — it is a prior, and re-deriving it from the family
-  it is shrunk against would make it the data. At n=99 the drift is 0.0023 on
-  each cutoff, inside the step size `LEAN_STRENGTH_PRIOR_N` was benchmarked for.
+  model versions that changed the distribution underneath it. If a constant was
+  read off the ledger, comment where it came from and what would invalidate it.
+  Note the asymmetry the comment there spells out: a *scale-family* change
+  invalidates it, but mere pool growth does not — it is a prior, and re-deriving
+  it from the family it is shrunk against would make it the data.
+
+  It went stale on schedule: v11 is a new scale family, so the v9/v10 literal
+  `(0.015, 0.032)` had to go. **The replacement `(0.010, 0.027)` has weaker
+  provenance than what it replaced, and that is the live part of this entry.**
+  v11 has no graded rows, and `.savant_cache/` cannot reconstruct past slates
+  (no-lookahead), so the cutoffs come from replaying the v9/v10 rows through the
+  v11 transform — exact given a pitcher's BF, but season BF and the two
+  population means are not in the ledger, so it was swept over a 3×3 grid and
+  the grid means were taken (p33 .0090-.0106, p80 .0255-.0277). A measured prior
+  for a distribution nobody has observed. Replace it with real p33/p80 sooner
+  than you would a normally-derived prior.
 
 **Resolved — keep as precedent**
 

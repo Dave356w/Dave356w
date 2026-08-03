@@ -6,7 +6,6 @@ import numpy as np
 import pandas as pd
 
 import bp_ablation
-from grade_leans import RECORD_TAGS
 
 LEDGER_REPORT = os.path.join("data", "ledger_report.txt")
 
@@ -28,6 +27,30 @@ def _reported_xwoba_full_record():
         )
     w, l, t = m.group(1), m.group(2), m.group(3)
     return int(w), int(l), int(t or 0)
+
+
+def _reported_record_family():
+    """The model tags the report's headline was scored over, read off its header.
+
+    Deliberately NOT grade_leans.RECORD_TAGS. The report is an artifact written
+    at some past moment under the family that was current *then*; RECORD_TAGS is
+    whatever the module says *now*. A MODEL_TAG bump moves the second and not the
+    first, so importing it made the replay select the new family's rows (none,
+    on the day of a bump) and compare them to a headline scored over the old
+    one -- the test failing for the bump rather than for a replay defect. Same
+    lesson as reading the record itself off the report instead of pinning it:
+    a check that cross-references two artifacts must read both.
+    """
+    with open(LEDGER_REPORT, encoding="utf-8") as fh:
+        head = fh.readline()
+    m = re.search(r"\[([^\]]+)\]", head)
+    if not m:
+        raise AssertionError(
+            f"{LEDGER_REPORT} header names no model family to score over; "
+            "regenerate it with `python grade_leans.py`"
+        )
+    # Split on " + ", not "+": the tags themselves contain one (xw+plat_consol_v9).
+    return tuple(t.strip() for t in m.group(1).split(" + ") if t.strip())
 
 
 def _row(**kw):
@@ -173,10 +196,18 @@ class GradeTest(unittest.TestCase):
         g = bp_ablation.grade(side,
                               pd.to_numeric(d["full_away"], errors="coerce"),
                               pd.to_numeric(d["full_home"], errors="coerce"))
-        # The report scores graded rows of the current record family; the
-        # replay scores every row carrying the phase decomposition. Intersect
-        # so the two are counted over one row set rather than assumed equal.
-        scored = ok & d["status"].eq("graded") & d["model_tag"].isin(RECORD_TAGS)
+        # The report scores graded rows of the family named in its own header;
+        # the replay scores every row carrying the phase decomposition.
+        # Intersect so the two are counted over one row set rather than assumed
+        # equal.
+        family = _reported_record_family()
+        scored = ok & d["status"].eq("graded") & d["model_tag"].isin(family)
+        if not scored.any():
+            self.skipTest(
+                f"no graded rows for the report's family {family} -- expected "
+                "only between a MODEL_TAG bump and the first regrade; this "
+                "check has nothing to compare until the bot grades a slate"
+            )
         self.assertEqual(bp_ablation.record(g[scored])[:3], reported)
 
     def test_scoring_agrees_with_shipped_grades(self):
