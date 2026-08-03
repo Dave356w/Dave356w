@@ -298,3 +298,29 @@ class ShadowWiringTests(unittest.TestCase):
                     "mx_xwoba_sp_mix_home", "edge_xwoba_sp_mix_away"):
             self.assertIn(col, gl.AUDIT_COLS)
             self.assertNotIn(col, gl.LEDGER_COLS)   # never read by grading
+
+
+class ShrinkageConstantTests(unittest.TestCase):
+    """MIX_SHRINK_K must equal the number its own comment reasons about.
+
+    It read 100.0 from 06b45e9 until 2026-08-03 while the comment above it and
+    the module docstring both described 600 -- the value the docstring calls
+    "deliberately far above the build's XWOBA_SHRINK_K = 100". Inert (the arm
+    is shadow-only and off by default), but it would have gone live at 3.6x the
+    documented noise budget. No test pinned it, which is why it drifted.
+    """
+
+    def test_k_keeps_the_documented_share_of_a_110_pa_cell(self):
+        # The comment's own arithmetic: 600 keeps ~15% of a 110-PA cell.
+        kept = 110.0 / (110.0 + pa.MIX_SHRINK_K)
+        self.assertAlmostEqual(kept, 0.15, places=2,
+                               msg="MIX_SHRINK_K no longer matches its comment")
+
+    def test_k_is_far_above_the_build_season_rate_shrinkage(self):
+        """A per-cell sample is far thinner than a season, so it shrinks harder.
+
+        Same numeral trap as LEAN_STRENGTH_PRIOR_N: these are three unrelated
+        pseudo-counts and must never be synced to each other.
+        """
+        import build_site as b
+        self.assertGreater(pa.MIX_SHRINK_K, 3 * b.XWOBA_SHRINK_K)
