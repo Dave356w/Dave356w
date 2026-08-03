@@ -1514,115 +1514,29 @@ class ModelTagProvenanceTests(unittest.TestCase):
         self.assertIn(build_site.MODEL_TAG, build_site.RECORD_TAGS)
         self.assertIn(build_site.MODEL_TAG, build_site.SCALE_TAGS)
 
-    def test_each_side_reads_its_own_primary_rate(self):
-        """Lineup on wOBA, arms on xwOBA -- the measured split.
-
-        Batter residual repeats year over year (r=+0.239, p=0.022); pitcher
-        residual does not (r=-0.117, n=41), and pure wOBA is the *worst* point
-        on the pitcher blend curve. Swapping either side silently would undo
-        the result this lineage exists to apply.
-        """
-        self.assertEqual(build_site.MODEL_TAG, "split+plat_consol_v1")
-        self.assertEqual(build_site.BATTER_RATE_SOURCE_COL, "woba")
-        self.assertEqual(build_site.PITCHER_RATE_SOURCE_COL, "xwoba")
-        self.assertEqual(build_site.rate_source_col("batter"), "woba")
-        self.assertEqual(build_site.rate_source_col("pitcher"), "xwoba")
-        self.assertIn("woba", build_site.statcast_selections("batter"))
-        self.assertNotIn("xwoba", build_site.statcast_selections("batter"))
-        self.assertIn("xwoba", build_site.statcast_selections("pitcher"))
-        self.assertNotIn("woba", build_site.statcast_selections("pitcher"))
+    def test_every_active_rate_source_is_observed_woba(self):
+        self.assertEqual(build_site.MODEL_TAG, "woba+plat_consol_v1")
+        self.assertEqual(build_site.MODEL_RATE_SOURCE_COL, "woba")
+        self.assertEqual(build_site.MODEL_RATE_LABEL, "wOBA")
+        self.assertIn("woba", build_site.STATCAST_SELECTIONS)
+        self.assertNotIn("xwoba", build_site.STATCAST_SELECTIONS)
         self.assertEqual(build_site.XWOBA_SHRINK_COL,
                          build_site.MODEL_RATE_INTERNAL_COL)
 
-    def test_tag_prefix_must_match_the_columns_actually_fetched(self):
-        """The tag is a claim about the statistic; it is checked, not trusted."""
-        self.assertEqual(
-            build_site.TAG_PREFIX_METRICS[
-                next(p for p in build_site.TAG_PREFIX_METRICS
-                     if build_site.MODEL_TAG.startswith(p))],
-            (build_site.BATTER_RATE_LABEL, build_site.PITCHER_RATE_LABEL),
-        )
-        self.assertEqual(build_site.DUMP_SUFFIX, "split")
-        # grade_leans must ingest this lineage's dumps, newest last.
-        self.assertIn(build_site.DUMP_SUFFIX, grade_leans.DUMP_SUFFIXES)
-        self.assertEqual(grade_leans.DUMP_SUFFIXES[-1], build_site.DUMP_SUFFIX)
-        self.assertEqual(grade_leans.MODEL_METRIC_LABEL,
-                         build_site.MODEL_RATE_LABEL)
-
-    def test_each_side_fetches_its_rate_even_when_both_are_exported(self):
-        for player_type, want, unwanted, val in (
-                ("batter", "woba", "xwoba", .401),
-                ("pitcher", "xwoba", "woba", .201)):
-            custom = pd.DataFrame({"player_id": [123], "pa": [50],
-                                   "woba": [.401], "xwoba": [.201]})
-            batted = pd.DataFrame({"id": [123], "bbe": [20]})
-            with mock.patch.object(build_site, "cached_csv",
-                                   side_effect=[custom, batted]) as fetch:
-                stat, _, _ = build_site.load_stat_lookups(player_type)
-            self.assertAlmostEqual(
-                stat[123][build_site.MODEL_RATE_INTERNAL_COL], val,
-                msg=f"{player_type} took the wrong column")
-            custom_url, cache_name = fetch.call_args_list[0].args
-            self.assertIn(f"selections=pa,k_percent,bb_percent,{want},", custom_url)
-            self.assertNotIn(f",{unwanted},", custom_url)
-            # Cache namespaced by the column fetched, so one lineage's same-day
-            # cache can never be served to another.
-            self.assertEqual(cache_name, f"custom_{want}_{player_type}")
-
-    def test_two_anchor_matchup_reduces_to_the_old_math_when_metrics_agree(self):
-        """M = L_out*(B/L_bat)*(P/L_pit) generalises B*P/L, it does not branch.
-
-        With one metric on both sides the anchors coincide and every historical
-        row must be reproduced bit for bit -- otherwise the split lineage would
-        silently re-price the xwOBA and wOBA families it inherits code from.
-        """
-        L = 0.316
-        for B, P in ((.340, .300), (.290, .330), (.316, .316), (.271, .355)):
-            expected = B * P / L
-            self.assertAlmostEqual(
-                build_site.matchup_value(B, P, "xwOBA", L, L), expected, places=12)
-            self.assertAlmostEqual(
-                build_site.matchup_value(B, P, "xwOBA", L, None), expected, places=12)
-            self.assertAlmostEqual(
-                build_site.matchup_value(B, P, "xwOBA", L, float("nan")),
-                expected, places=12)
-
-    def test_pitching_term_is_a_ratio_to_the_pitcher_league_mean(self):
-        """A distinct pitcher anchor must actually move the pitching term.
-
-        League wOBA and league xwOBA are close but not equal; anchoring the
-        pitching ratio on the batter mean would bias every arm by the gap.
-        """
-        B, P, L_bat, L_pit = .340, .300, .3163, .3100
-        m = build_site.matchup_value(B, P, "xwOBA", L_bat, L_pit)
-        self.assertAlmostEqual(m, B * P / L_pit, places=12)
-        self.assertNotAlmostEqual(m, B * P / L_bat, places=4)
-        # Additive stats are unaffected -- they never form a ratio.
-        for stat in build_site.ADD_STATS:
-            self.assertAlmostEqual(
-                build_site.matchup_value(B, P, stat, L_bat, L_pit),
-                B + P - L_bat, places=12)
-
-    def test_phase_edges_still_share_one_offensive_anchor(self):
-        """edge = mx - L for every phase, with L the batter anchor.
-
-        The pitcher anchor enters only the ratio denominator, so
-        tests/test_ledger_invariants' one-baseline check keeps holding on rows
-        built under the split.
-        """
-        ph = build_site.sequential_xwoba_phases(
-            b_neutral=.330, b_vs_sp=.336, starter=.290, bullpen=.305,
-            league=.3163, expected_sp_ip=5.5, sp_bf_per_ip=4.3,
-            bp_bf_per_ip=4.5, league_pit=.3100)
-        for key in ("xwOBA", "xwOBA_sp", "xwOBA_bp"):
-            recovered = ph[f"mx_{key}"] - ph[f"edge_{key}"]
-            self.assertAlmostEqual(recovered, .3163, places=12,
-                                   msg=f"{key} edge is off a different anchor")
-        # And the blend is still the PA-share convex combination.
-        q = ph["sp_share"]
-        self.assertAlmostEqual(
-            ph["mx_xwOBA"], q * ph["mx_xwOBA_sp"] + (1 - q) * ph["mx_xwOBA_bp"],
-            places=12)
+    def test_savant_woba_wins_even_if_export_also_contains_xwoba(self):
+        custom = pd.DataFrame({
+            "player_id": [123], "pa": [50],
+            "woba": [.401], "xwoba": [.201],
+        })
+        batted = pd.DataFrame({"id": [123], "bbe": [20]})
+        with mock.patch.object(build_site, "cached_csv",
+                               side_effect=[custom, batted]) as fetch:
+            stat, _, _ = build_site.load_stat_lookups("batter")
+        self.assertAlmostEqual(stat[123][build_site.MODEL_RATE_INTERNAL_COL], .401)
+        custom_url, cache_name = fetch.call_args_list[0].args
+        self.assertIn("selections=pa,k_percent,bb_percent,woba,", custom_url)
+        self.assertNotIn(",xwoba,", custom_url)
+        self.assertEqual(cache_name, "custom_woba_v1_batter")
 
     def test_pooled_record_is_named_for_its_rows_not_the_running_build(self):
         """A public record labelled with MODEL_RATE_LABEL is a false claim.
@@ -1658,9 +1572,8 @@ class ModelTagProvenanceTests(unittest.TestCase):
     def test_public_pages_do_not_name_a_metric_no_graded_row_used(self):
         """End-to-end guard on the three surfaces that publish the record.
 
-        Ledger is all xwOBA while the running build names a different metric --
-        the exact 2026-08-03 state, and still true under the split lineage. No
-        page may print a bare "wOBA" over these rows.
+        Ledger is all xwOBA, MODEL_RATE_LABEL is wOBA -- the exact 2026-08-03
+        state. No page may print "wOBA" over these rows.
         """
         ledger = pd.DataFrame([
             dict(game_pk=1, game_date="2026-07-20", away="A", home="B",
@@ -1680,9 +1593,7 @@ class ModelTagProvenanceTests(unittest.TestCase):
                  f5_close_home_ml=np.nan, f5_close_away_ml=np.nan,
                  ops_valid=False, ops_lean=None, lock_status="pregame"),
         ])
-        # Precondition: the build's own label is not what these rows are.
-        self.assertNotEqual(build_site.MODEL_RATE_LABEL, "xwOBA")
-        self.assertIn("wOBA", build_site.MODEL_RATE_LABEL)
+        self.assertEqual(build_site.MODEL_RATE_LABEL, "wOBA")
         with mock.patch.object(build_site, "load_ledger_df", return_value=ledger):
             pages = {
                 "record strip": build_site.records_strip_html(),

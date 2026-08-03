@@ -52,28 +52,18 @@ import numpy as np
 import pandas as pd
 import requests
 
-from market_backfill import (MARKET_COLS, attach_market, metric_label,
-                             metric_label_for_tag)
+from market_backfill import MARKET_COLS, attach_market, metric_label
 
 DATA_DIR    = os.environ.get("DATA_DIR", "data")
 LEDGER_PATH = os.path.join(DATA_DIR, "mlb_lean_ledger.csv")
 REPORT_PATH = os.path.join(DATA_DIR, "ledger_report.txt")
-MODEL_TAG   = os.environ.get("MODEL_TAG", "split+plat_consol_v1")
-# Derived from the tag, never written twice: metric_label() owns the single
-# prefix -> metric mapping that build_site, this module, and the vs-market
-# bucket all read.
-MODEL_METRIC_LABEL = os.environ.get("MODEL_METRIC_LABEL",
-                                    metric_label_for_tag(MODEL_TAG))
-if metric_label_for_tag(MODEL_TAG) != MODEL_METRIC_LABEL:
-    raise RuntimeError(
-        f"MODEL_TAG {MODEL_TAG!r} implies metric "
-        f"{metric_label_for_tag(MODEL_TAG)!r}, not {MODEL_METRIC_LABEL!r}"
-    )
-# Lean-dump suffixes in lineage order. Historical dumps are immutable; the
-# newest lineage is ingested LAST so a same-day pending row built under an
-# older tag is refreshed into the current one before first pitch. Graded rows
-# are never touched (see ingest).
-DUMP_SUFFIXES = ("xw", "woba", "split")
+MODEL_TAG   = os.environ.get("MODEL_TAG", "woba+plat_consol_v1")
+MODEL_METRIC_LABEL = os.environ.get(
+    "MODEL_METRIC_LABEL",
+    "wOBA" if MODEL_TAG.startswith("woba+") else "xwOBA",
+)
+if MODEL_TAG.startswith("woba+") != (MODEL_METRIC_LABEL == "wOBA"):
+    raise RuntimeError("MODEL_TAG and MODEL_METRIC_LABEL describe different metrics")
 _RECORD_FAMILIES = {
     # v3 changed only ledger locking/identity; its prediction math is v2.
     "xw+plat_consol_v3": ("xw+plat_consol_v2", "xw+plat_consol_v3"),
@@ -98,8 +88,6 @@ _RECORD_FAMILIES = {
     "xw+plat_consol_v9": ("xw+plat_consol_v9", "xw+plat_consol_v10"),
     "xw+plat_consol_v10": ("xw+plat_consol_v9", "xw+plat_consol_v10"),
     "woba+plat_consol_v1": ("woba+plat_consol_v1",),
-    # wOBA lineup + xwOBA arms: the arms change, so leans move.
-    "split+plat_consol_v1": ("split+plat_consol_v1",),
 }
 RECORD_TAGS = tuple(
     t.strip() for t in os.environ.get(
@@ -115,7 +103,6 @@ MODEL_FAMILY_TAGS = (
     ("v8", ("xw+plat_consol_v8",)),
     ("v9/v10", ("xw+plat_consol_v9", "xw+plat_consol_v10")),
     ("wOBA v1", ("woba+plat_consol_v1",)),
-    ("split v1", ("split+plat_consol_v1",)),
 )
 N_FIT_MIN   = 120
 _FINAL  = {"Final", "Game Over", "Completed Early"}
@@ -381,7 +368,9 @@ def rows_from_dump(xw_df, pl_df):
         dump_model_metric = a.get("model_metric")
         if dump_model_metric is None or (isinstance(dump_model_metric, float)
                                          and pd.isna(dump_model_metric)):
-            dump_model_metric = metric_label_for_tag(dump_model_tag)
+            dump_model_metric = (
+                "wOBA" if str(dump_model_tag).startswith("woba+") else "xwOBA"
+            )
         out.append(dict(
             game_pk=gpk, game_date=str(a.get("game_date")), away=away_team, home=home_team,
             away_sp=a.get("pitcher"), home_sp=h.get("pitcher"), model_tag=str(dump_model_tag),
@@ -477,12 +466,12 @@ def ingest(led):
     # Historical xwOBA dumps remain immutable. New wOBA dumps are ingested
     # after them so a same-day pending xwOBA snapshot can be refreshed into the
     # new wOBA lineage before first pitch; graded rows are never touched.
-    dump_paths = [p for suffix in DUMP_SUFFIXES
-                  for p in sorted(glob.glob(
-                      os.path.join(DATA_DIR, f"leans_*_{suffix}.csv")))]
+    dump_paths = (
+        sorted(glob.glob(os.path.join(DATA_DIR, "leans_*_xw.csv")))
+        + sorted(glob.glob(os.path.join(DATA_DIR, "leans_*_woba.csv")))
+    )
     for xw_path in dump_paths:
-        pl_path = re.sub(r"_(?:%s)\.csv$" % "|".join(DUMP_SUFFIXES),
-                         "_pl.csv", xw_path)
+        pl_path = re.sub(r"_(?:xw|woba)\.csv$", "_pl.csv", xw_path)
         xw = pd.read_csv(xw_path)
         pl = pd.read_csv(pl_path) if os.path.exists(pl_path) else None
         for row in rows_from_dump(xw, pl):
