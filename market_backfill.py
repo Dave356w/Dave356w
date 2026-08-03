@@ -305,6 +305,27 @@ def attach_market(df, col=COL, verbose=True):
 
 
 # --------------------------------------------------------------- analysis ---
+# The one place a MODEL_TAG prefix is turned into a metric name. build_site
+# validates its fetched columns against it, grade_leans stamps the report from
+# it, and metric_label() below falls back to it for rows written before the
+# model_metric column existed. Adding a lineage means adding one entry here.
+TAG_PREFIX_LABELS = (
+    ("split+", "wOBA/xwOBA"),   # wOBA lineup, xwOBA arms
+    ("woba+", "wOBA"),
+    ("xw+", "xwOBA"),
+)
+LEGACY_METRIC_LABEL = "xwOBA"   # pre-model_metric rows are all xwOBA
+
+
+def metric_label_for_tag(tag):
+    """Metric name implied by a MODEL_TAG's prefix."""
+    t = str(tag)
+    for prefix, label in TAG_PREFIX_LABELS:
+        if t.startswith(prefix):
+            return label
+    return LEGACY_METRIC_LABEL
+
+
 def metric_label(df, mixed="Model"):
     """Name of the primary rate behind a set of ledger rows, read off the rows.
 
@@ -321,18 +342,18 @@ def metric_label(df, mixed="Model"):
     """
     tag = df.get("model_tag")
     if tag is None:
-        return "xwOBA"
+        return LEGACY_METRIC_LABEL
     tag = pd.Series(tag).astype(str).reset_index(drop=True)
-    from_tag = np.where(tag.str.startswith("woba+"), "wOBA", "xwOBA")
+    from_tag = tag.map(metric_label_for_tag)
     metric = df.get("model_metric")
     if metric is None:
-        labels = pd.Series(from_tag)
+        labels = from_tag
     else:
         metric = pd.Series(metric).reset_index(drop=True)
-        labels = metric.where(metric.notna(), pd.Series(from_tag)).astype(str)
+        labels = metric.where(metric.notna(), from_tag).astype(str)
     uniq = labels.dropna().unique().tolist()
     if not uniq:
-        return "xwOBA"
+        return LEGACY_METRIC_LABEL
     return uniq[0] if len(uniq) == 1 else mixed
 
 

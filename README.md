@@ -1,13 +1,16 @@
 # MLB matchup leans
 
-Daily MLB probable-pitcher vs opponent-lineup leans (Statcast wOBA), built and
+Daily MLB probable-pitcher vs opponent-lineup leans (Statcast wOBA lineups vs
+xwOBA arms), built and
 published as a static site by GitHub Actions on a pregame trigger.
 
 **<https://dave356w.github.io/Dave356w/>**
 
-Current forward-test model: `woba+plat_consol_v1` — observed wOBA replaces
-xwOBA for every batter, starter, bullpen, league-prior, and pitch-mix rate;
-v10's sequential phases remain weighted by share of plate appearances.
+Current model: `split+plat_consol_v1` — the primary rate is chosen per side,
+observed **wOBA** for lineups and **xwOBA** for starters and bullpens, because
+the wOBA−xwOBA residual repeats year over year for hitters but not for
+pitchers. v10's sequential phases remain weighted by share of plate
+appearances.
 
 | Where to look | For |
 |---|---|
