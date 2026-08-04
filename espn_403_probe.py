@@ -53,6 +53,13 @@ import urllib.error
 import urllib.request
 from datetime import date
 
+# The shipped identity, read from its one definition rather than copied here,
+# so "what production sends" cannot drift from "what the probe tested".
+# fetch_headers.py is standard-library-only precisely so this import stays
+# free -- importing market_backfill would drag in pandas and break the
+# no-dependencies property the workflow relies on.
+from fetch_headers import FETCH_HEADERS
+
 # The two ESPN endpoints the site actually depends on, plus a no-argument path
 # on the core host. The core `/odds` URL needs a live event id, which we can
 # only learn from the scoreboard -- and the scoreboard is one of the things
@@ -80,10 +87,17 @@ CHROME_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 # production sends today, so the report always contains the baseline it is
 # being compared against rather than a paraphrase of it.
 VARIANTS = [
-    ("prod: market_backfill (bare Mozilla/5.0)", {
+    # What production sends right now. Not a copy -- the same object the fetch
+    # paths use, so a regression here is a regression there.
+    ("SHIPPED (fetch_headers.FETCH_HEADERS)", dict(FETCH_HEADERS)),
+    # The two header sets that were in production when this broke, kept
+    # byte-for-byte. They are a historical record of what the edge rejected,
+    # so the report always carries its own baseline; they are no longer what
+    # any module sends, and the labels must not imply otherwise.
+    ("blocked 2026-08-04: bare Mozilla/5.0", {
         "User-Agent": "Mozilla/5.0",
     }),
-    ("prod: build_site (Chrome UA + Accept)", {
+    ("blocked 2026-08-04: Chrome UA + Accept", {
         "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
                       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36",
         "Accept": "application/json,text/csv,*/*",
@@ -134,14 +148,8 @@ VARIANTS = [
         "Accept-Encoding": "gzip, deflate",
         "Connection": "keep-alive",
     }),
-    # The honest option, and the one already used elsewhere in this repo
-    # (schedule_gate.py sends `Dave356w-schedule-gate/1.0`). Says what we are
-    # and how to reach us, which is what a rate-limit conversation needs.
-    ("honest project UA (+contact URL)", {
-        "User-Agent": "Dave356w-matchup-site/1.0 "
-                      "(+https://github.com/Dave356w/Dave356w)",
-        "Accept": "application/json",
-    }),
+    # The honest-UA candidate that this measurement selected is no longer
+    # listed separately -- it is the SHIPPED entry at the top of this list.
     ("curl/8.5.0", {
         "User-Agent": "curl/8.5.0",
         "Accept": "*/*",

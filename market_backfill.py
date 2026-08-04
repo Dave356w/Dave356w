@@ -41,6 +41,8 @@ import urllib.request
 import numpy as np
 import pandas as pd
 
+from fetch_headers import FETCH_HEADERS
+
 # ---- COLMAP: adjust to the ledger CSV's actual column names ----------------
 COL = dict(
     date="game_date",       # 'YYYY-MM-DD'
@@ -69,7 +71,9 @@ MARKET_COLS = ["gamePk", "espn_id", "open_away_ml", "open_home_ml",
 
 # ---------------------------------------------------------------- helpers ---
 def _get(url):
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    # Was a bare `Mozilla/5.0`, which ESPN's edge began 403ing on 2026-08-04.
+    # See fetch_headers.py for the measurement behind the replacement.
+    req = urllib.request.Request(url, headers=FETCH_HEADERS)
     with urllib.request.urlopen(req, timeout=25) as r:
         return json.loads(r.read())
 
