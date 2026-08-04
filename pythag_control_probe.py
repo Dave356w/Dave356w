@@ -96,6 +96,31 @@ def _is_final(gm):
             or st.get("codedGameState") in ("F", "O"))
 
 
+def _bail(season, end_date, days, n_days_with_games, n_raw,
+          rej, seen_types, seen_states, sample, early):
+    """Die with everything needed to name the culprit in one read.
+
+    The point is that the reader should not have to guess which test rejected
+    what -- the first three failures of this probe were each 'fixed' by a guess
+    because the message named no field. Rejection counts, the gameType and
+    status values actually observed, and two raw samples between them make the
+    answer unambiguous."""
+    when = (f"after {n_days_with_games} days with games (stopping early)"
+            if early else f"after querying {len(days)} days")
+    raise SystemExit(
+        f"FAIL: no finished regular-season games for {season} up to "
+        f"{end_date} {when}.\n"
+        f"  days returning any game: {n_days_with_games}\n"
+        f"  games seen before filtering: {n_raw}\n"
+        f"  rejected by reason: {sorted(rej.items(), key=lambda kv: -kv[1])[:6]}\n"
+        f"  gameType values seen: "
+        f"{dict(sorted(seen_types.items(), key=lambda kv: -kv[1])[:8])}\n"
+        f"  abstract/coded states seen: "
+        f"{dict(sorted(seen_states.items(), key=lambda kv: -kv[1])[:8])}\n"
+        f"  sample games: {json.dumps(sample, default=str)[:900]}\n"
+        "Refusing to print a report built on an empty log.")
+
+
 def _days(start, end):
     d = dt.date.fromisoformat(start)
     stop = dt.date.fromisoformat(end)
@@ -133,7 +158,14 @@ def fetch_game_log(season, end_date, verbose=None):
     seen_types, seen_states = defaultdict(int), defaultdict(int)
     sample = []
     for i, d in enumerate(days):
-        js = _get(f"https://statsapi.mlb.com/api/v1/schedule?sportId=1&date={d}")
+        # `hydrate=team` is load-bearing, not decoration: without it the team
+        # object carries only id/link/name, `abbreviation` is absent, and every
+        # game is rejected for a missing abbreviation. That is exactly what
+        # happened, and it is why market_backfill._statsapi_day -- the call this
+        # one is modelled on -- hydrates `team`. Dropping it while "simplifying"
+        # the call is what cost three CI rounds.
+        js = _get("https://statsapi.mlb.com/api/v1/schedule"
+                  f"?sportId=1&date={d}&hydrate=team")
         games = [gm for day in js.get("dates", []) for gm in day.get("games", [])]
         if games:
             n_days_with_games += 1
@@ -177,6 +209,13 @@ def fetch_game_log(season, end_date, verbose=None):
             seen.add(pk)
             per[ab_a].append((d, float(sa), float(sh)))
             per[ab_h].append((d, float(sh), float(sa)))
+        # Fail fast on a structural mismatch. If the first handful of days that
+        # returned games kept none of them, another 150 days will not change
+        # that -- and each full pass costs ~2.5 minutes of CI to learn nothing
+        # new. The missing-abbreviation bug burned three rounds at full length.
+        if not seen and n_days_with_games >= 5:
+            _bail(season, end_date, days, n_days_with_games, n_raw,
+                  rej, seen_types, seen_states, sample, early=True)
         if i % 30 == 0 or d == days[-1]:
             line = (f"    {d}: {len(seen):4d} final regular-season games so far "
                     f"({n_raw} seen, {n_days_with_games} days with any)")
@@ -185,18 +224,8 @@ def fetch_game_log(season, end_date, verbose=None):
                 verbose.append(line)
         time.sleep(0.12)
     if not seen:
-        top_rej = sorted(rej.items(), key=lambda kv: -kv[1])[:6]
-        raise SystemExit(
-            f"FAIL: no finished regular-season games for {season} up to "
-            f"{end_date} after querying {len(days)} days.\n"
-            f"  days returning any game: {n_days_with_games}\n"
-            f"  games seen before filtering: {n_raw}\n"
-            f"  rejected by reason: {top_rej}\n"
-            f"  gameType values seen: {dict(sorted(seen_types.items(), key=lambda kv: -kv[1])[:8])}\n"
-            f"  abstract/coded states seen: "
-            f"{dict(sorted(seen_states.items(), key=lambda kv: -kv[1])[:8])}\n"
-            f"  sample games: {json.dumps(sample, default=str)[:900]}\n"
-            "Refusing to print a report built on an empty log.")
+        _bail(season, end_date, days, n_days_with_games, n_raw,
+              rej, seen_types, seen_states, sample, early=False)
     # Provenance on the success path too: a filter that quietly drops a third
     # of the season would otherwise look identical to one that drops nothing.
     kept_line = (f"    kept {len(seen)} of {n_raw} games; "
