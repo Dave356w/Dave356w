@@ -117,6 +117,35 @@ VARIANTS = [
         "Sec-Ch-Ua-Mobile": "?0",
         "Sec-Ch-Ua-Platform": '"Windows"',
     }),
+    # Round 2. The first run showed the block is not "browser or not" but
+    # "consistent or not": a bare `Mozilla/5.0` claims to be a browser and
+    # brings none of a browser's other headers, and that mismatch is exactly
+    # what Akamai bot-management scores. Requests that never claim to be a
+    # browser were not flagged. These three are the shippable honest options,
+    # and none of them were covered by round 1.
+    #
+    # build_site.py uses requests, not urllib, so its "send no User-Agent"
+    # case is not urllib's -- requests substitutes its own UA plus three more
+    # default headers. Reproduced faithfully here rather than assumed
+    # equivalent to the urllib default, which is a different request.
+    ("requests default UA (build_site w/o override)", {
+        "User-Agent": "python-requests/2.34.2",
+        "Accept": "*/*",
+        "Accept-Encoding": "gzip, deflate",
+        "Connection": "keep-alive",
+    }),
+    # The honest option, and the one already used elsewhere in this repo
+    # (schedule_gate.py sends `Dave356w-schedule-gate/1.0`). Says what we are
+    # and how to reach us, which is what a rate-limit conversation needs.
+    ("honest project UA (+contact URL)", {
+        "User-Agent": "Dave356w-matchup-site/1.0 "
+                      "(+https://github.com/Dave356w/Dave356w)",
+        "Accept": "application/json",
+    }),
+    ("curl/8.5.0", {
+        "User-Agent": "curl/8.5.0",
+        "Accept": "*/*",
+    }),
 ]
 
 INTERESTING_RESP_HEADERS = ("Server", "Content-Type", "X-Cache", "X-Served-By",
@@ -150,6 +179,22 @@ def _fmt(res):
     if res["err"]:
         return f"ERR  {res['err'][:90]}"
     return f"{res['status']}  {res['ms']:>5}ms"
+
+
+def _fmt_many(reses):
+    """Collapse N attempts. A bot-manager verdict that is not reproducible is
+    not a verdict, so an all-200 run and a 1-of-3 run must not print alike."""
+    codes = [r["status"] if not r["err"] else "ERR" for r in reses]
+    n_ok = sum(c == 200 for c in codes)
+    avg = int(sum(r["ms"] for r in reses) / max(len(reses), 1))
+    uniq = set(codes)
+    if uniq == {200}:
+        return f"200   {n_ok}/{len(codes)}  avg {avg:>4}ms"
+    if 200 not in uniq:
+        only = codes[0] if len(uniq) == 1 else "/".join(str(c) for c in codes)
+        return f"{only}   0/{len(codes)}  avg {avg:>4}ms"
+    return (f"FLAKY {n_ok}/{len(codes)}  "
+            f"[{', '.join(str(c) for c in codes)}]  avg {avg:>4}ms")
 
 
 def _detail(res, indent="      "):
@@ -219,6 +264,9 @@ def main():
                     help="slate date to request (YYYY-MM-DD, default today)")
     ap.add_argument("--event-id", default=None,
                     help="skip discovery and probe this ESPN event id's odds")
+    ap.add_argument("--repeat", type=int, default=3,
+                    help="attempts per variant; >1 separates a real verdict "
+                         "from a lucky 200 (default 3)")
     ap.add_argument("--out", default=None, help="also write the report here")
     args = ap.parse_args()
 
@@ -252,19 +300,27 @@ def main():
     if eid:
         targets.append((CORE_ODDS[0], CORE_ODDS[1].format(eid=eid)))
 
-    any_200 = {}
+    any_200, flaky, blocked = {}, {}, {}
     for tname, url in targets:
         rep.append("")
         rep.append(f"{tname}")
         rep.append(f"  {url}")
         for vname, headers in VARIANTS:
-            res = _attempt(url, headers)
-            rep.append(f"    {vname:<42} {_fmt(res)}")
-            if res["status"] == 200:
+            reses = []
+            for _ in range(args.repeat):
+                reses.append(_attempt(url, headers))
+                time.sleep(0.4)      # do not add a rate-limit to a 403 probe
+            rep.append(f"    {vname:<46} {_fmt_many(reses)}")
+            codes = {r["status"] for r in reses}
+            if codes == {200}:
                 any_200.setdefault(tname, []).append(vname)
+            elif 200 in codes:
+                flaky.setdefault(tname, []).append(vname)
+                rep.extend(_detail(next(r for r in reses
+                                        if r["status"] != 200)))
             else:
-                rep.extend(_detail(res))
-            time.sleep(0.4)          # do not add a rate-limit to a 403 probe
+                blocked.setdefault(tname, []).append(vname)
+                rep.extend(_detail(reses[0]))
 
     rep.append("")
     rep.append("=" * 68)
@@ -285,14 +341,28 @@ def main():
                    "allowlisting.")
         rep.append("     Quote the Reference # above to ESPN.")
     else:
-        rep.append("  At least one header set was allowed through:")
-        for tname, names in any_200.items():
+        rep.append("  Passed every attempt:")
+        for tname, _url in targets:
+            names = any_200.get(tname) or ["(none)"]
             rep.append(f"    {tname}: {', '.join(names)}")
-        rep.append("  => Fix is headers. Apply the cheapest passing variant to "
-                   "the shared")
-        rep.append("     fetch layer in build_site.py and market_backfill.py, "
-                   "and re-run this")
-        rep.append("     probe to confirm before trusting a green build.")
+        if flaky:
+            rep.append("  Intermittent — do NOT ship these, a bot-manager "
+                       "verdict that is not")
+            rep.append("  reproducible is not a verdict:")
+            for tname, names in flaky.items():
+                rep.append(f"    {tname}: {', '.join(names)}")
+        contested = [t for t, _u in targets if blocked.get(t)]
+        if contested:
+            rep.append(f"  Host actually blocking: {', '.join(contested)}")
+            rep.append("  Every other ESPN host answered every variant, so "
+                       "this is one edge's")
+            rep.append("  bot rule, not ESPN-wide and not the runner.")
+        rep.append("  => Fix is headers. Apply a variant that passed on the "
+                   "blocking host to")
+        rep.append("     the shared fetch layer in build_site.py and "
+                   "market_backfill.py, then")
+        rep.append("     re-run this probe to confirm before trusting a green "
+                   "build.")
     rep.append("=" * 68)
 
     text = "\n".join(rep)
