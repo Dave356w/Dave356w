@@ -114,10 +114,17 @@ precedent — they are how the fix is known to look.
   model versions that changed the distribution underneath it. It was re-derived
   for the v9/v10 xwOBA family, and **the wOBA v1 bump has now made it stale
   again** — a new `_SCALE_FAMILIES` entry is exactly the invalidation its own
-  comment names. It is deliberately not re-derived yet: the wOBA pool is n=6,
-  whose p33/p80 is noise, and freezing that would be this anti-pattern with a
-  fresher date on it. Shrinkage plus the slate top-up hold the line meanwhile
-  (at n=6 the cutoffs are 0.0150/0.0323, i.e. the prior). Recompute from the
+  comment names. It is deliberately not re-derived yet: the wOBA pool is still
+  small enough that its p33/p80 is noise, and freezing that would be this
+  anti-pattern with a fresher date on it. Shrinkage plus the slate top-up hold
+  the line meanwhile — recompute the pool before quoting it rather than reading
+  a number off this file, which is the same discipline the controls entry below
+  demands. One reading worth carrying, because it is a *direction* and not a
+  value to freeze: as of 2026-08-04 (wOBA v1+v2, n=16) the observed p80 is
+  running well under the 0.032 prior while the observed p33 sits close to the
+  0.015 one. If that survives the pool growing, the re-derivation will pull the
+  upper cutoff down materially and relabel the clear/strong boundary — so expect
+  a real move there, not a rounding change. Recompute from the
   wOBA family alone once it passes ~60 rows. If a constant was read off the
   ledger, comment where it came from and what would invalidate it. Note the
   asymmetry the comment there spells out: a *scale-family* change invalidates
