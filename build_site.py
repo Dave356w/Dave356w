@@ -1297,12 +1297,21 @@ def _pool_moments(rate, weight, prior, k):
     r, w = rate[m], weight[m]
     unweighted = float(r.mean())
     mean_w = float((k / (w + k)).mean())
+    # `r_n` is why `weighted` and `unweighted` differ at all: it is the
+    # correlation between a player's rate and how much he plays. It also
+    # decides whether a prior that varies with n would beat a single constant
+    # (see pool_shrink_target) -- that only pays once this is solidly
+    # positive, so it is measured rather than assumed.
+    r_n = None
+    if m.sum() >= 3 and float(r.std()) > 0 and float(w.std()) > 0:
+        r_n = float(np.corrcoef(r.to_numpy(), np.log(w.to_numpy()))[0, 1])
     return {
         "n": int(m.sum()),
         "weighted": float(np.average(r, weights=w)),
         "unweighted": unweighted,
         "mean_w": mean_w,
         "bias": mean_w * (unweighted - float(prior)),
+        "r_n": r_n,
     }
 
 
@@ -1376,10 +1385,12 @@ def log_prior_population_centres(batter_cust, pitcher_cust, prior, k,
     log(f"  shrinkage target = {prior:.5f} (PA-weighted league {MODEL_RATE_LABEL}), "
         f"K={k:.0f}; pool centres:")
     log(f"    {'pool':<24}{'n':>6}{'wtd':>9}{'unwtd':>9}{'mean w':>9}"
-        f"{'unwtd-tgt':>11}{'bias':>9}")
+        f"{'unwtd-tgt':>11}{'bias':>9}{'r(rate,lnN)':>13}")
     for label, m in rows:
+        r_n = "     --" if m["r_n"] is None else f"{m['r_n']:>+7.3f}"
         log(f"    {label:<24}{m['n']:>6}{m['weighted']:>9.4f}{m['unweighted']:>9.4f}"
-            f"{m['mean_w']:>9.3f}{m['unweighted'] - prior:>+11.4f}{m['bias']:>+9.4f}")
+            f"{m['mean_w']:>9.3f}{m['unweighted'] - prior:>+11.4f}{m['bias']:>+9.4f}"
+            f"{r_n:>13}")
 
 
 def fetch_all(slate_date):
@@ -1445,10 +1456,41 @@ def fetch_all(slate_date):
         g = _est_team_games(pd.to_numeric(batter_cust.get("pa"), errors="coerce")) if batter_cust is not None else None
         qual_bat = PCTILE_QUAL_BAT * g if g else None
         qual_pit = PCTILE_QUAL_PIT * g if g else None
-        ref_bat, qb = build_pctile_ref(batter_cust, prior, k_bat, qual_bat)
+
+        # The bars rank a player against a reference of qualified regulars, so
+        # the target that regression runs toward has to be the batter pool's
+        # own centre. Shrinking a 40-PA bat toward the PA-weighted league rate
+        # lands him near the middle of a population he is not drawn from, and
+        # the reference barely moves under the same target because its members
+        # are all high-PA -- so the sub-qualified bats rank high for a reason
+        # that is arithmetic, not hitting. The 2026-08-04 diagnostic measured
+        # that gap at 23 points pool-wide and 45 in the sub-qualified tail.
+        #
+        # DISPLAY ONLY, and deliberately not the lean's target. Replaying the
+        # 99 graded v9/v10 rows with the batter target moved flips 0 leans at
+        # every plausible lineup weight (mean |d net| <= 0.0004 against a median
+        # |xw_net| of 0.019) -- xw_net differences two lineups regressed toward
+        # the same centre, so a uniform re-centring cancels. Moving the lean's
+        # target would therefore bump MODEL_TAG, reset nothing, and shift every
+        # published per-side edge off zero, since `edge = mx - L` only reads as
+        # "vs league" while B and P are both centred on L. The bars are ranked
+        # against a population; the edge is measured against the league. Those
+        # are two different anchors and this is the one the bars need.
+        #
+        # The reference and the ranked value MUST share a target -- a rank
+        # against a differently-regressed population is not a rank at all.
+        prior_bat_display = pool_shrink_target(batter_cust) or prior
+        ref_bat, qb = build_pctile_ref(batter_cust, prior_bat_display, k_bat, qual_bat)
+        # Pitchers keep the league rate: the same diagnostic put slate probables
+        # at -0.0016 from it and the BF-weighted relief pool at -0.0024, i.e.
+        # already centred. Deriving a target for them would be motion, not fix.
         ref_pit, qp = build_pctile_ref(pitcher_cust, prior, k_pit, qual_pit)
         league_baseline["_pctile_ref_bat"] = ref_bat
         league_baseline["_pctile_ref_pit"] = ref_pit
+        league_baseline["_pctile_prior_bat"] = prior_bat_display
+        log(f"  batter percentile target: {prior_bat_display:.5f} "
+            f"(unweighted pool centre) vs league {prior:.5f} "
+            f"-> {prior_bat_display - prior:+.5f}")
         # K-BB% reference (pitchers), raw: K-BB stabilizes fast and the model
         # does not shrink it, so it is ranked at face value over the same
         # qualified pool.
@@ -1843,6 +1885,61 @@ def _est_team_games(pa_series):
         return None
     g = float(pa.quantile(0.99)) / PCTILE_PA_PER_GAME
     return g if np.isfinite(g) and g > 0 else None
+
+
+def pool_shrink_target(cust):
+    """A player pool's centre: the plain unweighted mean of its rates.
+
+    Unweighted, not PA-weighted, and the distinction is the whole point. The
+    PA-weighted rate is the mean of the *plate appearances* — it answers "what
+    does a league PA look like", which is the right question for a normalizer
+    and the wrong one for a shrinkage target. Playing time is awarded for
+    hitting well, so weighting by it puts the centre where the regulars are,
+    and every fringe bat is then regressed toward a population he is not drawn
+    from. On 2026-08-04 that gap measured 23 points pool-wide, 45 in the
+    sub-qualified tail.
+
+    Unweighted is safe here despite the `min=1` board being mostly small
+    samples: sampling noise on a rate is mean-zero (`E[k/n] = p` exactly), so
+    tiny lines scatter around their talent without dragging the *mean*. They
+    would wreck a variance or a quantile; they do not bias this.
+
+    Two better-looking candidates were measured and rejected. Benchmark: rank
+    sub-qualified bats by their published percentile against a reference of
+    qualified regulars, score Spearman against known talent, 40-60 seeds per
+    cell, sweeping how strongly playing time signals talent.
+
+      talent->PA link      0.00    0.25    0.50    1.00
+      PA-weighted (today) .5241   .5666   .5235   .1829
+      unweighted          .5236   .5715   .5365   .2503
+      per-n trend         .4759   .5815   .5978   .5390
+
+    A precision weight `n/(n+K)` — the exchangeable EB estimator of the prior
+    mean — lost to plain unweighted 0/40, because downweighting the low-PA
+    members biases the centre back up toward the pole it is supposed to avoid,
+    and those members are exactly the ones being ranked.
+
+    A prior that varies with `n` (regress rate on `log PA`) is better wherever
+    playing time really signals talent, and worse when it does not — it fits
+    noise into the slope, and `n` also sets the shrink weight, so the error
+    compounds where the weight is largest. Shrinking the slope by its own
+    evidence does not rescue that column (.4821). It is the right answer only
+    once `corr(rate, PA)` is known to be solidly positive on the real board,
+    which is why that correlation is now logged beside the pool centres. Do not
+    adopt it from this docstring; adopt it from the log.
+
+    Unweighted is the only candidate that beats today's target in every regime
+    and loses in none.
+    """
+    cols = getattr(cust, "columns", [])
+    if cust is None or MODEL_RATE_SOURCE_COL not in cols or "pa" not in cols:
+        return None
+    x = pd.to_numeric(cust[MODEL_RATE_SOURCE_COL], errors="coerce")
+    n = pd.to_numeric(cust["pa"], errors="coerce")
+    m = x.notna() & n.notna() & (n > 0)
+    if not m.any():
+        return None
+    return float(x[m].mean())
 
 
 def build_pctile_ref(cust, prior, k, qual_pa):
@@ -3499,7 +3596,13 @@ def _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
     # fetch_all. Missing on pre-market/degraded builds -> every pctile_rank
     # returns None and the bars fall back to em-dashes.
     _lb0 = league_baseline or {}
-    _prior = _f(_lb0.get("xwOBA"))
+    # Must be the same target `_pctile_ref_bat` was built with (fetch_all), or
+    # the bar ranks a value regressed one way against a population regressed
+    # another. Falls back to the league rate exactly when fetch_all's
+    # derivation did, so the pair cannot come apart.
+    _prior = _f(_lb0.get("_pctile_prior_bat"))
+    if _prior is None:
+        _prior = _f(_lb0.get("xwOBA"))
     _k_bat = XWOBA_SHRINK_K
     _ref_bat = _lb0.get("_pctile_ref_bat")
     _ref_pit = _lb0.get("_pctile_ref_pit")
