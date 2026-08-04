@@ -128,6 +128,39 @@ precedent — they are how the fix is known to look.
   averaged. Recorded in a comment rather than patched: n=14 is one slate, not a
   distribution. Display-only, so no `MODEL_TAG` implication either way.
 
+- **A measured defect deferred, with the fix that would recreate the entry
+  above.** The first backfilled actuals (2026-08-04, `actuals_backfill`) show
+  `expected_sp_ip` is **over-dispersed**: regressing actual on predicted over
+  306 side-games gives slope **0.756 ± 0.063**, 3.9 se below 1.0. Bias on the
+  same rows is +0.096 IP (t = 1.31) — a spread problem, not a level one.
+  Starters predicted short go 0.69 IP longer than predicted; those predicted
+  deep go 0.12 shorter. Shrinking toward the mean by 0.76 cuts IP MSE 5.2%.
+
+  Not fixed, on two grounds. It flips 1 of 80 graded v9/v10 leans (mean
+  |Δ net| 0.00067 against a median |xw_net| of 0.019), so the case is
+  correctness of a directly-observed input, not performance — and correctness
+  fixes can wait for a stable estimate. And 306 side-games of July/August is
+  thin for a slope that is plausibly seasonal: pitch counts climb early and
+  clubs get cautious in September, so this may not be the September slope.
+
+  **Gate: re-fit at ~600 side-games** (roughly 2026-08-25). The report prints
+  `IP calibration slope` every build so the number arrives without anyone
+  remembering to look. If it holds near 0.75, ship it — but as a per-build
+  derivation off the accumulating actuals, never as a frozen `a + b·pred`.
+  A literal fitted today is exactly the constants-frozen-from-data entry
+  above, with a fresher date on it. It is lean-path (it moves `q`, so `mx`),
+  so it bumps `MODEL_TAG`; at 1 flip in 80 it shares both families on the v10
+  precedent, but argue that in the PR rather than inheriting it.
+
+  Two companion readings from the same backfill, both recorded rather than
+  acted on. The realized phase weight (`act_sp_bf / act_pa`, the share of PAs
+  the starter actually faced) carries the same over-dispersion in the units
+  that matter — slope 0.746, bias +0.017, MAE 0.101 over 210 side-games — so
+  the defect is in the workload estimate, not in the BF/IP conversion. And the
+  rate metric says nothing yet: calibration slope 0.953 ± 0.380, corr
+  0.178 ± 0.070 against a 0.196 ceiling for a perfect model. Its 95% CI spans
+  near-zero to above that ceiling. Do not quote those two as findings.
+
 **Resolved — keep as precedent**
 
 - **One value, three homes.** `.github/workflows/build.yml` pinned `MODEL_TAG`,

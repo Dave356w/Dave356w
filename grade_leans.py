@@ -661,7 +661,10 @@ def report(led):
     _lg = pd.to_numeric(_fam.get("mx_xwoba_away"), errors="coerce") - \
         pd.to_numeric(_fam.get("edge_xwoba_away"), errors="coerce")
     _lg = float(_lg.mean()) if _lg.notna().any() else None
-    _act_lines = actuals_summary(_fam, baseline=_lg)
+    # Whole ledger, not _fam: actuals_summary scopes the rate metric to
+    # RECORD_TAGS itself and deliberately pools the IP metric across families,
+    # because expected_pitcher_ip is one estimator shared since v6.
+    _act_lines = actuals_summary(led, baseline=_lg, tags=RECORD_TAGS)
     for _ln in _act_lines:
         say(_ln)
     _fam_lines = [
