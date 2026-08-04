@@ -181,9 +181,12 @@ def attach_actuals(df, verbose=True):
 
     Skips are collected in `df.attrs['actual_skips']` as (index, reason).
     """
-    for c in ACTUAL_COLS:
-        if c not in df.columns:
-            df[c] = np.nan
+    missing = [c for c in ACTUAL_COLS if c not in df.columns]
+    if missing:
+        df = pd.concat(
+            [df, pd.DataFrame(np.nan, index=df.index, columns=missing)],
+            axis=1,
+        )
 
     settled = df[_SETTLED[0]].notna() & df[_SETTLED[1]].notna()
     have = df["act_woba_away"].notna() & df["act_woba_home"].notna()

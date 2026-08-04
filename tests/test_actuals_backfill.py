@@ -1,3 +1,5 @@
+import os
+import tempfile
 import unittest
 from unittest import mock
 
@@ -5,6 +7,7 @@ import numpy as np
 import pandas as pd
 
 import actuals_backfill as ab
+import grade_leans
 
 
 def _bat(pa=38, ab_=34, h=9, d=2, t=0, hr=1, bb=3, ibb=0, hbp=1, sf=0):
@@ -100,6 +103,27 @@ class AttachActualsTests(unittest.TestCase):
             again = ab.attach_actuals(out, verbose=False)
             self.assertEqual(gj.call_count, 1)      # second pass fetches nothing
         pd.testing.assert_frame_equal(out, again)
+
+    def test_actuals_survive_ledger_reload_and_second_pass_fetches_nothing(self):
+        led = self._led()
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, "ledger.csv")
+            with mock.patch.object(ab, "_get_json", return_value=_box()) as gj:
+                first = ab.attach_actuals(led.copy(), verbose=False)
+                first.to_csv(path, index=False)
+                with mock.patch.object(grade_leans, "LEDGER_PATH", path):
+                    loaded = grade_leans.load_ledger()
+                second = ab.attach_actuals(loaded, verbose=False)
+
+            self.assertEqual(gj.call_count, 1)
+            self.assertAlmostEqual(
+                second.at[0, "act_woba_away"],
+                first.at[0, "act_woba_away"],
+            )
+            self.assertAlmostEqual(
+                second.at[0, "act_sp_ip_home"],
+                first.at[0, "act_sp_ip_home"],
+            )
 
     def test_pending_rows_are_never_touched(self):
         """An actual is an outcome. A pending row's prediction can still be
