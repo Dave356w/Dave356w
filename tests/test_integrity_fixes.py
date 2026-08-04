@@ -1366,7 +1366,7 @@ class PoolShrinkTargetTests(unittest.TestCase):
 
 
 class PlatoonXwobaAdjustmentTests(unittest.TestCase):
-    ADJ = build_site.PLATOON_XWOBA_ADJ
+    OFFSETS = build_site.PLATOON_XWOBA_OFFSETS
     ADV = build_site.PLATOON_ADV_COL
     THR = build_site.SP_THROWS_COL
 
@@ -1399,11 +1399,9 @@ class PlatoonXwobaAdjustmentTests(unittest.TestCase):
 
     # --- the offset: who gets moved, and by how much -------------------------
 
-    def test_one_sided_hitters_move_both_ways(self):
-        self.assertAlmostEqual(build_site.platoon_xwoba_offset("L", "R"), self.ADJ)
-        self.assertAlmostEqual(build_site.platoon_xwoba_offset("R", "L"), self.ADJ)
-        self.assertAlmostEqual(build_site.platoon_xwoba_offset("R", "R"), -self.ADJ)
-        self.assertAlmostEqual(build_site.platoon_xwoba_offset("L", "L"), -self.ADJ)
+    def test_one_sided_hitters_use_the_centered_matchup_table(self):
+        for matchup, expected in self.OFFSETS.items():
+            self.assertAlmostEqual(build_site.platoon_xwoba_offset(*matchup), expected)
 
     def test_switch_hitter_holds_the_edge_but_is_not_moved(self):
         # He bats opposite the starter in essentially every PA, so his season
@@ -1420,12 +1418,27 @@ class PlatoonXwobaAdjustmentTests(unittest.TestCase):
         self.assertEqual(build_site.platoon_xwoba_offset("R", None), 0.0)
         self.assertEqual(build_site.platoon_xwoba_offset("S", None), 0.0)
 
-    def test_offset_is_zero_sum_over_a_hitters_two_platoon_states(self):
-        # A one-sided hitter's season line sits between his two states, so the
-        # two offsets cancel; a switch hitter's line is one state, so both are 0.
-        for bats in ("L", "R", "S"):
-            pair = [build_site.platoon_xwoba_offset(bats, t) for t in ("L", "R")]
-            self.assertAlmostEqual(sum(pair), 0.0)
+    def test_each_one_sided_hitter_keeps_the_same_point_021_gap(self):
+        self.assertAlmostEqual(
+            build_site.platoon_xwoba_offset("L", "R")
+            - build_site.platoon_xwoba_offset("L", "L"),
+            .021,
+        )
+        self.assertAlmostEqual(
+            build_site.platoon_xwoba_offset("R", "L")
+            - build_site.platoon_xwoba_offset("R", "R"),
+            .021,
+        )
+
+    def test_offsets_are_zero_at_their_assumed_exposure_mix(self):
+        # Rounded research priors: LHB hold the edge about 16/21 of the time;
+        # RHB about 6/21. Each season exposure blend returns exactly to zero.
+        lhb = ((16 / 21) * build_site.platoon_xwoba_offset("L", "R")
+               + (5 / 21) * build_site.platoon_xwoba_offset("L", "L"))
+        rhb = ((6 / 21) * build_site.platoon_xwoba_offset("R", "L")
+               + (15 / 21) * build_site.platoon_xwoba_offset("R", "R"))
+        self.assertAlmostEqual(lhb, 0.0)
+        self.assertAlmostEqual(rhb, 0.0)
 
     # --- through aggregate_lineup --------------------------------------------
 
@@ -1444,10 +1457,12 @@ class PlatoonXwobaAdjustmentTests(unittest.TestCase):
         H = self._lineup([(1, 0.500, 15, "L"), (2, 0.300, 550, "R")], hand="R")
         agg = build_site.aggregate_lineup(H, ["xwOBA"], weighted=True,
                                           shrink_prior=prior, shrink_k=k)
-        # Shrink first, then move by the flat platoon term -- a 15-PA bat's
-        # advantage is worth the same 0.010 as a 550-PA bat's.
-        s1 = (15 * .500 + k * prior) / (15 + k) + self.ADJ
-        s2 = (550 * .300 + k * prior) / (550 + k) - self.ADJ
+        # Shrink first, then apply the population cell. The term itself is not
+        # diluted by a hitter's overall-PA sample.
+        s1 = ((15 * .500 + k * prior) / (15 + k)
+              + self.OFFSETS[("L", "R")])
+        s2 = ((550 * .300 + k * prior) / (550 + k)
+              + self.OFFSETS[("R", "R")])
         w1, w2 = build_site.LINEUP_SLOT_PA[1], build_site.LINEUP_SLOT_PA[2]
         expected = (w1 * s1 + w2 * s2) / (w1 + w2)
         self.assertAlmostEqual(agg.loc[0, "opp_xwOBA"], expected)
@@ -1458,14 +1473,15 @@ class PlatoonXwobaAdjustmentTests(unittest.TestCase):
             self._lineup(rows, hand="R"), ["xwOBA"], weighted=True
         )
         self.assertAlmostEqual(agg.loc[0, "opp_xwOBA_neutral"], .320)
-        self.assertAlmostEqual(agg.loc[0, "opp_xwOBA_vs_sp"], .320 + self.ADJ)
-        self.assertAlmostEqual(agg.loc[0, "platoon_delta_sp"], self.ADJ)
+        adj = self.OFFSETS[("L", "R")]
+        self.assertAlmostEqual(agg.loc[0, "opp_xwOBA_vs_sp"], .320 + adj)
+        self.assertAlmostEqual(agg.loc[0, "platoon_delta_sp"], adj)
         self.assertAlmostEqual(
             agg.loc[0, "opp_xwOBA"],
             agg.loc[0, "opp_xwOBA_vs_sp"],
         )
 
-    def test_all_advantage_lineup_shifts_composite_up_by_the_constant(self):
+    def test_all_lhb_lineup_spread_matches_the_point_021_gap(self):
         prior, k = 0.317, 150.0
         rows = [(1, .340, 400, "L"), (2, .300, 500, "L"), (3, .280, 600, "L")]
         adv = build_site.aggregate_lineup(self._lineup(rows, hand="R"), ["xwOBA"],
@@ -1473,7 +1489,7 @@ class PlatoonXwobaAdjustmentTests(unittest.TestCase):
         none = build_site.aggregate_lineup(self._lineup(rows, hand="L"), ["xwOBA"],
                                            weighted=True, shrink_prior=prior, shrink_k=k)
         self.assertAlmostEqual(adv.loc[0, "opp_xwOBA"] - none.loc[0, "opp_xwOBA"],
-                               2 * self.ADJ)
+                               .021)
 
     def test_all_switch_lineup_composite_is_untouched(self):
         prior, k = 0.317, 150.0
@@ -1493,7 +1509,7 @@ class PlatoonXwobaAdjustmentTests(unittest.TestCase):
         agg = build_site.aggregate_lineup(self._lineup(rows, hand="R"), ["xwOBA"],
                                           weighted=True)
         w1, w2 = build_site.LINEUP_SLOT_PA[1], build_site.LINEUP_SLOT_PA[2]
-        expected = (w1 * (.320 - self.ADJ) + w2 * .320) / (w1 + w2)
+        expected = (w1 * (.320 + self.OFFSETS[("R", "R")]) + w2 * .320) / (w1 + w2)
         self.assertAlmostEqual(agg.loc[0, "opp_xwOBA"], expected)
         self.assertLess(agg.loc[0, "opp_xwOBA"], .320)
 
@@ -1517,7 +1533,9 @@ class PlatoonXwobaAdjustmentTests(unittest.TestCase):
         ])
         agg = build_site.aggregate_lineup(H, ["xwOBA"], weighted=True,
                                           shrink_prior=.317, shrink_k=175.0)
-        self.assertAlmostEqual(agg.loc[0, "opp_xwOBA"], .340 + self.ADJ)
+        self.assertAlmostEqual(
+            agg.loc[0, "opp_xwOBA"], .340 + self.OFFSETS[("L", "R")]
+        )
 
     def test_only_xwoba_moves(self):
         H = pd.DataFrame([
@@ -1526,7 +1544,9 @@ class PlatoonXwobaAdjustmentTests(unittest.TestCase):
                  batting_order=1, bats="L", **{self.THR: "R"}),
         ])
         agg = build_site.aggregate_lineup(H, ["xwOBA", "xSLG"], weighted=True)
-        self.assertAlmostEqual(agg.loc[0, "opp_xwOBA"], .340 + self.ADJ)
+        self.assertAlmostEqual(
+            agg.loc[0, "opp_xwOBA"], .340 + self.OFFSETS[("L", "R")]
+        )
         self.assertAlmostEqual(agg.loc[0, "opp_xSLG"], .450)
 
     # --- through the real segment -> aggregate -> render path ----------------
@@ -1723,8 +1743,16 @@ class ModelTagProvenanceTests(unittest.TestCase):
         self.assertIn(build_site.MODEL_TAG, build_site.RECORD_TAGS)
         self.assertIn(build_site.MODEL_TAG, build_site.SCALE_TAGS)
 
+    def test_centered_platoon_bump_resets_record_but_keeps_woba_scale(self):
+        self.assertEqual(build_site.RECORD_TAGS, ("woba+plat_consol_v2",))
+        self.assertEqual(grade_leans.RECORD_TAGS, ("woba+plat_consol_v2",))
+        self.assertEqual(
+            build_site.SCALE_TAGS,
+            ("woba+plat_consol_v1", "woba+plat_consol_v2"),
+        )
+
     def test_every_active_rate_source_is_observed_woba(self):
-        self.assertEqual(build_site.MODEL_TAG, "woba+plat_consol_v1")
+        self.assertEqual(build_site.MODEL_TAG, "woba+plat_consol_v2")
         self.assertEqual(build_site.MODEL_RATE_SOURCE_COL, "woba")
         self.assertEqual(build_site.MODEL_RATE_LABEL, "wOBA")
         self.assertIn("woba", build_site.STATCAST_SELECTIONS)
@@ -1763,7 +1791,7 @@ class ModelTagProvenanceTests(unittest.TestCase):
         legacy_nulls = legacy.assign(model_metric=[np.nan, None])
         self.assertEqual(market_backfill.metric_label(legacy_nulls), "xwOBA")
 
-        woba = pd.DataFrame({"model_tag": ["woba+plat_consol_v1"] * 2,
+        woba = pd.DataFrame({"model_tag": ["woba+plat_consol_v2"] * 2,
                              "model_metric": ["wOBA", "wOBA"]})
         self.assertEqual(market_backfill.metric_label(woba), "wOBA")
 

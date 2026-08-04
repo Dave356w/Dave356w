@@ -1,7 +1,7 @@
 # F5 (1st-5-innings) market capture — validation & first results
 
 > **Historical document (2026-07-21 data, v5-era xwOBA model; current forward
-> test is `woba+plat_consol_v1`).**
+> test is `woba+plat_consol_v2`).**
 > The market-capture mechanics, the data-quality audit, and the mapping fit are
 > unchanged and still describe today's code. Two things have moved:
 >

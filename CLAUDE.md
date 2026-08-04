@@ -38,7 +38,7 @@ prediction math. Two separate tag families gate two different questions:
 These are different equivalence relations and they do disagree. The authority is
 `_RECORD_FAMILIES` / `_SCALE_FAMILIES` in `build_site.py` (records mirrored in
 `grade_leans.py`) — not this table, which is a reading aid. Current model is
-**wOBA v1**.
+**wOBA v2**.
 
 | tag | what changed | record family | scale family |
 |---|---|---|---|
@@ -52,12 +52,16 @@ These are different equivalence relations and they do disagree. The authority is
 | v9 | starter/bullpen phases split; handedness applies to starter innings only | 9+10 | 8+9+10 |
 | v10 | phases weighted by PA share (measured BF/IP) not innings share | 9+10 | 8+9+10 |
 | wOBA v1 | observed wOBA replaces xwOBA in every active rate input; v10 construction fixed | wOBA v1 | wOBA v1 |
+| wOBA v2 | exposure-centred 0.021 starter platoon gap replaces universal ±0.010 | wOBA v2 | wOBA v1+v2 |
 | split v1 | one-slate wOBA-lineup/xwOBA-arms test; abandoned before grading | split v1 | split v1 |
 
-The wOBA forward test is intentionally isolated in both namespaces. Observed
-wOBA changes the predictions and its sampling distribution is not the xwOBA
-delta scale. Internal `xwOBA`/`xw_*` dump and ledger keys remain a compatibility
-schema for immutable history; new rows must carry `model_metric=wOBA`.
+The wOBA forward test is intentionally isolated from xwOBA in both namespaces.
+Observed wOBA changes the predictions and its sampling distribution is not the
+xwOBA delta scale. v2 starts a clean record because the platoon prior moves
+predictions, but shares v1's strength scale: the metric is unchanged and each
+handedness pair retains essentially the same total gap (0.021 versus 0.020).
+Internal `xwOBA`/`xw_*` dump and ledger keys remain a compatibility schema for
+immutable history; new rows must carry `model_metric=wOBA`.
 
 `split v1` remains an isolated historical namespace because its dump and
 pending ledger rows existed before full wOBA was restored. It is not an active

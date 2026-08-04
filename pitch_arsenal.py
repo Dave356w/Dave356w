@@ -26,9 +26,9 @@ pitcher's usage rates":
    exactly 1.0 against any arsenal.
 
 3. **It supplements the platoon term.** Savant's batter arsenal splits pool both
-   pitcher hands, so the handedness effect is not in them; `PLATOON_XWOBA_ADJ`
-   still applies. The multiplier is a starter-phase quantity only -- a bullpen
-   is not one arsenal.
+   pitcher hands, so the handedness effect is not in them;
+   `platoon_xwoba_offset` still applies. The multiplier is a starter-phase
+   quantity only -- a bullpen is not one arsenal.
 
 Shrinkage
 ---------

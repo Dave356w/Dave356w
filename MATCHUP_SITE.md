@@ -23,22 +23,23 @@ is no longer surfaced on the cards (the display is wOBA-only).
 
 ---
 
-## The current model — `woba+plat_consol_v1`
+## The current model — `woba+plat_consol_v2`
 
 **Read this section for what the code does today.** Everything below it is a
 changelog: each version note describes a *delta* against its predecessor, and
 several of those deltas have since been superseded. Where a version note and
 this section disagree, this section and the source are right.
 
-This forward test keeps v10's construction fixed and changes the primary rate
-only: every active batter, probable-starter, reliever/bullpen, league prior,
-team backfill, percentile, and optional pitch-mix cell is observed Statcast
-**wOBA**, never xwOBA. The model retains `K = 100` and the ±0.010 platoon term
-so the input statistic is the isolated change being tested. Because observed
-wOBA has a different sampling distribution, the tag starts new record and
-scale families; it is never pooled with v9/v10 history. Legacy dump/ledger
-columns such as `xw_net` remain only as a compatibility schema and every new
-row carries `model_metric=wOBA`.
+Every active batter, probable-starter, reliever/bullpen, league prior, team
+backfill, percentile, and optional pitch-mix cell is observed Statcast
+**wOBA**, never xwOBA. The model retains `K = 100`. v2 changes the starter
+platoon prior from a symmetric ±0.010 around every one-sided hitter's season
+line to a handedness-specific, exposure-centred table with the same conservative
+0.021 strong-side/weak-side gap. Prediction math changed, so v2 starts a clean
+record family. It shares v1's magnitude/strength scale because both use observed
+wOBA and the total prior gap changes only from 0.020 to 0.021. Neither pools
+with xwOBA history. Legacy dump/ledger columns such as `xw_net` remain only as
+a compatibility schema and every new row carries `model_metric=wOBA`.
 
 The short-lived `split+plat_consol_v1` experiment changed the pitching side
 back to xwOBA after treating a pitcher's weak cross-season residual correlation
@@ -67,10 +68,18 @@ aggregate and is **not** shrunk again.
 slot (`LINEUP_SLOT_PA`, 4.61 leadoff → 3.76 for the 9-hole):
 
 - `B_0` — the neutral composite, taken before any handedness term.
-- `B_SP` — after a flat **±0.010** (`PLATOON_XWOBA_ADJ`) is applied to each
-  *one-sided* hitter according to whether he holds the platoon edge over
-  tonight's starter. Switch hitters get **0** (their season line already is
-  their advantage-state number) and are still marked ◆.
+- `B_SP` — after `PLATOON_XWOBA_OFFSETS` is applied to each *one-sided* hitter:
+
+  | Batter | vs LHP | vs RHP |
+  |---|---:|---:|
+  | LHB | −0.016 | +0.005 |
+  | RHB | +0.015 | −0.006 |
+  | Switch/unknown | 0 | 0 |
+
+  Each one-sided row preserves a 0.021 platoon gap. The unequal offsets centre
+  the season blend at approximately 76.2% advantage exposure for LHB and 28.6%
+  for RHB instead of assuming a 50/50 schedule. Switch hitters get **0** because
+  their season line already is their advantage-state number, and remain marked ◆.
 - `platoon_delta_sp = B_SP − B_0`.
 
 **4. Two pitching inputs**, each shrunk with the same `K = 100`:
@@ -126,6 +135,24 @@ pitch-mix shadow arm (off by default). Both are described below.
 Each note below is the delta that version introduced, kept for provenance —
 ledger rows are immutable and a row's `model_tag` is only interpretable against
 the version note that produced it.
+
+### wOBA v2 — exposure-centred starter platoon prior
+
+`woba+plat_consol_v2` replaces the universal ±0.010 term with the four-cell
+table in the current-model section. The hitter-side gap remains deliberately
+conservative at 0.021, but the offsets now preserve the season wOBA at the
+assumed handedness exposure mix. Switch and unknown hitters remain zero, and
+the term still applies only to the starter phase after overall-wOBA shrinkage.
+
+This changes prediction math and therefore starts a clean `RECORD_TAGS` family.
+The primary metric and practical delta units are unchanged, so v1 and v2 share
+one `SCALE_TAGS` family for lean-strength calibration.
+
+On a same-input replay of the 2026-08-04 projected slate, v2 flipped **0 of 14**
+pair-complete leans. Median absolute game-net movement was **0.000587** and the
+maximum was **0.002602**; median `|xw_net|` moved only **0.7%**, from 0.016169 to
+0.016282. That supports shared scale units, but one projected slate is too small
+to declare the win/loss decisions equivalent, so the record remains isolated.
 
 Historical model version `xw+plat_consol_v2` added:
 
@@ -445,7 +472,7 @@ idea, and each is enforced by a test:
   Everything is a ratio to league-at-that-pitch-type, normalised so a
   league-average hitter returns exactly 1.0 against any arsenal.
 - **It supplements the platoon term.** Savant's batter arsenal splits pool both
-  pitcher hands, so `PLATOON_XWOBA_ADJ` still applies. The multiplier is a
+  pitcher hands, so `platoon_xwoba_offset` still applies. The multiplier is a
   starter-phase quantity only: a bullpen is not one arsenal.
 
 Each (batter, pitch type) cell is regressed toward that hitter's own overall
@@ -480,10 +507,10 @@ families.
 
 ### SP platoon-advantage xwOBA adjustment
 
-A **one-sided** hitter's xwOBA is moved by a flat **±0.010**
-(`PLATOON_XWOBA_ADJ`) before the lineup composite is taken, according to whether
-he holds the handedness edge over tonight's starter: **+0.010 with the
-advantage, −0.010 without it.** A switch hitter is **not** moved.
+The xwOBA lineages through wOBA v1 moved a **one-sided** hitter by a flat
+**±0.010** before the lineup composite. wOBA v2 supersedes that constant with
+`PLATOON_XWOBA_OFFSETS`, the exposure-centred four-cell table in the current
+model section. A switch hitter is still **not** moved.
 
 Two separate questions, deliberately answered by two helpers:
 
@@ -496,10 +523,11 @@ Two separate questions, deliberately answered by two helpers:
   The offset is a *deviation from the hitter's own season line*, and that line
   is already a platoon blend weighted by his real exposure to each pitcher hand.
   A switch hitter bats opposite the starter in essentially every PA, so his
-  season xwOBA already **is** his advantage-state number — adding 0.010 would
-  count the same edge twice. His offset is **0**, and he is still marked ◆. An
-  unrecorded bats side gets 0 for the same reason an unknown starter hand does:
-  no evidence either way is not evidence of a disadvantage.
+  season xwOBA already **is** his advantage-state number — adding another
+  advantage term would count the same edge twice. His offset is **0**, and he
+  is still marked ◆. An unrecorded bats side gets 0 for the same reason an
+  unknown starter hand does: no evidence either way is not evidence of a
+  disadvantage.
 
 **Where it lands.** The tag and the starter's hand (`sp_throws`) are attached in
 `segment_pitcher_blocks`, so the xwOBA lean does not depend on the platoon-OPS
@@ -513,22 +541,14 @@ still receives the platoon term.
 
 **What does not move.** Only the lean input. The per-hitter card xwOBA stays the
 raw season rate and `xw_pctile` stays a season-talent rank against qualified
-regulars, consistent with how shrinkage is already displayed. The legend states
-both the ±0.010 and the switch-hitter exemption, so the page does not overclaim
-what ◆ means for the lean.
+regulars, consistent with how shrinkage is already displayed. The switch-hitter
+exemption prevents the page's advantage marker from overclaiming what moves the
+lean. v2 implements the centred form `+(1−s)·g` with the edge and `−s·g`
+without it using static population exposure shares; individual hitter splits
+remain outside the model.
 
-**Known residual.** A one-sided hitter's season blend is not 50/50 either. Most
-starters are right-handed, so a LHB's season line is mostly measured *with* the
-advantage and a RHB's mostly *without*, which makes the true deviations
-asymmetric between the two rather than the ±one-constant used here. With `s` the
-hitter's season share of PAs in the advantage state and `g` his platoon gap, the
-centred form is `+(1−s)·g` with the edge and `−s·g` without it — the switch-hitter
-case is just `s ≈ 1`. Correcting the rest needs a magnitude for `g` and per-hitter
-exposure shares (available in `player_splits_hit`, but only via the lens this
-path was deliberately decoupled from), so it is not attempted. The flat constant
-stays deliberately simple.
-
-**Measured effect** (279 games over the committed slate dumps, using each side's
+**Historical v1 measured effect** (279 games over the committed slate dumps,
+using each side's
 `n_platoon_adv` / `n_SW` / `n_opp` counts):
 
 | quantity | switch bats moved | switch bats exempt (shipped) |

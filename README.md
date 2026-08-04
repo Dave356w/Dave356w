@@ -5,9 +5,9 @@ published as a static site by GitHub Actions on a pregame trigger.
 
 **<https://dave356w.github.io/Dave356w/>**
 
-Current forward-test model: `woba+plat_consol_v1` — observed wOBA replaces
-xwOBA for every batter, starter, bullpen, league-prior, and pitch-mix rate;
-v10's sequential phases remain weighted by share of plate appearances.
+Current forward-test model: `woba+plat_consol_v2` — observed wOBA supplies
+every active rate, and the starter platoon prior uses exposure-centred 0.021
+gaps instead of a symmetric ±0.010 around each hitter's season line.
 
 | Where to look | For |
 |---|---|
