@@ -74,6 +74,21 @@ model shows **no statistically significant edge over the closing market**.
 - `x* = (n·x + K·prior)/(n+K)`, both batters and the starter regressed toward
   the shared league xwOBA prior. Sharing the prior is correct: league-wide
   xwOBA-allowed equals league xwOBA.
+  > **Amendment.** That last sentence proves less than it is used for. The
+  > identity is true, and empirical Bayes wants the centre of the pool each
+  > estimate is drawn from — a pooled mean is not the centre of any of its
+  > subpools, it only guarantees they average back to it. Batters, rotation
+  > arms and the relief pool are three pools shrunk toward one target, and the
+  > PA/BF weighting that builds the target lifts it above the player-level
+  > centre within each. v7 named the batter half of this
+  > (`MATCHUP_SITE.md`, "Centre-matched shrinkage moments"), corrected the `K`
+  > estimator for the resulting between-centre offset, and deliberately left
+  > the target alone; v8 then retired that estimator, so nothing measured the
+  > offset any more. `prior_population_centres` now logs every pool's weighted
+  > and unweighted centre against the target each build, plus `bias` — mean
+  > prior weight × (pool centre − target) — so the question is settled from
+  > measurement rather than from the identity above. It is log-only and moves
+  > no lean; whether the target should split is a separate, unmade decision.
 - `K` is estimated per build by **method of moments**. Re-derived:
   `E[d²] = τ² + σ²/n`, so
   `Vu − Vw = σ²·(mean(1/n) − 1/mean(n))` (non-negative by AM–HM),

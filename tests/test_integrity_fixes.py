@@ -1156,6 +1156,104 @@ class XwobaShrinkageTests(unittest.TestCase):
         self.assertLess(agg.loc[0, "opp_xwOBA"], raw.loc[0, "opp_xwOBA"])
 
 
+class PriorPopulationCentreTests(unittest.TestCase):
+    """The shrinkage-target diagnostic. Log-only, so these assert the arithmetic
+    and the pool predicates -- never a centre read off a real leaderboard, which
+    would be the frozen-constant anti-pattern with a diagnostic's name on it."""
+
+    SRC = build_site.MODEL_RATE_SOURCE_COL
+
+    def _cust(self, rows):
+        # rows: (player_id, rate, pa)
+        return pd.DataFrame([{"player_id": p, self.SRC: r, "pa": n}
+                             for (p, r, n) in rows])
+
+    def test_recovers_planted_weighted_and_unweighted_centres(self):
+        prior, k = 0.300, 100.0
+        # A high-PA .340 regular and a low-PA .260 bench bat: PA weighting puts
+        # the centre near the regular, the player-level centre sits at .300.
+        cust = self._cust([(1, 0.340, 600), (2, 0.260, 40)])
+        rows = dict(build_site.prior_population_centres(cust, None, prior, k))
+        m = rows["batters"]
+        self.assertEqual(m["n"], 2)
+        self.assertAlmostEqual(m["weighted"], (600 * .340 + 40 * .260) / 640, places=9)
+        self.assertAlmostEqual(m["unweighted"], 0.300, places=9)
+        self.assertAlmostEqual(
+            m["mean_w"], ((k / (600 + k)) + (k / (40 + k))) / 2, places=9)
+        self.assertAlmostEqual(m["bias"], m["mean_w"] * (m["unweighted"] - prior),
+                               places=9)
+        # The gap the diagnostic exists to surface: PA weighting flatters the
+        # pool relative to the players in it.
+        self.assertGreater(m["weighted"], m["unweighted"])
+
+    def test_zero_gap_pool_reports_zero_bias(self):
+        prior, k = 0.317, 100.0
+        cust = self._cust([(1, 0.317, 500), (2, 0.317, 20)])
+        m = dict(build_site.prior_population_centres(cust, None, prior, k))["batters"]
+        self.assertAlmostEqual(m["unweighted"], prior, places=9)
+        self.assertAlmostEqual(m["bias"], 0.0, places=9)
+
+    def test_pitcher_subpools_use_the_relief_pitcher_ids_predicate(self):
+        """A swingman on the boundary must land in the same pool the model
+        would shrink him in. If RP_MAX_START_SHARE moves, this fails here
+        rather than silently describing a pool the bullpen never used."""
+        prior, k = 0.310, 100.0
+        share = build_site.RP_MAX_START_SHARE
+        ip_cap = build_site.RP_MAX_IP_PER_APPEARANCE
+        roles = {
+            11: {"start_share": share, "avg_ip_per_appearance": ip_cap},      # RP
+            12: {"start_share": share + 0.01, "avg_ip_per_appearance": 1.0},  # SP
+            13: {"start_share": 0.0, "avg_ip_per_appearance": ip_cap + 0.1},  # neither
+        }
+        cust = self._cust([(11, 0.280, 200), (12, 0.330, 500), (13, 0.300, 90)])
+        rows = dict(build_site.prior_population_centres(
+            cust, cust, prior, k, role_map=roles))
+        self.assertEqual(rows["  pitchers:RP"]["n"], 1)
+        self.assertAlmostEqual(rows["  pitchers:RP"]["unweighted"], 0.280, places=9)
+        self.assertEqual(rows["  pitchers:SP"]["n"], 1)
+        self.assertAlmostEqual(rows["  pitchers:SP"]["unweighted"], 0.330, places=9)
+        # The long reliever is excluded from both, exactly as relief_pitcher_ids
+        # excludes him and the rotation split does not claim him.
+        self.assertEqual(rows["pitchers"]["n"], 3)
+
+    def test_slate_probable_pool_is_the_starters_actually_shrunk(self):
+        prior, k = 0.310, 100.0
+        cust = self._cust([(21, 0.330, 500), (22, 0.290, 480), (23, 0.360, 120)])
+        rows = dict(build_site.prior_population_centres(
+            cust, cust, prior, k, probable_ids={21, 23}))
+        m = rows["  pitchers:SP(slate)"]
+        self.assertEqual(m["n"], 2)
+        self.assertAlmostEqual(m["unweighted"], (0.330 + 0.360) / 2, places=9)
+
+    def test_degrades_without_roles_and_without_a_usable_prior(self):
+        cust = self._cust([(1, 0.320, 300)])
+        # No role map: the pitcher pool stays undifferentiated rather than
+        # guessing a split -- the current model's assumption, stated.
+        labels = [l for l, _ in build_site.prior_population_centres(
+            cust, cust, 0.310, 100.0)]
+        self.assertIn("batters", labels)
+        self.assertIn("pitchers", labels)
+        self.assertNotIn("  pitchers:RP", labels)
+        # An unusable target yields nothing and must not raise.
+        for bad in (None, float("nan")):
+            self.assertEqual(
+                build_site.prior_population_centres(cust, cust, bad, 100.0), [])
+
+    def test_empty_and_zero_weight_pools_are_dropped_not_zero_filled(self):
+        self.assertIsNone(build_site._pool_moments([], [], 0.31, 100.0))
+        self.assertIsNone(build_site._pool_moments([0.3], [0], 0.31, 100.0))
+        self.assertIsNone(build_site._pool_moments([np.nan], [500], 0.31, 100.0))
+
+    def test_diagnostic_does_not_mutate_its_inputs(self):
+        cust = self._cust([(1, 0.340, 600), (2, 0.260, 40)])
+        before = cust.copy(deep=True)
+        build_site.log_prior_population_centres(cust, cust, 0.31, 100.0,
+                                                role_map={1: {"start_share": 0.0,
+                                                              "avg_ip_per_appearance": 1.0}},
+                                                probable_ids={2})
+        pd.testing.assert_frame_equal(cust, before)
+
+
 class PlatoonXwobaAdjustmentTests(unittest.TestCase):
     ADJ = build_site.PLATOON_XWOBA_ADJ
     ADV = build_site.PLATOON_ADV_COL
