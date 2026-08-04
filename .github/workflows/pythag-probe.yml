@@ -1,0 +1,74 @@
+name: Pythagorean control probe
+
+# Manual only. Measures whether a walk-forward Pythagorean arm (team strength
+# -> implied win%) earns a place next to always-home and always-chalk, using
+# real StatsAPI game logs instead of the ledger's partial subsample.
+#
+# The runner is the point twice over: StatsAPI is not reachable from every
+# dev environment, and the numbers this prints are the ones a decision about
+# _baseline_controls() would rest on, so they should come from the same place
+# the build runs.
+#
+# Touches nothing: no build, no lean, no ledger, no commit, no Pages deploy.
+# It reads data/mlb_lean_ledger.csv, pulls a season of finished game scores,
+# prints a report and uploads it. `contents: read` makes that structural.
+#
+# Deliberately outside the `site-build` concurrency group -- it never writes to
+# data/, so it has no reason to queue behind a build.
+on:
+  # Runs itself on any PR that changes the probe, so a probe nobody has
+  # executed cannot merge. Path-filtered, so unrelated PRs are unaffected.
+  pull_request:
+    paths:
+      - 'pythag_control_probe.py'
+      - '.github/workflows/pythag-probe.yml'
+  workflow_dispatch:
+    inputs:
+      windows:
+        description: 'Game-count windows to sweep (0 = whole season to date)'
+        required: false
+        default: '30,60,90,0'
+      expos:
+        description: 'Pythagorean exponents'
+        required: false
+        default: '1.83,2.0'
+      shrink:
+        description: 'Pseudo-games shrinking each estimate toward .500'
+        required: false
+        default: '0,6,12,25'
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10        # fail fast if StatsAPI hangs
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run probe
+        run: |
+          python pythag_control_probe.py \
+            ${{ inputs.windows && format('--windows {0}', inputs.windows) || '' }} \
+            ${{ inputs.expos && format('--expos {0}', inputs.expos) || '' }} \
+            ${{ inputs.shrink && format('--shrink {0}', inputs.shrink) || '' }} \
+            --out pythag_control_probe_report.txt
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pythag-control-probe
+          path: pythag_control_probe_report.txt
+          if-no-files-found: warn
