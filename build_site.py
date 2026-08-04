@@ -96,7 +96,7 @@ USE_TEAM_LOGOS = os.environ.get("USE_TEAM_LOGOS", "1") != "0"
 LOGO_CDN = "https://www.mlbstatic.com/team-logos"
 DATA_DIR = os.environ.get("DATA_DIR", "data")            # grading ledger home
 LEDGER_PATH = os.path.join(DATA_DIR, "mlb_lean_ledger.csv")
-MODEL_TAG = os.environ.get("MODEL_TAG", "woba+plat_consol_v1")  # keep in sync with grade_leans.py
+MODEL_TAG = os.environ.get("MODEL_TAG", "woba+plat_consol_v2")  # keep in sync with grade_leans.py
 if not MODEL_TAG.startswith("woba+"):
     raise RuntimeError(
         "This build fetches observed wOBA; refusing to stamp it with a non-wOBA MODEL_TAG"
@@ -135,6 +135,12 @@ _RECORD_FAMILIES = {
     # Observed wOBA replaces xwOBA in every active rate input while the rest of
     # v10's construction stays fixed. This is a new prediction family.
     "woba+plat_consol_v1": ("woba+plat_consol_v1",),
+    # v2 replaces the symmetric +/-0.010 starter platoon term with a
+    # handedness-specific, exposure-centred 0.021 gap. On the 2026-08-04
+    # projected slate it flips 0/14 pair-complete leans, but one slate is not
+    # enough to establish decision equivalence, so its forward record starts
+    # clean.
+    "woba+plat_consol_v2": ("woba+plat_consol_v2",),
     # Short-lived wOBA-lineup/xwOBA-arms experiment. It is retained only so
     # immutable dumps and ledger rows remain recognised after full wOBA was
     # restored; it never pools with the active wOBA record.
@@ -178,7 +184,13 @@ _SCALE_FAMILIES = {
                            "xw+plat_consol_v10"),
     # wOBA has a different sampling distribution from xwOBA, so it cannot
     # share magnitude cutoffs with any xwOBA lineage.
-    "woba+plat_consol_v1": ("woba+plat_consol_v1",),
+    # v2 changes the centre of the starter platoon prior but retains observed
+    # wOBA units and essentially the same total gap (0.021 versus 0.020). On the
+    # 2026-08-04 projected slate median |net| moves only 0.7% (.016169 ->
+    # .016282), so v1 and v2 remain compatible for magnitude/strength
+    # calibration.
+    "woba+plat_consol_v1": ("woba+plat_consol_v1", "woba+plat_consol_v2"),
+    "woba+plat_consol_v2": ("woba+plat_consol_v1", "woba+plat_consol_v2"),
     # The mixed-metric delta has its own units. Historical recognition does
     # not make it compatible with the active full-wOBA scale.
     "split+plat_consol_v1": ("split+plat_consol_v1",),
@@ -1689,13 +1701,19 @@ XWOBA_SHRINK_K = 100.0
 USE_PITCH_MIX_SHADOW = os.environ.get("PITCH_MIX_SHADOW", "0") == "1"
 
 # --- SP platoon-advantage xwOBA adjustment ---------------------------------
-# A one-sided hitter's shrunk xwOBA is moved by a flat +/- PLATOON_XWOBA_ADJ
-# depending on whether he holds the handedness edge over tonight's starter, then
-# the lineup composite is taken. Applied AFTER shrinkage on purpose: shrinkage
-# estimates season talent from a noisy sample, while this is a matchup term that
-# carries no sample-size uncertainty of its own and must not be regressed away
-# for a low-PA bat. It is a fixed constant, not a value read off the ledger, so
-# no distribution shift can invalidate it.
+# A one-sided hitter's shrunk xwOBA is moved by the handedness/matchup cell in
+# PLATOON_XWOBA_OFFSETS before the lineup composite is taken. Every pair keeps
+# the same conservative 0.021 advantage-minus-disadvantage gap, but the season
+# line is no longer treated as the midpoint of a 50/50 exposure mix:
+#
+#                    vs LHP     vs RHP
+#       LHB           -0.016     +0.005
+#       RHB           +0.015     -0.006
+#
+# The cells are centred at approximately 76.2% advantage exposure for LHB and
+# 28.6% for RHB. Applied AFTER shrinkage on purpose: shrinkage estimates season
+# talent from a noisy sample, while this is a fixed population matchup prior and
+# must not be regressed away for a low-PA bat.
 #
 # The offset is a DEVIATION FROM THE HITTER'S OWN SEASON LINE, and that line is
 # already a platoon blend weighted by his real exposure to each pitcher hand.
@@ -1705,19 +1723,21 @@ USE_PITCH_MIX_SHADOW = os.environ.get("PITCH_MIX_SHADOW", "0") == "1"
 #   * A switch hitter takes the opposite side in essentially every PA, so his
 #     season xwOBA IS his advantage-state number. He holds the edge -- the card
 #     still marks him and the platoon-OPS lens still counts him -- but adding
-#     PLATOON_XWOBA_ADJ on top would count it twice. His offset is 0.
+#     another advantage offset on top would count it twice. His offset is 0.
 #   * A hitter with no recorded side gets 0 for the same reason the unknown-hand
 #     case does: no evidence either way, so no move.
 #   * A hitter whose starter's throwing hand is unknown gets 0. An absent bio is
 #     not evidence of a platoon disadvantage.
 #
-# Known residual: a one-sided hitter's season blend is not 50/50 either. Most
-# starters are right-handed, so a LHB's line is mostly measured WITH the
-# advantage and a RHB's mostly without, which makes the true deviations
-# asymmetric between the two rather than the +/- one constant used here. Fixing
-# that needs a platoon-gap magnitude and per-hitter exposure shares; it is not
-# attempted, and the flat constant stays deliberately simple.
-PLATOON_XWOBA_ADJ = 0.010
+# These remain population offsets, not player-specific split estimates. A
+# future per-hitter model would need separate vs-hand samples and much heavier
+# regression than the K=100 overall-wOBA shrinkage used above.
+PLATOON_XWOBA_OFFSETS = {
+    ("L", "L"): -0.016,
+    ("L", "R"): +0.005,
+    ("R", "L"): +0.015,
+    ("R", "R"): -0.006,
+}
 PLATOON_ADV_COL = "sp_platoon_adv"     # per-hitter tag carried from the SP block
 SP_THROWS_COL = "sp_throws"            # faced starter's hand, distinct from the hitter's own
 OPP = {"L": "R", "R": "L"}
@@ -1752,15 +1772,16 @@ def platoon_advantage(bats, throws):
 def platoon_xwoba_offset(bats, throws):
     """How far to move this hitter's season xwOBA for tonight's platoon state.
 
-    +PLATOON_XWOBA_ADJ with the edge, -PLATOON_XWOBA_ADJ without it -- but only
-    for a one-sided hitter, whose season line averages over both platoon states.
-    A switch hitter's season line is already his advantage-state number, so his
-    offset is 0; so is an unrecorded bats side or an unknown starter hand.
+    The lookup is handedness-specific and exposure-centred, but only one-sided
+    hitters move. A switch hitter's season line is already his advantage-state
+    number, so his offset is 0; so is an unrecorded bats side or an unknown
+    starter hand.
     """
-    adv = platoon_advantage(bats, throws)
-    if adv is None or str(bats or "")[:1].upper() not in ("L", "R"):
+    b = str(bats or "")[:1].upper()
+    t = str(throws or "")[:1].upper()
+    if b not in ("L", "R") or t not in ("L", "R"):
         return 0.0
-    return PLATOON_XWOBA_ADJ if adv else -PLATOON_XWOBA_ADJ
+    return PLATOON_XWOBA_OFFSETS[(b, t)]
 
 
 def platoon_xwoba_offsets(g):

@@ -59,7 +59,7 @@ from actuals_backfill import (attach_actuals, actuals_summary,
 DATA_DIR    = os.environ.get("DATA_DIR", "data")
 LEDGER_PATH = os.path.join(DATA_DIR, "mlb_lean_ledger.csv")
 REPORT_PATH = os.path.join(DATA_DIR, "ledger_report.txt")
-MODEL_TAG   = os.environ.get("MODEL_TAG", "woba+plat_consol_v1")
+MODEL_TAG   = os.environ.get("MODEL_TAG", "woba+plat_consol_v2")
 MODEL_METRIC_LABEL = os.environ.get(
     "MODEL_METRIC_LABEL",
     "wOBA" if MODEL_TAG.startswith("woba+") else "xwOBA",
@@ -90,6 +90,7 @@ _RECORD_FAMILIES = {
     "xw+plat_consol_v9": ("xw+plat_consol_v9", "xw+plat_consol_v10"),
     "xw+plat_consol_v10": ("xw+plat_consol_v9", "xw+plat_consol_v10"),
     "woba+plat_consol_v1": ("woba+plat_consol_v1",),
+    "woba+plat_consol_v2": ("woba+plat_consol_v2",),
     # Historical one-slate experiment; isolated from the restored full-wOBA
     # family but still recognised by the immutable ledger.
     "split+plat_consol_v1": ("split+plat_consol_v1",),
@@ -108,6 +109,7 @@ MODEL_FAMILY_TAGS = (
     ("v8", ("xw+plat_consol_v8",)),
     ("v9/v10", ("xw+plat_consol_v9", "xw+plat_consol_v10")),
     ("wOBA v1", ("woba+plat_consol_v1",)),
+    ("wOBA v2", ("woba+plat_consol_v2",)),
     ("split v1", ("split+plat_consol_v1",)),
 )
 N_FIT_MIN   = 120
