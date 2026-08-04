@@ -125,6 +125,13 @@ def fetch_game_log(season, end_date, verbose=None):
     days = list(_days(f"{season}-03-01", end_date))
     n_days_with_games = 0
     n_raw = 0                      # games seen at all, before any filtering
+    # Rejections counted by reason. The previous run proved the query works
+    # (2076 games over 154 days) and that the filter dropped all of them, but
+    # not WHICH test did it -- so the fix was still a guess. These counters
+    # name the culprit instead.
+    rej = defaultdict(int)
+    seen_types, seen_states = defaultdict(int), defaultdict(int)
+    sample = []
     for i, d in enumerate(days):
         js = _get(f"https://statsapi.mlb.com/api/v1/schedule?sportId=1&date={d}")
         games = [gm for day in js.get("dates", []) for gm in day.get("games", [])]
@@ -132,17 +139,40 @@ def fetch_game_log(season, end_date, verbose=None):
             n_days_with_games += 1
         n_raw += len(games)
         for gm in games:
+            st = gm.get("status") or {}
+            seen_types[str(gm.get("gameType"))] += 1
+            seen_states[f"{st.get('abstractGameState')}/{st.get('codedGameState')}"] += 1
+            if len(sample) < 2:
+                t0 = gm.get("teams") or {}
+                sample.append({
+                    "top_level_keys": sorted(gm.keys())[:14],
+                    "gameType": gm.get("gameType"),
+                    "status": {k: st.get(k) for k in
+                               ("abstractGameState", "codedGameState", "detailedState")},
+                    "away": {k: (t0.get("away") or {}).get(k) for k in ("score",)},
+                    "home": {k: (t0.get("home") or {}).get(k) for k in ("score",)},
+                    "away_team_keys": sorted(((t0.get("away") or {}).get("team") or {}).keys())[:10],
+                })
             pk = gm.get("gamePk")
-            if pk in seen or gm.get("gameType") != "R" or not _is_final(gm):
+            if pk in seen:
+                rej["duplicate"] += 1
+                continue
+            if gm.get("gameType") != "R":
+                rej[f"gameType={gm.get('gameType')!r}"] += 1
+                continue
+            if not _is_final(gm):
+                rej["not final"] += 1
                 continue
             t = gm.get("teams") or {}
             a, h = t.get("away") or {}, t.get("home") or {}
             sa, sh = a.get("score"), h.get("score")
             if sa is None or sh is None:
+                rej["missing score"] += 1
                 continue
             ab_a = ((a.get("team") or {}).get("abbreviation"))
             ab_h = ((h.get("team") or {}).get("abbreviation"))
             if not ab_a or not ab_h:
+                rej["missing team abbreviation"] += 1
                 continue
             seen.add(pk)
             per[ab_a].append((d, float(sa), float(sh)))
@@ -155,18 +185,25 @@ def fetch_game_log(season, end_date, verbose=None):
                 verbose.append(line)
         time.sleep(0.12)
     if not seen:
-        # Separate "the query returned nothing" from "the filter ate everything";
-        # they have completely different fixes and the message should say which.
+        top_rej = sorted(rej.items(), key=lambda kv: -kv[1])[:6]
         raise SystemExit(
             f"FAIL: no finished regular-season games for {season} up to "
             f"{end_date} after querying {len(days)} days.\n"
             f"  days returning any game: {n_days_with_games}\n"
             f"  games seen before filtering: {n_raw}\n"
-            + ("  -> the query itself came back empty; the date range or season "
-               "is wrong.\n" if n_raw == 0 else
-               "  -> games WERE returned and the gameType/final filter removed "
-               "all of them; inspect gameType and status values.\n")
-            + "Refusing to print a report built on an empty log.")
+            f"  rejected by reason: {top_rej}\n"
+            f"  gameType values seen: {dict(sorted(seen_types.items(), key=lambda kv: -kv[1])[:8])}\n"
+            f"  abstract/coded states seen: "
+            f"{dict(sorted(seen_states.items(), key=lambda kv: -kv[1])[:8])}\n"
+            f"  sample games: {json.dumps(sample, default=str)[:900]}\n"
+            "Refusing to print a report built on an empty log.")
+    # Provenance on the success path too: a filter that quietly drops a third
+    # of the season would otherwise look identical to one that drops nothing.
+    kept_line = (f"    kept {len(seen)} of {n_raw} games; "
+                 f"rejected: {dict(sorted(rej.items(), key=lambda kv: -kv[1])[:5])}")
+    print(kept_line, flush=True)
+    if verbose is not None:
+        verbose.append(kept_line)
     return {k: sorted(v) for k, v in per.items()}
 
 
