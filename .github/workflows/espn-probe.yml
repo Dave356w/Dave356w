@@ -1,0 +1,69 @@
+name: ESPN 403 probe
+
+# Manual only. Measures what ESPN returns to a GitHub runner and whether any
+# header set is still allowed through, after the 2026-08-04 403s took out both
+# the pregame odds strip and the market backfill.
+#
+# The runner is the point. The same probe run from a laptop measures the
+# laptop's IP reputation, and that is a different question from the one the
+# broken build is asking.
+#
+# Touches nothing: no build, no lean, no ledger, no commit, no Pages deploy.
+# `contents: read` makes that structural rather than a promise. Deliberately
+# outside the `site-build` concurrency group -- it never writes to data/, so it
+# has no reason to queue behind a build, and this is run *because* something is
+# broken, which is exactly when waiting is worst.
+on:
+  # Runs itself on any PR that changes the probe. Two reasons, and the second
+  # is why it exists at all: a probe nobody has executed is a guess with a
+  # shebang, and `workflow_dispatch` is only dispatchable once the file is on
+  # the default branch -- so without this, the first measurement could not
+  # happen until after the diagnosis it was supposed to inform had been merged.
+  # Path-filtered, so it never fires on unrelated pull requests.
+  pull_request:
+    paths:
+      - 'espn_403_probe.py'
+      - '.github/workflows/espn-probe.yml'
+  workflow_dispatch:
+    inputs:
+      date:
+        description: 'Slate date to request (YYYY-MM-DD, default today UTC)'
+        required: false
+        default: ''
+      event_id:
+        description: 'ESPN event id for the odds endpoint (default: discover from the scoreboard)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10        # fail fast if an ESPN edge hangs rather than denies
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # No pip install: the probe imports only the standard library, on
+      # purpose. A dependency resolution failure must not be able to masquerade
+      # as an ESPN outage while we are trying to diagnose one.
+
+      - name: Run probe
+        run: |
+          python espn_403_probe.py \
+            ${{ inputs.date && format('--date {0}', inputs.date) || '' }} \
+            ${{ inputs.event_id && format('--event-id {0}', inputs.event_id) || '' }} \
+            --out espn_403_probe_report.txt
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: espn-403-probe
+          path: espn_403_probe_report.txt
+          if-no-files-found: warn
