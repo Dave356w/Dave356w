@@ -209,11 +209,14 @@ def fetch_game_log(season, end_date, verbose=None):
             seen.add(pk)
             per[ab_a].append((d, float(sa), float(sh)))
             per[ab_h].append((d, float(sh), float(sa)))
-        # Fail fast on a structural mismatch. If the first handful of days that
-        # returned games kept none of them, another 150 days will not change
-        # that -- and each full pass costs ~2.5 minutes of CI to learn nothing
-        # new. The missing-abbreviation bug burned three rounds at full length.
-        if not seen and n_days_with_games >= 5:
+        # Fail fast on a structural mismatch -- but the condition has to be
+        # "regular-season games arrived and none survived", not "nothing
+        # survived". The first version tripped on 2026-03-01..05, which is
+        # entirely spring training ('S' and 'E'): keeping none of those is
+        # correct behaviour, not a fault, and the season simply had not started
+        # yet. Gate on `R` games actually seen so the guard cannot fire before
+        # there is anything it could be right about.
+        if not seen and seen_types.get("R", 0) >= 20:
             _bail(season, end_date, days, n_days_with_games, n_raw,
                   rej, seen_types, seen_states, sample, early=True)
         if i % 30 == 0 or d == days[-1]:
