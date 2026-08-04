@@ -53,6 +53,8 @@ import pandas as pd
 import requests
 
 from market_backfill import MARKET_COLS, attach_market, metric_label
+from actuals_backfill import (attach_actuals, actuals_summary,
+                              actuals_family_line)
 
 DATA_DIR    = os.environ.get("DATA_DIR", "data")
 LEDGER_PATH = os.path.join(DATA_DIR, "mlb_lean_ledger.csv")
@@ -650,6 +652,31 @@ def report(led):
             say(f"  b_lineup={b[1]:+.3f}±{se[1]:.3f}  b_sp={b[2]:+.3f}±{se[2]:.3f}  HFA={b[0]:+.3f}")
             say(f"  implied w = b_sp/b_lineup = {ratio:+.2f}  "
                 "(symmetric matchup ratio ⇒ ≈ +1.00)")
+    # Predicted-vs-actual is scored on RECORD_TAGS only, for the same reason
+    # the record is: rates from different prediction families are not
+    # commensurable, and pooling them would make a calibration slope describe
+    # a model that never existed. The league-rate baseline is recovered from
+    # the rows themselves (mx - edge), never a literal.
+    _fam = led[led["model_tag"].isin(RECORD_TAGS)]
+    _lg = pd.to_numeric(_fam.get("mx_xwoba_away"), errors="coerce") - \
+        pd.to_numeric(_fam.get("edge_xwoba_away"), errors="coerce")
+    _lg = float(_lg.mean()) if _lg.notna().any() else None
+    _act_lines = actuals_summary(_fam, baseline=_lg)
+    for _ln in _act_lines:
+        say(_ln)
+    _fam_lines = [
+        ln for ln in (actuals_family_line(label, fam)
+                      for label, fam in _model_family_grades(led))
+        if ln is not None
+    ]
+    if _fam_lines:
+        if not _act_lines:
+            say("predicted vs actual (backfilled box scores)")
+        say("  by prediction family (never pooled — different inputs, "
+            "different scale against an observed-wOBA actual):")
+        for _ln in _fam_lines:
+            say(_ln)
+
     families = _model_family_grades(led)
     if families:
         say("model-family history (never pooled into the current-family fit):")
@@ -673,6 +700,13 @@ def main():
         led = attach_market(led)      # idempotent; settled rows missing MLs only
     except Exception as e:            # market outage must not lose the grading run
         print(f"market backfill: FAILED ({type(e).__name__}: {e}); rows retry next run")
+    try:
+        # Must follow attach_market: the join key is the gamePk that call
+        # resolves and score-verifies. Same outage discipline -- a StatsAPI
+        # box score is an outcome, and losing one must never lose the grades.
+        led = attach_actuals(led)
+    except Exception as e:            # noqa: BLE001
+        print(f"actuals backfill: FAILED ({type(e).__name__}: {e}); rows retry next run")
     led.to_csv(LEDGER_PATH, index=False)
     report(led)
 
