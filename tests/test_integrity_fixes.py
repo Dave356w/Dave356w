@@ -1254,6 +1254,117 @@ class PriorPopulationCentreTests(unittest.TestCase):
         pd.testing.assert_frame_equal(cust, before)
 
 
+class PoolShrinkTargetTests(unittest.TestCase):
+    """The batter percentile target. Display-only: the lean path must keep the
+    league rate, and these lock that in."""
+
+    SRC = build_site.MODEL_RATE_SOURCE_COL
+
+    def _cust(self, rows):
+        return pd.DataFrame([{"player_id": p, self.SRC: r, "pa": n}
+                             for (p, r, n) in rows])
+
+    def test_is_the_unweighted_pool_mean(self):
+        rows = [(1, 0.340, 600), (2, 0.260, 40), (3, 0.300, 250)]
+        self.assertAlmostEqual(
+            build_site.pool_shrink_target(self._cust(rows)),
+            (0.340 + 0.260 + 0.300) / 3, places=9)
+
+    def test_sits_below_the_pa_weighted_rate_when_playing_time_tracks_talent(self):
+        """The gap this exists to close. Equal by construction when playing
+        time carries no information -- the target is not a blanket subtraction."""
+        cust = self._cust([(1, 0.360, 600), (2, 0.330, 400),
+                           (3, 0.280, 60), (4, 0.240, 10)])
+        pa_weighted = float(np.average(cust[self.SRC], weights=cust["pa"]))
+        self.assertLess(build_site.pool_shrink_target(cust), pa_weighted)
+
+        flat = self._cust([(1, 0.360, 300), (2, 0.240, 300)])
+        self.assertAlmostEqual(
+            build_site.pool_shrink_target(flat),
+            float(np.average(flat[self.SRC], weights=flat["pa"])), places=9)
+
+    def test_tiny_samples_scatter_without_biasing_the_mean(self):
+        """Sampling noise on a rate is mean-zero (`E[k/n] = p`), so a min=1
+        board's small lines do not drag the centre -- the reason unweighted is
+        usable here even though it would wreck a variance or a quantile.
+
+        This is a claim about bias, so it is tested across draws. A single
+        draw of a pool this small scatters with sd ~0.013; asserting one draw
+        near talent would be a coin flip dressed as a test."""
+        talent = 0.300
+        base = [(i, talent, 500) for i in range(60)]
+        self.assertAlmostEqual(
+            build_site.pool_shrink_target(self._cust(base)), talent, places=9)
+
+        ests = []
+        for seed in range(200):
+            rng = np.random.default_rng(seed)
+            noisy = list(base)
+            for i in range(200):
+                pa = int(rng.integers(1, 15))
+                noisy.append((1000 + i, float(rng.binomial(pa, talent)) / pa, pa))
+            ests.append(build_site.pool_shrink_target(self._cust(noisy)))
+        ests = np.array(ests)
+        self.assertAlmostEqual(float(ests.mean()), talent, delta=0.002)
+        # And the scatter is real: the target does wobble build to build.
+        self.assertGreater(float(ests.std()), 0.005)
+
+    def test_no_threshold_anywhere_in_the_derivation(self):
+        """Sweeping one player's PA cannot move the target at all: PA decides
+        only membership (n > 0), never a weight or a cut. A pool centre gated
+        on `>= N` would step as that player crossed it."""
+        vals = [build_site.pool_shrink_target(
+            self._cust([(1, 0.340, 600), (2, 0.240, pa)]))
+            for pa in range(1, 400, 3)]
+        self.assertEqual(len(set(round(v, 12) for v in vals)), 1)
+
+    def test_unusable_inputs_return_none_so_the_caller_falls_back(self):
+        self.assertIsNone(build_site.pool_shrink_target(None))
+        self.assertIsNone(build_site.pool_shrink_target(pd.DataFrame()))
+        self.assertIsNone(build_site.pool_shrink_target(self._cust([(1, 0.3, 0)])))
+        self.assertIsNone(build_site.pool_shrink_target(
+            self._cust([(1, np.nan, 500)])))
+
+    def test_lower_target_drops_a_low_pa_bat_far_more_than_a_regular(self):
+        """The defect this fixes: sub-qualified bats rank high because they are
+        regressed toward a centre above their own pool. Regulars move too --
+        every shrunk value shifts by `w_i x delta` -- but `w` is 5x smaller for
+        them, so the ranking between the two corrects."""
+        k, league, pool = 100.0, 0.3163, 0.3050
+        # Dense reference so the ratio is not read through searchsorted's
+        # discretization; the exact ratio is the weight ratio
+        # (100/140) / (100/700) = 5.0.
+        ref = np.sort(np.linspace(0.290, 0.360, 4000))
+        fringe_drop = (build_site.pctile_rank(0.300, 40, ref, league, k)
+                       - build_site.pctile_rank(0.300, 40, ref, pool, k))
+        reg_drop = (build_site.pctile_rank(0.300, 600, ref, league, k)
+                    - build_site.pctile_rank(0.300, 600, ref, pool, k))
+        self.assertGreater(fringe_drop, 0.0)
+        self.assertGreater(reg_drop, 0.0)
+        self.assertAlmostEqual(fringe_drop / reg_drop, 5.0, delta=0.2)
+
+    def test_lean_path_keeps_the_league_rate_not_the_display_target(self):
+        """Guards the claim that makes this display-only: if the lean ever
+        starts reading the percentile target, it becomes prediction math and
+        owes a MODEL_TAG bump. Fail here instead."""
+        lb = {"xwOBA": 0.3163, "_pctile_prior_bat": 0.3050}
+        with (
+            mock.patch.object(
+                build_site, "segment_pitcher_blocks",
+                return_value=("pitcher_rows", "opposing_hitters"),
+            ),
+            mock.patch.object(
+                build_site, "aggregate_lineup", return_value="lineup_aggregate"
+            ) as aggregate,
+            mock.patch.object(
+                build_site, "build_matchup", return_value=pd.DataFrame()
+            ) as matchup,
+        ):
+            build_site.build_xwoba_matchup(pd.DataFrame(), lb)
+        self.assertEqual(aggregate.call_args.kwargs["shrink_prior"], 0.3163)
+        self.assertEqual(matchup.call_args.kwargs["shrink_prior"], 0.3163)
+
+
 class PlatoonXwobaAdjustmentTests(unittest.TestCase):
     ADJ = build_site.PLATOON_XWOBA_ADJ
     ADV = build_site.PLATOON_ADV_COL
