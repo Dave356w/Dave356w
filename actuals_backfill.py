@@ -392,13 +392,29 @@ def actuals_family_line(label, fam):
 
 
 def actuals_summary(df, baseline=None, tags=None):
-    """Report lines for predicted-vs-actual. Empty list when nothing pairs."""
+    """Report lines for predicted-vs-actual. Empty list when nothing pairs.
+
+    Pass the WHOLE ledger. The two metrics take different scopes on purpose:
+
+      rates  -- scoped to `tags` (the record family). v9/v10 predicts from
+                xwOBA inputs and wOBA v1 from observed wOBA; against an
+                observed-wOBA actual those are not the same measurement, so
+                pooling them would describe a model that never existed.
+      IP     -- pooled over every family. `expected_pitcher_ip` is one
+                estimator, unchanged since v6, so every row measures the same
+                thing. Scoping it to the record family would have shown n=2
+                for months after each bump and hidden the 306-side-game slope
+                that is the whole reason the line exists.
+
+    The per-family lines below still break IP out, so a family-specific change
+    to the workload estimator would show up rather than being averaged away.
+    """
     if tags is None or "model_tag" not in getattr(df, "columns", []):
         d = df
     else:
         d = df[df["model_tag"].astype(str).isin(set(tags))]
-    ip = paired_sp_ip(d)
-    rates = paired_rates(d)
+    ip = paired_sp_ip(df)          # pooled -- see above
+    rates = paired_rates(d)        # family-scoped
     if ip.empty and rates.empty:
         return []
 
@@ -408,6 +424,18 @@ def actuals_summary(df, baseline=None, tags=None):
         mae = float((ip["act"] - ip["pred"]).abs().mean())
         lines.append(f"  starter IP   n={len(ip):<4d} bias {bias:+.2f} IP  "
                      f"MAE {mae:.2f} IP   (drives the phase weight q)")
+        # The slope is the finding, not the bias. On 2026-08-04 it measured
+        # 0.756 +/- 0.063 over 306 side-games -- 3.9 se below 1.0, i.e.
+        # expected_sp_ip is over-dispersed, pushing too far from the mean in
+        # both directions. Bias over the same rows was +0.10 IP (t=1.31): a
+        # spread problem, not a level one. Printing it every build is what
+        # makes the deferred re-fit surface on its own rather than depending
+        # on anyone remembering. See CLAUDE.md for the decision and its gate.
+        cal = calibration(ip["pred"], ip["act"])
+        if cal:
+            lines.append(f"    IP calibration slope {cal['slope']:+.3f} "
+                         f"+/- {cal['se_slope']:.3f} (1.00 = calibrated; "
+                         f"< 1 = over-dispersed)")
     if not rates.empty:
         n = len(rates)
         lines.append(f"  offense wOBA n={n:<4d} pred mean {rates['pred'].mean():.4f}  "

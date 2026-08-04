@@ -296,6 +296,24 @@ class SummaryTests(unittest.TestCase):
     def test_family_line_is_none_when_nothing_pairs(self):
         self.assertIsNone(ab.actuals_family_line("v2", pd.DataFrame([{"game_pk": 1}])))
 
+
+    def test_ip_pools_across_families_while_rates_stay_scoped(self):
+        """expected_pitcher_ip is one estimator shared since v6, so its slope
+        must pool; the rates must not, because families predict from different
+        inputs. Scoping IP to the record family would show n=2 for months
+        after every bump and hide the sample the line exists to surface."""
+        led = pd.DataFrame({
+            "game_pk": [1, 2], "model_tag": ["woba+plat_consol_v1", "xw+plat_consol_v10"],
+            "mx_xwoba_away": [0.32, 0.32], "mx_xwoba_home": [0.31, 0.31],
+            "act_woba_away": [0.30, 0.40], "act_woba_home": [0.33, 0.28],
+            "act_pa_away": [38, 38], "act_pa_home": [38, 38],
+            "expected_sp_ip_away": [5.0, 6.0], "expected_sp_ip_home": [5.5, 4.5],
+            "act_sp_ip_away": [4.0, 6.5], "act_sp_ip_home": [6.0, 4.0],
+        })
+        out = "\n".join(ab.actuals_summary(led, tags=["woba+plat_consol_v1"]))
+        self.assertIn("starter IP   n=4", out)      # both families
+        self.assertIn("offense wOBA n=2", out)      # current family only
+
     def test_tag_filter_scopes_to_one_family(self):
         led = pd.DataFrame({
             "game_pk": [1, 2], "model_tag": ["v10", "v2"],
