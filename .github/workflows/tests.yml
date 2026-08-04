@@ -1,0 +1,55 @@
+name: Tests
+
+# Runs the gate CLAUDE.md documents -- validate_data_files.py then the whole
+# suite -- on every pull request and every push to main. This previously ran a
+# single file (tests/test_bp_ablation.py), so 309 of 310 tests never ran
+# anywhere but a developer's machine, and the one gate this repo has was
+# effectively opt-in.
+#
+# Deliberately NOT wired into build.yml, and that is a data-integrity decision
+# rather than a convenience one. The build commits pregame snapshots, and the
+# ledger only accepts a row whose snapshot predates first pitch. A test failure
+# blocking the daily build would cost that slate's rows permanently -- they
+# cannot be re-derived afterwards without lookahead, which `.savant_cache/`
+# being gitignored makes impossible on purpose. So tests gate the change, and
+# the build keeps running against a main branch the change already passed on.
+#
+# The job stays named `test`, so the existing check name does not move.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pytest
+
+      # First, because this is the check that has failed in production twice:
+      # a conflict marker committed into data/ breaks every downstream read.
+      - name: Validate committed CSV data
+        run: python validate_data_files.py
+
+      - name: Run tests
+        run: python -m pytest tests/ -q
