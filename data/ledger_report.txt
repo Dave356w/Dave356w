@@ -4,6 +4,15 @@ platoon lean full: 0-1  (0.000)   F5: 0-1  (0.000)   (reliable-only, n=1)
 wOBA on same subset  full: 0-1  (0.000)   F5: 0-1  (0.000)
 home F5 baseline: 1.000  (n=1)
 weight fit: 1 usable F5 decisions (gate 120)
+predicted vs actual (backfilled box scores)
+  starter IP   n=2    bias +0.11 IP  MAE 0.87 IP   (drives the phase weight q)
+  offense wOBA n=2    pred mean 0.2966  actual mean 0.2784  (-0.0182)
+  by prediction family (never pooled — different inputs, different scale against an observed-wOBA actual):
+  v6         SP IP n=  6 bias +0.60
+  v7         SP IP n= 90 bias +0.09
+  v9/v10     wOBA n=194 pred 0.3138 act 0.3021 (-0.0118) slope +0.95±0.38  SP IP n=194 bias +0.08
+  wOBA v1    wOBA n=  2 pred 0.2966 act 0.2784 (-0.0182)  SP IP n=  2 bias +0.11
+  split v1   wOBA n= 14 pred 0.3221 act 0.3514 (+0.0294) slope -0.78±1.58  SP IP n= 14 bias +0.05
 model-family history (never pooled into the current-family fit):
   v2/v3   n=189  xwOBA full 110-79  (0.582)  F5 89-75-25  (0.543)
   v4      n= 14  xwOBA full 8-6  (0.571)  F5 6-7-1  (0.462)
