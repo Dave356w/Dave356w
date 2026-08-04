@@ -281,10 +281,18 @@ def log(*a):
 # ============================================================
 # CELL 1 -- FETCH (render-free / no browser)
 # ============================================================
-def _get_json(url, params=None, tries=4):
+def _get_json(url, params=None, tries=4, headers=None):
+    """`headers` overrides the session defaults for one call.
+
+    Used only by the ESPN odds path, which needs the honest agent string in
+    fetch_headers.py to get past that edge's bot rule. Deliberately per-call
+    rather than a change to `session.headers`: Savant and StatsAPI are
+    answering the browser-ish UA today, and a build that loses the Savant
+    leaderboards costs a slate's rows permanently.
+    """
     for k in range(tries):
         try:
-            r = session.get(url, params=params, timeout=30)
+            r = session.get(url, params=params, timeout=30, headers=headers)
             r.raise_for_status()
             return r.json()
         except Exception:
@@ -2621,11 +2629,13 @@ def _parse_espn_dt(s):
 
 def fetch_pregame_odds(slate_df):
     """game_pk -> {away_ml, home_ml, open_away_ml, open_home_ml, total, p_home}."""
+    from fetch_headers import FETCH_HEADERS
     out = {}
     try:
         ds = SLATE_DATE.replace("-", "")
         sb = _get_json("https://site.api.espn.com/apis/site/v2/sports/baseball/"
-                       f"mlb/scoreboard?dates={ds}", tries=2)
+                       f"mlb/scoreboard?dates={ds}", tries=2,
+                       headers=FETCH_HEADERS)
     except Exception as e:  # noqa: BLE001
         log(f"pregame odds: scoreboard fetch failed ({e!r}) -> strip renders em-dashes")
         return out
@@ -2665,7 +2675,8 @@ def fetch_pregame_odds(slate_df):
         try:
             odds = _get_json("https://sports.core.api.espn.com/v2/sports/baseball/"
                              f"leagues/mlb/events/{pick['eid']}/competitions/"
-                             f"{pick['eid']}/odds", tries=2)
+                             f"{pick['eid']}/odds", tries=2,
+                             headers=FETCH_HEADERS)
         except Exception as e:  # noqa: BLE001
             log(f"pregame odds: game_pk={g['game_pk']} odds fetch failed ({e!r})")
             continue
