@@ -1893,6 +1893,72 @@ class ModelTagProvenanceTests(unittest.TestCase):
                 "and silently drifts from them on the next version bump",
             )
 
+class MarketCalibrationTests(unittest.TestCase):
+    """Invariants of the market-calibration page.
+
+    These are structural, not expectations about how the market performed: a
+    failure here means the table is built wrong, not that the season went
+    differently. That is the same line test_ledger_invariants.py holds.
+    """
+
+    def test_odds_ladder_tiles_every_representable_price(self):
+        """No price may fall through, and none may match two rungs.
+
+        The first version used `lo < ml <= hi`, which dropped exactly +100 --
+        not greater than 100, not <= -100 -- so one observation per such game
+        vanished silently and the home/away counts went 385 vs 384.
+        """
+        prices = list(range(-2000, -99)) + list(range(100, 2001))
+        for ml in prices:
+            hits = [lab for lo, hi, lab in build_site._ODDS_LADDER
+                    if (lo is None or ml >= lo) and (hi is None or ml <= hi)]
+            self.assertEqual(len(hits), 1,
+                             f"American price {ml:+d} matched rungs {hits}")
+
+    def _frame(self):
+        return pd.DataFrame({
+            "full_home": [5, 2, 6, 1, 4, 3],
+            "full_away": [3, 4, 2, 3, 1, 7],
+            "close_p_home": [.55, .48, .70, .42, .50, .62],
+            # deliberately includes an even-money +100 price, the case that broke
+            "close_home_ml": [-120, 105, -250, 115, 100, -160],
+            "close_away_ml": [100, -125, 210, -135, -120, 140],
+        })
+
+    def test_each_game_contributes_one_home_and_one_away_observation(self):
+        rows, totals = build_site._market_calibration_rows(self._frame())
+        self.assertEqual(totals["home"]["n"], totals["away"]["n"])
+        self.assertEqual(totals["all"]["n"],
+                         totals["home"]["n"] + totals["away"]["n"])
+        per_rung = sum(r["all"]["n"] for r in rows)
+        self.assertEqual(per_rung, totals["all"]["n"],
+                         "rung counts must sum to the total; a dropped price "
+                         "shows up here first")
+
+    def test_both_sides_implied_and_actual_are_exactly_one_half(self):
+        """Forced by construction, so a deviation is a bug, not a result.
+
+        Devigged probabilities sum to 1 across the two sides of a game, and
+        exactly one side wins. Pooling both sides must therefore give .500 on
+        both the implied and the realised column, whatever the season did.
+        """
+        _rows, totals = build_site._market_calibration_rows(self._frame())
+        self.assertAlmostEqual(totals["all"]["implied"], 0.5, places=9)
+        self.assertAlmostEqual(totals["all"]["actual"], 0.5, places=9)
+
+    def test_rows_without_a_close_are_skipped_not_imputed(self):
+        d = self._frame()
+        d.loc[0, "close_p_home"] = np.nan
+        _rows, totals = build_site._market_calibration_rows(d)
+        self.assertEqual(totals["home"]["n"], 5)
+        self.assertEqual(totals["away"]["n"], 5)
+
+    def test_no_close_column_yields_no_rows_rather_than_raising(self):
+        rows, totals = build_site._market_calibration_rows(
+            pd.DataFrame({"full_home": [1], "full_away": [2]}))
+        self.assertEqual(rows, [])
+        self.assertEqual(totals, {})
+
 
 if __name__ == "__main__":
     unittest.main()
