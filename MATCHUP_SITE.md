@@ -250,7 +250,10 @@ uses the PA-weighted pool mean, and the unweighted dispersion uses the
 unweighted pool mean. The estimator no longer consumes the shrinkage target;
 `sigma²`, `tau²`, and `K = sigma²/tau²` are properties of the player pool.
 The league xwOBA remains the target when each resulting player estimate is
-shrunk.
+shrunk. That target was never revisited — v8 retired the estimator this
+correction lived in, so the between-centre offset stopped being measured
+anywhere. `prior_population_centres` now logs it each build for every pool the
+target is applied to; see the amendment in `docs/build_logic_validation.md`.
 
 The same v7 draft also removes two downstream discretization artifacts:
 

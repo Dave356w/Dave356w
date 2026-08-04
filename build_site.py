@@ -1249,6 +1249,139 @@ def compute_league_baseline(batter_cust):
     return league_baseline
 
 
+# --- shrinkage-target population diagnostic (log-only) ----------------------
+# XWOBA_SHRINK_K regresses batters, probable starters and every reliever toward
+# ONE target: the PA-weighted league rate compute_league_baseline just built.
+# The justification on record (docs/build_logic_validation.md) is "league-wide
+# xwOBA-allowed equals league xwOBA". That identity is true and does not
+# license the target. Empirical Bayes wants the centre of the pool each
+# estimate is drawn from, and a pooled mean is not the centre of any of its
+# subpools -- the identity only guarantees they average back to it.
+#
+# v7 already named the batter half of this (MATCHUP_SITE.md: low-PA members
+# have a different unweighted centre than the PA-weighted target), corrected
+# the K *estimator* for the resulting between-centre offset, and deliberately
+# left the target alone. v8 then retired that estimator, so nothing in the
+# current build measures the offset at all and the target has never been
+# revisited.
+#
+# So this logs the centres instead of arguing them from identities. Two
+# distinct gaps are separated on purpose:
+#
+#   weighted vs unweighted -- within one pool, how much the PA/BF weighting
+#     lifts the centre above the player-level centre EB actually wants. Good
+#     hitters take more PA and good relievers get more usage, so the weighted
+#     figure flatters both pools relative to their members.
+#   pool vs target -- whether that pool belongs at the shared target at all.
+#
+# `bias` multiplies the second gap by the mean prior weight to give the average
+# displacement the shared target imposes on a member of the pool: what the
+# wrong centre is actually worth, in rate points, before anything cancels
+# between the two sides of a game.
+#
+# Log-only by construction. Nothing here returns into a lean, a dump, a ledger
+# row or the page, so it carries no MODEL_TAG implication and cannot fail the
+# build -- the caller swallows its exceptions.
+def _pool_moments(rate, weight, prior, k):
+    """(n, weighted centre, unweighted centre, mean prior weight, bias) or None.
+
+    `weight` is PA for batters and BF for pitchers -- the same sample size the
+    shrinkage uses, so `mean_w` is literally the average share of a member's
+    published estimate that is the target rather than the player.
+    """
+    rate = pd.to_numeric(pd.Series(rate).reset_index(drop=True), errors="coerce")
+    weight = pd.to_numeric(pd.Series(weight).reset_index(drop=True), errors="coerce")
+    m = rate.notna() & weight.notna() & (weight > 0)
+    if not m.any():
+        return None
+    r, w = rate[m], weight[m]
+    unweighted = float(r.mean())
+    mean_w = float((k / (w + k)).mean())
+    return {
+        "n": int(m.sum()),
+        "weighted": float(np.average(r, weights=w)),
+        "unweighted": unweighted,
+        "mean_w": mean_w,
+        "bias": mean_w * (unweighted - float(prior)),
+    }
+
+
+def prior_population_centres(batter_cust, pitcher_cust, prior, k,
+                             role_map=None, probable_ids=None):
+    """Centres of every pool the shared shrinkage target is applied to.
+
+    `role_map` is player id -> season role line (load_team_pitcher_roles), which
+    build_pitching_plans has already fetched and cached for the slate's teams;
+    passing it costs no extra request and is what splits the rotation from the
+    relief pool. Without it the pitcher pools collapse to one undifferentiated
+    row -- which is the current model's assumption, stated rather than hidden.
+
+    Returns a list of (label, moments) with unusable pools dropped.
+    """
+    if prior is None or not np.isfinite(float(prior)):
+        return []
+    src = MODEL_RATE_SOURCE_COL
+    out = []
+
+    def add(label, cust, mask=None):
+        cols = getattr(cust, "columns", [])
+        if cust is None or src not in cols or "pa" not in cols:
+            return
+        rate, weight = cust[src], cust["pa"]
+        if mask is not None:
+            rate, weight = rate[mask], weight[mask]
+        moments = _pool_moments(rate, weight, prior, k)
+        if moments:
+            out.append((label, moments))
+
+    add("batters", batter_cust)
+    # The sub-qualified tail is where the target does most of its work: these
+    # are the call-ups and platoon bats whose published rate is mostly prior.
+    games = (_est_team_games(pd.to_numeric(batter_cust.get("pa"), errors="coerce"))
+             if batter_cust is not None else None)
+    if games:
+        pa = pd.to_numeric(batter_cust["pa"], errors="coerce")
+        add(f"batters <{PCTILE_QUAL_BAT * games:.0f}PA", batter_cust,
+            pa < PCTILE_QUAL_BAT * games)
+
+    add("pitchers", pitcher_cust)
+    if role_map and pitcher_cust is not None and "player_id" in pitcher_cust.columns:
+        pid = pd.to_numeric(pitcher_cust["player_id"], errors="coerce")
+        share = pid.map(lambda i: (role_map.get(int(i)) or {}).get("start_share")
+                        if pd.notna(i) else None)
+        ip_app = pid.map(lambda i: (role_map.get(int(i)) or {}).get("avg_ip_per_appearance")
+                         if pd.notna(i) else None)
+        share = pd.to_numeric(share, errors="coerce")
+        ip_app = pd.to_numeric(ip_app, errors="coerce")
+        # Same predicate relief_pitcher_ids uses, so the RP row describes the
+        # pool bullpen_xwoba_aggregate actually shrinks -- not a proxy for it.
+        add("  pitchers:RP", pitcher_cust,
+            (share <= RP_MAX_START_SHARE) & (ip_app <= RP_MAX_IP_PER_APPEARANCE))
+        add("  pitchers:SP", pitcher_cust, share > RP_MAX_START_SHARE)
+    if probable_ids and pitcher_cust is not None and "player_id" in pitcher_cust.columns:
+        pid = pd.to_numeric(pitcher_cust["player_id"], errors="coerce")
+        # The only starters the model ever shrinks. A rotation-wide SP centre
+        # can differ from this one; that difference is selection, not talent.
+        add("  pitchers:SP(slate)", pitcher_cust,
+            pid.isin({int(i) for i in probable_ids}))
+    return out
+
+
+def log_prior_population_centres(batter_cust, pitcher_cust, prior, k,
+                                 role_map=None, probable_ids=None):
+    rows = prior_population_centres(batter_cust, pitcher_cust, prior, k,
+                                    role_map=role_map, probable_ids=probable_ids)
+    if not rows:
+        return
+    log(f"  shrinkage target = {prior:.5f} (PA-weighted league {MODEL_RATE_LABEL}), "
+        f"K={k:.0f}; pool centres:")
+    log(f"    {'pool':<24}{'n':>6}{'wtd':>9}{'unwtd':>9}{'mean w':>9}"
+        f"{'unwtd-tgt':>11}{'bias':>9}")
+    for label, m in rows:
+        log(f"    {label:<24}{m['n']:>6}{m['weighted']:>9.4f}{m['unweighted']:>9.4f}"
+            f"{m['mean_w']:>9.3f}{m['unweighted'] - prior:>+11.4f}{m['bias']:>+9.4f}")
+
+
 def fetch_all(slate_date):
     """Run the full cell-1 fetch. Returns a dict of everything downstream needs."""
     log(f"Pulling slate for {slate_date} ...")
@@ -1388,6 +1521,26 @@ def fetch_all(slate_date):
     pitching_plans = build_pitching_plans(
         slate_df, recent_start_era, pitcher_stat, league_baseline
     )
+
+    # Log-only; runs here because build_pitching_plans has just populated
+    # _team_pitcher_role_cache, so the rotation/relief split costs no request.
+    # Best-effort in both directions: a missing role line drops the pitcher
+    # subpools, and any failure at all drops the whole block rather than the
+    # build. See prior_population_centres.
+    if USE_XWOBA_SHRINK:
+        try:
+            # Read the cache rather than calling load_team_pitcher_roles: a
+            # diagnostic must not add a request, and a team that failed to load
+            # above should drop out of the subpools instead of being retried.
+            role_map = {}
+            for roles in _team_pitcher_role_cache.values():
+                role_map.update(roles or {})
+            log_prior_population_centres(
+                batter_cust, pitcher_cust, league_baseline.get("xwOBA"),
+                XWOBA_SHRINK_K, role_map=role_map, probable_ids=prob_ids,
+            )
+        except Exception as e:  # noqa: BLE001
+            log(f"  shrinkage-target population diagnostic unavailable: {e!r}")
 
     try:
         league_baseline["ERA"] = load_league_era()
