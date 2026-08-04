@@ -267,13 +267,25 @@ receive closing lines (`run_market_update.py` invariant). Do not relax either.
 
 ```
 python validate_data_files.py     # CSV conflict markers — has failed twice in prod
-python -m pytest tests/ -q        # CI does NOT run these yet
+python -m pytest tests/ -q
 ```
 
-CI has no test step and `requirements.txt` has no pytest. Until that is fixed,
-running the suite locally is the only gate. If you touch `build_site.py`,
-`grade_leans.py`, or `market_backfill.py`, run both commands and paste the
-output in the PR.
+`.github/workflows/tests.yml` now runs both on every pull request and every
+push to main, so this is a real gate rather than an honour system. Run it
+locally anyway when you touch `build_site.py`, `grade_leans.py`,
+`market_backfill.py` or `actuals_backfill.py`, and paste the output in the PR —
+CI tells you *that* something broke, the local run tells you before you push.
+
+`requirements.txt` still has no pytest, on purpose: the workflow installs it
+alongside, and the build job has no reason to carry a test dependency into
+production. Install it yourself to run the gate.
+
+The suite is **not** wired into `build.yml`, and that is a data-integrity
+decision. The build commits pregame snapshots, and the ledger only accepts a
+row whose snapshot predates first pitch — so a test failure blocking the daily
+build would cost that slate's rows permanently. They cannot be re-derived
+afterwards without lookahead. Tests gate the change; the build runs against a
+main branch the change already passed on.
 
 `tests/test_ledger_invariants.py` runs against the committed ledger rather than
 constructed frames: phase algebra (`mx = q·mx_sp + (1−q)·mx_bp`, shares summing
