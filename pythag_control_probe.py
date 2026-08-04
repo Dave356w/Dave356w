@@ -57,6 +57,7 @@ from __future__ import annotations
 
 import argparse
 import bisect
+import datetime as dt
 import itertools
 import json
 import sys
@@ -87,30 +88,6 @@ def _get(url, tries=4):
             time.sleep(1.5 * (2 ** k))
 
 
-def _month_chunks(start, end):
-    """[(start, end), ...] one month at a time.
-
-    StatsAPI's /schedule does not reliably answer a five-month span -- the
-    first version of this probe asked for 03-01..08-04 in one call and got
-    zero dates back, which then surfaced as an int(NaN) crash further down
-    rather than as the fetch failure it was. Chunking also makes a partial
-    upstream outage visible per month instead of silently short.
-    """
-    out = []
-    y, m = int(start[:4]), int(start[5:7])
-    while True:
-        s = f"{y:04d}-{m:02d}-01"
-        ny, nm = (y + 1, 1) if m == 12 else (y, m + 1)
-        e = min(f"{ny:04d}-{nm:02d}-01", end)
-        if s > end:
-            break
-        out.append((max(s, start), e))
-        if e >= end:
-            break
-        y, m = ny, nm
-    return out
-
-
 def _is_final(gm):
     """Finished games report 'F' or 'O' in codedGameState; abstractGameState
     is the authority. Requiring 'F' alone silently drops completed games."""
@@ -119,42 +96,77 @@ def _is_final(gm):
             or st.get("codedGameState") in ("F", "O"))
 
 
+def _days(start, end):
+    d = dt.date.fromisoformat(start)
+    stop = dt.date.fromisoformat(end)
+    while d <= stop:
+        yield d.isoformat()
+        d += dt.timedelta(days=1)
+
+
 def fetch_game_log(season, end_date, verbose=None):
-    """(abbr) -> sorted list of (date, runs_scored, runs_allowed), regular season."""
+    """(abbr) -> sorted list of (date, runs_scored, runs_allowed), regular season.
+
+    Queries one day at a time with `?sportId=1&date=YYYY-MM-DD`. That is more
+    requests than a date range, and it is deliberate: this exact call shape is
+    what market_backfill._statsapi_day runs successfully on every build, so it
+    is the one shape in this repo known to work. Two attempts at the range form
+    (`startDate`/`endDate`, with and without month chunking) both came back with
+    zero dates, and guessing at range parameters from a sandbox that cannot
+    reach StatsAPI is how that time got spent. A proven call beats a clever one.
+
+    Diagnostics print as they happen rather than accumulating into the report:
+    the first version collected them into the report string, which is only
+    emitted at the end, so the fetch failure discarded exactly the lines needed
+    to diagnose it.
+    """
     per = defaultdict(list)
     seen = set()
-    for s, e in _month_chunks(f"{season}-03-01", end_date):
-        url = (f"https://statsapi.mlb.com/api/v1/schedule?sportId=1&gameType=R"
-               f"&startDate={s}&endDate={e}")
-        js = _get(url)
-        got = 0
-        for day in js.get("dates", []):
-            for gm in day.get("games", []):
-                pk = gm.get("gamePk")
-                if pk in seen or not _is_final(gm):
-                    continue
-                t = gm.get("teams") or {}
-                a, h = t.get("away") or {}, t.get("home") or {}
-                sa, sh = a.get("score"), h.get("score")
-                if sa is None or sh is None:
-                    continue
-                ab_a = ((a.get("team") or {}).get("abbreviation"))
-                ab_h = ((h.get("team") or {}).get("abbreviation"))
-                if not ab_a or not ab_h:
-                    continue
-                d = (gm.get("officialDate") or gm.get("gameDate", ""))[:10]
-                seen.add(pk)
-                got += 1
-                per[ab_a].append((d, float(sa), float(sh)))
-                per[ab_h].append((d, float(sh), float(sa)))
-        if verbose is not None:
-            verbose.append(f"    {s}..{e}: {got} final games")
-        time.sleep(0.2)
+    days = list(_days(f"{season}-03-01", end_date))
+    n_days_with_games = 0
+    n_raw = 0                      # games seen at all, before any filtering
+    for i, d in enumerate(days):
+        js = _get(f"https://statsapi.mlb.com/api/v1/schedule?sportId=1&date={d}")
+        games = [gm for day in js.get("dates", []) for gm in day.get("games", [])]
+        if games:
+            n_days_with_games += 1
+        n_raw += len(games)
+        for gm in games:
+            pk = gm.get("gamePk")
+            if pk in seen or gm.get("gameType") != "R" or not _is_final(gm):
+                continue
+            t = gm.get("teams") or {}
+            a, h = t.get("away") or {}, t.get("home") or {}
+            sa, sh = a.get("score"), h.get("score")
+            if sa is None or sh is None:
+                continue
+            ab_a = ((a.get("team") or {}).get("abbreviation"))
+            ab_h = ((h.get("team") or {}).get("abbreviation"))
+            if not ab_a or not ab_h:
+                continue
+            seen.add(pk)
+            per[ab_a].append((d, float(sa), float(sh)))
+            per[ab_h].append((d, float(sh), float(sa)))
+        if i % 30 == 0 or d == days[-1]:
+            line = (f"    {d}: {len(seen):4d} final regular-season games so far "
+                    f"({n_raw} seen, {n_days_with_games} days with any)")
+            print(line, flush=True)
+            if verbose is not None:
+                verbose.append(line)
+        time.sleep(0.12)
     if not seen:
+        # Separate "the query returned nothing" from "the filter ate everything";
+        # they have completely different fixes and the message should say which.
         raise SystemExit(
-            "FAIL: StatsAPI returned no finished regular-season games for "
-            f"{season} up to {end_date}. Nothing downstream is computable; "
-            "refusing to print a report built on an empty log.")
+            f"FAIL: no finished regular-season games for {season} up to "
+            f"{end_date} after querying {len(days)} days.\n"
+            f"  days returning any game: {n_days_with_games}\n"
+            f"  games seen before filtering: {n_raw}\n"
+            + ("  -> the query itself came back empty; the date range or season "
+               "is wrong.\n" if n_raw == 0 else
+               "  -> games WERE returned and the gameType/final filter removed "
+               "all of them; inspect gameType and status values.\n")
+            + "Refusing to print a report built on an empty log.")
     return {k: sorted(v) for k, v in per.items()}
 
 
