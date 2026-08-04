@@ -53,7 +53,7 @@ import pandas as pd
 import requests
 
 from market_backfill import MARKET_COLS, attach_market, metric_label
-from actuals_backfill import (attach_actuals, actuals_summary,
+from actuals_backfill import (ACTUAL_COLS, attach_actuals, actuals_summary,
                               actuals_family_line)
 
 DATA_DIR    = os.environ.get("DATA_DIR", "data")
@@ -257,8 +257,9 @@ MODEL_FIELDS = [
 def load_ledger():
     if os.path.exists(LEDGER_PATH):
         led = pd.read_csv(LEDGER_PATH)
-        persisted_cols = (LEDGER_COLS + [c for c in MARKET_COLS if c not in LEDGER_COLS]
-                          + AUDIT_COLS)
+        persisted_cols = list(dict.fromkeys(
+            LEDGER_COLS + MARKET_COLS + AUDIT_COLS + ACTUAL_COLS
+        ))
         # Add every missing column in one concat. Inserting them one at a time
         # refragmented the frame on each new audit column and pandas warns.
         missing = [c for c in persisted_cols if c not in led.columns]
@@ -284,7 +285,9 @@ def load_ledger():
                   "pitching_basis_away", "pitching_basis_home"):
             led[c] = led[c].astype(object)
         return led
-    return pd.DataFrame(columns=LEDGER_COLS + AUDIT_COLS)
+    return pd.DataFrame(columns=list(dict.fromkeys(
+        LEDGER_COLS + MARKET_COLS + AUDIT_COLS + ACTUAL_COLS
+    )))
 
 
 def _utc_datetime(value):
