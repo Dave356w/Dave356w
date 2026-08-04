@@ -33,6 +33,7 @@
 
 import base64
 import io
+import math
 import os
 import re
 import sys
@@ -4640,6 +4641,114 @@ def _team_performance_rows(led):
     return rows
 
 
+# Conventional American-odds rungs. Bands are in PRICE, not probability,
+# because "is -180 fairly priced" is the question actually being asked, and a
+# probability band would blur two different prices into one row. American odds
+# never fall between -100 and +100, so plain numeric ordering is a valid ladder
+# and the favourite/underdog split falls out of the sign.
+# Bounds are INCLUSIVE at both ends and match the labels exactly. The first
+# version used a half-open `lo < ml <= hi`, which silently dropped a price of
+# exactly +100: it is not > 100, and it is not <= -100, so it fell through
+# every rung. The page's own home/away counts caught it (385 vs 384 where the
+# two must be equal), which is the argument for printing n per side rather
+# than only a total.
+_ODDS_LADDER = (
+    (None, -250, "≤ -250"),
+    (-249, -175, "-249 to -175"),
+    (-174, -130, "-174 to -130"),
+    (-129, -100, "-129 to -100"),
+    (100, 129, "+100 to +129"),
+    (130, 174, "+130 to +174"),
+    (175, 249, "+175 to +249"),
+    (250, None, "≥ +250"),
+)
+
+
+def _ladder_rung(ml):
+    """Rung label for an American price, or None if it is not a valid one.
+
+    American odds never fall strictly between -100 and +100, so the rungs above
+    tile every representable price. A None return therefore means the input was
+    not a real moneyline, and the caller drops it rather than guessing."""
+    for lo, hi, label in _ODDS_LADDER:
+        if (lo is None or ml >= lo) and (hi is None or ml <= hi):
+            return label
+    return None
+
+
+def _market_calibration_rows(led):
+    """Devigged closing implied % against realised win %, by side and price.
+
+    One graded game contributes TWO observations -- the home side at its close
+    and the away side at its close -- because each side is its own bet and the
+    question is asked per price, not per game. That is deliberate double
+    counting of games, not of bets, and the note on the page says so.
+
+    `close_p_home` is already devigged by market_backfill, so `implied` is a
+    fair probability and the gap to the raw price is the vig. Rows without a
+    close are skipped rather than imputed; ties/unplayed rows never enter.
+    """
+    if led is None or "close_p_home" not in led.columns:
+        return [], {}
+    fa = pd.to_numeric(led.get("full_away"), errors="coerce")
+    fh = pd.to_numeric(led.get("full_home"), errors="coerce")
+    ph = pd.to_numeric(led["close_p_home"], errors="coerce")
+    hml = pd.to_numeric(led.get("close_home_ml"), errors="coerce")
+    aml = pd.to_numeric(led.get("close_away_ml"), errors="coerce")
+    ok = fa.notna() & fh.notna() & (fa != fh) & ph.notna() & hml.notna() & aml.notna()
+    if not ok.any():
+        return [], {}
+    home_won = (fh > fa)[ok].to_numpy()
+    obs = []
+    for side, ml, imp, won in (
+        ("home", hml[ok].to_numpy(), ph[ok].to_numpy(), home_won),
+        ("away", aml[ok].to_numpy(), (1.0 - ph[ok]).to_numpy(), ~home_won),
+    ):
+        for m, p, w in zip(ml, imp, won):
+            rung = _ladder_rung(float(m))
+            if rung is not None:
+                obs.append((rung, side, float(p), bool(w)))
+
+    def agg(sel):
+        n = len(sel)
+        if not n:
+            return None
+        wins = sum(1 for _, _, _, w in sel if w)
+        imp = sum(p for _, _, p, _ in sel) / n
+        act = wins / n
+        return dict(n=n, w=wins, implied=imp, actual=act,
+                    se=math.sqrt(max(act * (1 - act), 0.0) / n),
+                    diff=act - imp)
+
+    rows = []
+    for _lo, _hi, label in _ODDS_LADDER:
+        at = [o for o in obs if o[0] == label]
+        if not at:
+            continue
+        rows.append(dict(
+            rung=label,
+            home=agg([o for o in at if o[1] == "home"]),
+            away=agg([o for o in at if o[1] == "away"]),
+            all=agg(at),
+        ))
+    totals = {s: agg([o for o in obs if o[1] == s]) for s in ("home", "away")}
+    totals["all"] = agg(obs)
+    return rows, totals
+
+
+def _calib_cell(parts):
+    """Realised vs implied for one bucket, with the sample size it rests on."""
+    if not parts:
+        return "<span class='tm-n'>—</span>"
+    d = parts["diff"]
+    tone = "cool" if d > 0 else ("warm" if d < 0 else "")
+    return (f"<span class='tm-record{(' ' + tone) if tone else ''}'>"
+            f"{100 * parts['actual']:.1f}%</span>"
+            f"<span class='tm-accuracy'>vs {100 * parts['implied']:.1f}% implied "
+            f"({d * 100:+.1f})</span>"
+            f"<span class='tm-n'>n={parts['n']} · ±{100 * parts['se']:.1f}</span>")
+
+
 def _team_metric_cell(parts):
     """Record + decision accuracy + n, with ties excluded from accuracy."""
     w, l, t, n = (parts[k] for k in ("w", "l", "t", "n"))
@@ -5028,7 +5137,8 @@ def _lock_provenance(led):
 def render_grades_html(built_txt):
     back = ("<div class='backlink ledger-nav'>"
             "<a href='index.html'>← today's leans</a>"
-            "<a href='team-grades.html'>performance by team →</a></div>")
+            "<a href='team-grades.html'>performance by team →</a>"
+            "<a href='market-calibration.html'>market calibration →</a></div>")
     led = load_ledger_df()
     if led is None:
         body = back + ("<div class='legend'><div class='lg-title'>Grading ledger · "
@@ -5128,11 +5238,75 @@ def render_grades_html(built_txt):
     return html_document(back + head + summary + table, built_txt, title="MLB lean grades")
 
 
+def render_market_calibration_html(built_txt):
+    """Devigged closing implied % against realised win %, by side and price."""
+    nav = ("<div class='backlink ledger-nav'>"
+           "<a href='grades.html'>← full ledger</a>"
+           "<a href='team-grades.html'>performance by team →</a></div>")
+    head = ("<div class='gr-head'><h1 class='gr-h1'>Market calibration</h1>"
+            "<div class='gr-lead'>What the devigged DK close implied, against "
+            "what actually happened — split by side and by price rung. This "
+            "grades the <i>market</i>, not the model. Built "
+            f"<span class='stamp'>{built_txt}</span>.</div></div>")
+    led = load_ledger_df()
+    rows, totals = _market_calibration_rows(led)
+    if not rows:
+        empty = ("<div class='gr-note'>No graded rows carry a closing line yet — "
+                 "this page appears once the market backfill has run.</div>")
+        return html_document(nav + head + empty, built_txt,
+                             title="MLB market calibration")
+
+    stats = []
+    for key, lab in (("all", "Both sides"), ("home", "Home"), ("away", "Away")):
+        t = totals.get(key)
+        if not t:
+            continue
+        stats.append(
+            f"<div class='gr-stat'><div class='l'>{lab}</div>"
+            f"<div class='v'>{100 * t['actual']:.1f}%</div>"
+            f"<div class='s'>vs {100 * t['implied']:.1f}% implied "
+            f"({t['diff'] * 100:+.1f} ± {100 * t['se']:.1f}) · n={t['n']}</div></div>")
+
+    # The honest framing has to be on the page, not just in a commit message:
+    # every rung here is thin, and a calibration table invites reading a bias
+    # into what is sampling noise. State the arithmetic that decides it.
+    note = (
+        "<div class='gr-note'><b>Implied</b> is the DK closing moneyline "
+        "devigged to a fair probability, so it already excludes the hold; the "
+        "gap between it and the raw price is what you pay to bet. Each graded "
+        "game contributes two observations — the home side at its close and the "
+        "away side at its close — because a price is what is being graded, not "
+        "a game. <b>±</b> is one standard error on the realised rate. "
+        "A rung whose gap is smaller than about twice its ± is indistinguishable "
+        "from a fairly priced market; at these sample sizes most of them are, and "
+        "resolving a real favourite-longshot bias would take thousands of games "
+        "rather than hundreds.</div>")
+
+    body = []
+    for r in rows:
+        cells = [
+            ("c-game", "Price", f"<span class='team-code'>{_esc(r['rung'])}</span>"),
+            ("c-lean", "Home", _calib_cell(r["home"])),
+            ("c-ml", "Away", _calib_cell(r["away"])),
+            ("c-final", "All", _calib_cell(r["all"])),
+        ]
+        tds = "".join(f"<td class='{cls}' data-l='{lab}'>{value}</td>"
+                      for cls, lab, value in cells)
+        body.append(f"<tr class='gr-row'>{tds}</tr>")
+    heads = ("Price rung", "Home side", "Away side", "Both")
+    table = ("<div class='gr-tablewrap'><table class='gr team-gr'><thead><tr>"
+             + "".join(f"<th>{h}</th>" for h in heads)
+             + f"</tr></thead><tbody>{''.join(body)}</tbody></table></div>")
+    summary = "<div class='gr-summary'>" + "".join(stats) + "</div>" + note
+    return html_document(nav + head + summary + table, built_txt,
+                         title="MLB market calibration")
+
+
 def render_team_grades_html(built_txt):
     """Render the displayed ledger lineage's record split by MLB club."""
     nav = ("<div class='backlink ledger-nav'>"
            "<a href='grades.html'>← full ledger</a>"
-           "<a href='index.html'>today's leans →</a></div>")
+           "<a href='market-calibration.html'>market calibration →</a></div>")
     led = load_ledger_df()
     # Same rule as the other two public surfaces: this page pools every graded
     # family, so it is named for the rows it shows, not for tonight's build.
@@ -5274,7 +5448,10 @@ def write_grades_page(built_txt=None):
     team_grades_path = os.path.join(OUT_DIR, "team-grades.html")
     with open(team_grades_path, "w") as f:
         f.write(render_team_grades_html(built_txt))
-    log(f"Wrote {grades_path} and {team_grades_path}")
+    calib_path = os.path.join(OUT_DIR, "market-calibration.html")
+    with open(calib_path, "w") as f:
+        f.write(render_market_calibration_html(built_txt))
+    log(f"Wrote {grades_path}, {team_grades_path} and {calib_path}")
     return grades_path
 
 
