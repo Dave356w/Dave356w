@@ -288,6 +288,7 @@ def run_config(rows, logs, w, expo, K, eps=1e-9):
     n = len(rows)
     pick = np.zeros(n, dtype=bool)
     live = np.zeros(n, dtype=bool)
+    prob = np.full(n, np.nan)
     for i, r in rows.iterrows():
         la = logs.get(LEDGER2SA.get(r["away"], r["away"]))
         lh = logs.get(LEDGER2SA.get(r["home"], r["home"]))
@@ -297,11 +298,51 @@ def run_config(rows, logs, w, expo, K, eps=1e-9):
         rsa, raa, na = la.window(d, w)
         rsh, rah, nh = lh.window(d, w)
         p = log5(pyth(rsh, rah, nh, expo, K), pyth(rsa, raa, na, expo, K))
+        prob[i] = p
         if abs(p - 0.5) < eps:
             continue                      # exact .500 abstains; never defaults home
         live[i] = True
         pick[i] = p > 0.5
     return pick, live
+
+
+def _logit(p, eps=1e-6):
+    p = np.clip(np.asarray(p, dtype=float), eps, 1 - eps)
+    return np.log(p / (1 - p))
+
+
+def _logistic_fit(X, y, iters=50):
+    """Plain IRLS. Returns (beta, se). No sklearn/statsmodels dependency --
+    requirements.txt carries neither, and the build job has no reason to."""
+    X = np.column_stack([np.ones(len(y)), X])
+    b = np.zeros(X.shape[1])
+    for _ in range(iters):
+        eta = X @ b
+        mu = 1.0 / (1.0 + np.exp(-eta))
+        w = np.clip(mu * (1 - mu), 1e-9, None)
+        z = eta + (y - mu) / w
+        XtW = X.T * w
+        try:
+            b_new = np.linalg.solve(XtW @ X, XtW @ z)
+        except np.linalg.LinAlgError:
+            break
+        if np.max(np.abs(b_new - b)) < 1e-9:
+            b = b_new
+            break
+        b = b_new
+    eta = X @ b
+    mu = 1.0 / (1.0 + np.exp(-eta))
+    w = np.clip(mu * (1 - mu), 1e-9, None)
+    try:
+        cov = np.linalg.inv((X.T * w) @ X)
+        se = np.sqrt(np.diag(cov))
+    except np.linalg.LinAlgError:
+        se = np.full_like(b, np.nan)
+    return b, se
+
+
+def _dec(ml):
+    return 1.0 + (ml / 100.0 if ml > 0 else 100.0 / (-ml))
 
 
 def rec(pick, live, won, sub=None):
@@ -310,6 +351,69 @@ def rec(pick, live, won, sub=None):
     w = int(hit.sum())
     l = int(m.sum()) - w
     return w, l, (w / (w + l) if (w + l) else float("nan"))
+
+
+def vs_market(rows, prob, won, rep, label):
+    """Does the Pythagorean probability say anything the closing line doesn't?
+
+    Accuracy is the wrong test here. A signal can pick the right side often and
+    still be worthless if the market already knew -- and run differential is
+    public, so the prior is that it did. The test that answers the question is
+    conditional: regress the outcome on the market's log-odds AND the
+    Pythagorean log-odds together. The market coefficient absorbs everything
+    the line already prices; whatever is left on the Pythagorean coefficient is
+    its marginal contribution. A coefficient within ~2 se of zero means no
+    information beyond the close, however good its raw hit rate looked.
+
+    Brier is reported alongside because it is the honest scoring rule for a
+    probability, and because "worse Brier than the market" and "no marginal
+    information" are different failures worth telling apart.
+    """
+    m = rows["p_close"].to_numpy(dtype=float)
+    ok = ~np.isnan(m) & ~np.isnan(prob)
+    n = int(ok.sum())
+    if n < 40:
+        rep.append(f"  {label}: only {n} rows carry a close; skipping")
+        return
+    pm, pp, y = m[ok], prob[ok], won[ok].astype(float)
+    rep.append(f"  {label}  (n={n})")
+    rep.append(f"    corr(pythag, market)      {np.corrcoef(pp, pm)[0, 1]:+.3f}")
+    rep.append(f"    mean |pythag - market|    {np.mean(np.abs(pp - pm)):.4f}")
+    rep.append(f"    Brier  pythag {np.mean((pp - y) ** 2):.4f}   "
+               f"market {np.mean((pm - y) ** 2):.4f}   "
+               f"(lower is better; .25 = always .500)")
+    b, se = _logistic_fit(np.column_stack([_logit(pm), _logit(pp)]), y)
+    rep.append(f"    outcome ~ market_logit + pythag_logit")
+    rep.append(f"      market coef {b[1]:+.3f} +/- {se[1]:.3f}"
+               f"   (t {b[1] / se[1] if se[1] else float('nan'):+.2f})")
+    rep.append(f"      pythag coef {b[2]:+.3f} +/- {se[2]:.3f}"
+               f"   (t {b[2] / se[2] if se[2] else float('nan'):+.2f})"
+               "   <- marginal information")
+    verdict = ("no marginal information beyond the close"
+               if abs(b[2]) < 2 * (se[2] or np.inf)
+               else "carries information the close does not")
+    rep.append(f"      => {verdict}")
+
+    # Practical form of the same question: bet pythag's side when it disagrees
+    # with the market by more than a threshold, priced at the close.
+    hml = pd.to_numeric(rows.get("close_home_ml"), errors="coerce").to_numpy(dtype=float)[ok]
+    aml = pd.to_numeric(rows.get("close_away_ml"), errors="coerce").to_numpy(dtype=float)[ok]
+    if np.isnan(hml).all():
+        return
+    rep.append("    disagreement betting at the close (flat 1u):")
+    for thr in (0.00, 0.03, 0.05, 0.10):
+        sel = np.abs(pp - pm) >= thr
+        sel &= ~np.isnan(hml) & ~np.isnan(aml)
+        if sel.sum() < 15:
+            continue
+        take_home = pp[sel] > pm[sel]
+        w = np.where(take_home, y[sel] == 1, y[sel] == 0)
+        ml = np.where(take_home, hml[sel], aml[sel])
+        profit = np.where(w, np.array([_dec(x) - 1 for x in ml]), -1.0)
+        roi = profit.sum()
+        rep.append(f"      |diff| >= {thr:.2f}: {int(sel.sum()):3d} bets  "
+                   f"{int(w.sum()):3d}-{int(sel.sum() - w.sum()):3d}  "
+                   f"{roi:+.2f}u  ({100 * roi / sel.sum():+.1f}% ROI)")
 
 
 def main():
@@ -367,7 +471,7 @@ def main():
             f"  {'window':>7} {'expo':>5} {'K':>5} {'W':>4} {'L':>4} {'rate':>7} {'abst':>5}"]
     results = {}
     for w, e, K in itertools.product(windows, expos, shrinks):
-        pick, live = run_config(rows, logs, w, e, K)
+        pick, live, _ = run_config(rows, logs, w, e, K)
         W, L, R = rec(pick, live, won)
         results[(w, e, K)] = (pick, live, R)
         rep.append(f"  {('season' if w <= 0 else w):>7} {e:5.2f} {K:5.0f} "
@@ -410,6 +514,13 @@ def main():
             f"  all configs on the second half: mean {oos.mean():.3f} sd {oos.std():.3f}",
             f"  always-home on the second half: "
             f"{rec(np.ones(len(rows), dtype=bool), late, won)[2]:.3f}"]
+
+    # --------------------------------------------------- pythag vs market --
+    rep += ["", "PYTHAG vs ODDS-IMPLIED (does it add anything to the close?)"]
+    for w in windows:
+        _, _, pr = run_config(rows, logs, w, expos[0], shrinks[0])
+        vs_market(rows, pr, won, rep,
+                  f"window={'season' if w <= 0 else w}")
 
     # ------------------------------------------------------------- verdict --
     rep += ["", "=" * 74, "READING"]
