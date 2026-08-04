@@ -87,33 +87,74 @@ def _get(url, tries=4):
             time.sleep(1.5 * (2 ** k))
 
 
-def fetch_game_log(season, end_date):
+def _month_chunks(start, end):
+    """[(start, end), ...] one month at a time.
+
+    StatsAPI's /schedule does not reliably answer a five-month span -- the
+    first version of this probe asked for 03-01..08-04 in one call and got
+    zero dates back, which then surfaced as an int(NaN) crash further down
+    rather than as the fetch failure it was. Chunking also makes a partial
+    upstream outage visible per month instead of silently short.
+    """
+    out = []
+    y, m = int(start[:4]), int(start[5:7])
+    while True:
+        s = f"{y:04d}-{m:02d}-01"
+        ny, nm = (y + 1, 1) if m == 12 else (y, m + 1)
+        e = min(f"{ny:04d}-{nm:02d}-01", end)
+        if s > end:
+            break
+        out.append((max(s, start), e))
+        if e >= end:
+            break
+        y, m = ny, nm
+    return out
+
+
+def _is_final(gm):
+    """Finished games report 'F' or 'O' in codedGameState; abstractGameState
+    is the authority. Requiring 'F' alone silently drops completed games."""
+    st = gm.get("status") or {}
+    return (st.get("abstractGameState") == "Final"
+            or st.get("codedGameState") in ("F", "O"))
+
+
+def fetch_game_log(season, end_date, verbose=None):
     """(abbr) -> sorted list of (date, runs_scored, runs_allowed), regular season."""
-    url = (f"https://statsapi.mlb.com/api/v1/schedule?sportId=1&gameType=R"
-           f"&startDate={season}-03-01&endDate={end_date}")
-    js = _get(url)
     per = defaultdict(list)
     seen = set()
-    for day in js.get("dates", []):
-        for gm in day.get("games", []):
-            pk = gm.get("gamePk")
-            if pk in seen:
-                continue
-            if (gm.get("status") or {}).get("codedGameState") != "F":
-                continue           # only finals; in-progress/postponed carry no result
-            t = gm.get("teams") or {}
-            a, h = t.get("away") or {}, t.get("home") or {}
-            sa, sh = a.get("score"), h.get("score")
-            if sa is None or sh is None:
-                continue
-            ab_a = ((a.get("team") or {}).get("abbreviation"))
-            ab_h = ((h.get("team") or {}).get("abbreviation"))
-            if not ab_a or not ab_h:
-                continue
-            d = (gm.get("officialDate") or gm.get("gameDate", ""))[:10]
-            seen.add(pk)
-            per[ab_a].append((d, float(sa), float(sh)))
-            per[ab_h].append((d, float(sh), float(sa)))
+    for s, e in _month_chunks(f"{season}-03-01", end_date):
+        url = (f"https://statsapi.mlb.com/api/v1/schedule?sportId=1&gameType=R"
+               f"&startDate={s}&endDate={e}")
+        js = _get(url)
+        got = 0
+        for day in js.get("dates", []):
+            for gm in day.get("games", []):
+                pk = gm.get("gamePk")
+                if pk in seen or not _is_final(gm):
+                    continue
+                t = gm.get("teams") or {}
+                a, h = t.get("away") or {}, t.get("home") or {}
+                sa, sh = a.get("score"), h.get("score")
+                if sa is None or sh is None:
+                    continue
+                ab_a = ((a.get("team") or {}).get("abbreviation"))
+                ab_h = ((h.get("team") or {}).get("abbreviation"))
+                if not ab_a or not ab_h:
+                    continue
+                d = (gm.get("officialDate") or gm.get("gameDate", ""))[:10]
+                seen.add(pk)
+                got += 1
+                per[ab_a].append((d, float(sa), float(sh)))
+                per[ab_h].append((d, float(sh), float(sa)))
+        if verbose is not None:
+            verbose.append(f"    {s}..{e}: {got} final games")
+        time.sleep(0.2)
+    if not seen:
+        raise SystemExit(
+            "FAIL: StatsAPI returned no finished regular-season games for "
+            f"{season} up to {end_date}. Nothing downstream is computable; "
+            "refusing to print a report built on an empty log.")
     return {k: sorted(v) for k, v in per.items()}
 
 
@@ -211,12 +252,24 @@ def main():
            f"  ledger rows (graded, decided, MLB clubs): {len(rows)}",
            f"  date range: {rows['game_date'].min()} -> {end}"]
 
-    raw = fetch_game_log(args.season, end)
+    rep.append("  StatsAPI fetch:")
+    raw = fetch_game_log(args.season, end, verbose=rep)
     logs = {k: Log(v) for k, v in raw.items()}
     depth = [len(v) for v in raw.values()]
     rep.append(f"  StatsAPI clubs: {len(logs)}  |  final games per club: "
-               f"median {int(np.median(depth))}, min {min(depth)}, max {max(depth)}")
+               f"median {np.median(depth):.0f}, min {min(depth)}, max {max(depth)}")
     rep.append("  (the ledger-only prototype had a median of 12 prior games per pick)")
+
+    # Provenance, not an assumption: a club whose abbreviation does not match
+    # StatsAPI's would be silently skipped by run_config, quietly shrinking the
+    # scored set. Count it and name the offenders instead.
+    miss = sorted({t for r in (rows["away"].tolist() + rows["home"].tolist())
+                   for t in [LEDGER2SA.get(r, r)] if t not in logs})
+    n_miss = int(sum(1 for _, r in rows.iterrows()
+                     if LEDGER2SA.get(r["away"], r["away"]) not in logs
+                     or LEDGER2SA.get(r["home"], r["home"]) not in logs))
+    rep.append(f"  ledger clubs absent from StatsAPI log: "
+               f"{miss if miss else 'none'}  ({n_miss} rows unscoreable)")
 
     won = rows["home_won"].to_numpy()
     all_true = np.ones(len(rows), dtype=bool)
