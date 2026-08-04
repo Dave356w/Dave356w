@@ -372,9 +372,21 @@ def main():
         results[(w, e, K)] = (pick, live, R)
         rep.append(f"  {('season' if w <= 0 else w):>7} {e:5.2f} {K:5.0f} "
                    f"{W:4d} {L:4d} {R:7.3f} {int((~live).sum()):5d}")
+    # Report the spread over DISTINCT outcomes, not over grid cells. The first
+    # run printed "spread across 32 configs ... sd 0.018" when the 32 cells
+    # collapse to 4 distinct records: at ~113 games per club, neither the
+    # exponent (1.83 vs 2.0) nor the shrink K (0..25) ever changes a pick, so
+    # only the window does anything. Quoting 32 there would overstate how much
+    # was actually varied -- the same sin the held-out split exists to avoid.
     rates = np.array([v[2] for v in results.values()])
-    rep += ["", f"  spread across {len(rates)} configs: min {rates.min():.3f} "
-                f"max {rates.max():.3f} mean {rates.mean():.3f} sd {rates.std():.3f}"]
+    distinct = sorted({(W, L) for (W, L, _) in
+                       (rec(p, lv, won) for (p, lv, _) in results.values())})
+    urates = np.array([w / (w + l) for w, l in distinct])
+    rep += ["", f"  {len(rates)} grid cells collapse to {len(distinct)} distinct "
+                f"records: expo and K never flip a pick at ~113 games/club,",
+            "  so the window is the only live knob.",
+            f"  spread over those {len(urates)}: min {urates.min():.3f} "
+            f"max {urates.max():.3f} mean {urates.mean():.3f} sd {urates.std():.3f}"]
 
     # ------------------------------------------------------- held-out split --
     mid = len(rows) // 2
