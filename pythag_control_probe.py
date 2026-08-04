@@ -303,7 +303,7 @@ def run_config(rows, logs, w, expo, K, eps=1e-9):
             continue                      # exact .500 abstains; never defaults home
         live[i] = True
         pick[i] = p > 0.5
-    return pick, live
+    return pick, live, prob
 
 
 def _logit(p, eps=1e-6):
