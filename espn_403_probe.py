@@ -288,8 +288,13 @@ def main():
     rep.append("=" * 68)
 
     rep.append("")
-    rep.append("CONTROL — same egress, non-ESPN host")
-    res = _attempt(CONTROL[1].format(d=args.date), {"User-Agent": "Mozilla/5.0"})
+    rep.append("CONTROL — same egress, non-ESPN host, SHIPPED headers")
+    # Sent with FETCH_HEADERS rather than a neutral agent so this line does
+    # double duty: egress health, and proof that the identity chosen to get
+    # past ESPN is still accepted by StatsAPI -- which market_backfill._get
+    # also calls, and which would otherwise be the one path the fix could
+    # break without anything measuring it.
+    res = _attempt(CONTROL[1].format(d=args.date), dict(FETCH_HEADERS))
     rep.append(f"  {CONTROL[0]:<34} {_fmt(res)}")
     control_ok = res["status"] == 200
     if not control_ok:
