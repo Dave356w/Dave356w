@@ -23,7 +23,7 @@ is no longer surfaced on the cards (the display is wOBA-only).
 
 ---
 
-## The current model — `woba+plat_consol_v2`
+## The current model — `woba+plat_consol_v4`
 
 **Read this section for what the code does today.** Everything below it is a
 changelog: each version note describes a *delta* against its predecessor, and
@@ -32,14 +32,28 @@ this section disagree, this section and the source are right.
 
 Every active batter, probable-starter, reliever/bullpen, league prior, team
 backfill, percentile, and optional pitch-mix cell is observed Statcast
-**wOBA**, never xwOBA. The model retains `K = 100`. v2 changes the starter
-platoon prior from a symmetric ±0.010 around every one-sided hitter's season
-line to a handedness-specific, exposure-centred table with the same conservative
-0.021 strong-side/weak-side gap. Prediction math changed, so v2 starts a clean
-record family. It shares v1's magnitude/strength scale because both use observed
-wOBA and the total prior gap changes only from 0.020 to 0.021. Neither pools
-with xwOBA history. Legacy dump/ledger columns such as `xw_net` remain only as
-a compatibility schema and every new row carries `model_metric=wOBA`.
+**wOBA**, never xwOBA.
+
+Shrinkage is where the last two versions did their work, and they moved
+different halves of it. v3 raised the pseudo-sample from `K = 100` to
+**`K = 400`** — fitted, not chosen, by three independent estimators that all
+exclude 100 — and moved the reliever target off the league PA-weighted batter
+rate onto the relief pool's own unweighted centre. v4 then replaced the
+shrinkage *target* itself: every batter, starter and reliever with 2023–2025
+Savant history now regresses toward **his own** recency-weighted rate rather
+than a population centre. A player with no history returns the population
+centre exactly, so there is no rookie branch. See §"wOBA v3 — fitted shrinkage
+constant and relief-pool target" and §"wOBA v4 — personal shrinkage priors".
+
+The starter platoon prior is v2's: a handedness-specific, exposure-centred
+table with a conservative 0.021 strong-side/weak-side gap, replacing the
+symmetric ±0.010 that every lineage through wOBA v1 used.
+
+v3 and v4 each start a clean record family **and** a clean scale family, argued
+in `_RECORD_FAMILIES` / `_SCALE_FAMILIES` rather than inherited. None of the
+wOBA lineage pools with xwOBA history in either namespace. Legacy dump/ledger
+columns such as `xw_net` remain only as a compatibility schema and every new row
+carries `model_metric=wOBA`.
 
 The short-lived `split+plat_consol_v1` experiment changed the pitching side
 back to xwOBA after treating a pitcher's weak cross-season residual correlation
@@ -58,11 +72,15 @@ from the active-roster top-PA pool (`posted` / `partial_filled` / `projected`);
 a posted hitter absent from the season leaderboard keeps his slot and receives
 the team's PA-weighted wOBA (`wOBA_team_backfill`).
 
-**2. Shrinkage.** Every hitter's season wOBA is regressed toward the league
-baseline by his PA with a fixed pseudo-sample, `x* = (n·x + 100·prior)/(n+100)`
-(`XWOBA_SHRINK_K = 100`). A deviation keeps `n/(n+100)` of its raw size: 50% at
-100 PA, 75% at 300, ~86% at 600. A team-backfilled hitter is already an
-aggregate and is **not** shrunk again.
+**2. Shrinkage.** Every hitter's season wOBA is regressed toward his prior by
+his PA with a fixed pseudo-sample, `x* = (n·x + 400·prior)/(n+400)`
+(`XWOBA_SHRINK_K = 400`). A deviation keeps `n/(n+400)` of its raw size: 20% at
+100 PA, 43% at 300, 60% at 600 — so at this K the prior supplies most of a
+published rate, which is exactly why v4 had to make that prior the player's own
+rather than a shared centre. `prior` is `player_priors.prior_for(...)`, the
+hitter's recency-weighted 2023–2025 history blended toward the league baseline,
+falling back to the league baseline itself when he has none. A team-backfilled
+hitter is already an aggregate and is **not** shrunk again.
 
 **3. Two lineup composites**, both weighted by expected PA per batting-order
 slot (`LINEUP_SLOT_PA`, 4.61 leadoff → 3.76 for the 9-hole):
@@ -82,15 +100,21 @@ slot (`LINEUP_SLOT_PA`, 4.61 leadoff → 3.76 for the 9-hole):
   their season line already is their advantage-state number, and remain marked ◆.
 - `platoon_delta_sp = B_SP − B_0`.
 
-**4. Two pitching inputs**, each shrunk with the same `K = 100`:
+**4. Two pitching inputs**, each shrunk with the same `K = 400`, and each toward
+its own target rather than one shared centre:
 
-- `P_SP` — the probable starter's season wOBA-allowed, shrunk by BF.
+- `P_SP` — the probable starter's season wOBA-allowed, shrunk by BF toward his
+  own 2023–2025 prior.
 - `P_BP` — a role-filtered bullpen pool: active roster minus the probable,
   keeping pitchers with start share ≤ `0.35` and ≤ `3.0` IP per appearance
   (loose enough to retain bulk relievers, tight enough to drop rotation arms).
-  Each reliever is shrunk individually, then averaged by estimated relief
-  workload (`team BF × (1 − start share)`). Needs ≥ 3 qualifying pitchers
-  (`BULLPEN_MIN_PITCHERS`).
+  Each reliever is shrunk individually — toward his own prior, blended against
+  the **relief pool's unweighted centre** (`relief_pool_prior`) rather than the
+  league batter rate, which sits ~0.010 above it — then averaged by estimated
+  relief workload (`team BF × (1 − start share)`). Needs ≥ 3 qualifying pitchers
+  (`BULLPEN_MIN_PITCHERS`); below that the league baseline is the fallback
+  target. The centre is derived every build from the same Savant rates the pool
+  is built from, never frozen as a literal.
 
 **5. Expected starter workload.** A normal starter blends his last-five start
 average with his season IP/start, regressed toward `SP_IP_PRIOR = 5.2` and
@@ -135,6 +159,104 @@ pitch-mix shadow arm (off by default). Both are described below.
 Each note below is the delta that version introduced, kept for provenance —
 ledger rows are immutable and a row's `model_tag` is only interpretable against
 the version note that produced it.
+
+### wOBA v4 — personal shrinkage priors
+
+`woba+plat_consol_v4` changes what a rate is regressed *toward*. v3 settled how
+hard (`K = 400`); this settles the target. Until v4 every batter, starter and
+reliever was pulled toward a population centre, so at `K = 400` a career .360
+hitter and a career .290 hitter with equal samples published within a hair of
+each other — the prior supplies ~70% of a median reliever's rate and about half
+of a 400-PA batter's, so the target *is* most of the number.
+
+`player_priors.prior_for` replaces that centre with
+
+    π = (H·θ_hist + C·μ) / (H + C)
+
+where `θ_hist` is the player's recency-weighted 2023–2025 Savant wOBA carried as
+a **deviation from the pool centre he earned it against**, and `μ` is the same
+population centre the build used before. `H = 0` returns `μ` exactly, so rookies
+and call-ups are unchanged and need no branch. Storing the deviation rather than
+the level is what keeps a 2023 rate comparable to a 2025 one; the per-season
+centres live in `data/woba_prior_centres.csv`.
+
+Measured out of sample by `player_prior_probe.py` at this K. The early-season
+split — the first month, the case the build faces every April and where the
+prior carries most of the weight — reports BF-weighted out-of-sample MSE gains
+of **BAT +25.35%** [+18.30, +32.84], **RP +22.28%** [+16.36, +28.68] and
+**SP +16.38%** [+8.84, +25.86] against the shipped centre. The balanced
+mid-season split reports +7.33%, +5.91% and +2.83%, all with paired CIs
+excluding zero, and `C` fitted on 2024 holds on 2025 and vice versa for batters
+and relievers.
+
+Two negative results are load-bearing. The unregressed career rate (`C = 0`)
+was measured and **loses** on two of three populations (BAT −11.46%,
+RP −24.29%) — a 70-PA career would otherwise supply most of a published rate.
+And role-separated history buys nothing (SP +16.38 vs +16.85 role-blind), so
+the build passes `role=None`.
+
+New `RECORD_TAGS` family and new `SCALE_TAGS` family, both argued rather than
+inherited. The record half: early-season out-of-sample MSE moves 16–25% across
+all three populations and the published rate of an established player moves by
+roughly the size of the platoon term — these are different predictions. The
+scale half is arithmetic, and it is v3's argument with the sign reversed:
+shrinking toward a personal prior instead of one shared centre lets two players
+with equal samples keep different centres, so `|xw_net|` **disperses** where v3
+compressed it. Same wOBA units, materially different spread.
+
+Turning `PLAYER_PRIORS=0` off restores v3 behaviour exactly, and so does an
+empty `data/woba_priors_*.csv` — the population centre is the `H = 0` limit. A
+missing snapshot degrades to that limit and logs, rather than failing the build.
+
+### wOBA v3 — fitted shrinkage constant and relief-pool target
+
+`woba+plat_consol_v3` makes two changes that had to ship together.
+
+**`XWOBA_SHRINK_K` 100 → 400.** Fitted, not chosen. `reliever_shrink_probe.py`
+measures K three independent ways and every one excludes 100 by a wide margin:
+
+| estimator | K | interval |
+|---|---:|---|
+| walk-forward, season-to-date → next outing (n=53,464) | 391 | [293, 519] |
+| within-season split, relievers | 600 | [355, 1400] |
+| within-season split, batters | 384 | [302, 503] |
+| within-season split, starters | 577 | [398, 894] |
+| season pair (upper bound) | 669–1048 | — |
+
+The walk-forward arm is the one that matches what this code does — a
+season-to-date rate predicting tonight's innings, not one aggregate predicting
+another — and it is better powered by two orders of magnitude. Its estimator
+runs 10–13% high on synthetic logs of this shape, so its point estimate
+corresponds to a true K nearer 350.
+
+400 is one value for all three populations, **not** a role split. That was the
+original hypothesis and the data refused it: relievers 600 against starters 577,
+intervals overlapping almost entirely. Marcel's 2.4× role gap does not appear in
+BF-denominated data. Do not read the third digit — weighted MSE is flat near its
+minimum, so 350 and 450 are not distinguishable here. What is distinguishable is
+100 from 400.
+
+**Reliever target → the relief pool's own unweighted centre.** The league batter
+centre is the centre of no subpool: over 223 role-filtered arms on 30 active
+rosters the relief pool sits **0.0102 below** it. At `K = 400` that offset lands
+almost intact in every bullpen number, which is why K and the target had to move
+in the same commit — raising K against the old target would have doubled a known
+bias instead of removing it. The centre is **unweighted**, because empirical
+Bayes wants the centre of the population a member is drawn from; the pool's
+usage-weighted centre sits 0.0116 the *other* side, because the good arms get
+the innings, so shrinking toward it would over-correct and land further from the
+truth than the shipped target was. The obvious fix is worse than the status quo;
+this is the non-obvious one. It is derived every build from the same Savant
+rates the pool is built from, never frozen.
+
+New `RECORD_TAGS` family and new `SCALE_TAGS` family. The record half is argued:
+a 4× K changes every shrunk batter, starter and reliever rate, and the target
+move shifts every bullpen number by a further ~0.010 before weighting — not the
+v10 situation, where a reweight flipped 0 of 14 leans and earned a shared line.
+The scale half is arithmetic: quadrupling K compresses `|xw_net|`, since a
+median batter at ~400 PA keeps 400/500 = 80% of his deviation at `K = 100` and
+400/800 = 50% at `K = 400`. The wOBA v2 family had 15 graded rows, so the cost
+of resetting was 15 games.
 
 ### wOBA v2 — exposure-centred starter platoon prior
 
@@ -481,15 +603,27 @@ skill and not general hitting ability the composite already carries. A hitter
 with no cells lands on a multiplier of exactly 1.0 — the degradation is
 continuous, with no coverage threshold.
 
-**Why it is dark.** At the build's usual `K = 100`, residual cell noise moves a
-game delta by about 0.013 xwOBA against a median `|xw_net|` of **0.0188** over
-the 28 scale-family rows as of 2026-07-28 (all tagged v9; the family's v8 entry
-has never matched a ledger row) — **69%** of a typical
-lean, injected as noise. Holding that to ~19% needs `K ≈ 600`, at which point
-even an 80-point raw cell deviation moves a lineup composite by 0.0008. Whether
-the arm can escape that squeeze depends on the true dispersion of
-batter × pitch-type skill, which has not been measured here. (Recompute the
-median on any `SCALE_TAGS` change — this ratio is the entire gate.)
+**Why it is dark.** *(This whole estimate is stale and is kept as the shape of
+the argument, not as current numbers — see the note below it.)* At `K = 100`,
+residual cell noise moves a game delta by about 0.013 xwOBA against a median
+`|xw_net|` of **0.0188** over the 28 scale-family rows as of 2026-07-28 (all
+tagged v9; the family's v8 entry has never matched a ledger row) — **69%** of a
+typical lean, injected as noise. Holding that to ~19% needs `K ≈ 600`, at which
+point even an 80-point raw cell deviation moves a lineup composite by 0.0008.
+Whether the arm can escape that squeeze depends on the true dispersion of
+batter × pitch-type skill, which has not been measured here.
+
+**Both halves of that ratio have since moved, in opposite directions, and it has
+not been recomputed.** The parenthetical it used to carry — *recompute the
+median on any `SCALE_TAGS` change, this ratio is the entire gate* — has fired
+four times since (wOBA v1, v2, then v3 and v4 each isolating) and nobody
+recomputed. The numerator moved because `K` is now **400**, not 100, which cuts
+residual cell noise; the denominator moved because v3 compressed `|xw_net|` and
+v4 dispersed it again. The current `SCALE_TAGS` family is v4 alone and holds
+**zero graded rows**, so the median is not computable from it yet at all. Do not
+read 69% as today's figure, and do not read `K ≈ 600` as today's requirement —
+the build already sits two-thirds of the way there. Recompute both before this
+arm is argued either way.
 
 `python pitch_arsenal_probe.py` is that measurement: it decomposes the observed
 cell dispersion into sampling and between-player components (implying a `K`),
@@ -575,8 +709,8 @@ and the flips land on exactly the games a marginal record is most sensitive to.
 That was recorded here as a knowing exception to the "bump on any
 prediction-math change" rule, with the note that bumping to v8 was the fix. **v8
 duly landed** (fixed `K = 100`), and v9 and v10 after it, so v10 was four
-families clear of the problem; the isolated wOBA v1 test is one lineage farther
-on. The v7 rows remain immutable and remain
+families clear of the problem; the wOBA lineage (v1 through v4) is four further
+families on again, each of them isolated. The v7 rows remain immutable and remain
 internally heterogeneous — read that family's 22-23 line with that caveat, and
 do not treat it as one model's record. The units argument still holds: median
 `|xw_net|` moved only 0.02672 → 0.02642 across the two changes, so v7 rows do
@@ -597,10 +731,12 @@ paid silently.
 | `pitch_arsenal_probe.py` | Measurement that gates the arm: cell dispersion split into signal and sampling noise, year-over-year reliability, and the noise budget the arm must clear. Prints only; writes nothing to `data/`. |
 | `reliever_shrink_probe.py` | Measurement behind `XWOBA_SHRINK_K`: fits the BF-denominated regression constant out of sample three independent ways, with batters and starters through the same code path as controls. Prints only; writes nothing to `data/`. |
 | `player_prior_probe.py` | Measurement on the shrinkage *target*: does a player's regressed recency-weighted career rate beat the league/role centre at the shipped K? Scores the population centre, the raw career rate and the regressed one on identical rows, paired. Prints only; writes nothing to `data/`. |
+| `player_priors.py` | The wOBA v4 shrinkage target: loads the frozen snapshots and computes `prior_for(pid, ...) = (H·θ_hist + C·μ)/(H + C)`, the player's recency-weighted history regressed toward the population centre. Returns `μ` exactly at `H = 0`, so an absent player needs no branch and an absent snapshot degrades the whole build to v3 behaviour. |
 | `priors_snapshot.py` | Freezes completed-season Savant wOBA into `data/woba_priors_<season>.csv` + `data/woba_prior_centres.csv`, for use as player-specific shrinkage priors. Refuses in-progress seasons and never silently rewrites a season file. Rookies get no row — the fallback is `H = 0` in the prior expression, not a branch. |
 | `market_backfill.py` | Odds join: attaches ESPN/DraftKings opening + closing moneylines and the devigged home close probability to settled ledger rows (score-verified join, idempotent, no silent defaults), and computes the vs-market scoreboard. |
 | `run_market_update.py` | Headless CLI for the odds join: `--dry-run` preview, one-off backfills, `--merge-backfill` for pre-enriched files. CI doesn't need it (grading calls `attach_market` directly); it's for local runs. |
 | `.github/workflows/build.yml` | Scheduled + manual workflow: build → grade → commit ledger → deploy Pages. |
+| `.github/workflows/tests.yml` | The gate: `validate_data_files.py` then the whole suite, on every pull request and every push to `main`. Deliberately *not* wired into `build.yml` — a test failure blocking the daily build would cost that slate's rows permanently. |
 | `requirements.txt` | `requests`, `numpy`, `pandas`. |
 | `data/` | Committed state: daily lean dumps, the ledger, and the latest report. |
 
