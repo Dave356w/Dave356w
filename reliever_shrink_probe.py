@@ -111,6 +111,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import calendar
 import json
 import math
 import sys
@@ -207,25 +208,16 @@ def _bail(what, season, group, stat_type, payload, extra=""):
         "Refusing to print a report built on an empty pull.")
 
 
-def fetch_periods(season, group, stat_type, verbose=True):
-    """(pid, period) -> counting-stat dict, for one season and one stat type.
+def _collect(payload, group, period, into, dropped):
+    """Accumulate one payload's splits into `into`, keyed (pid, period).
 
-    `stat_type` is 'byMonth' (period = calendar month) or 'season' (period = 0).
-    Both go through the `/api/v1/stats` shape build_site.load_league_era already
-    runs on every build -- same endpoint, same `playerPool=ALL`, same
-    `sportIds`. Only `stats` changes. That is deliberate: a proven call shape
-    with one parameter varied is a smaller bet than a new endpoint, and the
-    schedule endpoint's `startDate`/`endDate` form is already on record in this
-    repo as having returned nothing.
+    Accumulates rather than assigns. A player traded mid-season appears under
+    each club, and the per-team shapes below issue one call per club, so the
+    same (pid, period) is written more than once by construction. Assigning
+    would keep the last club's line and silently discard the rest of his
+    season.
     """
-    payload = _get(STATS_URL, {
-        "stats": stat_type, "group": group, "season": season,
-        "sportIds": SPORT_ID, "gameType": "R", "playerPool": "ALL",
-        "limit": 5000,
-    })
-    out = {}
     n_raw = 0
-    dropped = defaultdict(int)
     for sk in _splits(payload):
         n_raw += 1
         who = sk.get("player") or sk.get("person") or {}
@@ -240,14 +232,10 @@ def fetch_periods(season, group, stat_type, verbose=True):
         if group == "pitching" and pos and str(pos.get("code")) not in ("1", "None", ""):
             dropped["non-pitcher"] += 1
             continue
-        if stat_type == "byMonth":
-            period = sk.get("month")
-            if period is None:
-                dropped["no month on split"] += 1
-                continue
-            period = int(period)
-        else:
-            period = 0
+        p = sk.get("month") if period is None else period
+        if p is None:
+            dropped["no month on split"] += 1
+            continue
         st = sk.get("stat") or {}
         rec = {
             "AB": _num(st.get("atBats")),
@@ -264,18 +252,148 @@ def fetch_periods(season, group, stat_type, verbose=True):
             "GS": _num(st.get("gamesStarted")),
             "outs": float(_outs(st.get("inningsPitched"))),
         }
-        out[(int(pid), period)] = rec
-    if not out:
-        _bail("no usable splits", season, group, stat_type, payload,
-              extra=f"raw splits {n_raw}, dropped {dict(dropped)}")
-    if stat_type == "byMonth" and len({p for _, p in out}) < 2:
-        _bail("byMonth returned a single period", season, group, stat_type,
-              payload, extra="cannot split a season into two disjoint halves")
+        key = (int(pid), int(p))
+        into[key] = _add(into[key], rec) if key in into else rec
+    return n_raw
+
+
+_team_ids = {}
+
+
+def team_ids(season):
+    """Club ids for a season. Needed only by the per-team shapes."""
+    if season not in _team_ids:
+        js = _get("https://statsapi.mlb.com/api/v1/teams",
+                  {"sportId": SPORT_ID, "season": season})
+        _team_ids[season] = [int(t["id"]) for t in js.get("teams", [])
+                             if t.get("id") is not None]
+    return _team_ids[season]
+
+
+def _month_ranges(season):
+    for m in range(3, 12):
+        last = calendar.monthrange(season, m)[1]
+        yield m, f"{season}-{m:02d}-01", f"{season}-{m:02d}-{last:02d}"
+
+
+# Candidate call shapes for splitting a season into periods, tried in order.
+#
+# The first version of this probe assumed one shape and hard-failed on it. CI
+# measured that assumption wrong: `stats=byMonth` with `sportIds=1` and
+# `playerPool=ALL` returned zero stat blocks for every season. That is the same
+# mistake this repo already has on record for the schedule endpoint's
+# startDate/endDate form -- guessing at parameters from a sandbox that cannot
+# reach StatsAPI.
+#
+# So the shape is discovered rather than assumed, and which one answered is
+# printed in the report. `sportId` singular is listed before `sportIds` plural
+# on the theory that the split endpoints want the singular; the plural is kept
+# in the list precisely because CI has now measured it, and a shape known not
+# to work is worth keeping as a recorded measurement rather than deleting.
+#
+# The per-team shapes are last because they cost 30 calls per season-group, and
+# first among the fallbacks in likelihood: `load_team_pitcher_roles` already
+# proves `teamId` + `season` answers on this endpoint, so they vary one
+# parameter from a call this repo runs on every build.
+def _shape_calls(name, season, group):
+    """(params, period) pairs for one candidate shape. period None = read month."""
+    base = {"group": group, "season": season, "gameType": "R", "limit": 5000}
+    if name == "byMonth/sportId":
+        return [({**base, "stats": "byMonth", "sportId": SPORT_ID,
+                  "playerPool": "ALL"}, None)]
+    if name == "byMonth/sportIds":
+        return [({**base, "stats": "byMonth", "sportIds": SPORT_ID,
+                  "playerPool": "ALL"}, None)]
+    if name == "byMonth/no-pool":
+        return [({**base, "stats": "byMonth", "sportId": SPORT_ID}, None)]
+    if name == "byDateRange/month":
+        return [({**base, "stats": "byDateRange", "sportId": SPORT_ID,
+                  "playerPool": "ALL", "startDate": s, "endDate": e}, m)
+                for m, s, e in _month_ranges(season)]
+    if name == "byMonth/team":
+        return [({**base, "stats": "byMonth", "sportId": SPORT_ID,
+                  "teamId": t, "limit": 1000}, None)
+                for t in team_ids(season)]
+    raise ValueError(name)
+
+
+PERIOD_SHAPES = ["byMonth/sportId", "byMonth/sportIds", "byMonth/no-pool",
+                 "byDateRange/month", "byMonth/team"]
+
+_shape_log = []          # (shape, season, group, outcome) -- printed in the report
+_working_shape = {}      # group -> the shape that answered, reused across seasons
+
+
+def fetch_month_periods(season, group, verbose=True):
+    """(pid, month) -> counting stats, via whichever candidate shape answers.
+
+    Returns {} when no shape yields two periods. Deliberately not a hard exit:
+    the season-pair arm runs on `stats=season`, which IS a proven shape, so a
+    within-season split that cannot be built must not take down an arm that
+    can. The caller reports the gap instead.
+    """
+    order = PERIOD_SHAPES
+    if group in _working_shape:      # don't re-probe once one has answered
+        order = [_working_shape[group]] + [s for s in PERIOD_SHAPES
+                                           if s != _working_shape[group]]
+    for name in order:
+        out, dropped, n_raw = {}, defaultdict(int), 0
+        try:
+            for params, period in _shape_calls(name, season, group):
+                n_raw += _collect(_get(STATS_URL, params), group, period,
+                                  out, dropped)
+        except Exception as e:  # noqa: BLE001
+            _shape_log.append((name, season, group, f"error {e!r}"[:60]))
+            continue
+        periods = {p for _, p in out}
+        total_bf = sum(r["BF"] for r in out.values())
+        if len(periods) >= 2 and total_bf > 0:
+            _shape_log.append((name, season, group,
+                               f"OK: {len(out)} player-periods, "
+                               f"{len(periods)} periods, {total_bf:.0f} BF"))
+            _working_shape[group] = name
+            if verbose:
+                print(f"  {season} {group}: {name} -> {len(out)} player-periods, "
+                      f"{len(periods)} periods, dropped {dict(dropped)}",
+                      file=sys.stderr)
+            return out
+        _shape_log.append((name, season, group,
+                           f"empty: {n_raw} raw splits, {len(periods)} periods"))
     if verbose:
-        print(f"  {season} {group} {stat_type}: {len(out)} player-periods, "
-              f"{len({p for _, p in out})} periods, dropped {dict(dropped)}",
+        print(f"  {season} {group}: no candidate shape returned two periods",
               file=sys.stderr)
+    return {}
+
+
+def fetch_season_totals(season, group, verbose=True):
+    """(pid, 0) -> season counting stats. The proven shape, unchanged.
+
+    This is `load_league_era`'s call with `group` varied -- endpoint, sportIds,
+    playerPool and limit all identical to what the build runs daily. It is the
+    one fetch here allowed to hard-fail, because if it returns nothing the
+    problem is StatsAPI or this repo's access to it, not a parameter guess.
+    """
+    out, dropped = {}, defaultdict(int)
+    payload = _get(STATS_URL, {
+        "stats": "season", "group": group, "season": season,
+        "sportIds": SPORT_ID, "gameType": "R", "playerPool": "ALL",
+        "limit": 5000,
+    })
+    n_raw = _collect(payload, group, 0, out, dropped)
+    if not out:
+        _bail("no usable splits", season, group, "season", payload,
+              extra=f"raw splits {n_raw}, dropped {dict(dropped)}")
+    if verbose:
+        print(f"  {season} {group} season: {len(out)} players, "
+              f"dropped {dict(dropped)}", file=sys.stderr)
     return out
+
+
+def fetch_periods(season, group, stat_type, verbose=True):
+    """Dispatch to the season-totals or month-split fetcher."""
+    if stat_type == "season":
+        return fetch_season_totals(season, group, verbose)
+    return fetch_month_periods(season, group, verbose)
 
 
 # --------------------------------------------------------------------------
@@ -429,6 +547,8 @@ def bootstrap_k(rows, mu_mode, draws=BOOT_DRAWS, seed=BOOT_SEED):
     """
     rng = np.random.default_rng(seed)
     n = len(rows)
+    if n < 10:
+        return float("nan"), float("nan")
     out = []
     for _ in range(draws):
         idx = rng.integers(0, n, n)
@@ -542,6 +662,28 @@ def main(argv=None):
     say("Marcel's IP-denominated 60 (SP) / 25 (RP). dMSE is the out-of-sample")
     say("weighted MSE the fitted K buys over the shipped one -- read it first.")
     say("")
+
+    # ---- which call shape answered ----------------------------------------
+    # Printed, not assumed. The first version of this probe hard-coded one
+    # shape and CI measured it returning zero stat blocks, so the shape is now
+    # a finding in its own right: the next person changing this fetch should be
+    # reading measurements rather than re-deriving them from the docs.
+    if _shape_log:
+        say("StatsAPI call shapes tried (the within-season split depends on these)")
+        say("  " + "-" * 74)
+        seen = set()
+        for name, season, group, outcome in _shape_log:
+            if (name, group) in seen and not outcome.startswith("OK"):
+                continue
+            seen.add((name, group))
+            say(f"  {name:<20s} {season} {group:<9s} {outcome}")
+        say("")
+
+    if not any(monthly.values()):
+        say("!! No candidate shape produced a within-season split. Every arm")
+        say("!! below that needs two periods inside one season is absent; the")
+        say("!! season-pair arm still runs, on the proven `stats=season` shape.")
+        say("")
 
     # ---- per-season within-season fits ------------------------------------
     # The split point is chosen to divide each season's BF as evenly as the
