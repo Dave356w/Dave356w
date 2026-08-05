@@ -1698,6 +1698,22 @@ ADD_STATS = {"EV", "LA°"}
 # the transformation stable and directly reproducible. Shrinkage touches only
 # xwOBA (the lean stat); the other columns and raw per-hitter card values are
 # untouched.
+#
+# The one value also regresses every member of the bullpen pool
+# (`bullpen_xwoba_aggregate` -> `_shrink_one`), and whether it should is an open
+# question rather than a settled one. Marcel is the precedent for expecting not:
+# it carries separate baselines by role -- 200 PA for a hitter, 60 IP for a
+# starter, 25 IP for a reliever. Those are IP-denominated and this is
+# BF-denominated, and no published BF-denominated reliever constant exists to
+# convert against, so the number has to be fitted here.
+#
+# `reliever_shrink_probe.py` fits it, and fits starters and batters through the
+# same code path as controls -- the claim under test is a *difference* between
+# the three, not a distance from 100. Run it (manual workflow, StatsAPI is not
+# reachable from every dev environment) before changing this value, and read
+# `dMSE vs 100` before the K column: weighted MSE is flat near its minimum, so a
+# large move in K that buys nothing measurable is not a finding. Splitting K by
+# role is lean-path, so it bumps MODEL_TAG.
 USE_XWOBA_SHRINK = True
 XWOBA_SHRINK_COL = "xwOBA"
 XWOBA_SHRINK_K = 100.0
