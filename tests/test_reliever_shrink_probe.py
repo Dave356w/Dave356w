@@ -172,3 +172,80 @@ def test_empty_pull_raises_rather_than_reporting():
     """An empty fetch must not reach the report as a zero-row arm."""
     with pytest.raises(SystemExit):
         P._bail("no usable splits", 2026, "pitching", "byMonth", {"stats": []})
+
+
+# --- what CI measured, pinned so it cannot regress -------------------------
+# The first CI run of this probe died on `stats=byMonth&sportIds=1`, which
+# returned zero stat blocks for every season. Two defects, not one: the guessed
+# call shape, and a probe that let a dead arm kill an arm using a proven shape.
+
+def _payload(pid, month, bf, code="1"):
+    return {"stats": [{"splits": [{
+        "player": {"id": pid}, "position": {"code": code}, "month": month,
+        "stat": {"atBats": bf * 0.9, "hits": bf * 0.2, "doubles": 0,
+                 "triples": 0, "homeRuns": bf * 0.03, "baseOnBalls": bf * 0.08,
+                 "intentionalWalks": 0, "hitByPitch": 0, "sacFlies": 0,
+                 "battersFaced": bf, "gamesPitched": 10, "gamesStarted": 0,
+                 "inningsPitched": "20.0"},
+    }]}]}
+
+
+def test_a_dead_shape_falls_through_to_a_working_one(monkeypatch):
+    """The shape that failed in CI must not be able to take the probe down."""
+    tried = []
+
+    def fake_get(url, params, tries=4):
+        tried.append(params.get("stats"))
+        if "sportIds" in params:          # the shape CI measured as empty
+            return {"stats": []}
+        return {"stats": [{"splits": [
+            _payload(1, 4, 40)["stats"][0]["splits"][0],
+            _payload(1, 7, 55)["stats"][0]["splits"][0],
+        ]}]}
+
+    monkeypatch.setattr(P, "_get", fake_get)
+    P._working_shape.clear()
+    P._shape_log.clear()
+    out = P.fetch_month_periods(2026, "pitching", verbose=False)
+    assert len(out) == 2, "fell through to no working shape"
+    assert {p for _, p in out} == {4, 7}
+
+
+def test_no_working_shape_returns_empty_instead_of_exiting(monkeypatch):
+    """A within-season split that cannot be built must not kill the run.
+
+    The season-pair arm uses `stats=season`, a shape this repo runs on every
+    build. Hard-failing here would discard a working arm because a different
+    one is unavailable -- which is exactly what the first CI run did.
+    """
+    monkeypatch.setattr(P, "_get", lambda url, params, tries=4: {"stats": []})
+    monkeypatch.setattr(P, "team_ids", lambda season: [108])
+    P._working_shape.clear()
+    P._shape_log.clear()
+    assert P.fetch_month_periods(2026, "pitching", verbose=False) == {}
+    assert P._shape_log, "a failed shape must be recorded, not swallowed"
+
+
+def test_season_totals_still_hard_fail_on_an_empty_pull(monkeypatch):
+    """The proven shape keeps its fail-loudly contract."""
+    monkeypatch.setattr(P, "_get", lambda url, params, tries=4: {"stats": []})
+    with pytest.raises(SystemExit):
+        P.fetch_season_totals(2026, "pitching", verbose=False)
+
+
+def test_a_traded_player_accumulates_across_calls():
+    """Per-team shapes write the same (pid, month) once per club.
+
+    Assigning instead of accumulating would keep only the last club's line and
+    silently drop the rest of the pitcher's season.
+    """
+    into, dropped = {}, __import__("collections").defaultdict(int)
+    P._collect(_payload(7, 5, 30), "pitching", None, into, dropped)
+    P._collect(_payload(7, 5, 20), "pitching", None, into, dropped)
+    assert into[(7, 5)]["BF"] == 50
+
+
+def test_position_players_are_dropped_from_the_pitching_pool():
+    into, dropped = {}, __import__("collections").defaultdict(int)
+    P._collect(_payload(9, 5, 6, code="3"), "pitching", None, into, dropped)
+    assert into == {} and dropped["non-pitcher"] == 1
