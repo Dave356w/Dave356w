@@ -396,6 +396,121 @@ def fetch_periods(season, group, stat_type, verbose=True):
     return fetch_month_periods(season, group, verbose)
 
 
+# --- walk-forward arm: fit K against realised relief outings ----------------
+# The within-season arm above predicts one HALF-SEASON aggregate from another.
+# The model does not do that. It predicts tonight's relief innings from a
+# season-to-date rate, and this arm fits K against exactly that.
+#
+# Why it cannot be done through the stored bullpen aggregate, which is the
+# obvious route and is closed: the ledger keeps `bullpen_xwoba` but not the
+# per-reliever (rate, BF, usage) it was built from, and that aggregate was
+# computed at K=100. Recovering what it would have been at some other K needs
+# each member's rate and sample as of that slate -- i.e. a Savant leaderboard
+# as it read on a past date, which `.savant_cache/` being gitignored makes
+# unrecoverable on purpose. Inverting the aggregate instead (treating the pool
+# as one arm with a mean BF) is only exact when every reliever has identical
+# BF; with heterogeneous samples it is biased, and by Jensen it under-shrinks,
+# which is precisely the direction under test. So it is not done.
+#
+# A game log is not a leaderboard. "This reliever faced 5 and allowed a double
+# on 12 July" reads the same whenever it is fetched, so summing his outings
+# strictly before a date reconstructs exactly what was knowable then. That is
+# the same argument pythag_control_probe makes for pulling finished games, and
+# it is what makes this arm walk-forward rather than lookahead.
+#
+# It reuses fit_k, moments_k and bootstrap_k unchanged -- one prior outing
+# aggregate predicting one realised outing is the same (n1, w1) -> (n2, w2)
+# shape the split arm already produces, so there is no second estimator to
+# keep honest.
+def fetch_game_log(pid, season):
+    """[(date, line)] for one pitcher, chronological. Proven call shape.
+
+    `stats=gameLog` on /people/{id}/stats is what build_site.load_recent_start_era
+    runs on every build; only the parsed fields differ.
+    """
+    data = _get(f"https://statsapi.mlb.com/api/v1/people/{int(pid)}/stats",
+                {"stats": "gameLog", "group": "pitching", "season": season,
+                 "gameType": "R"})
+    out = []
+    for blk in data.get("stats", []) or []:
+        for sk in blk.get("splits", []) or []:
+            st = sk.get("stat") or {}
+            date = sk.get("date")
+            if not date:
+                continue
+            rec = {
+                "AB": _num(st.get("atBats")), "H": _num(st.get("hits")),
+                "2B": _num(st.get("doubles")), "3B": _num(st.get("triples")),
+                "HR": _num(st.get("homeRuns")), "BB": _num(st.get("baseOnBalls")),
+                "IBB": _num(st.get("intentionalWalks")),
+                "HBP": _num(st.get("hitByPitch")), "SF": _num(st.get("sacFlies")),
+                "BF": _num(st.get("battersFaced")),
+                "G": 1.0, "GS": _num(st.get("gamesStarted")),
+                "outs": float(_outs(st.get("inningsPitched"))),
+            }
+            out.append((str(date), rec))
+    out.sort(key=lambda t: t[0])
+    return out
+
+
+def walkforward_pairs(log, role_cut, min_prior_bf=1.0):
+    """(n1, w1, n2, w2, bf_per_ip) rows: season-to-date predicts the next outing.
+
+    One row per outing after the first. The prior is the strict sum of earlier
+    outings -- never including the one being predicted, which is the whole
+    point -- and role is judged on that prior alone, so a reliever who is later
+    moved into the rotation still contributes his relief outings.
+    """
+    rows = []
+    acc = {}
+    starts = 0
+    for i, (_date, rec) in enumerate(log):
+        if i > 0 and acc:
+            prior_apps = i
+            if starts / prior_apps <= role_cut:
+                w1, n1 = woba(acc)
+                w2, n2 = woba(rec)
+                if (n1 >= min_prior_bf and n2 > 0
+                        and math.isfinite(w1) and math.isfinite(w2)):
+                    ip = acc.get("outs", 0.0) / 3.0
+                    rows.append((n1, w1, n2, w2,
+                                 (acc["BF"] / ip) if ip > 0 else float("nan")))
+        acc = _add(acc, rec) if acc else dict(rec)
+        starts += rec.get("GS", 0.0)
+    return rows
+
+
+def walkforward_rows(season, role_cut, max_pitchers=0, verbose=True):
+    """Pooled walk-forward rows for a season's relief population."""
+    totals = fetch_season_totals(season, "pitching", verbose=False)
+    pool = []
+    for (pid, _), rec in totals.items():
+        g, gs, bf = rec.get("G", 0.0), rec.get("GS", 0.0), rec.get("BF", 0.0)
+        if g <= 0 or bf <= 0:
+            continue
+        if (gs / g) <= role_cut:
+            pool.append((bf, int(pid)))
+    pool.sort(reverse=True)
+    if max_pitchers:
+        pool = pool[:max_pitchers]
+    rows, failed = [], 0
+    for k, (_bf, pid) in enumerate(pool):
+        try:
+            log = fetch_game_log(pid, season)
+        except Exception:  # noqa: BLE001
+            failed += 1
+            continue
+        rows.extend(walkforward_pairs(log, role_cut))
+        if verbose and k and k % 100 == 0:
+            print(f"    {season}: {k}/{len(pool)} relievers, {len(rows)} outings",
+                  file=sys.stderr)
+        time.sleep(0.12)
+    if verbose:
+        print(f"  {season} walk-forward: {len(pool)} relievers, {len(rows)} "
+              f"predicted outings, {failed} log fetches failed", file=sys.stderr)
+    return np.array(rows, dtype=float) if rows else np.empty((0, 5))
+
+
 # --- league prior by role and hand -----------------------------------------
 # A separate question from K, and the one that binds if K stays at 100.
 #
@@ -728,6 +843,12 @@ def main(argv=None):
     ap.add_argument("--weight-jitter", type=float, default=0.05,
                     help="relative wOBA-weight perturbation for the sensitivity arm")
     ap.add_argument("--draws", type=int, default=BOOT_DRAWS)
+    ap.add_argument("--walkforward", dest="walkforward", action="store_true",
+                    default=True,
+                    help="fit K against realised next outings (one call per reliever)")
+    ap.add_argument("--no-walkforward", dest="walkforward", action="store_false")
+    ap.add_argument("--wf-max-pitchers", type=int, default=0,
+                    help="cap relievers per season in the walk-forward arm (0 = all)")
     ap.add_argument("--out", default=None, help="also write the report here")
     a = ap.parse_args(argv)
 
@@ -907,6 +1028,43 @@ def main(argv=None):
                 continue
             say(_row(summarise(r, f"first-period BF >= {floor}", _pool_mu(r), a.shipped)))
     say("")
+
+    # ---- walk-forward arm -------------------------------------------------
+    # The arm that matches what the model actually does: season-to-date rate
+    # predicts tonight's relief innings. Every other K figure in this report
+    # predicts an aggregate from an aggregate.
+    if a.walkforward:
+        say("Walk-forward: season-to-date predicts the NEXT outing")
+        say("  this is the model's own use of K; the split arms above are proxies")
+        say(HEAD)
+        wf = {}
+        for season in seasons:
+            try:
+                r = walkforward_rows(season, a.role_cut, a.wf_max_pitchers)
+            except SystemExit:
+                raise
+            except Exception as e:  # noqa: BLE001
+                say(f"  {season}: unavailable ({e!r})")
+                continue
+            if not len(r):
+                continue
+            wf[season] = r
+            say(_row(summarise(r, f"{season} outings", _pool_mu(r), a.shipped)))
+        if wf:
+            allr = np.vstack(list(wf.values()))
+            s = summarise(allr, "pooled outings", _pool_mu(allr), a.shipped)
+            say(_row(s))
+            lo, hi = bootstrap_k(allr, None, draws=min(a.draws, 400))
+            verdict = ("contains 100" if math.isfinite(lo) and lo <= a.shipped <= hi
+                       else "excludes 100" if math.isfinite(lo) else "CI unavailable")
+            say(f"  pooled K = {_fmt_k(s['k']).strip()}  "
+                f"95% CI [{lo:.1f}, {hi:.1f}]  {verdict}")
+            say("")
+            say("  A single outing is ~4 batters faced, so w2 is almost pure")
+            say("  noise per row -- which is fine and is the point: the fit is")
+            say("  BF-weighted, so it aggregates that noise the same way the")
+            say("  bullpen phase does, and the minimum is still unbiased in K.")
+        say("")
 
     # ---- league prior by role and hand ------------------------------------
     # Printed with the displacement each pool suffers, not just the centre.
