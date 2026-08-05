@@ -561,6 +561,83 @@ def fetch_hands(pids, verbose=True):
     return out
 
 
+def bullpen_pool_centre(season, verbose=True):
+    """Centre of the EXACT pool `bullpen_xwoba_aggregate` builds.
+
+    Every other centre in this report describes a population defined HERE --
+    "relievers" by some start-share cut of my choosing. The build does not
+    shrink that population. It shrinks the members of a per-team, role-filtered,
+    active-roster pool, and if the target is meant to be the centre of the pool
+    an estimate is drawn from, that is the pool.
+
+    So the filter is IMPORTED rather than reimplemented. `relief_pitcher_ids`
+    and `load_team_pitcher_roles` come from build_site itself, which means this
+    cannot describe a pool the build does not build. A local copy of the
+    <=35% start share and <=3.0 IP/appearance rules would be a second home for
+    a value that already has one, and CLAUDE.md has the entry for what happens
+    next.
+
+    Two consequences of importing the real thing:
+
+      * It is a TODAY object. `pitcher_roster` is the active roster and
+        `load_team_pitcher_roles` keys off build_site's own SEASON, so this
+        measures the current pool and cannot be run for a past season. That is
+        the right scope -- the target is applied to tonight's pool -- but it
+        means this arm has no multi-season stability check, unlike the others.
+      * The probable starter is NOT excluded. The build drops him per game so
+        his innings are not double counted; for a population centre that is
+        per-slate noise, and excluding one arm per team would bias toward the
+        pool's weaker members.
+
+    Usage weight mirrors the aggregate: team relief BF x (1 - start share),
+    falling back to season BF when the role line has none.
+    """
+    import build_site as B          # heavy, and only this arm needs it
+
+    totals = fetch_season_totals(season, "pitching", verbose=False)
+    rates = {}
+    for (pid, _), rec in totals.items():
+        w, den = woba(rec)
+        if den > 0 and math.isfinite(w):
+            rates[pid] = (w, den, rec)
+
+    seen, members = set(), []
+    n_teams = 0
+    for tid in team_ids(season):
+        try:
+            roles = B.load_team_pitcher_roles(tid)
+            ids = B.relief_pitcher_ids(tid, roles, probable_pid=None)
+        except Exception as e:  # noqa: BLE001
+            if verbose:
+                print(f"    team {tid} pool unavailable: {e!r}", file=sys.stderr)
+            continue
+        n_teams += 1
+        for pid in ids:
+            if pid in seen or pid not in rates:
+                continue
+            seen.add(pid)
+            w, den, rec = rates[pid]
+            role = roles.get(pid) or {}
+            # `_num` returns 0.0 for a missing value, which is what the
+            # aggregate's own `share or 0.0` and role-BF fallback already do.
+            share = _num(role.get("start_share"))
+            role_bf = _num(role.get("batters_faced"))
+            base = role_bf if role_bf > 0 else _num(rec.get("BF"))
+            usage = base * max(0.0, 1.0 - share)
+            if usage > 0:
+                members.append((w, usage, den))
+    if verbose:
+        print(f"  bullpen pool: {len(members)} arms over {n_teams} clubs",
+              file=sys.stderr)
+    if not members:
+        return None
+    return {"n": len(members), "n_teams": n_teams,
+            "usage": _centre([(w, u) for w, u, _ in members]),
+            "talent": _centre([(w, d) for w, _, d in members]),
+            "unweighted": float(np.mean([w for w, _, _ in members])),
+            "med_bf": float(np.median([d for _, _, d in members]))}
+
+
 def _centre(members):
     """(n, weighted centre, unweighted centre, total weight, median weight)."""
     if not members:
@@ -849,6 +926,10 @@ def main(argv=None):
     ap.add_argument("--no-walkforward", dest="walkforward", action="store_false")
     ap.add_argument("--wf-max-pitchers", type=int, default=0,
                     help="cap relievers per season in the walk-forward arm (0 = all)")
+    ap.add_argument("--pool-centre", dest="pool_centre", action="store_true",
+                    default=True,
+                    help="measure the centre of build_site's own relief pool")
+    ap.add_argument("--no-pool-centre", dest="pool_centre", action="store_false")
     ap.add_argument("--out", default=None, help="also write the report here")
     a = ap.parse_args(argv)
 
@@ -1114,6 +1195,58 @@ def main(argv=None):
     say("  overlap to the extent a hand's centre is itself set by the batters")
     say("  it faces -- so shipping both without checking is a double count.")
     say("")
+
+    # ---- the pool the build actually shrinks ------------------------------
+    # The centre that matters, because it is the only one defined by the
+    # shipped filter rather than by this file.
+    if a.pool_centre:
+        say("Bullpen pool centre -- the pool build_site actually aggregates")
+        say("  filter imported from build_site (relief_pitcher_ids), not copied")
+        say("  " + "-" * 68)
+        try:
+            pc = bullpen_pool_centre(seasons[-1])
+        except SystemExit:
+            raise
+        except Exception as e:  # noqa: BLE001
+            pc = None
+            say(f"  unavailable ({e!r})")
+        if pc:
+            ref = None
+            try:
+                cent = role_centres(seasons[-1], a.role_cut, verbose=False)
+                ref = (cent.get("BAT") or {}).get("wtd")
+            except Exception:  # noqa: BLE001
+                pass
+            say(f"  {pc['n']} arms over {pc['n_teams']} clubs, median {pc['med_bf']:.0f} BF")
+            say(f"  usage-weighted centre (what the aggregate averages): "
+                f"{pc['usage']['wtd']:.4f}")
+            say(f"  BF-weighted centre  (talent weighting):              "
+                f"{pc['talent']['wtd']:.4f}")
+            say(f"  unweighted centre   (what EB wants for a member):    "
+                f"{pc['unweighted']:.4f}")
+            if ref is not None:
+                say(f"  league batter centre (the build's current target):   {ref:.4f}")
+                say("")
+                say(f"  {'target choice':<34s}{'gap vs pool':>14s}"
+                    f"{'displ@K=100':>13s}{'displ@K=390':>13s}")
+                med = pc["med_bf"]
+                for label, centre in (("league batter (shipped)", ref),
+                                      ("pool usage-weighted", pc["usage"]["wtd"]),
+                                      ("pool unweighted", pc["unweighted"])):
+                    gap = centre - pc["unweighted"]
+                    say(f"  {label:<34s}{gap:>+14.4f}"
+                        f"{gap * (100 / (med + 100)):>+13.4f}"
+                        f"{gap * (390 / (med + 390)):>+13.4f}")
+                say("")
+                say("  Gap is measured against the pool's own UNWEIGHTED centre,")
+                say("  which is what an individual member's prior should be. The")
+                say("  displacement columns are what each choice costs that member")
+                say("  at the shipped K and at the walk-forward K -- read them, not")
+                say("  the gap: raising K raises the prior's share of the estimate,")
+                say("  so a target error that is tolerable at 100 need not be at 390.")
+                say("  Levels are StatsAPI-reconstructed and not comparable to")
+                say("  Savant's; the gaps between rows are.")
+        say("")
 
     # ---- season-pair arm --------------------------------------------------
     say("Season pair (year N -> year N+1) -- Marcel's comparison, upper bound")
