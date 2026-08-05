@@ -62,6 +62,27 @@ def test_an_existing_season_file_is_never_silently_rewritten(tmp_path, monkeypat
     S.write_season(2024, rows, S.season_centres(rows), force=True)
 
 
+def test_a_dry_run_is_not_blocked_by_an_already_frozen_season(tmp_path, monkeypatch):
+    """A dry run writes nothing, so the immutability guard must not stop it.
+
+    Regression: once 2023-2025 were frozen, the PR-event dry run started
+    failing on `data/woba_priors_2023.csv already exists` -- the fetch check
+    this workflow exists for became a permanent red the moment it had done its
+    job once. The guard now protects the write, not the report.
+    """
+    monkeypatch.setattr(S, "PRIORS_TEMPLATE",
+                        os.path.join(str(tmp_path), "woba_priors_{season}.csv"))
+    monkeypatch.setattr(S, "CENTRES_PATH",
+                        os.path.join(str(tmp_path), "woba_prior_centres.csv"))
+    rows = BAT + ARMS
+    S.write_season(2024, rows, S.season_centres(rows))
+    S.write_season(2024, rows, S.season_centres(rows), dry_run=True)
+    # ...and it still wrote nothing: the file is byte-identical.
+    before = (tmp_path / "woba_priors_2024.csv").read_bytes()
+    S.write_season(2024, [BAT[0]], S.season_centres(BAT), dry_run=True)
+    assert (tmp_path / "woba_priors_2024.csv").read_bytes() == before
+
+
 def test_an_empty_pull_never_becomes_a_prior_file(tmp_path, monkeypatch):
     """A report over an empty pull looks like a measurement. So does a prior."""
     monkeypatch.setattr(S, "build_season", lambda *a, **k: ([], []))

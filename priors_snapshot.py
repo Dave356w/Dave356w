@@ -249,18 +249,27 @@ def season_centres(rows):
 def write_season(season, rows, centres, force=False, dry_run=False):
     """Write one season file and merge its centres. Never silently overwrites."""
     path = PRIORS_TEMPLATE.format(season=season)
-    if os.path.exists(path) and not force:
+    exists = os.path.exists(path)
+    df = pd.DataFrame(rows, columns=PRIOR_COLUMNS).sort_values(
+        ["role", "player_id"], kind="stable")
+    # A dry run writes nothing, so the immutability guard must not stop it --
+    # once a season is frozen, every later PR that touches this file runs the
+    # dry run against an existing snapshot, and refusing there would turn the
+    # fetch check into a permanent red. It reports what it WOULD do instead,
+    # which is strictly more information than the refusal was.
+    if dry_run:
+        note = ("would REFUSE (exists; --force not given)" if exists and not force
+                else "would OVERWRITE (--force)" if exists
+                else "would write")
+        print(f"  {note} {path}: {len(df)} rows", file=sys.stderr)
+        return
+    if exists and not force:
         raise SystemExit(
             f"FAIL: {path} already exists.\n"
             "  A completed season's prior is immutable -- a ledger row built\n"
             "  against it must stay reconcilable. Rewriting it silently would\n"
             "  change history. Pass --force only to repair a known-bad file,\n"
             "  and say so in the PR.")
-    df = pd.DataFrame(rows, columns=PRIOR_COLUMNS).sort_values(
-        ["role", "player_id"], kind="stable")
-    if dry_run:
-        print(f"  would write {path}: {len(df)} rows", file=sys.stderr)
-        return
     os.makedirs(DATA_DIR, exist_ok=True)
     df.to_csv(path, index=False)
     merge_centres(centres)
