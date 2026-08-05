@@ -269,6 +269,18 @@ def test_shipped_mu_mirrors_build_site_not_a_tidier_version():
     assert P.shipped_mu("SP", None) is None
 
 
+def test_early_split_takes_the_first_months_not_the_balanced_one():
+    """The two splits answer different questions and must not coincide."""
+    periods = {(1, 4): {"BF": 100.0}, (1, 5): {"BF": 100.0},
+               (2, 6): {"BF": 600.0}, (2, 7): {"BF": 100.0}}
+    assert P.early_split(periods, 1) == 4
+    assert P.early_split(periods, 2) == 5
+    assert P.balanced_split(periods) == 5
+    # Not enough months to leave anything on the other side of the boundary.
+    assert P.early_split({(1, 4): {"BF": 10.0}}, 1) is None
+    assert P.early_split(periods, 4) is None
+
+
 def test_balanced_split_divides_batters_faced_not_months():
     periods = {(1, 4): {"BF": 100.0}, (1, 5): {"BF": 100.0},
                (2, 6): {"BF": 600.0}, (2, 7): {"BF": 100.0}}
@@ -369,6 +381,41 @@ def test_main_produces_a_report_without_a_network(monkeypatch, tmp_path, capsys)
         assert want in text, f"missing section: {want}"
     # Arm 1 is the baseline by construction; it must print as exactly zero.
     assert "+0.00%" in text or " 0.00%" in text
+
+
+def test_cross_tab_separates_history_size_from_current_sample():
+    """Planted: history helps ONLY where history is large, n1 carries nothing.
+
+    The synthetic pool draws n1 and history size independently, and the talent
+    signal is real for every player. So the gain must line up with H and be
+    flat across n1 -- which is the pattern that would show the first report's
+    n1 table was reading H through a proxy. If `cross_tab` cannot recover a
+    planted separation it cannot adjudicate the real one.
+    """
+    # Two pools with the same talent distribution and the same n1 draw, differing
+    # only in how much history each player has. Thinning an existing pool by
+    # scaling H would be wrong: it leaves a full-precision rate attached to a
+    # small sample, which is a better prior than any real thin history, and the
+    # arm would correctly exploit it. The noise has to be regenerated at the
+    # smaller n, so the history is drawn that way from the start.
+    rows = attach_all(synth(n_players=800, seed=8, hist_bf=(200, 600))
+                      + synth(n_players=800, seed=9, hist_bf=(3, 12)))
+    n1, w1, n2, w2, mu, th, h = P.to_arrays(rows, "recency_role")
+    c = P.fit_c(n1, w1, n2, w2, mu, th, h)
+    tab = P.cross_tab(rows, "recency_role", P.SHIPPED_K, c)
+    assert tab is not None
+    # n1 and H were drawn independently, so the probe must report them as such.
+    # This is the number that adjudicates the real table: on live data it is
+    # strongly positive, which is what makes the n1 buckets unreadable alone.
+    assert abs(tab["corr"]) < 0.15
+    hi_h = [tab[(False, True)][1], tab[(True, True)][1]]
+    lo_h = [tab[(False, False)][1], tab[(True, False)][1]]
+    assert min(hi_h) > max(lo_h), f"high-H {hi_h} did not beat low-H {lo_h}"
+
+
+def test_cross_tab_declines_to_report_when_there_is_no_history():
+    rows = attach_all(synth(n_players=200, seed=6), (0.0, 0.0, 0.0))
+    assert P.cross_tab(rows, "recency_role", P.SHIPPED_K, 200.0) is None
 
 
 def test_paired_bootstrap_brackets_the_point_estimate_on_a_real_signal():
