@@ -371,6 +371,41 @@ def test_main_produces_a_report_without_a_network(monkeypatch, tmp_path, capsys)
     assert "+0.00%" in text or " 0.00%" in text
 
 
+def test_cross_tab_separates_history_size_from_current_sample():
+    """Planted: history helps ONLY where history is large, n1 carries nothing.
+
+    The synthetic pool draws n1 and history size independently, and the talent
+    signal is real for every player. So the gain must line up with H and be
+    flat across n1 -- which is the pattern that would show the first report's
+    n1 table was reading H through a proxy. If `cross_tab` cannot recover a
+    planted separation it cannot adjudicate the real one.
+    """
+    # Two pools with the same talent distribution and the same n1 draw, differing
+    # only in how much history each player has. Thinning an existing pool by
+    # scaling H would be wrong: it leaves a full-precision rate attached to a
+    # small sample, which is a better prior than any real thin history, and the
+    # arm would correctly exploit it. The noise has to be regenerated at the
+    # smaller n, so the history is drawn that way from the start.
+    rows = attach_all(synth(n_players=800, seed=8, hist_bf=(200, 600))
+                      + synth(n_players=800, seed=9, hist_bf=(3, 12)))
+    n1, w1, n2, w2, mu, th, h = P.to_arrays(rows, "recency_role")
+    c = P.fit_c(n1, w1, n2, w2, mu, th, h)
+    tab = P.cross_tab(rows, "recency_role", P.SHIPPED_K, c)
+    assert tab is not None
+    # n1 and H were drawn independently, so the probe must report them as such.
+    # This is the number that adjudicates the real table: on live data it is
+    # strongly positive, which is what makes the n1 buckets unreadable alone.
+    assert abs(tab["corr"]) < 0.15
+    hi_h = [tab[(False, True)][1], tab[(True, True)][1]]
+    lo_h = [tab[(False, False)][1], tab[(True, False)][1]]
+    assert min(hi_h) > max(lo_h), f"high-H {hi_h} did not beat low-H {lo_h}"
+
+
+def test_cross_tab_declines_to_report_when_there_is_no_history():
+    rows = attach_all(synth(n_players=200, seed=6), (0.0, 0.0, 0.0))
+    assert P.cross_tab(rows, "recency_role", P.SHIPPED_K, 200.0) is None
+
+
 def test_paired_bootstrap_brackets_the_point_estimate_on_a_real_signal():
     rows = attach(synth(n_players=600, seed=4), P.RECENCY_WEIGHTS)
     lo, hi = P.paired_bootstrap(rows, "recency_role", True, draws=200)

@@ -591,9 +591,59 @@ def _row(s, ci=None):
 
 BUCKETS = ((0, 50), (50, 150), (150, 350), (350, 10 ** 9))
 
+# History size, in the same discounted units H is measured in: a full-time bat
+# with three complete seasons behind him lands near 600, since the ladder sums
+# to 1.0. The n1 buckets alone cannot answer the question they were written for
+# -- see `cross_tab` below.
+H_BUCKETS = ((1, 100), (100, 300), (300, 500), (500, 10 ** 9))
 
-def bucket_label(lo, hi):
-    return f"n1 {lo}-{'inf' if hi > 10 ** 8 else hi}"
+
+def bucket_label(lo, hi, name="n1"):
+    return f"{name} {lo}-{'inf' if hi > 10 ** 8 else hi}"
+
+
+def cross_tab(rows, spec, k, c, mu_is_base=True):
+    """arm-3 dMSE in each quadrant of (n1 above/below median) x (H ditto).
+
+    The n1 table on its own is confounded and the first report shipped it that
+    way. A batter with 350+ PA by the split is a regular, and a regular is
+    exactly the player carrying three full seasons of history -- so `n1` and
+    `H` are not independent, and "the prior helps most at high n1" and "the
+    prior helps most when there is a lot of history" produce the SAME table.
+    They are different claims with different consequences: the first would mean
+    the prior is doing something a prior should not, the second is ordinary
+    empirical Bayes working as designed.
+
+    Splitting on both at once separates them. Read the two high-H cells against
+    each other: if they agree, n1 was never the variable.
+    """
+    n1, w1, n2, w2, mu, th, h = to_arrays(rows, spec)
+    if len(n1) < 40 or not np.any(h > 0):
+        return None
+    n1_med, h_med = float(np.median(n1)), float(np.median(h[h > 0]))
+    out = {}
+    for hi_n1 in (False, True):
+        for hi_h in (False, True):
+            m = ((n1 >= n1_med) == hi_n1) & ((h >= h_med) == hi_h)
+            if m.sum() < 10:
+                out[(hi_n1, hi_h)] = (int(m.sum()), float("nan"))
+                continue
+            base = arm_loss(None, n1[m], w1[m], n2[m], w2[m], mu[m], mu[m],
+                            np.zeros(int(m.sum())), k)
+            mse = arm_loss(c, n1[m], w1[m], n2[m], w2[m], mu[m], th[m], h[m], k)
+            out[(hi_n1, hi_h)] = (
+                int(m.sum()),
+                ((base - mse) / base * 100.0
+                 if base > 0 and math.isfinite(mse) else float("nan")))
+    out["medians"] = (n1_med, h_med)
+    # Guarded: a pool where every player carries identical history has no
+    # correlation to report, and `np.corrcoef` answers that with a divide-by-
+    # zero warning and a nan rather than a refusal.
+    a_, b_ = n1[h > 0], h[h > 0]
+    out["corr"] = (float(np.corrcoef(a_, b_)[0, 1])
+                   if len(a_) > 2 and a_.std() > 0 and b_.std() > 0
+                   else float("nan"))
+    return out
 
 
 def main(argv=None):
@@ -755,6 +805,57 @@ def main(argv=None):
         say("")
     say("  C is held at the pooled fit inside the buckets -- refitting it per")
     say("  bucket would fit four constants and report the best of them.")
+    say("")
+
+    # ---- the same rows, bucketed by HISTORY instead --------------------
+    say("By history size -- the variable the n1 table cannot separate")
+    say("  " + "-" * 74)
+    for pop in POPULATIONS:
+        rs = rows_by_pop[pop]
+        if len(rs) < 30:
+            continue
+        say(f"  {pop}")
+        for lo, hi in H_BUCKETS:
+            sub = [r for r in rs
+                   if lo <= r["hist"][ARMS[2][1]][1] < hi]
+            if len(sub) < 30:
+                say(f"    {bucket_label(lo, hi, 'H'):<14s} {len(sub):>6d} rows "
+                    f"-- too few to fit")
+                continue
+            scored = score_arms(sub, a.k, c_override=fitted_c.get(pop))
+            say(f"    {bucket_label(lo, hi, 'H'):<14s} {len(sub):>6d} rows  "
+                f"arm2 {scored[1]['dmse']:>+6.2f}%   "
+                f"arm3 {scored[2]['dmse']:>+6.2f}%")
+        say("")
+
+    # ---- and both at once, which is the point --------------------------
+    say("n1 x H -- are these one finding or two?")
+    say("  " + "-" * 74)
+    for pop in POPULATIONS:
+        rs = rows_by_pop[pop]
+        if len(rs) < 40:
+            continue
+        c = (fitted_c.get(pop) or {}).get(ARMS[2][0])
+        tab = cross_tab(rs, ARMS[2][1], a.k, c)
+        if not tab:
+            continue
+        n1_med, h_med = tab["medians"]
+        say(f"  {pop}  medians: n1 {n1_med:.0f}, H {h_med:.0f}   "
+            f"corr(n1, H) = {tab['corr']:+.2f}")
+        say(f"    {'':<12s} {'low H':>16s} {'high H':>16s}")
+        for hi_n1, name in ((False, "low n1"), (True, "high n1")):
+            cells = []
+            for hi_h in (False, True):
+                n, d = tab[(hi_n1, hi_h)]
+                cells.append(f"{d:+6.2f}% (n={n})" if math.isfinite(d)
+                             else f"    -- (n={n})")
+            say(f"    {name:<12s} {cells[0]:>16s} {cells[1]:>16s}")
+        say("")
+    say("  If the two high-H cells agree while the two low-H cells agree, the")
+    say("  n1 table above was reading history size through a proxy and the")
+    say("  'helps most at high n1' finding does not exist. If instead the two")
+    say("  high-n1 cells agree across H, it does, and it needs an explanation")
+    say("  before any of this ships.")
     say("")
 
     # ---- fit here, score there -------------------------------------------
