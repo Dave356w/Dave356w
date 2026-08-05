@@ -92,6 +92,14 @@ def attach_all(rows, weights=None):
     attach(rows, weights, "recency_blind")
     attach(rows, FLAT, "career_role")
     attach(rows, (1.0,), "prev_role")
+    # The synthetic league does not drift, so the centred arm sees the same
+    # history as the uncentred one -- which is exactly the null it should show.
+    attach(rows, weights, "recency_centred")
+    # Nothing frozen: the Savant arm has no history at all. Kept in the fixture
+    # rather than omitted, because "no priors committed yet" is the state the
+    # probe runs in until `priors_snapshot.py` has been run, and it must be a
+    # tie with arm 1 rather than a crash.
+    attach(rows, (0.0, 0.0, 0.0), "savant_centred")
     return rows
 
 
@@ -291,13 +299,19 @@ def test_build_rows_classifies_role_on_the_first_period_only():
 def test_score_arms_reports_the_league_arm_as_the_zero():
     rows = attach_all(synth(n_players=400, seed=2))
     scored = P.score_arms(rows)
-    assert [s["label"][:2] for s in scored] == ["1 ", "2 ", "3 ", "3b", "3c"]
+    assert [s["label"][:2] for s in scored] == ["1 ", "2 ", "3 ", "3b", "3c",
+                                                "3d", "3e"]
     assert scored[0]["dmse"] == pytest.approx(0.0)
     assert scored[0]["c"] is None
     # Planted persistent talent: the regressed arm beats the centre, and the
     # unregressed career arm is the one that gives it back.
     assert scored[2]["dmse"] > 0.0
     assert scored[2]["dmse"] > scored[1]["dmse"]
+    # An arm with nothing frozen behind it must tie arm 1 exactly -- reporting
+    # "no data" as a zero, never as a number.
+    savant = next(s for s in scored if s["spec"] == "savant_centred")
+    assert savant["dmse"] == pytest.approx(0.0, abs=1e-9)
+    assert savant["cover"] == pytest.approx(0.0)
 
 
 def _fake_line(rng, pa, gs_share, mu=0.315):

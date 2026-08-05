@@ -137,6 +137,7 @@ from collections import defaultdict
 import numpy as np
 
 import build_site
+from priors_snapshot import centred_history, load_priors
 from reliever_shrink_probe import (
     _add,
     _centre,
@@ -197,12 +198,18 @@ def season_role(rec, role_cut):
 
 
 def history_index(seasons, group, role_cut, verbose=True):
-    """{pid: {season: (rate, denominator, role)}} from completed season totals.
+    """({pid: {season: (rate, denominator, role)}}, {(season, pool): centre}).
 
     One call per season-group -- the `stats=season` shape `load_league_era`
     already runs daily, so this is the fetch path least likely to surprise.
+
+    The per-season pool centres come out of the same pull because a rate is
+    only comparable across seasons against the centre it was earned under.
+    They are what the centred arms read; computing them here costs nothing and
+    keeps them from being fetched twice out of step.
     """
     out = defaultdict(dict)
+    pools = defaultdict(list)
     for season in sorted(seasons):
         totals = fetch_season_totals(season, group, verbose=verbose)
         for (pid, _), rec in totals.items():
@@ -213,7 +220,15 @@ def history_index(seasons, group, role_cut, verbose=True):
             if role is None:
                 continue
             out[pid][season] = (float(rate), float(den), role)
-    return out
+            pools[(season, role)].append((rate, den))
+            if role != "BAT":
+                pools[(season, "P")].append((rate, den))
+    centres = {}
+    for key, members in pools.items():
+        c = _centre(members)
+        if c:
+            centres[key] = c
+    return out, centres
 
 
 def weighted_history(hist, target_season, weights, role=None, lookback=None):
@@ -271,11 +286,13 @@ def personal_prior(theta_hist, h, mu, c):
 # ships against (mu), and every history aggregation an arm might use. History
 # is precomputed per row because only C varies during a fit -- refetching or
 # re-aggregating inside the golden section would make the search the slow part.
-HIST_SPECS = ("recency_role", "recency_blind", "career_role", "prev_role")
+HIST_SPECS = ("recency_role", "recency_blind", "career_role", "prev_role",
+              "recency_centred", "savant_centred")
 
 
 def build_rows(target, periods, hist, split_after, population, role_cut,
-               mu, weights, career_lookback):
+               mu, weights, career_lookback, centres=None,
+               savant_hist=None, savant_centres=None):
     """Rows for one target season and one population. Returns a list of dicts.
 
     Role is classified on PERIOD 1 only, for the same reason
@@ -320,6 +337,20 @@ def build_rows(target, periods, hist, split_after, population, role_cut,
                                                 lookback=career_lookback),
                 # The parsimony control: one season of history, regressed.
                 "prev_role": weighted_history(h, target, (1.0,), role=role),
+                # Same ladder and the same rows as `recency_role`, but each
+                # season read against ITS OWN pool centre and the deviation
+                # carried onto today's. Isolates league drift from talent:
+                # `recency_role` imports 2023's run environment into a 2025
+                # prediction and this one does not.
+                "recency_centred": centred_history(
+                    h, centres, target, weights, mu, role=role),
+                # The shipped metric. History from Savant's completed-season
+                # leaderboards (`priors_snapshot.py`) rather than rebuilt from
+                # StatsAPI counting stats -- centred, because it is on neither
+                # the same scale nor the same season as the target period.
+                "savant_centred": centred_history(
+                    (savant_hist or {}).get(pid), savant_centres, target,
+                    weights, mu, role=role),
             },
         })
     return rows
@@ -420,11 +451,22 @@ def fit_k_vector(n1, w1, n2, w2, mu, theta_hist, h, c):
 
 ARMS = (
     # label, history spec, fit C?
+    #
+    # Order is load-bearing for the first three: arm 1 is the baseline every
+    # dMSE is measured against, and the verdict reads indices 1 and 2.
     ("1 league/role centre", None, False),
     ("2 raw career", "career_role", False),
     ("3 regressed recency", "recency_role", True),
     ("3b regressed, role-blind", "recency_blind", True),
     ("3c regressed, prev season", "prev_role", True),
+    # Two separable questions about arm 3, one variable each: does centring
+    # each season on its own league help, and is Savant's published rate a
+    # better history than the StatsAPI reconstruction? The second arm is empty
+    # (H=0 everywhere, so it ties arm 1) until `priors_snapshot.py` has been
+    # run and its files committed -- which is the honest way for it to report
+    # "no data" rather than a number.
+    ("3d regressed, centred", "recency_centred", True),
+    ("3e Savant history, centred", "savant_centred", True),
 )
 
 
@@ -443,6 +485,14 @@ def score_arms(rows, k=SHIPPED_K, c_override=None):
                 c = (c_override.get(label) if c_override else None)
                 if c is None:
                     c = fit_c(n1, w1, n2, w2, mu, th, h, k)
+                # An arm with no history behind it (nothing frozen yet, or a
+                # source that resolved no player) is arm 1 exactly: every prior
+                # is mu. Report it as the tie it is rather than as `nan`.
+                # Deliberately NOT applied when history exists and the fit
+                # still failed -- C = None there would silently score the
+                # raw-career arm under a regressed arm's label.
+                if not math.isfinite(c or float("nan")) and not np.any(h > 0):
+                    c = None
             else:
                 c = None
         mse = arm_loss(c, n1, w1, n2, w2, mu, th, h, k)
@@ -498,6 +548,10 @@ def _fmt_c(s):
     C = 0 is the raw-career arm, which is a different thing entirely."""
     if s["spec"] is None:
         return "  (H=0)"
+    # No history resolved for this source at all. Printing `0` here would read
+    # as C = 0 -- the raw-career arm -- which is the opposite of what happened.
+    if not s.get("cover"):
+        return " (empty)"
     c = s["c"]
     if c is None:
         return "      0"
@@ -557,6 +611,8 @@ def main(argv=None):
     ap.add_argument("--recency", default=",".join(str(v) for v in RECENCY_WEIGHTS),
                     help="recency ladder, most recent first")
     ap.add_argument("--draws", type=int, default=BOOT_DRAWS)
+    ap.add_argument("--priors", default="data",
+                    help="directory holding the frozen Savant prior files")
     ap.add_argument("--out", default=None, help="also write the report here")
     a = ap.parse_args(argv)
 
@@ -574,10 +630,20 @@ def main(argv=None):
 
     # ---- pull -------------------------------------------------------------
     print("Pulling StatsAPI season totals (history) ...", file=sys.stderr)
-    hist = {
-        "hitting": history_index(hist_seasons, "hitting", a.role_cut),
-        "pitching": history_index(hist_seasons, "pitching", a.role_cut),
-    }
+    hist, hist_centres = {}, {}
+    for group in ("hitting", "pitching"):
+        hist[group], centres_g = history_index(hist_seasons, group, a.role_cut)
+        hist_centres.update(centres_g)
+    # Frozen Savant history, when it has been committed. Absent is not an
+    # error: `load_priors` returns empty maps and the Savant arm degrades to
+    # H=0 everywhere, which ties arm 1 and prints as such.
+    savant_hist, savant_centres = load_priors(a.priors)
+    if savant_hist:
+        print(f"  Savant priors: {len(savant_hist)} players, "
+              f"{len(savant_centres)} season-pool centres", file=sys.stderr)
+    else:
+        print(f"  Savant priors: none committed under {a.priors}/ -- arm 3e "
+              "will report as empty", file=sys.stderr)
     print("Pulling StatsAPI monthly splits (targets) ...", file=sys.stderr)
     monthly, centres = {}, {}
     for season in targets:
@@ -625,22 +691,27 @@ def main(argv=None):
             if mu is None:
                 continue
             rs = build_rows(season, per, hist[group], split, pop, a.role_cut,
-                            mu, weights, lookback)
+                            mu, weights, lookback, centres=hist_centres,
+                            savant_hist=savant_hist,
+                            savant_centres=savant_centres)
             rows_by_pop[pop].extend(rs)
             rows_by_pop_season[(pop, season)].extend(rs)
 
     # ---- coverage ---------------------------------------------------------
     say("Coverage -- how many rows a personal prior can even touch")
-    say("  population        rows   with history   share of period-2 BF   mu")
-    say("  " + "-" * 74)
+    say("  population        rows   with history   share of period-2 BF   mu"
+        "        Savant")
+    say("  " + "-" * 80)
     for pop in POPULATIONS:
         rs = rows_by_pop[pop]
         if not rs:
             say(f"  {pop:<12s}  no rows")
             continue
         _, _, n2, _, mu, _, h = to_arrays(rs, "recency_role")
+        _, _, _, _, _, _, hs = to_arrays(rs, "savant_centred")
         say(f"  {pop:<12s} {len(rs):>7d} {np.mean(h > 0):>13.1%} "
-            f"{np.sum(n2[h > 0]) / np.sum(n2):>21.1%}   {np.mean(mu):.4f}")
+            f"{np.sum(n2[h > 0]) / np.sum(n2):>21.1%}   {np.mean(mu):.4f}"
+            f"  {np.mean(hs > 0):>8.1%}")
     say("")
     say("  Rows without usable history score identically under every arm, so")
     say("  the BF share bounds what any of this can buy on a real slate.")
