@@ -1,0 +1,87 @@
+name: Reliever shrinkage constant probe
+
+# Manual only. Fits the BF-denominated regression constant for relievers off
+# StatsAPI pitcher-seasons, and fits starters and batters through the same code
+# path as controls, so a decision about splitting XWOBA_SHRINK_K by role rests
+# on measurements rather than on Marcel's IP-denominated precedent.
+#
+# The runner is the point twice over: StatsAPI is not reachable from every dev
+# environment, and the numbers this prints are the ones that decision would
+# rest on, so they should come from the same place the build runs.
+#
+# Touches nothing: no build, no lean, no ledger, no commit, no Pages deploy.
+# It pulls monthly and season pitching/hitting splits, prints a report and
+# uploads it. `contents: read` makes that structural.
+#
+# Deliberately outside the `site-build` concurrency group -- it never writes to
+# data/, so it has no reason to queue behind a build.
+on:
+  # Runs itself on any PR that changes the probe, so a probe nobody has
+  # executed cannot merge. Path-filtered, so unrelated PRs are unaffected.
+  pull_request:
+    paths:
+      - 'reliever_shrink_probe.py'
+      - 'tests/test_reliever_shrink_probe.py'
+      - '.github/workflows/reliever-shrink-probe.yml'
+  workflow_dispatch:
+    inputs:
+      seasons:
+        description: 'Seasons to fit (comma-separated; pairs feed the year-to-year arm)'
+        required: false
+        default: '2023,2024,2025,2026'
+      role_cut:
+        description: 'Max share of appearances started to count as relief'
+        required: false
+        default: '0.20'
+      shipped:
+        description: 'The K currently in build_site.py, for the dMSE column'
+        required: false
+        default: '100'
+      draws:
+        description: 'Bootstrap draws behind the confidence intervals'
+        required: false
+        default: '2000'
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20        # fail fast if StatsAPI hangs
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest
+
+      # The estimators are checked against pools with a planted K before the
+      # probe is allowed to report on real ones. An estimator that returns a
+      # confident number for the wrong K prints a report indistinguishable from
+      # a correct one, so this gate runs first and the fit never runs without it.
+      - name: Verify the estimators recover a planted constant
+        run: python -m pytest tests/test_reliever_shrink_probe.py -q
+
+      - name: Run probe
+        run: |
+          python reliever_shrink_probe.py \
+            ${{ inputs.seasons && format('--seasons {0}', inputs.seasons) || '' }} \
+            ${{ inputs.role_cut && format('--role-cut {0}', inputs.role_cut) || '' }} \
+            ${{ inputs.shipped && format('--shipped {0}', inputs.shipped) || '' }} \
+            ${{ inputs.draws && format('--draws {0}', inputs.draws) || '' }} \
+            --out reliever_shrink_probe_report.txt
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reliever-shrink-probe
+          path: reliever_shrink_probe_report.txt
+          if-no-files-found: warn
