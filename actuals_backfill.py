@@ -71,7 +71,36 @@ ACTUAL_RATE_COLS = [f"act_woba_{s}" for s in ("away", "home")]
 # `expected_sp_ip_away` / `_home`. They pair directly; the batting columns do
 # not (see `paired_rates`).
 ACTUAL_PIT_COLS = [f"act_sp_{f}_{s}" for s in ("away", "home") for f in ("ip", "bf")]
-ACTUAL_COLS = ACTUAL_BAT_COLS + ACTUAL_RATE_COLS + ACTUAL_PIT_COLS
+
+# The starter's ALLOWED line, same fields as a batting line and keyed the same
+# way as act_sp_ip: by the side whose starter it describes.
+#
+# This exists so the three model components can be scored separately. Until
+# now the only actual was a team's whole-game offense, which is the JOINT
+# outcome of that lineup against the opposing starter AND bullpen -- so a
+# starter estimate and a bullpen estimate could never be wrong in measurable
+# ways, only jointly. Splitting the phase is what makes them separable.
+#
+# The bullpen phase is deliberately NOT stored: it is the opposing side's
+# batting line minus this, exactly, because a game's batters are faced by the
+# starter or by a reliever and by nobody else. Storing it would be a second
+# copy of a subtraction. But CLAUDE.md's rule applies -- a count derived by
+# subtracting cannot carry a name you did not measure -- so `phase_lines()`
+# validates the residual is non-negative in every field before it will call it
+# a bullpen line, rather than assuming the identity holds.
+_SP_ALLOWED_FIELDS = ["ab", "h", "2b", "3b", "hr", "bb", "ibb", "hbp", "sf"]
+ACTUAL_SP_LINE_COLS = [f"act_sp_{f}_{s}"
+                       for s in ("away", "home") for f in _SP_ALLOWED_FIELDS]
+
+# Bumped whenever this module learns to store a new actual. attach_actuals
+# treats a row as done only at the current schema, so rows backfilled under an
+# older one are revisited and topped up instead of being stranded by a
+# write-once gate that only ever asked about act_woba.
+ACT_SCHEMA = 2
+ACTUAL_META_COLS = ["act_schema"]
+
+ACTUAL_COLS = (ACTUAL_BAT_COLS + ACTUAL_RATE_COLS + ACTUAL_PIT_COLS
+               + ACTUAL_SP_LINE_COLS + ACTUAL_META_COLS)
 
 _SETTLED = ("full_away", "full_home")
 
@@ -158,16 +187,112 @@ def parse_boxscore(box):
             "hbp": bat.get("hitByPitch"), "sf": bat.get("sacFlies"),
         }
         sp_ip = sp_bf = None
+        sp_line = None
         for p in (t.get("players") or {}).values():
             ps = ((p.get("stats") or {}).get("pitching")) or {}
             if _f(ps.get("gamesStarted")):
                 outs = innings_to_outs(ps.get("inningsPitched"))
                 sp_ip = None if outs is None else outs / 3.0
                 sp_bf = _f(ps.get("battersFaced"))
+                # The allowed line, read from the same object. Field
+                # availability on a pitching split is NOT assumed -- a missing
+                # `doubles` would otherwise silently roll extra-base hits into
+                # singles and bias every starter's allowed rate downward. All
+                # or nothing: one absent field abandons the line, and
+                # attach_actuals counts how often that happens so a schema
+                # that does not carry these surfaces as a number rather than
+                # as quietly-wrong rates.
+                got = {f: _f(ps.get(_BOX_PIT_KEY[f])) for f in _SP_ALLOWED_FIELDS}
+                if all(v is not None for v in got.values()):
+                    sp_line = got
                 break
         rec["sp_ip"], rec["sp_bf"] = sp_ip, sp_bf
+        rec["sp_line"] = sp_line
         out[side] = rec
     return out
+
+
+# Box-score pitching keys for the allowed line. Spelled out rather than reusing
+# the batting names because only some of them coincide.
+_BOX_PIT_KEY = {"ab": "atBats", "h": "hits", "2b": "doubles", "3b": "triples",
+                "hr": "homeRuns", "bb": "baseOnBalls",
+                "ibb": "intentionalWalks", "hbp": "hitByPitch",
+                "sf": "sacFlies"}
+
+
+def phase_lines(row, side):
+    """(starter-allowed, bullpen-allowed) component dicts for one side's staff.
+
+    `side` names the PITCHING side, matching act_sp_ip_{side}. The batters they
+    faced are the other side's, so the bullpen residual is taken against that
+    side's batting line.
+
+    Returns (None, None) when the starter line is absent, and (sp, None) when
+    the residual is not a valid line -- a negative count in any field means the
+    starter line and the team batting line disagree, and a bullpen rate built
+    on that would be fiction. Never guesses.
+    """
+    bat_side = "home" if side == "away" else "away"
+    sp = {}
+    for f in _SP_ALLOWED_FIELDS:
+        v = _f(row.get(f"act_sp_{f}_{side}"))
+        if v is None:
+            return None, None
+        sp[f] = v
+    bp = {}
+    for f in _SP_ALLOWED_FIELDS:
+        team = _f(row.get(f"act_{f}_{bat_side}"))
+        if team is None:
+            return sp, None
+        r = team - sp[f]
+        if r < 0:
+            return sp, None
+        bp[f] = r
+    return sp, bp
+
+
+def _fill(df, i, col, val):
+    """Write only into a null cell. An actual is immutable once recorded.
+
+    The module has always documented write-once, but it was enforced by the
+    todo gate rather than by the writes: the loop assigned unconditionally and
+    was simply never handed a row that already had values. Adding a schema
+    stamp makes revisiting normal, which turned that into a live overwrite --
+    caught by the test that asserts existing actuals survive. Enforced here now,
+    where the claim is made, so the gate and the guarantee are independent.
+    """
+    if val is None:
+        return
+    cur = df.at[i, col] if col in df.columns else None
+    if cur is None or (isinstance(cur, float) and np.isnan(cur)) or pd.isna(cur):
+        df.at[i, col] = val
+
+
+def _settled_mask(df):
+    return df[_SETTLED[0]].notna() & df[_SETTLED[1]].notna()
+
+
+def _done_mask(df):
+    """Backfilled at the CURRENT schema -- not merely "has a wOBA".
+
+    The original gate asked only about act_woba, which would strand every
+    column added later on exactly the rows that already had one, i.e. all of
+    them. Revisiting is cheap and safe: the writes are fill-if-null, and a box
+    score is a timestamped event rather than a leaderboard, so re-reading one
+    is backfill and not lookahead. The stamp is written even when a box score
+    cannot supply the newer fields, so a game that simply lacks them is not
+    re-fetched on every build forever.
+    """
+    schema = (pd.to_numeric(df["act_schema"], errors="coerce")
+              if "act_schema" in df.columns
+              else pd.Series(np.nan, index=df.index))
+    return (df["act_woba_away"].notna() & df["act_woba_home"].notna()
+            & (schema >= ACT_SCHEMA))
+
+
+def _todo_index(df):
+    """Rows a backfill run should attempt, in ledger order."""
+    return df.index[_settled_mask(df) & ~_done_mask(df) & df["gamePk"].notna()]
 
 
 def attach_actuals(df, verbose=True):
@@ -188,10 +313,8 @@ def attach_actuals(df, verbose=True):
             axis=1,
         )
 
-    settled = df[_SETTLED[0]].notna() & df[_SETTLED[1]].notna()
-    have = df["act_woba_away"].notna() & df["act_woba_home"].notna()
-    todo = df.index[settled & ~have & df["gamePk"].notna()]
-    no_pk = int((settled & ~have & df["gamePk"].isna()).sum())
+    todo = _todo_index(df)
+    no_pk = int((_settled_mask(df) & ~_done_mask(df) & df["gamePk"].isna()).sum())
 
     if len(todo) == 0:
         if verbose:
@@ -203,6 +326,7 @@ def attach_actuals(df, verbose=True):
     skips = []
     n_ok = 0
     consec = 0
+    no_sp_line = 0
     started = time.monotonic()
     stopped = None
     for i in todo:
@@ -237,10 +361,20 @@ def attach_actuals(df, verbose=True):
         for side in ("away", "home"):
             p = parsed[side]
             for f in _BAT_FIELDS:
-                df.at[i, f"act_{f}_{side}"] = _f(p.get(f))
-            df.at[i, f"act_woba_{side}"] = woba_from_components(p)
-            df.at[i, f"act_sp_ip_{side}"] = p.get("sp_ip")
-            df.at[i, f"act_sp_bf_{side}"] = p.get("sp_bf")
+                _fill(df, i, f"act_{f}_{side}", _f(p.get(f)))
+            _fill(df, i, f"act_woba_{side}", woba_from_components(p))
+            _fill(df, i, f"act_sp_ip_{side}", p.get("sp_ip"))
+            _fill(df, i, f"act_sp_bf_{side}", p.get("sp_bf"))
+            line = p.get("sp_line")
+            if line is None:
+                no_sp_line += 1
+            else:
+                for f, v in line.items():
+                    _fill(df, i, f"act_sp_{f}_{side}", v)
+        # Stamped even when a starter line was unavailable: the row is as
+        # complete as this box score allows, and leaving it unstamped would
+        # re-fetch it on every future build.
+        df.at[i, "act_schema"] = ACT_SCHEMA
         n_ok += 1
         time.sleep(THROTTLE_S)
 
@@ -249,6 +383,7 @@ def attach_actuals(df, verbose=True):
     if verbose:
         remaining = len(todo) - n_ok - len(skips)
         print(f"actuals backfill: {n_ok} attached, {len(skips)} skipped"
+              + (f", {no_sp_line} without a starter allowed line" if no_sp_line else "")
               + (f", {no_pk} lack a gamePk" if no_pk else "")
               + (f"; STOPPED EARLY ({stopped}), {remaining} rows retry next run"
                  if stopped else ""))
@@ -328,6 +463,89 @@ def paired_net(df):
                       if "model_tag" in df.columns else None),
         "pred": pred[m].to_numpy(), "act": act[m].to_numpy(),
     })
+
+
+def paired_components(df):
+    """Long frame of (predicted, actual) for each model component separately.
+
+    The three components the lean is built from are scored apart from each
+    other for the first time here. Their pairings are NOT alike, which is the
+    whole reason this lives in one function:
+
+      SP      `starter_xwoba_{side}` is that side's starter, and the realised
+              starter-allowed line is keyed the same way -> SAME side.
+      BP      `bullpen_xwoba_{side}` likewise -> SAME side.
+      lineup  `opp_xwoba_neutral_{side}` is the lineup that side's pitching
+              FACES, so it is the other side's offense -> CROSSED, exactly as
+              paired_rates crosses mx.
+
+    Getting the lineup cross backwards yields a plausible near-zero slope
+    rather than an error, which is why no caller does its own pairing.
+
+    Read slopes, not intercepts. The lineup's predicted value is a neutral
+    composite while its actual is a real game against real pitching, so the
+    two sit on offset levels by construction; and the weights here may differ
+    from Savant's yearly set, which moves an intercept and not a slope.
+    """
+    rows = []
+    for _, r in df.iterrows():
+        tag = r.get("model_tag")
+        gpk = r.get("game_pk")
+        for side in ("away", "home"):
+            other = "home" if side == "away" else "away"
+            sp, bp = phase_lines(r, side)
+            for comp, pred_col, act in (
+                ("SP", f"starter_xwoba_{side}",
+                 woba_from_components(sp) if sp else None),
+                ("BP", f"bullpen_xwoba_{side}",
+                 woba_from_components(bp) if bp else None),
+                ("lineup", f"opp_xwoba_neutral_{side}", _f(r.get(f"act_woba_{other}"))),
+            ):
+                pred = _f(r.get(pred_col))
+                if pred is None or act is None:
+                    continue
+                den = None
+                if comp == "SP" and sp:
+                    den = sum(sp[f] for f in ("ab", "bb", "hbp", "sf")) - sp["ibb"]
+                elif comp == "BP" and bp:
+                    den = sum(bp[f] for f in ("ab", "bb", "hbp", "sf")) - bp["ibb"]
+                elif comp == "lineup":
+                    den = _f(r.get(f"act_pa_{other}"))
+                rows.append({"game_pk": gpk, "model_tag": tag, "component": comp,
+                             "side": side, "pred": pred, "act": act, "den": den})
+    return (pd.DataFrame(rows) if rows else
+            pd.DataFrame(columns=["game_pk", "model_tag", "component", "side",
+                                  "pred", "act", "den"]))
+
+
+def components_summary(df, tags=None):
+    """Per-component predicted-vs-actual lines. Empty list when nothing pairs.
+
+    Family-scoped for the same reason the rate and delta lines are: v9/v10
+    predicts these components from xwOBA inputs and the wOBA lineage from
+    observed wOBA, and the actual is observed wOBA either way, so pooling them
+    would describe a model that never ran.
+    """
+    if tags is not None and "model_tag" in getattr(df, "columns", []):
+        df = df[df["model_tag"].astype(str).isin(set(tags))]
+    p = paired_components(df)
+    if p.empty:
+        return []
+    lines = ["component error (each scored against its own realised phase)"]
+    for comp in ("SP", "BP", "lineup"):
+        s = p[p.component == comp]
+        if s.empty:
+            continue
+        err = s["act"] - s["pred"]
+        cal = calibration(s["pred"], s["act"])
+        bit = (f"  {comp:<7s} n={len(s):<4d} pred {s['pred'].mean():.4f} "
+               f"act {s['act'].mean():.4f} ({err.mean():+.4f})  "
+               f"MAE {err.abs().mean():.4f}")
+        if cal:
+            r = float(np.corrcoef(s["pred"], s["act"])[0, 1])
+            bit += f"  slope {cal['slope']:+.2f}±{cal['se_slope']:.2f}  corr {r:+.3f}"
+        lines.append(bit)
+    return lines
 
 
 def paired_sp_ip(df):

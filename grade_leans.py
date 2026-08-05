@@ -54,7 +54,7 @@ import requests
 
 from market_backfill import MARKET_COLS, attach_market, metric_label
 from actuals_backfill import (ACTUAL_COLS, attach_actuals, actuals_summary,
-                              actuals_family_line)
+                              actuals_family_line, components_summary)
 
 DATA_DIR    = os.environ.get("DATA_DIR", "data")
 LEDGER_PATH = os.path.join(DATA_DIR, "mlb_lean_ledger.csv")
@@ -684,6 +684,14 @@ def report(led):
             "different scale against an observed-wOBA actual):")
         for _ln in _fam_lines:
             say(_ln)
+
+    # Each component against its own realised phase, so SP, BP and the lineup
+    # can be tuned separately instead of only jointly. Until the schema-2
+    # backfill has run there is no realised starter line, so only the lineup
+    # component pairs and the others are simply absent -- which is the honest
+    # state, not a gap to fill with the joint number.
+    for _ln in components_summary(led, tags=RECORD_TAGS):
+        say(_ln)
 
     families = _model_family_grades(led)
     if families:
