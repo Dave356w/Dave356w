@@ -1,0 +1,82 @@
+name: Matchup combiner probe
+
+# Manual only. Asks whether B*P/L is the right combiner -- and reports, with
+# arithmetic, that the mult-vs-add half of that question is unanswerable on
+# this data (the two forms differ by ~0.0004 wOBA against a realised phase rate
+# with sd ~0.11). What it does fit is the restriction both forms imply and that
+# IS measurable at this sample size: that the lineup rate and the pitching rate
+# enter with equal weight.
+#
+# `--backfill` is on by default because the committed ledger only carries phase
+# actuals once the Actions bot has worked through the schema-2 backfill; the
+# probe fetches them into memory so the numbers do not wait on that. It writes
+# nothing -- `contents: read` plus a post-run diff check make that structural.
+#
+# Deliberately outside the `site-build` concurrency group -- it never writes to
+# data/, so it has no reason to queue behind a build.
+on:
+  pull_request:
+    paths:
+      - 'matchup_form_probe.py'
+      - 'tests/test_matchup_form_probe.py'
+      - '.github/workflows/matchup-form-probe.yml'
+  workflow_dispatch:
+    inputs:
+      backfill:
+        description: 'Fetch phase actuals into memory first (needed until the bot has caught up)'
+        required: false
+        default: 'true'
+      budget:
+        description: 'Seconds of fetching before stopping'
+        required: false
+        default: '900'
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest
+
+      # Coefficients are the whole output, and a fit that returns confident
+      # numbers for the wrong weights reads exactly like a correct one. The
+      # planted-weight recovery runs before the probe is allowed near real data.
+      - name: Verify the fit recovers planted weights
+        run: python -m pytest tests/test_matchup_form_probe.py -q
+
+      - name: Run probe
+        run: |
+          python matchup_form_probe.py \
+            ${{ inputs.backfill != 'false' && '--backfill' || '' }} \
+            ${{ inputs.budget && format('--budget {0}', inputs.budget) || '' }} \
+            --out matchup_form_probe_report.txt
+
+      - name: Confirm nothing was written to data/
+        run: |
+          if ! git diff --quiet -- data/; then
+            echo "::error::probe modified data/ -- it must be read-only"
+            git --no-pager diff --stat -- data/
+            exit 1
+          fi
+          echo "data/ clean"
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: matchup-form-probe
+          path: matchup_form_probe_report.txt
+          if-no-files-found: warn
