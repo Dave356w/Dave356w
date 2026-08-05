@@ -274,6 +274,24 @@ a past game is not recoverable, so historical rows cannot be re-derived from
 today's Savant pull — that is lookahead, not backfill. Pending rows never
 receive closing lines (`run_market_update.py` invariant). Do not relax either.
 
+The one Savant pull that is *not* slate-dependent is a **completed** season:
+2024's final line reads the same whenever it is fetched. `priors_snapshot.py`
+freezes those into `data/woba_priors_<season>.csv` plus the per-season pool
+centres in `data/woba_prior_centres.csv`, and the distinction is enforced
+rather than trusted — it refuses any season not strictly earlier than
+`build_site.SEASON`, and refuses to overwrite an existing season file without
+`--force`. Both refusals are load-bearing. A season file is **immutable**: a
+ledger row built against a prior has to stay reconcilable, and Savant does
+occasionally revise history. Rewrite one only to repair a known-bad file, and
+say so in the PR.
+
+Store the deviation, not the level. A rate is only comparable across seasons
+against the centre it was earned under, which is why the centres file exists
+and why `centred_history()` carries `theta_s − mu_s` rather than `theta_s`.
+Using a stored rate without its centre imports that season's run environment
+into today's prediction — the same error as freezing a constant off the ledger,
+one artifact out.
+
 ## Before opening a PR
 
 ```

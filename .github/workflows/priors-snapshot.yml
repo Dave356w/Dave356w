@@ -1,0 +1,114 @@
+name: Freeze completed-season wOBA priors
+
+# Manual only. Pulls Savant's custom leaderboard for COMPLETED seasons and
+# commits one immutable file per season plus the pool centres those rates are
+# read against.
+#
+# This is the one probe-adjacent workflow that writes to data/, so it takes the
+# rules that come with that:
+#
+#   * It joins the `site-build` concurrency group. That group serializes ledger
+#     commits, and a snapshot commit racing a build commit interleaves writes to
+#     the same directory. `cancel-in-progress: false` for the same reason the
+#     build sets it -- a cancelled write is a half-written data/.
+#
+#   * It runs `validate_data_files.py` before AND after the commit, mirroring
+#     build.yml. That gate has caught unresolved conflict markers in committed
+#     CSVs twice in production.
+#
+#   * It is the Actions bot that commits, never a human. CLAUDE.md: data/ is
+#     the bot's.
+#
+# The script refuses any season that is not strictly earlier than the current
+# one, and refuses to overwrite an existing season file without --force. Those
+# are enforced in the script rather than here, so a local run cannot bypass
+# them either.
+on:
+  # Path-filtered dry run on the PR that changes this code. It fetches from
+  # Savant and prints the row counts but writes and commits NOTHING, so the
+  # call shape and the column names are proven before anyone can dispatch the
+  # writing version -- which, being workflow_dispatch, is not even available
+  # until this file is on the default branch. A leaderboard export that renamed
+  # a column should fail here, not on the run that commits.
+  pull_request:
+    paths:
+      - 'priors_snapshot.py'
+      - 'tests/test_priors_snapshot.py'
+      - '.github/workflows/priors-snapshot.yml'
+  workflow_dispatch:
+    inputs:
+      seasons:
+        description: 'Completed seasons to freeze (comma-separated)'
+        required: false
+        default: '2023,2024,2025'
+      role_cut:
+        description: 'Max share of appearances started to count as relief'
+        required: false
+        default: '0.20'
+      force:
+        description: 'Overwrite an existing season file (repair only -- say why in the PR)'
+        type: boolean
+        required: false
+        default: false
+      dry_run:
+        description: 'Fetch and report, write nothing'
+        type: boolean
+        required: false
+        default: false
+
+concurrency:
+  group: site-build
+  cancel-in-progress: false
+
+permissions:
+  contents: write          # commit the frozen priors (data/) back to the repo
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest
+
+      # The immutability and no-lookahead guards are the reason this workflow
+      # is safe to give `contents: write`. Verify them before it has write
+      # access to anything.
+      - name: Verify the snapshot guards
+        run: python -m pytest tests/test_priors_snapshot.py -q
+
+      - name: Freeze priors
+        run: |
+          python priors_snapshot.py \
+            ${{ inputs.seasons && format('--seasons {0}', inputs.seasons) || '' }} \
+            ${{ inputs.role_cut && format('--role-cut {0}', inputs.role_cut) || '' }} \
+            ${{ inputs.force && '--force' || '' }} \
+            ${{ (github.event_name != 'workflow_dispatch' || inputs.dry_run) && '--dry-run' || '' }}
+
+      # Gated on the EVENT, not only on the input. `inputs.dry_run` is empty on
+      # a pull_request run, so a `!inputs.dry_run` condition alone would make
+      # every PR that touches this file try to commit to data/.
+      - name: Commit
+        if: ${{ github.event_name == 'workflow_dispatch' && !inputs.dry_run }}
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          python validate_data_files.py
+          git add data/
+          git diff --cached --quiet || git commit -m "freeze wOBA priors $(date -u +%FT%H:%MZ)"
+          # `github.ref_name`, not a hardcoded `main`. build.yml can hardcode
+          # it because it only ever runs on main; this one is dispatched
+          # against whichever branch is being reviewed, and rebasing a feature
+          # branch onto main here would push the wrong history.
+          git pull --rebase origin "${{ github.ref_name }}"
+          python validate_data_files.py
+          git push origin HEAD:"${{ github.ref_name }}"
