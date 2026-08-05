@@ -1108,8 +1108,16 @@ class XwobaShrinkageTests(unittest.TestCase):
         s = float(build_site.shrink_xwoba([0.360], [150], prior, k).iloc[0])
         self.assertAlmostEqual(build_site._shrink_one(0.360, 150, prior, k), s, places=6)
 
-    def test_model_uses_fixed_100_for_batters_and_pitchers(self):
-        self.assertEqual(build_site.XWOBA_SHRINK_K, 100.0)
+    def test_model_uses_one_fixed_k_for_batters_and_pitchers(self):
+        """One K reaches both pools -- the claim, not the numeral.
+
+        This asserted the literal 100.0 and so failed on the v3 bump for a
+        reason with nothing to do with what it guards, which is that batters
+        and pitchers are handed the SAME constant. The value is read off the
+        module; a role split would still fail here, which is the point.
+        """
+        k = build_site.XWOBA_SHRINK_K
+        self.assertGreater(k, 0)
         with (
             mock.patch.object(
                 build_site, "segment_pitcher_blocks",
@@ -1744,15 +1752,38 @@ class ModelTagProvenanceTests(unittest.TestCase):
         self.assertIn(build_site.MODEL_TAG, build_site.SCALE_TAGS)
 
     def test_centered_platoon_bump_resets_record_but_keeps_woba_scale(self):
-        self.assertEqual(build_site.RECORD_TAGS, ("woba+plat_consol_v2",))
-        self.assertEqual(grade_leans.RECORD_TAGS, ("woba+plat_consol_v2",))
-        self.assertEqual(
-            build_site.SCALE_TAGS,
-            ("woba+plat_consol_v1", "woba+plat_consol_v2"),
-        )
+        """v2's own family decisions, which are history and cannot change.
+
+        Previously read the LIVE tags, so every later bump broke a test about
+        v2. The maps are the authority (CLAUDE.md), so ask them directly.
+        """
+        self.assertEqual(build_site._RECORD_FAMILIES["woba+plat_consol_v2"],
+                         ("woba+plat_consol_v2",))
+        self.assertEqual(grade_leans._RECORD_FAMILIES["woba+plat_consol_v2"],
+                         ("woba+plat_consol_v2",))
+        self.assertEqual(build_site._SCALE_FAMILIES["woba+plat_consol_v2"],
+                         ("woba+plat_consol_v1", "woba+plat_consol_v2"))
+
+    def test_v3_starts_a_new_record_and_a_new_scale_family(self):
+        """Both halves of the v3 decision, argued in _RECORD_FAMILIES.
+
+        K 100->400 changes every shrunk rate and the relief target moves every
+        bullpen number, so the record resets; and quadrupling K compresses
+        |xw_net|, so magnitudes are not comparable with v2 either.
+        """
+        self.assertEqual(build_site._RECORD_FAMILIES["woba+plat_consol_v3"],
+                         ("woba+plat_consol_v3",))
+        self.assertEqual(grade_leans._RECORD_FAMILIES["woba+plat_consol_v3"],
+                         ("woba+plat_consol_v3",))
+        self.assertEqual(build_site._SCALE_FAMILIES["woba+plat_consol_v3"],
+                         ("woba+plat_consol_v3",))
+        self.assertNotIn("woba+plat_consol_v2",
+                         build_site._SCALE_FAMILIES["woba+plat_consol_v3"])
 
     def test_every_active_rate_source_is_observed_woba(self):
-        self.assertEqual(build_site.MODEL_TAG, "woba+plat_consol_v2")
+        # The subject is the metric. Pinning the version made this fail on a
+        # bump that changed no rate source at all.
+        self.assertTrue(build_site.MODEL_TAG.startswith("woba+"))
         self.assertEqual(build_site.MODEL_RATE_SOURCE_COL, "woba")
         self.assertEqual(build_site.MODEL_RATE_LABEL, "wOBA")
         self.assertIn("woba", build_site.STATCAST_SELECTIONS)
@@ -1962,3 +1993,66 @@ class MarketCalibrationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ReliefPoolPriorTests(unittest.TestCase):
+    """v3's shrink target: the relief pool's own UNWEIGHTED centre.
+
+    The three failure modes are all silent -- a wrong pool, a weighted mean, or
+    a frozen literal would each produce a plausible number and shift every
+    bullpen rate by ~0.01 without erroring.
+    """
+
+    def _roles(self, n=60):
+        r = {i: {"appearances": 50, "starts": 0, "start_share": 0.0,
+                 "avg_ip_per_appearance": 1.0, "batters_faced": 150.0}
+             for i in range(1, n)}
+        r[99] = {"appearances": 28, "starts": 28, "start_share": 1.0,
+                 "avg_ip_per_appearance": 6.0, "batters_faced": 700.0}
+        return r
+
+    def _stat(self, n=60):
+        s = {i: {"xwOBA": 0.290 + 0.001 * i} for i in range(1, n)}
+        s[99] = {"xwOBA": 0.900}          # rotation arm, must never enter
+        return s
+
+    def test_prior_is_the_unweighted_mean_over_the_shipped_filter(self):
+        build_site._pitcher_roster_cache[1] = list(range(1, 60)) + [99]
+        got = build_site.relief_pool_prior([1], self._stat(), {1: self._roles()})
+        expect = sum(0.290 + 0.001 * i for i in range(1, 60)) / 59
+        self.assertAlmostEqual(got, expect, places=12)
+
+    def test_usage_weighting_is_not_used(self):
+        """EB wants the population centre, and the pool's usage-weighted centre
+        sits ~0.012 the other side of it because the good arms get the innings.
+        A BF-weighted mean here would over-correct past the shipped target."""
+        roles = self._roles()
+        for i in range(1, 30):            # give the best arms all the usage
+            roles[i]["batters_faced"] = 900.0
+        build_site._pitcher_roster_cache[2] = list(range(1, 60))
+        got = build_site.relief_pool_prior([2], self._stat(), {2: roles})
+        expect = sum(0.290 + 0.001 * i for i in range(1, 60)) / 59
+        self.assertAlmostEqual(got, expect, places=12)
+
+    def test_rotation_arms_cannot_reach_the_prior(self):
+        build_site._pitcher_roster_cache[3] = [99]
+        self.assertIsNone(
+            build_site.relief_pool_prior([3], self._stat(), {3: self._roles()}))
+
+    def test_too_few_arms_returns_none_so_the_caller_keeps_the_league_baseline(self):
+        """A centre off a handful of pitchers is worse than the target it
+        replaces, so v3 declines rather than shrinking toward noise."""
+        build_site._pitcher_roster_cache[4] = list(range(1, 10))
+        roles = {i: self._roles()[i] for i in range(1, 10)}
+        self.assertIsNone(
+            build_site.relief_pool_prior([4], self._stat(), {4: roles}))
+
+    def test_the_prior_is_not_a_literal(self):
+        """Derived per build. If it were frozen, changing the inputs could not
+        move it -- which is the constants-frozen-from-data trap."""
+        build_site._pitcher_roster_cache[5] = list(range(1, 60))
+        base = build_site.relief_pool_prior([5], self._stat(), {5: self._roles()})
+        hotter = {i: {"xwOBA": v["xwOBA"] + 0.050}
+                  for i, v in self._stat().items()}
+        moved = build_site.relief_pool_prior([5], hotter, {5: self._roles()})
+        self.assertAlmostEqual(moved - base, 0.050, places=12)
