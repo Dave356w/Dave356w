@@ -59,7 +59,7 @@ from actuals_backfill import (ACTUAL_COLS, attach_actuals, actuals_summary,
 DATA_DIR    = os.environ.get("DATA_DIR", "data")
 LEDGER_PATH = os.path.join(DATA_DIR, "mlb_lean_ledger.csv")
 REPORT_PATH = os.path.join(DATA_DIR, "ledger_report.txt")
-MODEL_TAG   = os.environ.get("MODEL_TAG", "woba+plat_consol_v3")
+MODEL_TAG   = os.environ.get("MODEL_TAG", "woba+plat_consol_v4")
 MODEL_METRIC_LABEL = os.environ.get(
     "MODEL_METRIC_LABEL",
     "wOBA" if MODEL_TAG.startswith("woba+") else "xwOBA",
@@ -94,6 +94,9 @@ _RECORD_FAMILIES = {
     # v3: K 100->400 plus a relief-pool shrink target. New prediction
     # family; see build_site._RECORD_FAMILIES for the argument.
     "woba+plat_consol_v3": ("woba+plat_consol_v3",),
+    # v4: player-specific shrinkage targets. New record family --
+    # see _RECORD_FAMILIES in build_site.py, which is the authority.
+    "woba+plat_consol_v4": ("woba+plat_consol_v4",),
     # Historical one-slate experiment; isolated from the restored full-wOBA
     # family but still recognised by the immutable ledger.
     "split+plat_consol_v1": ("split+plat_consol_v1",),
@@ -114,6 +117,7 @@ MODEL_FAMILY_TAGS = (
     ("wOBA v1", ("woba+plat_consol_v1",)),
     ("wOBA v2", ("woba+plat_consol_v2",)),
     ("wOBA v3", ("woba+plat_consol_v3",)),
+    ("wOBA v4", ("woba+plat_consol_v4",)),
     ("split v1", ("split+plat_consol_v1",)),
 )
 N_FIT_MIN   = 120

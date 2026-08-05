@@ -62,6 +62,27 @@ def test_an_existing_season_file_is_never_silently_rewritten(tmp_path, monkeypat
     S.write_season(2024, rows, S.season_centres(rows), force=True)
 
 
+def test_a_dry_run_is_not_blocked_by_an_already_frozen_season(tmp_path, monkeypatch):
+    """A dry run writes nothing, so the immutability guard must not stop it.
+
+    Regression: once 2023-2025 were frozen, the PR-event dry run started
+    failing on `data/woba_priors_2023.csv already exists` -- the fetch check
+    this workflow exists for became a permanent red the moment it had done its
+    job once. The guard now protects the write, not the report.
+    """
+    monkeypatch.setattr(S, "PRIORS_TEMPLATE",
+                        os.path.join(str(tmp_path), "woba_priors_{season}.csv"))
+    monkeypatch.setattr(S, "CENTRES_PATH",
+                        os.path.join(str(tmp_path), "woba_prior_centres.csv"))
+    rows = BAT + ARMS
+    S.write_season(2024, rows, S.season_centres(rows))
+    S.write_season(2024, rows, S.season_centres(rows), dry_run=True)
+    # ...and it still wrote nothing: the file is byte-identical.
+    before = (tmp_path / "woba_priors_2024.csv").read_bytes()
+    S.write_season(2024, [BAT[0]], S.season_centres(BAT), dry_run=True)
+    assert (tmp_path / "woba_priors_2024.csv").read_bytes() == before
+
+
 def test_an_empty_pull_never_becomes_a_prior_file(tmp_path, monkeypatch):
     """A report over an empty pull looks like a measurement. So does a prior."""
     monkeypatch.setattr(S, "build_season", lambda *a, **k: ([], []))
@@ -160,8 +181,8 @@ def test_centred_history_carries_the_deviation_not_the_level(tmp_path):
     """
     _seed(tmp_path)
     hist, centres = S.load_priors(str(tmp_path))
-    theta, h = S.centred_history(hist[1], centres, 2025, (0.5, 0.3),
-                                 mu_now=0.330)
+    theta, h = S.centred_history(hist[1], centres, 2025, 0.330,
+                                 weights=(0.5, 0.3))
     assert h == pytest.approx(0.5 * 600.0 + 0.3 * 600.0)
     assert theta == pytest.approx(0.355, abs=1e-9)
 
@@ -170,7 +191,7 @@ def test_centred_history_reads_relievers_against_their_unweighted_centre(tmp_pat
     """RP is the one pool the build shrinks toward an UNWEIGHTED centre."""
     _seed(tmp_path)
     hist, centres = S.load_priors(str(tmp_path))
-    theta, _ = S.centred_history(hist[4], centres, 2025, (1.0,), mu_now=0.300)
+    theta, _ = S.centred_history(hist[4], centres, 2025, 0.300, weights=(1.0,))
     rp_unw = centres[(2024, "RP")]["unw"]
     assert theta == pytest.approx(0.300 + (0.260 - rp_unw))
 
@@ -179,8 +200,8 @@ def test_centred_history_is_the_population_centre_when_there_is_no_history(tmp_p
     """The rookie fallback is H=0, not a branch. Verify there is no branch."""
     _seed(tmp_path)
     hist, centres = S.load_priors(str(tmp_path))
-    theta, h = S.centred_history(hist.get(999), centres, 2025, (0.5, 0.3),
-                                 mu_now=0.330)
+    theta, h = S.centred_history(hist.get(999), centres, 2025, 0.330,
+                                 weights=(0.5, 0.3))
     assert h == 0.0
     import player_prior_probe as P
     assert P.personal_prior(theta, h, 0.330, 400.0) == pytest.approx(0.330)
@@ -192,8 +213,8 @@ def test_centred_history_skips_a_season_with_no_stored_centre(tmp_path):
     _seed(tmp_path)
     hist, centres = S.load_priors(str(tmp_path))
     centres.pop((2024, "BAT"))
-    theta, h = S.centred_history(hist[1], centres, 2025, (0.5, 0.3),
-                                 mu_now=0.330)
+    theta, h = S.centred_history(hist[1], centres, 2025, 0.330,
+                                 weights=(0.5, 0.3))
     # Only 2023 survives: rate 0.390 against that season's weighted centre
     # 0.365, so the same +0.025 deviation on a third of the weight.
     assert h == pytest.approx(0.3 * 600.0)

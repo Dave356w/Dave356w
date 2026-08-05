@@ -47,6 +47,7 @@ import pandas as pd
 import requests
 
 import pitch_arsenal
+import player_priors
 
 # ------------------------------------------------------------
 # CONFIG
@@ -87,6 +88,9 @@ LINEUP_SLOT_PA = {1: 4.61, 2: 4.50, 3: 4.39, 4: 4.29, 5: 4.18,
                   6: 4.08, 7: 3.97, 8: 3.87, 9: 3.76}
 USE_SLOT_PA_WEIGHTS = True
 CACHE_DIR = os.environ.get("CACHE_DIR", ".")
+# Where the frozen completed-season priors live (priors_snapshot.py writes
+# them). Committed, unlike CACHE_DIR, which is the gitignored slate cache.
+PRIORS_DIR = os.environ.get("PRIORS_DIR", "data")
 OUT_DIR = os.environ.get("OUT_DIR", "public")
 # Team cap logos are keyed by the same StatsAPI team id the slate already
 # carries. They live on MLB's static CDN (not in the API payload), so the build
@@ -97,7 +101,7 @@ USE_TEAM_LOGOS = os.environ.get("USE_TEAM_LOGOS", "1") != "0"
 LOGO_CDN = "https://www.mlbstatic.com/team-logos"
 DATA_DIR = os.environ.get("DATA_DIR", "data")            # grading ledger home
 LEDGER_PATH = os.path.join(DATA_DIR, "mlb_lean_ledger.csv")
-MODEL_TAG = os.environ.get("MODEL_TAG", "woba+plat_consol_v3")  # keep in sync with grade_leans.py
+MODEL_TAG = os.environ.get("MODEL_TAG", "woba+plat_consol_v4")  # keep in sync with grade_leans.py
 if not MODEL_TAG.startswith("woba+"):
     raise RuntimeError(
         "This build fetches observed wOBA; refusing to stamp it with a non-wOBA MODEL_TAG"
@@ -152,6 +156,16 @@ _RECORD_FAMILIES = {
     # clean record. The old family had 15 graded rows, so the cost of resetting
     # is 15 games.
     "woba+plat_consol_v3": ("woba+plat_consol_v3",),
+    # v4 replaces the shrinkage TARGET: every batter, starter and reliever with
+    # 2023-2025 Savant history now regresses toward his own recency-weighted
+    # rate instead of a population centre. NEW RECORD FAMILY, argued not
+    # inherited. This is not the v10 situation, where a convex reweight of the
+    # same two phases flipped 0 of 14 leans and earned a shared line. Here the
+    # early-season out-of-sample MSE moves 16-25% across all three populations
+    # and the published rate of an established player moves by roughly the size
+    # of the platoon term. Those are different predictions and they get a clean
+    # record. The v3 family had its own graded rows and they stay immutable.
+    "woba+plat_consol_v4": ("woba+plat_consol_v4",),
     # Short-lived wOBA-lineup/xwOBA-arms experiment. It is retained only so
     # immutable dumps and ledger rows remain recognised after full wOBA was
     # restored; it never pools with the active wOBA record.
@@ -210,6 +224,16 @@ _SCALE_FAMILIES = {
     # family exists to separate. Pooling v2 and v3 magnitudes would rank two
     # distributions against one set of cutoffs.
     "woba+plat_consol_v3": ("woba+plat_consol_v3",),
+    # v4 starts a NEW SCALE FAMILY, and like v3's this half is not a judgement
+    # call either -- it is the same argument with the sign reversed. Shrinking
+    # toward a personal prior instead of one shared centre WIDENS the delta
+    # distribution: under v3 two players with equal samples were pulled to the
+    # same number and their difference compressed toward zero, while under v4
+    # each keeps his own centre, so |xw_net| disperses. Same wOBA units,
+    # materially wider spread, which is exactly what a scale family separates.
+    # Pooling v3 and v4 magnitudes would rank two distributions against one set
+    # of cutoffs and relabel every game in the crossed band.
+    "woba+plat_consol_v4": ("woba+plat_consol_v4",),
     # The mixed-metric delta has its own units. Historical recognition does
     # not make it compatible with the active full-wOBA scale.
     "split+plat_consol_v1": ("split+plat_consol_v1",),
@@ -1055,7 +1079,9 @@ def bullpen_xwoba_aggregate(team_id, probable_pid, pitcher_stat, role_stats,
         usage_bf = (role_bf if role_bf is not None and role_bf > 0 else bf) * relief_share
         if usage_bf <= 0:
             continue
-        shrunk = _shrink_one(xw, bf, prior, shrink_k)
+        # v4: each arm toward his own history, and toward the relief pool's
+        # centre (`prior`, the v3 target) when he has none.
+        shrunk = _shrink_one(xw, bf, player_prior_one(pid, prior), shrink_k)
         if shrunk is not None and pd.notna(shrunk):
             weighted.append((pid, usage_bf, float(shrunk), bf_per_ip(role)))
     if len(weighted) < BULLPEN_MIN_PITCHERS:
@@ -1841,6 +1867,89 @@ XWOBA_SHRINK_COL = "xwOBA"
 # be false. What is distinguishable is 100 from 400.
 XWOBA_SHRINK_K = 400.0
 
+# --- v4: the shrinkage TARGET is the player, not the pool ------------------
+# K says how hard to regress. This says what to regress toward. Until v4 every
+# batter, starter and reliever was pulled toward a population centre, so a
+# career .360 hitter and a career .290 hitter with equal samples were published
+# within a hair of each other -- at K=400 the prior supplies ~70% of a median
+# reliever's rate and about half of a 400-PA batter's, so the target is most of
+# the number.
+#
+# `player_priors.prior_for` replaces that centre with
+#
+#     pi = (H*theta_hist + C*mu) / (H + C)
+#
+# where theta_hist is the player's recency-weighted 2023-2025 Savant wOBA
+# expressed as a deviation from the pool centre he earned it against, and mu is
+# the SAME population centre the build used before. H = 0 returns mu exactly,
+# so rookies and call-ups are unchanged and need no branch.
+#
+# Measured by `player_prior_probe.py` on a runner, out of sample, at this K.
+# The early-season split -- period 1 = the first month, which is the case the
+# build faces every April and where the prior carries most of the weight --
+# reports BAT +25.35% [+18.30,+32.84], RP +22.28% [+16.36,+28.68] and
+# SP +16.38% [+8.84,+25.86] in BF-weighted out-of-sample MSE against the
+# shipped centre. The balanced mid-season split reports +7.33%, +5.91% and
+# +2.83%, all with paired CIs excluding zero, and the C fitted on 2024 holds
+# on 2025 and vice versa for batters and relievers.
+#
+# The unregressed career rate (C = 0) was measured too and LOSES on two of
+# three populations (BAT -11.46%, RP -24.29%): a 70-PA career would otherwise
+# supply most of a published rate. Role-separated history was measured and buys
+# nothing (SP +16.38 vs +16.85 role-blind), so the build passes role=None.
+#
+# Turning this off restores the v3 behaviour exactly, and so does an empty
+# data/woba_priors_*.csv -- the population centre is the H = 0 limit.
+USE_PLAYER_PRIORS = os.environ.get("PLAYER_PRIORS", "1") == "1"
+
+_player_prior_state = {}
+
+
+def player_prior_history():
+    """The frozen priors, loaded once per build. ({}, {}) when absent.
+
+    Absent is not an error: every caller degrades to the population centre,
+    which is the v3 behaviour. A daily build must not fail to produce a page
+    because a snapshot file is missing.
+    """
+    if "loaded" not in _player_prior_state:
+        try:
+            hist, centres = player_priors.load_priors(PRIORS_DIR)
+        except Exception as e:  # noqa: BLE001
+            log(f"  player priors unavailable ({e!r}) -> population centres")
+            hist, centres = {}, {}
+        _player_prior_state["loaded"] = (hist, centres)
+    return _player_prior_state["loaded"]
+
+
+def player_prior_vector(ids, mu):
+    """Per-player shrinkage targets aligned with `ids`, falling back to `mu`.
+
+    Returns `mu` itself (a scalar) when priors are off or nothing is frozen, so
+    the caller hands `shrink_xwoba` exactly what v3 handed it.
+    """
+    mu = _f(mu)
+    if not USE_PLAYER_PRIORS or mu is None:
+        return mu
+    hist, centres = player_prior_history()
+    if not hist or not centres:
+        return mu
+    return [player_priors.prior_for(pid, hist, centres, SEASON, mu,
+                                    player_priors.PRIOR_HISTORY_C)
+            for pid in ids]
+
+
+def player_prior_one(pid, mu):
+    """Scalar form, for the starter row and each member of the bullpen pool."""
+    mu = _f(mu)
+    if not USE_PLAYER_PRIORS or mu is None:
+        return mu
+    hist, centres = player_prior_history()
+    if not hist or not centres:
+        return mu
+    return player_priors.prior_for(pid, hist, centres, SEASON, mu,
+                                   player_priors.PRIOR_HISTORY_C)
+
 # Pitch-mix shadow arm (pitch_arsenal.py). OFF by default and inert when on:
 # it writes shadow columns for forward testing and never moves a lean, so no
 # MODEL_TAG bump is involved either way. Turn it on only once
@@ -2010,12 +2119,30 @@ def shrink_xwoba(x, n, prior, k):
     Series in / positionally-reindexed Series out (aligns with wmean's reset
     index). A missing rate or n<=0 collapses to the prior. Pass-through when
     shrinkage is disabled or k/prior are unusable.
+
+    v4: `prior` may be a per-player vector as well as a scalar. Nothing else
+    changes -- the arithmetic is identical and a vector of one repeated value
+    reproduces the scalar path exactly, which is what makes the personal-prior
+    change a substitution rather than a second code path.
     """
     xs = pd.to_numeric(pd.Series(x).reset_index(drop=True), errors="coerce")
-    if not USE_XWOBA_SHRINK or k is None or not np.isfinite(k) or prior is None or not np.isfinite(prior):
+    if not USE_XWOBA_SHRINK or k is None or not np.isfinite(k) or prior is None:
         return xs
+    if np.isscalar(prior) or isinstance(prior, (int, float)):
+        if not np.isfinite(prior):
+            return xs
+        ps = pd.Series(float(prior), index=xs.index)
+    else:
+        ps = pd.to_numeric(pd.Series(prior).reset_index(drop=True),
+                           errors="coerce")
+        if len(ps) != len(xs) or not ps.notna().any():
+            return xs
     ns = pd.to_numeric(pd.Series(n).reset_index(drop=True), errors="coerce").fillna(0.0).clip(lower=0.0)
-    return (ns * xs.fillna(prior) + k * prior) / (ns + k)
+    out = (ns * xs.fillna(ps) + k * ps) / (ns + k)
+    # A player whose personal prior is unusable falls back to the unshrunk
+    # rate rather than to NaN -- the same degradation the scalar guard above
+    # makes, applied per row.
+    return out.where(ps.notna(), xs)
 
 
 def _shrink_one(x, n, prior, k):
@@ -2128,7 +2255,17 @@ def build_pctile_ref(cust, prior, k, qual_pa):
         m, qual_pa = base, None
     if int(m.sum()) < PCTILE_MIN_POOL:
         return None, None
-    arr = np.sort(pd.to_numeric(shrink_xwoba(xw[m], pa[m], prior, k), errors="coerce")
+    # v4: shrink the reference population the same way the ranked value is
+    # shrunk -- toward each player's own prior. The invariant the caller states
+    # is that the reference and the ranked value share a target; personal
+    # priors keep that, because both sides now use the SAME player's target.
+    # Ranking a personal-prior rate against a population-prior distribution
+    # would break it, and the bar would stop being the percentile of the number
+    # printed beside it.
+    target = prior
+    if "player_id" in cols:
+        target = player_prior_vector(pd.Series(cust["player_id"])[m], prior)
+    arr = np.sort(pd.to_numeric(shrink_xwoba(xw[m], pa[m], target, k), errors="coerce")
                   .dropna().to_numpy())
     return (arr if arr.size else None), qual_pa
 
@@ -2140,13 +2277,19 @@ def build_pctile_ref_raw(series, min_n=PCTILE_MIN_POOL):
     return np.sort(v.to_numpy()) if len(v) >= min_n else None
 
 
-def pctile_rank(value, pa, ref_arr, prior, k, invert=False):
+def pctile_rank(value, pa, ref_arr, prior, k, invert=False, pid=None):
     """Percentile (0-100) of a player's *shrunk* xwOBA within ref_arr. Set
     invert for pitchers (low xwOBA-against = high percentile). None when
-    unavailable."""
+    unavailable.
+
+    `pid` opts this player into his own v4 prior, matching how `build_pctile_ref`
+    shrank the population he is being ranked against. Omitting it ranks a
+    population-shrunk value against a personal-shrunk distribution, which is
+    the mismatch the reference's docstring warns about."""
     if ref_arr is None or getattr(ref_arr, "size", 0) == 0 or value is None or pd.isna(value):
         return None
-    s = _shrink_one(value, pa, prior, k)
+    s = _shrink_one(value, pa, player_prior_one(pid, prior) if pid is not None
+                    else prior, k)
     if s is None or not np.isfinite(s):
         return None
     frac = float(np.searchsorted(ref_arr, s, side="right")) / ref_arr.size
@@ -2224,7 +2367,13 @@ def aggregate_lineup(H, rate_cols, weighted=True, shrink_prior=None, shrink_k=No
             # hitter already carries a team aggregate, so keep that final value
             # instead of applying player-level shrinkage a second time.
             if c == XWOBA_SHRINK_COL and shrink_prior is not None and "PA" in g.columns:
-                vals = shrink_xwoba(g[c], g["PA"], shrink_prior, shrink_k)
+                # v4: each hitter regresses toward his OWN prior when he has
+                # history, and toward `shrink_prior` -- the league centre v3
+                # used for everyone -- when he does not.
+                target = shrink_prior
+                if "player_id" in g.columns:
+                    target = player_prior_vector(g["player_id"], shrink_prior)
+                vals = shrink_xwoba(g[c], g["PA"], target, shrink_k)
                 if MODEL_RATE_TEAM_BACKFILL_COL in g.columns:
                     backfilled = (
                         pd.Series(g[MODEL_RATE_TEAM_BACKFILL_COL])
@@ -2301,8 +2450,12 @@ def build_matchup(P, agg, rate_cols, league_baseline, shrink_prior=None, shrink_
             # batters faced (PA), so a short-sample starter isn't taken at face
             # value. This shrunk value drives the lean and the SP card display.
             if c == XWOBA_SHRINK_COL and shrink_prior is not None:
+                # v4: the starter regresses toward his own history when he has
+                # it. `player_prior_one` returns `shrink_prior` unchanged for a
+                # rookie, so this is the v3 line for anyone without a record.
                 pv = _shrink_one(pv, pd.to_numeric(pr.get("PA"), errors="coerce"),
-                                 shrink_prior, shrink_k)
+                                 player_prior_one(pr.get("player_id"),
+                                                  shrink_prior), shrink_k)
             ov = a.get(f"opp_{c}")
             if c == XWOBA_SHRINK_COL:
                 neutral = a.get("opp_xwOBA_neutral")
@@ -3111,7 +3264,8 @@ def _hitters_for(opp_hitters_df, detail_df, gpk, fp, lg_ops,
             xw_pctile=(
                 pctile_rank_raw(xw_raw, ref_bat)
                 if team_backfill
-                else pctile_rank(xw_raw, _f(r.get("PA")), ref_bat, prior, k_bat)
+                else pctile_rank(xw_raw, _f(r.get("PA")), ref_bat, prior, k_bat,
+                                 pid=r.get("player_id"))
             ),
             adv=bool(adv_tag) if adv_tag is not None and pd.notna(adv_tag) else False,
             ops=_f(d["ops_vs_hand"]) if d is not None else None,

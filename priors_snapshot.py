@@ -92,6 +92,17 @@ import numpy as np
 import pandas as pd
 
 import build_site
+# The reading side lives in `player_priors` -- imported by the build, which
+# cannot import this module (it imports the build). Re-exported here because
+# this is where a reader looks for it, and because writer and reader must agree
+# on the file format by construction rather than by comment.
+from player_priors import (  # noqa: F401
+    CENTRES_NAME,
+    PRIORS_PREFIX,
+    centred_history,
+    load_priors,
+    personal_prior,
+)
 from reliever_shrink_probe import fetch_season_totals
 
 DATA_DIR = "data"
@@ -238,18 +249,27 @@ def season_centres(rows):
 def write_season(season, rows, centres, force=False, dry_run=False):
     """Write one season file and merge its centres. Never silently overwrites."""
     path = PRIORS_TEMPLATE.format(season=season)
-    if os.path.exists(path) and not force:
+    exists = os.path.exists(path)
+    df = pd.DataFrame(rows, columns=PRIOR_COLUMNS).sort_values(
+        ["role", "player_id"], kind="stable")
+    # A dry run writes nothing, so the immutability guard must not stop it --
+    # once a season is frozen, every later PR that touches this file runs the
+    # dry run against an existing snapshot, and refusing there would turn the
+    # fetch check into a permanent red. It reports what it WOULD do instead,
+    # which is strictly more information than the refusal was.
+    if dry_run:
+        note = ("would REFUSE (exists; --force not given)" if exists and not force
+                else "would OVERWRITE (--force)" if exists
+                else "would write")
+        print(f"  {note} {path}: {len(df)} rows", file=sys.stderr)
+        return
+    if exists and not force:
         raise SystemExit(
             f"FAIL: {path} already exists.\n"
             "  A completed season's prior is immutable -- a ledger row built\n"
             "  against it must stay reconcilable. Rewriting it silently would\n"
             "  change history. Pass --force only to repair a known-bad file,\n"
             "  and say so in the PR.")
-    df = pd.DataFrame(rows, columns=PRIOR_COLUMNS).sort_values(
-        ["role", "player_id"], kind="stable")
-    if dry_run:
-        print(f"  would write {path}: {len(df)} rows", file=sys.stderr)
-        return
     os.makedirs(DATA_DIR, exist_ok=True)
     df.to_csv(path, index=False)
     merge_centres(centres)
@@ -264,72 +284,6 @@ def merge_centres(centres):
         new = pd.concat([keep, new], ignore_index=True)
     new.sort_values(["season", "pool"], kind="stable").to_csv(
         CENTRES_PATH, index=False)
-
-
-# --------------------------------------------------------------------------
-# reading side -- what a consumer (the probe today, the build later) calls
-# --------------------------------------------------------------------------
-def load_priors(data_dir=DATA_DIR):
-    """({pid: {season: (woba, pa, role)}}, {(season, pool): centre dict}).
-
-    Returns empty maps when nothing is committed yet, so a consumer degrades to
-    the population centre -- which is the shipped behaviour -- rather than
-    failing. That is the same posture `relief_pool_prior` takes when too few
-    arms resolve.
-    """
-    hist, centres = {}, {}
-    cpath = os.path.join(data_dir, os.path.basename(CENTRES_PATH))
-    if os.path.exists(cpath):
-        for _, r in pd.read_csv(cpath).iterrows():
-            centres[(int(r["season"]), str(r["pool"]))] = {
-                "wtd": float(r["woba_wtd"]), "unw": float(r["woba_unw"]),
-                "n": int(r["n"]), "pa": float(r["pa"]),
-            }
-    for name in sorted(os.listdir(data_dir)) if os.path.isdir(data_dir) else []:
-        if not (name.startswith("woba_priors_") and name.endswith(".csv")):
-            continue
-        df = pd.read_csv(os.path.join(data_dir, name))
-        for _, r in df.iterrows():
-            hist.setdefault(int(r["player_id"]), {})[int(r["season"])] = (
-                float(r["woba"]), float(r["pa"]), str(r["role"]))
-    return hist, centres
-
-
-def centred_history(hist, centres, target_season, weights, mu_now,
-                    pool_for_role=None, role=None, lookback=None):
-    """(theta_hist_on_today's_scale, H) -- the deviation form, or (nan, 0).
-
-    Each season's rate is read against ITS OWN pool centre and the deviation is
-    carried onto `mu_now`. A level is a property of its run environment; a
-    deviation is a property of the player. Without this a 2023 rate imports
-    2023's offence into a 2026 prediction, and the drift is the same order as
-    the talent spread the prior is trying to capture.
-    """
-    num = den = 0.0
-    lookback = len(weights) if lookback is None else lookback
-    for lag in range(1, lookback + 1):
-        s = target_season - lag
-        got = (hist or {}).get(s)
-        if got is None:
-            continue
-        rate, n, r = got
-        if role is not None and r != role:
-            continue
-        v = weights[lag - 1] if lag - 1 < len(weights) else 0.0
-        if v <= 0 or n <= 0:
-            continue
-        pool = (pool_for_role or (lambda x: x))(r)
-        c = (centres or {}).get((s, pool))
-        if c is None:
-            continue
-        # RP against its unweighted centre, everything else against the
-        # PA-weighted one -- mirroring which centre the build shrinks toward.
-        base = c["unw"] if pool == "RP" else c["wtd"]
-        num += v * n * (rate - base)
-        den += v * n
-    if den <= 0:
-        return float("nan"), 0.0
-    return mu_now + num / den, den
 
 
 def main(argv=None):
