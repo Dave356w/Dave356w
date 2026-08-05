@@ -396,6 +396,104 @@ def fetch_periods(season, group, stat_type, verbose=True):
     return fetch_month_periods(season, group, verbose)
 
 
+# --- league prior by role and hand -----------------------------------------
+# A separate question from K, and the one that binds if K stays at 100.
+#
+# The build shrinks batters, probable starters and every reliever toward ONE
+# target: the PA-weighted league batter wOBA from compute_league_baseline. At
+# K = 100 and a median reliever's ~92 BF that target supplies 52% of every
+# published reliever rate, so if it is the centre of no actual subpool, half
+# of each estimate is a number that describes nobody. `_pool_moments` in
+# build_site.py logs this gap; this measures it by role and by throwing hand.
+#
+# TWO THINGS THIS CANNOT SAY, both because of how the rate is rebuilt:
+#
+#   * Absolute level. wOBA here is reconstructed from StatsAPI counting stats
+#     with the fixed linear weights above, while the build's target comes from
+#     Savant's own wOBA column. Those differ by the year's wOBA scale, so a
+#     centre printed here is NOT a value to paste into build_site.py. K was
+#     immune to this -- it is a variance ratio, so the scale cancels -- and a
+#     centre is not. Only the GAPS BETWEEN POOLS below are scale-robust,
+#     because the same weights are applied to every pool.
+#
+#   * Therefore the fix is a per-build derivation off the Savant leaderboard
+#     the build already fetches, never a literal copied from this report. That
+#     is the constants-frozen-from-data entry in CLAUDE.md, and a role-split
+#     target would be a fresh instance of it.
+#
+# Weighted and unweighted centres are both reported, and the difference is not
+# cosmetic. Empirical Bayes wants the centre of the population each estimate is
+# drawn from -- the player-level, unweighted centre. The build's target is
+# PA-weighted, which flatters both pools relative to their own members, since
+# good hitters take more PA and good relievers get more usage. That is the
+# first of the two gaps _pool_moments separates, and it survives here.
+def fetch_hands(pids, verbose=True):
+    """pid -> {'throws', 'bats'}. Mirrors build_site.load_people's call shape."""
+    out = {}
+    pids = [int(p) for p in pids]
+    for i in range(0, len(pids), 100):
+        chunk = pids[i:i + 100]
+        data = _get("https://statsapi.mlb.com/api/v1/people",
+                    {"personIds": ",".join(map(str, chunk))})
+        for p in data.get("people", []) or []:
+            out[int(p["id"])] = {
+                "throws": (p.get("pitchHand") or {}).get("code"),
+                "bats": (p.get("batSide") or {}).get("code"),
+            }
+    if verbose:
+        print(f"  hands: {len(out)} of {len(pids)} players resolved",
+              file=sys.stderr)
+    return out
+
+
+def _centre(members):
+    """(n, weighted centre, unweighted centre, total weight, median weight)."""
+    if not members:
+        return None
+    r = np.array([m[0] for m in members], dtype=float)
+    w = np.array([m[1] for m in members], dtype=float)
+    ok = np.isfinite(r) & np.isfinite(w) & (w > 0)
+    if not ok.any():
+        return None
+    r, w = r[ok], w[ok]
+    return {"n": int(len(r)), "wtd": float(np.sum(r * w) / np.sum(w)),
+            "unw": float(np.mean(r)), "total": float(np.sum(w)),
+            "med": float(np.median(w))}
+
+
+def role_centres(season, role_cut, verbose=True):
+    """{label: centre dict} for batters and for SP/RP split by throwing hand.
+
+    Role is classified on season starts/appearances, and handedness comes from
+    the people endpoint rather than being inferred from splits -- a pitcher's
+    hand is a fact about him, not a property of the sample.
+    """
+    pools = defaultdict(list)
+    pit = fetch_season_totals(season, "pitching", verbose=False)
+    bat = fetch_season_totals(season, "hitting", verbose=False)
+    hands = fetch_hands(sorted({p for p, _ in pit} | {p for p, _ in bat}),
+                        verbose=verbose)
+    for (pid, _), rec in pit.items():
+        rate, den = woba(rec)
+        if den <= 0 or not math.isfinite(rate):
+            continue
+        g, gs = rec.get("G", 0.0), rec.get("GS", 0.0)
+        if g <= 0:
+            continue
+        role = "RP" if (gs / g) <= role_cut else "SP"
+        hand = (hands.get(pid) or {}).get("throws") or "?"
+        pools[f"{role}-{hand}"].append((rate, den))
+        pools[role].append((rate, den))
+    for (pid, _), rec in bat.items():
+        rate, den = woba(rec)
+        if den <= 0 or not math.isfinite(rate):
+            continue
+        side = (hands.get(pid) or {}).get("bats") or "?"
+        pools["BAT"].append((rate, den))
+        pools[f"BAT-{side}"].append((rate, den))
+    return {k: c for k, c in ((k, _centre(v)) for k, v in pools.items()) if c}
+
+
 # --------------------------------------------------------------------------
 # rates
 # --------------------------------------------------------------------------
@@ -808,6 +906,55 @@ def main(argv=None):
             if len(r) < 20:
                 continue
             say(_row(summarise(r, f"first-period BF >= {floor}", _pool_mu(r), a.shipped)))
+    say("")
+
+    # ---- league prior by role and hand ------------------------------------
+    # Printed with the displacement each pool suffers, not just the centre.
+    # A gap in wOBA points is not actionable on its own -- what matters is
+    # gap * K/(n + K), the share of it that actually lands in a published rate
+    # at the shipped K and that pool's own median sample.
+    say("League prior by role and hand -- the target, not the constant")
+    say("  NOTE: levels here are NOT comparable to build_site's Savant-derived")
+    say("  target (different wOBA weights). Only gaps BETWEEN pools are, since")
+    say("  the same weights apply to every pool. Do not paste a centre below")
+    say("  into the build -- derive it per-build from Savant.")
+    say("")
+    say(f"  {'pool':<10s} {'n':>5s} {'wtd':>8s} {'unwtd':>8s} "
+        f"{'vs BAT':>8s} {'medPA':>6s} {'displ@K=100':>12s}")
+    say("  " + "-" * 68)
+    for season in seasons:
+        try:
+            cent = role_centres(season, a.role_cut)
+        except SystemExit:
+            raise
+        except Exception as e:  # noqa: BLE001
+            say(f"  {season}: unavailable ({e!r})")
+            continue
+        ref = (cent.get("BAT") or {}).get("wtd")
+        say(f"  -- {season} --")
+        for key in ("BAT", "BAT-L", "BAT-R", "SP", "SP-L", "SP-R",
+                    "RP", "RP-L", "RP-R"):
+            c = cent.get(key)
+            if not c:
+                continue
+            gap = (c["wtd"] - ref) if ref is not None else float("nan")
+            # What the single shared target actually costs a member of this
+            # pool: the gap times the prior's weight at the shipped K.
+            displ = gap * (a.shipped / (c["med"] + a.shipped))
+            say(f"  {key:<10s} {c['n']:>5d} {c['wtd']:>8.4f} {c['unw']:>8.4f} "
+                f"{gap:>+8.4f} {c['med']:>6.0f} {displ:>+12.4f}")
+        for role in ("SP", "RP"):
+            l, r = cent.get(f"{role}-L"), cent.get(f"{role}-R")
+            if l and r:
+                say(f"  {role} L-R hand gap: {l['wtd'] - r['wtd']:+.4f} wOBA "
+                    f"(L n={l['n']}, R n={r['n']})")
+    say("")
+    say("  Read the hand rows against the platoon term already in the model.")
+    say("  wOBA v2 applies an exposure-centred 0.021 starter platoon gap. That")
+    say("  models batter-vs-hand matchup; an L/R TARGET models the mean level")
+    say("  of each hand's population. They are different quantities, but they")
+    say("  overlap to the extent a hand's centre is itself set by the batters")
+    say("  it faces -- so shipping both without checking is a double count.")
     say("")
 
     # ---- season-pair arm --------------------------------------------------
