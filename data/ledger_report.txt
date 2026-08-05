@@ -15,7 +15,7 @@ predicted vs actual (backfilled box scores)
   offense wOBA n=30   pred mean 0.3137  actual mean 0.3088  (-0.0050)
     calibration slope -0.73 +/- 1.16 (1.00 = calibrated)
     UNDER-POWERED: se 1.16 cannot separate 1.00 from 0.80; needs ~6400 side-games
-    skill vs league-rate baseline -0.0592 (ceiling ~0.04; per-game noise dominates)
+    skill vs league-rate baseline -0.0590 (ceiling ~0.04; per-game noise dominates)
   by prediction family (never pooled — different inputs, different scale against an observed-wOBA actual):
   v6         SP IP n=  6 bias +0.60
   v7         SP IP n= 90 bias +0.09
