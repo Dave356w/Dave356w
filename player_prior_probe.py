@@ -137,7 +137,7 @@ from collections import defaultdict
 import numpy as np
 
 import build_site
-from priors_snapshot import centred_history, load_priors
+from player_priors import centred_history, load_priors, personal_prior
 from reliever_shrink_probe import (
     _add,
     _centre,
@@ -264,20 +264,6 @@ def weighted_history(hist, target_season, weights, role=None, lookback=None):
     return num / den, den
 
 
-def personal_prior(theta_hist, h, mu, c):
-    """pi = (H*theta_hist + C*mu) / (H + C). The whole proposal, in one line.
-
-    H = 0 (no usable history) returns `mu` exactly, so a rookie is the n=0
-    limit of the same expression rather than a branch. C = 0 returns the raw
-    history, which is the arm expected to lose.
-    """
-    if h is None or h <= 0 or theta_hist is None or not math.isfinite(theta_hist):
-        return mu
-    if c is None or c <= 0:
-        return float(theta_hist)
-    return float((h * theta_hist + c * mu) / (h + c))
-
-
 # --------------------------------------------------------------------------
 # rows
 # --------------------------------------------------------------------------
@@ -343,14 +329,14 @@ def build_rows(target, periods, hist, split_after, population, role_cut,
                 # `recency_role` imports 2023's run environment into a 2025
                 # prediction and this one does not.
                 "recency_centred": centred_history(
-                    h, centres, target, weights, mu, role=role),
+                    h, centres, target, mu, weights=weights, role=role),
                 # The shipped metric. History from Savant's completed-season
                 # leaderboards (`priors_snapshot.py`) rather than rebuilt from
                 # StatsAPI counting stats -- centred, because it is on neither
                 # the same scale nor the same season as the target period.
                 "savant_centred": centred_history(
-                    (savant_hist or {}).get(pid), savant_centres, target,
-                    weights, mu, role=role),
+                    (savant_hist or {}).get(pid), savant_centres, target, mu,
+                    weights=weights, role=role),
             },
         })
     return rows
