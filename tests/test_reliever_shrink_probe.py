@@ -245,6 +245,61 @@ def test_a_traded_player_accumulates_across_calls():
     assert into[(7, 5)]["BF"] == 50
 
 
+def test_centre_reports_weighted_and_unweighted_separately():
+    """The two centres answer different questions and must not collapse.
+
+    EB wants the pool's player-level (unweighted) centre; the build's target is
+    PA-weighted. Reporting one as the other would hide the first of the two
+    gaps _pool_moments exists to separate.
+    """
+    c = P._centre([(0.300, 100.0), (0.400, 300.0)])
+    assert c["wtd"] == pytest.approx(0.375)
+    assert c["unw"] == pytest.approx(0.350)
+    assert c["n"] == 2 and c["med"] == pytest.approx(200.0)
+    assert P._centre([]) is None
+    assert P._centre([(0.3, 0.0)]) is None      # zero weight is not a member
+
+
+def test_role_centres_split_by_role_and_throwing_hand(monkeypatch):
+    def rec(bf, starts, apps):
+        return {"AB": bf * 0.9, "H": bf * 0.2, "2B": 0.0, "3B": 0.0,
+                "HR": bf * 0.03, "BB": bf * 0.08, "IBB": 0.0, "HBP": 0.0,
+                "SF": 0.0, "BF": float(bf), "G": float(apps),
+                "GS": float(starts), "outs": float(bf)}
+
+    pit = {(1, 0): rec(600, 25, 25),    # SP, throws L
+           (2, 0): rec(650, 26, 26),    # SP, throws R
+           (3, 0): rec(70, 0, 60),      # RP, throws L
+           (4, 0): rec(80, 0, 65)}      # RP, throws R
+    bat = {(5, 0): rec(500, 0, 140)}
+    hands = {1: {"throws": "L", "bats": "L"}, 2: {"throws": "R", "bats": "R"},
+             3: {"throws": "L", "bats": "L"}, 4: {"throws": "R", "bats": "R"},
+             5: {"throws": "R", "bats": "L"}}
+    monkeypatch.setattr(P, "fetch_season_totals",
+                        lambda s, g, verbose=True: pit if g == "pitching" else bat)
+    monkeypatch.setattr(P, "fetch_hands", lambda pids, verbose=True: hands)
+
+    cent = P.role_centres(2026, 0.20, verbose=False)
+    assert cent["SP"]["n"] == 2 and cent["RP"]["n"] == 2
+    assert cent["SP-L"]["n"] == 1 and cent["RP-R"]["n"] == 1
+    assert cent["BAT"]["n"] == 1 and cent["BAT-L"]["n"] == 1
+    # A starter must never land in the relief pool via the hand split.
+    assert "SP-L" in cent and cent["RP-L"]["n"] == 1
+
+
+def test_role_centres_survive_an_unknown_hand(monkeypatch):
+    """A missing hand must bucket as '?', not crash or silently join L or R."""
+    r = {"AB": 90.0, "H": 20.0, "2B": 0.0, "3B": 0.0, "HR": 3.0, "BB": 8.0,
+         "IBB": 0.0, "HBP": 0.0, "SF": 0.0, "BF": 100.0, "G": 50.0, "GS": 0.0,
+         "outs": 100.0}
+    monkeypatch.setattr(P, "fetch_season_totals",
+                        lambda s, g, verbose=True: {(9, 0): r} if g == "pitching" else {})
+    monkeypatch.setattr(P, "fetch_hands", lambda pids, verbose=True: {})
+    cent = P.role_centres(2026, 0.20, verbose=False)
+    assert cent["RP-?"]["n"] == 1
+    assert "RP-L" not in cent and "RP-R" not in cent
+
+
 def test_position_players_are_dropped_from_the_pitching_pool():
     into, dropped = {}, __import__("collections").defaultdict(int)
     P._collect(_payload(9, 5, 6, code="3"), "pitching", None, into, dropped)
