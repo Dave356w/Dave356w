@@ -1,0 +1,85 @@
+name: Phase actuals probe
+
+# Manual only. Answers one question before anything depends on the answer:
+# does a box score's per-pitcher `stats.pitching` object actually carry the
+# fields a starter's ALLOWED line needs (doubles, triples, sacFlies alongside
+# hits and walks)? If it does not, parse_boxscore abandons every starter line
+# by design and the SP/BP split is inert -- silently, because the report just
+# omits a component it cannot pair.
+#
+# Guessing at field availability from a sandbox that cannot reach StatsAPI is
+# how the byMonth shape shipped broken once already. This measures it.
+#
+# READ-ONLY, and `contents: read` makes that structural: data/ belongs to the
+# Actions bot's build job, which is what populates the ledger for real. This
+# runs attach_actuals against an in-memory copy so the numbers are available
+# before the merge, and throws the result away.
+#
+# Deliberately outside the `site-build` concurrency group -- it never writes to
+# data/, so it has no reason to queue behind a build.
+on:
+  pull_request:
+    paths:
+      - 'phase_actuals_probe.py'
+      - 'actuals_backfill.py'
+      - '.github/workflows/phase-actuals-probe.yml'
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: 'Only attempt N rows (0 = all settled rows)'
+        required: false
+        default: '0'
+      budget:
+        description: 'Seconds of fetching before stopping'
+        required: false
+        default: '900'
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25        # ~400 box scores at 0.15s throttle plus latency
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest
+
+      # The pairing and residual rules are checked before the probe is allowed
+      # to report on real games: a wrong cross here yields a plausible weak
+      # correlation rather than an error.
+      - name: Verify the phase split
+        run: python -m pytest tests/test_actuals_backfill.py -q
+
+      - name: Run probe
+        run: |
+          python phase_actuals_probe.py \
+            ${{ inputs.limit && format('--limit {0}', inputs.limit) || '' }} \
+            ${{ inputs.budget && format('--budget {0}', inputs.budget) || '' }} \
+            --out phase_actuals_probe_report.txt
+
+      - name: Confirm nothing was written to data/
+        run: |
+          if ! git diff --quiet -- data/; then
+            echo "::error::probe modified data/ -- it must be read-only"
+            git --no-pager diff --stat -- data/
+            exit 1
+          fi
+          echo "data/ clean"
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase-actuals-probe
+          path: phase_actuals_probe_report.txt
+          if-no-files-found: warn
