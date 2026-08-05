@@ -5,9 +5,11 @@ published as a static site by GitHub Actions on a pregame trigger.
 
 **<https://dave356w.github.io/Dave356w/>**
 
-Current forward-test model: `woba+plat_consol_v2` — observed wOBA supplies
-every active rate, and the starter platoon prior uses exposure-centred 0.021
-gaps instead of a symmetric ±0.010 around each hitter's season line.
+Current forward-test model: `woba+plat_consol_v4` — observed wOBA supplies
+every active rate; rates are regressed with a fitted `K = 400` toward each
+player's own recency-weighted 2023–2025 history rather than a population
+centre; and the starter platoon prior uses exposure-centred 0.021 gaps instead
+of a symmetric ±0.010 around each hitter's season line.
 
 | Where to look | For |
 |---|---|
@@ -20,5 +22,8 @@ gaps instead of a symmetric ±0.010 around each hitter's season line.
 ```bash
 pip install -r requirements.txt
 python build_site.py          # writes public/index.html for today's ET slate
-python -m pytest tests/ -q    # CI does not run these; local is the only gate
+
+pip install pytest            # deliberately not in requirements.txt
+python validate_data_files.py # run both before opening a PR
+python -m pytest tests/ -q    # also CI-gated on every PR and push to main
 ```

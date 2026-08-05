@@ -1,7 +1,7 @@
 # Build-logic validation — MLB matchup-lean model
 
 > **Historical document. Reviewed the v5 model on 2026-07-21 and refreshed for
-> xwOBA v10; the current forward test is `woba+plat_consol_v2`.** Its structural
+> xwOBA v10; the current forward test is `woba+plat_consol_v4`.** Its structural
 > checks still describe the inherited v10 construction, but every empirical
 > result here predates the wOBA substitution and is not evidence for that new
 > lineage. What still held at v10 and what had been superseded:
@@ -9,7 +9,7 @@
 > | section | status against v10 |
 > |---|---|
 > | 1. Matchup math | **Holds**, with one amendment — the lean is now a two-phase blend, so the `d_lineup + d_sp` linearization in §1 describes the starter phase only. See the amendment note in §1. |
-> | 2. Shrinkage | **Superseded.** v8 retired the per-build method-of-moments estimator for a fixed `XWOBA_SHRINK_K = 100`. §2 documents the v5–v7 estimator it validated, not today's code. |
+> | 2. Shrinkage | **Superseded twice.** v8 retired the per-build method-of-moments estimator for a fixed `XWOBA_SHRINK_K = 100`; wOBA v3 then refitted that to 400 and wOBA v4 changed the target from a population centre to each player's own history. §2 documents the v5–v7 estimator it validated, not today's code. |
 > | 3. Platoon lens | **Holds.** Still computed and graded; no longer surfaced on the cards. |
 > | 4. Vs-market test | **Holds.** Unchanged. |
 > | 5. Integrity controls | **Holds**, and the pregame lock has since been exercised in anger — it correctly rejected post-game refreshes on 2026-07-26 and 07-28. |
@@ -18,12 +18,22 @@
 > The model versions between this review and now: v6 (expected-IP
 > starter/bullpen blend), v7 (centre-matched shrinkage moments, full precision,
 > zero-as-abstention), v8 (fixed `K=100`), v9 (starter/bullpen phase split),
-> v10 (PA-share phase weighting). See `MATCHUP_SITE.md` §"The current model".
+> v10 (PA-share phase weighting), then the wOBA lineage — wOBA v1 (observed
+> wOBA replaces xwOBA throughout), v2 (exposure-centred starter platoon prior),
+> v3 (`K` refitted 100 → 400; relievers shrink toward the relief pool's own
+> unweighted centre) and v4 (the shrinkage target becomes each player's own
+> recency-weighted history). See `MATCHUP_SITE.md` §"The current model".
+>
+> Note that §2 below is doubly superseded: it documents the v5–v7 estimator,
+> the table row beneath calls it out as replaced by v8's fixed `K = 100`, and
+> **that value is itself now historical** — the shipped constant is
+> `XWOBA_SHRINK_K = 400`, and what it regresses toward is no longer a
+> population centre at all.
 
 **Date of review:** 2026-07-21 · **Refreshed:** 2026-07-29
 **Scope:** Statistical soundness and robustness of the daily matchup-lean build
 logic in this repo (`build_site.py`, `grade_leans.py`, `market_backfill.py`)
-that generates <https://dave356w.github.io/dave356w/>.
+that generates <https://dave356w.github.io/Dave356w/>.
 
 ## Verdict
 
@@ -59,12 +69,18 @@ model shows **no statistically significant edge over the closing market**.
   correct winner (`grade_leans._wlt`). Full-game and first-5-innings (F5)
   grades are computed separately; F5 requires all five innings present.
 
-### 2. Empirical-Bayes xwOBA shrinkage — **as reviewed at v5; superseded at v8**
+### 2. Empirical-Bayes xwOBA shrinkage — **as reviewed at v5; superseded at v8, again at wOBA v3/v4**
 
-> **Current code:** `shrink_xwoba` applies a fixed `XWOBA_SHRINK_K = 100` to
-> every batter, probable starter, and reliever. The form is unchanged —
-> `x* = (n·x + K·prior)/(n+K)` — only `K` is now a constant rather than a
-> per-build estimate. `estimate_shrink_k` is no longer on the lean path.
+> **Current code:** `shrink_xwoba` applies a fixed `XWOBA_SHRINK_K = 400` — not
+> the 100 this note carried through the v8–v10 era — to every batter, probable
+> starter, and reliever. The *form* is still unchanged, `x* = (n·x + K·prior)/(n+K)`,
+> and that is the whole reason this section's verification is still worth
+> reading; but both free terms have since moved. `K` was refitted at wOBA v3
+> (three independent estimators, all excluding 100). `prior` stopped being a
+> single population centre at wOBA v4: each player regresses toward his own
+> recency-weighted 2023–2025 history, and relievers who lack one regress toward
+> the relief pool's unweighted centre rather than the league batter rate.
+> `estimate_shrink_k` is no longer on the lean path.
 > v7 first corrected the estimator (centring each moment on its own population
 > mean), then v8 removed it entirely: a fixed pseudo-sample is reproducible
 > across builds and preserves more of the player-distribution tails than the

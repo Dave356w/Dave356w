@@ -38,7 +38,7 @@ prediction math. Two separate tag families gate two different questions:
 These are different equivalence relations and they do disagree. The authority is
 `_RECORD_FAMILIES` / `_SCALE_FAMILIES` in `build_site.py` (records mirrored in
 `grade_leans.py`) — not this table, which is a reading aid. Current model is
-**wOBA v2**.
+**wOBA v4**.
 
 | tag | what changed | record family | scale family |
 |---|---|---|---|
@@ -53,6 +53,8 @@ These are different equivalence relations and they do disagree. The authority is
 | v10 | phases weighted by PA share (measured BF/IP) not innings share | 9+10 | 8+9+10 |
 | wOBA v1 | observed wOBA replaces xwOBA in every active rate input; v10 construction fixed | wOBA v1 | wOBA v1 |
 | wOBA v2 | exposure-centred 0.021 starter platoon gap replaces universal ±0.010 | wOBA v2 | wOBA v1+v2 |
+| wOBA v3 | `XWOBA_SHRINK_K` 100 → 400 (fitted); reliever target moves to the relief pool's own unweighted centre | wOBA v3 | wOBA v3 |
+| wOBA v4 | shrinkage *target* becomes the player's own recency-weighted 2023–2025 history, not a population centre | wOBA v4 | wOBA v4 |
 | split v1 | one-slate wOBA-lineup/xwOBA-arms test; abandoned before grading | split v1 | split v1 |
 
 The wOBA forward test is intentionally isolated from xwOBA in both namespaces.
@@ -62,6 +64,18 @@ predictions, but shares v1's strength scale: the metric is unchanged and each
 handedness pair retains essentially the same total gap (0.021 versus 0.020).
 Internal `xwOBA`/`xw_*` dump and ledger keys remain a compatibility schema for
 immutable history; new rows must carry `model_metric=wOBA`.
+
+v3 and v4 each isolate in **both** namespaces, and in both cases the scale half
+is arithmetic rather than judgement — which is what makes them the useful
+counter-precedent to v10. v3 quadruples `K`, so every input keeps less of its
+deviation and `|xw_net|` compresses (a 400-PA batter drops from 400/500 = 80% of
+his deviation to 400/800 = 50%). v4 is the same argument with the sign reversed:
+shrinking toward a *personal* prior instead of one shared centre lets two players
+with equal samples keep different centres, so the delta distribution widens. Same
+wOBA units both times, materially different spread, which is exactly what a scale
+family separates. Neither inherited anything; both are argued in the comments
+above `_RECORD_FAMILIES` and `_SCALE_FAMILIES`, which is where the argument
+belongs.
 
 `split v1` remains an isolated historical namespace because its dump and
 pending ledger rows existed before full wOBA was restored. It is not an active
@@ -94,6 +108,23 @@ the map is the authority on a historical question and deleting the entry would
 lose the answer. What it means in practice is that "the v8/v9/v10 scale pool"
 is the v9/v10 pool, and any provenance note claiming v8 rows is wrong.
 
+Third, and **live rather than historical: wOBA v3 has no graded rows either.**
+The `_RECORD_FAMILIES` comment on `woba+plat_consol_v4` says "The v3 family had
+its own graded rows and they stay immutable." As of 2026-08-05 that is not true —
+v3 holds 4 rows, all `pending`, all from today's slate, and none has ever
+graded. The claim was written the same day v3 shipped, describing rows that did
+not exist yet.
+
+This differs from the v8 case in one way that matters: v8's is settled, but
+v3's is not. Those 4 rows carry a pregame lock and may well grade tonight under
+the v3 tag, at which point the comment becomes true by accident. That is the
+reason it is recorded here rather than corrected in the source — a comment that
+is wrong today and right tomorrow should not be rewritten twice. **Check the
+ledger before quoting it.** What must not happen is the comment being read as
+evidence that a v3 record exists; it was an assumption, not a measurement, and
+it is the third instance of a version note asserting rows a build had not yet
+produced.
+
 When you bump `MODEL_TAG`, decide both questions explicitly in the PR body.
 Silence defaults to a new record family and inherited units — which is wrong
 about half the time. And when you bump it, grep for the tag: it must live in
@@ -112,21 +143,29 @@ precedent — they are how the fix is known to look.
 - **Constants frozen from data.** `LEAN_STRENGTH_FALLBACK` was a literal copy of
   the pooled p33/p80 at the time it was written, and stayed there through two
   model versions that changed the distribution underneath it. It was re-derived
-  for the v9/v10 xwOBA family, and **the wOBA v1 bump has now made it stale
-  again** — a new `_SCALE_FAMILIES` entry is exactly the invalidation its own
-  comment names. It is deliberately not re-derived yet: the wOBA pool is still
+  for the v9/v10 xwOBA family, and **every wOBA bump since has re-staled it** —
+  a new `_SCALE_FAMILIES` entry is exactly the invalidation its own comment
+  names, and there have now been four (wOBA v1, v2 sharing v1, then v3 and v4
+  each isolating). It is deliberately not re-derived yet: the wOBA pool is still
   small enough that its p33/p80 is noise, and freezing that would be this
   anti-pattern with a fresher date on it. Shrinkage plus the slate top-up hold
   the line meanwhile — recompute the pool before quoting it rather than reading
   a number off this file, which is the same discipline the controls entry below
-  demands. One reading worth carrying, because it is a *direction* and not a
-  value to freeze: as of 2026-08-04 (wOBA v1+v2, n=16) the observed p80 is
-  running well under the 0.032 prior while the observed p33 sits close to the
-  0.015 one. If that survives the pool growing, the re-derivation will pull the
-  upper cutoff down materially and relabel the clear/strong boundary — so expect
-  a real move there, not a rounding change. Recompute from the
-  wOBA family alone once it passes ~60 rows. If a constant was read off the
-  ledger, comment where it came from and what would invalidate it. Note the
+  demands.
+
+  The one directional reading this entry used to carry — that as of 2026-08-04
+  (wOBA v1+v2, n=16) the observed p80 ran well under the 0.032 prior while p33
+  sat close to 0.015 — **no longer describes the current scale family and has
+  been retired rather than restated.** v3 and v4 each started a fresh
+  `_SCALE_FAMILIES` entry, so `SCALE_TAGS` today selects v4 alone, and v4 has
+  **zero graded rows** (11 pending, all 2026-08-05). Carrying that direction
+  forward would have been the anti-pattern itself: a number measured on one
+  distribution, quoted against another, with a bump in between that provably
+  changed the spread in a *known direction opposite to v3's*. Recompute from
+  whatever `SCALE_TAGS` resolves to at the time, once that family passes ~60
+  rows. Expect that to take a while — the pool has restarted twice in two days.
+  If a constant was read off the ledger, comment where it came from and what
+  would invalidate it. Note the
   asymmetry the comment there spells out: a *scale-family* change invalidates
   it, but mere pool growth does not — it is a prior, and re-deriving it from the
   family it is shrunk against would make it the data.
