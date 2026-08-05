@@ -1,7 +1,7 @@
 no graded games yet.
 predicted vs actual (backfilled box scores)
-  starter IP   n=336  bias +0.13 IP  MAE 0.97 IP   (drives the phase weight q)
-    IP calibration slope +0.741 +/- 0.061 (1.00 = calibrated; < 1 = over-dispersed)
+  starter IP   n=344  bias +0.12 IP  MAE 0.97 IP   (drives the phase weight q)
+    IP calibration slope +0.739 +/- 0.061 (1.00 = calibrated; < 1 = over-dispersed)
   by prediction family (never pooled — different inputs, different scale against an observed-wOBA actual):
   v2/v3      net n=188 slope +0.51±0.17
   v4         net n= 14 slope -0.36±0.81
@@ -11,6 +11,7 @@ predicted vs actual (backfilled box scores)
   v9/v10     wOBA n=194 pred 0.3138 act 0.3021 (-0.0118) slope +0.95±0.38  SP IP n=194 bias +0.08  net n= 97 slope +1.45±0.52
   wOBA v1    wOBA n=  2 pred 0.2966 act 0.2784 (-0.0182)  SP IP n=  2 bias +0.11  net n=  1
   wOBA v2    wOBA n= 30 pred 0.3137 act 0.3088 (-0.0050) slope -0.73±1.16  SP IP n= 30 bias +0.52  net n= 15 slope -1.86±1.89
+  wOBA v3    wOBA n=  8 pred 0.3171 act 0.3191 (+0.0019) slope +4.10±3.06  SP IP n=  8 bias -0.68  net n=  4 slope +3.41±1.90
   split v1   wOBA n= 14 pred 0.3221 act 0.3514 (+0.0294) slope -0.78±1.58  SP IP n= 14 bias +0.05  net n=  7 slope -1.18±0.89
   xw+plat_consol_v1  net n=  1
 model-family history (never pooled into the current-family fit):
@@ -22,5 +23,6 @@ model-family history (never pooled into the current-family fit):
   v9/v10  n= 97  xwOBA full 55-42  (0.567)  F5 44-38-15  (0.537)
   wOBA v1 n=  1  wOBA full 0-1  (0.000)  F5 0-1  (0.000)
   wOBA v2 n= 15  wOBA full 6-9  (0.400)  F5 7-6-2  (0.538)
+  wOBA v3 n=  4  wOBA full 3-1  (0.750)  F5 4-0  (1.000)
   split v1 n=  7  wOBA/xwOBA full 4-3  (0.571)  F5 3-4  (0.429)
   xw+plat_consol_v1 n=  1  xwOBA full 0-1  (0.000)  F5 0-0-1
