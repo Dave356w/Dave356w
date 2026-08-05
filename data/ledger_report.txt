@@ -1,17 +1,27 @@
-LEAN LEDGER — 1 graded games  [woba+plat_consol_v2]
-wOBA lean   full: 1-0  (1.000)   F5: 1-0  (1.000)
-home F5 baseline: 1.000  (n=1)
-weight fit: 1 usable F5 decisions (gate 120)
+LEAN LEDGER — 15 graded games  [woba+plat_consol_v2]
+wOBA lean   full: 6-9  (0.400)   F5: 7-6-2  (0.538)
+platoon lean full: 4-4  (0.500)   F5: 4-2-2  (0.667)   (reliable-only, n=8)
+wOBA on same subset  full: 3-5  (0.375)   F5: 3-3-2  (0.500)
+wOBA F5 by |Δ| tercile:
+  low  2-3  (0.400)   (Δ 0.001–0.011, n=5)
+  mid  3-1-1  (0.750)   (Δ 0.014–0.019, n=5)
+  hi   2-2-1  (0.500)   (Δ 0.019–0.040, n=5)
+DIVERGE h2h (F5): wOBA 0 — platoon 1  (n=1)
+home F5 baseline: 0.769  (n=13)
+weight fit: 13 usable F5 decisions (gate 120)
 predicted vs actual (backfilled box scores)
-  starter IP   n=308  bias +0.11 IP  MAE 0.97 IP   (drives the phase weight q)
-    IP calibration slope +0.749 +/- 0.063 (1.00 = calibrated; < 1 = over-dispersed)
-  offense wOBA n=2    pred mean 0.3324  actual mean 0.2941  (-0.0383)
+  starter IP   n=336  bias +0.13 IP  MAE 0.97 IP   (drives the phase weight q)
+    IP calibration slope +0.741 +/- 0.061 (1.00 = calibrated; < 1 = over-dispersed)
+  offense wOBA n=30   pred mean 0.3137  actual mean 0.3088  (-0.0050)
+    calibration slope -0.73 +/- 1.16 (1.00 = calibrated)
+    UNDER-POWERED: se 1.16 cannot separate 1.00 from 0.80; needs ~6400 side-games
+    skill vs league-rate baseline -0.0592 (ceiling ~0.04; per-game noise dominates)
   by prediction family (never pooled — different inputs, different scale against an observed-wOBA actual):
   v6         SP IP n=  6 bias +0.60
   v7         SP IP n= 90 bias +0.09
   v9/v10     wOBA n=194 pred 0.3138 act 0.3021 (-0.0118) slope +0.95±0.38  SP IP n=194 bias +0.08
   wOBA v1    wOBA n=  2 pred 0.2966 act 0.2784 (-0.0182)  SP IP n=  2 bias +0.11
-  wOBA v2    wOBA n=  2 pred 0.3324 act 0.2941 (-0.0383)  SP IP n=  2 bias +2.11
+  wOBA v2    wOBA n= 30 pred 0.3137 act 0.3088 (-0.0050) slope -0.73±1.16  SP IP n= 30 bias +0.52
   split v1   wOBA n= 14 pred 0.3221 act 0.3514 (+0.0294) slope -0.78±1.58  SP IP n= 14 bias +0.05
 model-family history (never pooled into the current-family fit):
   v2/v3   n=189  xwOBA full 110-79  (0.582)  F5 89-75-25  (0.543)
@@ -21,6 +31,6 @@ model-family history (never pooled into the current-family fit):
   v7      n= 45  xwOBA full 22-23  (0.489)  F5 24-12-9  (0.667)
   v9/v10  n= 97  xwOBA full 55-42  (0.567)  F5 44-38-15  (0.537)
   wOBA v1 n=  1  wOBA full 0-1  (0.000)  F5 0-1  (0.000)
-  wOBA v2 n=  1  wOBA full 1-0  (1.000)  F5 1-0  (1.000)
+  wOBA v2 n= 15  wOBA full 6-9  (0.400)  F5 7-6-2  (0.538)
   split v1 n=  7  wOBA/xwOBA full 4-3  (0.571)  F5 3-4  (0.429)
   xw+plat_consol_v1 n=  1  xwOBA full 0-1  (0.000)  F5 0-0-1
