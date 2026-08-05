@@ -97,7 +97,7 @@ USE_TEAM_LOGOS = os.environ.get("USE_TEAM_LOGOS", "1") != "0"
 LOGO_CDN = "https://www.mlbstatic.com/team-logos"
 DATA_DIR = os.environ.get("DATA_DIR", "data")            # grading ledger home
 LEDGER_PATH = os.path.join(DATA_DIR, "mlb_lean_ledger.csv")
-MODEL_TAG = os.environ.get("MODEL_TAG", "woba+plat_consol_v2")  # keep in sync with grade_leans.py
+MODEL_TAG = os.environ.get("MODEL_TAG", "woba+plat_consol_v3")  # keep in sync with grade_leans.py
 if not MODEL_TAG.startswith("woba+"):
     raise RuntimeError(
         "This build fetches observed wOBA; refusing to stamp it with a non-wOBA MODEL_TAG"
@@ -142,6 +142,16 @@ _RECORD_FAMILIES = {
     # enough to establish decision equivalence, so its forward record starts
     # clean.
     "woba+plat_consol_v2": ("woba+plat_consol_v2",),
+    # v3 raises XWOBA_SHRINK_K 100 -> 400 and moves the reliever shrink target
+    # from the league PA-weighted batter rate to the relief pool's own
+    # unweighted centre. NEW RECORD FAMILY, argued rather than inherited: a 4x
+    # K changes every shrunk batter, starter and reliever rate, and the target
+    # move shifts every bullpen number by a further ~0.010 before weighting.
+    # That is not the v10 situation, where a reweight flipped 0 of 14 leans and
+    # earned a shared line -- these are different predictions and they get a
+    # clean record. The old family had 15 graded rows, so the cost of resetting
+    # is 15 games.
+    "woba+plat_consol_v3": ("woba+plat_consol_v3",),
     # Short-lived wOBA-lineup/xwOBA-arms experiment. It is retained only so
     # immutable dumps and ledger rows remain recognised after full wOBA was
     # restored; it never pools with the active wOBA record.
@@ -192,6 +202,14 @@ _SCALE_FAMILIES = {
     # calibration.
     "woba+plat_consol_v1": ("woba+plat_consol_v1", "woba+plat_consol_v2"),
     "woba+plat_consol_v2": ("woba+plat_consol_v1", "woba+plat_consol_v2"),
+    # v3 also starts a NEW SCALE FAMILY, and this half is not a judgement call.
+    # Quadrupling K shrinks every input toward its prior, so |xw_net| compresses
+    # -- a median batter at ~400 PA keeps 400/500 = 80% of his deviation at
+    # K=100 and 400/800 = 50% at K=400. The delta is measured in the same wOBA
+    # units but on a materially narrower spread, which is exactly what a scale
+    # family exists to separate. Pooling v2 and v3 magnitudes would rank two
+    # distributions against one set of cutoffs.
+    "woba+plat_consol_v3": ("woba+plat_consol_v3",),
     # The mixed-metric delta has its own units. Historical recognition does
     # not make it compatible with the active full-wOBA scale.
     "split+plat_consol_v1": ("split+plat_consol_v1",),
@@ -235,6 +253,10 @@ RECENT_STARTS = 5
 OPENER_MAX_AVG_IP = 3.0     # avg IP/start below this => treat probable as an opener
 OPENER_MIN_STARTS = 2       # need a repeated pattern, not one rain-shortened start
 BULLPEN_MIN_PITCHERS = 3    # minimum role-filtered relievers for an aggregate
+# Below this many resolved arms the relief centre is estimated off too few
+# pitchers to beat the league baseline it replaces, so v3 falls back to v2's
+# target rather than shrinking toward a noisy one. A full slate resolves ~200.
+RELIEF_PRIOR_MIN_ARMS = 40
 OPENER_ROLE_APPEARANCES = 10
 OPENER_ROLE_MIN_APPEARANCES = 3
 OPENER_ROLE_MAX_STARTS = 1
@@ -950,6 +972,64 @@ def bf_per_ip(role):
     return float(bf) / season_ip
 
 
+def relief_pool_prior(team_ids, pitcher_stat, roles_by_team):
+    """Unweighted centre of tonight's relief pools, or None.
+
+    v3 shrinks relievers toward this instead of toward the league PA-weighted
+    batter rate. Three things make that the right target and each of them was
+    measured before the change, not argued:
+
+      * The league batter centre is the centre of no subpool. Measured over the
+        223 role-filtered arms on 30 active rosters, the relief pool sits
+        0.0102 BELOW it. At K=400 the prior supplies ~70% of a median
+        reliever's published rate, so that offset lands almost intact in every
+        bullpen number -- which is precisely why K and this target had to move
+        in the same commit. Raising K against the old target would have doubled
+        a known bias instead of removing it.
+      * UNWEIGHTED, not usage-weighted, because empirical Bayes wants the
+        centre of the population a member is drawn from. The pool's own
+        usage-weighted centre -- what `bullpen_xwoba_aggregate` averages -- sits
+        0.0116 the OTHER side of the unweighted centre, because the good arms
+        get the innings. Shrinking toward it would over-correct and land
+        further from the truth than the shipped target was. The obvious fix is
+        worse than the status quo; this is the non-obvious one.
+      * Derived every build from the same Savant rates the pool is built from,
+        never a literal. The measured 0.3032 is on a StatsAPI reconstruction
+        and is not even on Savant's scale; only the gaps between pools
+        transfer. A frozen centre here would be the constants-frozen-from-data
+        entry in CLAUDE.md with a fresh date on it.
+
+    Membership is `relief_pitcher_ids` -- the same filter the aggregate uses, so
+    the prior and the pool cannot describe different populations. No probable is
+    excluded: the aggregate drops tonight's starter per game so his innings are
+    not double counted, but for a population centre that is per-slate noise, and
+    dropping one arm per club would bias toward the pool's weaker members.
+
+    Returns None when too few arms resolve, and the caller then falls back to
+    the league baseline -- the v2 behaviour -- rather than shrinking toward a
+    centre estimated off a handful of pitchers.
+    """
+    rates, seen = [], set()
+    for tid in team_ids:
+        roles = (roles_by_team or {}).get(tid)
+        if not roles:
+            continue
+        try:
+            ids = relief_pitcher_ids(tid, roles, probable_pid=None)
+        except Exception:  # noqa: BLE001
+            continue
+        for pid in ids:
+            if pid in seen:
+                continue
+            seen.add(pid)
+            v = _f((pitcher_stat.get(pid) or {}).get(XWOBA_SHRINK_COL))
+            if v is not None and pd.notna(v):
+                rates.append(float(v))
+    if len(rates) < RELIEF_PRIOR_MIN_ARMS:
+        return None
+    return float(np.mean(rates))
+
+
 def bullpen_xwoba_aggregate(team_id, probable_pid, pitcher_stat, role_stats,
                             prior, shrink_k):
     """Role-filtered bullpen xwOBA with per-pitcher empirical-Bayes shrinkage.
@@ -1043,10 +1123,33 @@ def build_pitching_plans(slate_df, recent_profiles, pitcher_stat,
     """Expected-IP + role-filtered bullpen plan for every probable-pitcher side."""
     plans = {}
     classifications = opener_classifications(recent_profiles)
-    prior = _f((league_baseline or {}).get("xwOBA"))
+    league_prior = _f((league_baseline or {}).get("xwOBA"))
     shrink_k = XWOBA_SHRINK_K
     roles_by_team = {}
     bullpen_by_pair = {}
+
+    # Role lines first, for every club on the slate: the relief centre has to
+    # exist before any member is shrunk toward it, and it is a population
+    # statistic over all of tonight's pools rather than one club's.
+    for _, g in slate_df.iterrows():
+        for side in ("away", "home"):
+            tid = g.get(f"{side}_team_id")
+            if pd.isna(tid):
+                continue
+            tid = int(tid)
+            if tid not in roles_by_team:
+                try:
+                    roles_by_team[tid] = load_team_pitcher_roles(tid)
+                except Exception as e:  # noqa: BLE001
+                    log(f"  bullpen roles unavailable for team {tid}: {e!r}")
+                    roles_by_team[tid] = None
+    relief_prior = relief_pool_prior(list(roles_by_team), pitcher_stat, roles_by_team)
+    prior = relief_prior if relief_prior is not None else league_prior
+    log(f"  relief shrink target: "
+        + (f"{relief_prior:.4f} (pool centre, {len(roles_by_team)} clubs)"
+           if relief_prior is not None
+           else f"{league_prior} (league baseline; too few arms resolved)")
+        + f" | league baseline {league_prior}")
 
     for _, g in slate_df.iterrows():
         for side in ("away", "home"):
@@ -1060,12 +1163,6 @@ def build_pitching_plans(slate_df, recent_profiles, pitcher_stat,
                 (recent_profiles or {}).get(pid), classification
             )
 
-            if tid not in roles_by_team:
-                try:
-                    roles_by_team[tid] = load_team_pitcher_roles(tid)
-                except Exception as e:  # noqa: BLE001
-                    log(f"  bullpen roles unavailable for team {tid}: {e!r}")
-                    roles_by_team[tid] = None
             pair = (tid, pid)
             if pair not in bullpen_by_pair:
                 try:
@@ -1716,7 +1813,33 @@ ADD_STATS = {"EV", "LA°"}
 # role is lean-path, so it bumps MODEL_TAG.
 USE_XWOBA_SHRINK = True
 XWOBA_SHRINK_COL = "xwOBA"
-XWOBA_SHRINK_K = 100.0
+
+# v3: 100 -> 400. Fitted, not chosen. `reliever_shrink_probe.py` measures K
+# three independent ways and every one of them excludes 100 by a wide margin:
+#
+#   walk-forward, season-to-date -> next outing   391  [293, 519]  n=53,464
+#   within-season split, relievers                600  [355, 1400]
+#   within-season split, batters                  384  [302,  503]
+#   within-season split, starters                 577  [398,  894]
+#   season pair (upper bound)                     669-1048
+#
+# The walk-forward arm is the one that matches what this code does -- a
+# season-to-date rate predicting tonight's innings, rather than one aggregate
+# predicting another -- and it is the best powered by two orders of magnitude.
+# Its estimator runs 10-13% high on synthetic logs of this shape, so its point
+# estimate corresponds to a true K nearer 350.
+#
+# 400 is a single value for all three populations, NOT a role split. That was
+# the original hypothesis and the data refused it: relievers 600 against
+# starters 577, intervals overlapping almost entirely. Marcel's 2.4x role gap
+# does not appear in BF-denominated data. 400 sits inside all three intervals,
+# so one constant is both the parsimonious choice and the supported one.
+#
+# Do not read the third digit. Weighted MSE is flat near its minimum -- that is
+# why `dMSE vs 100` is the column the probe tells you to read first -- so 350
+# and 450 are not distinguishable here and precision beyond "about 400" would
+# be false. What is distinguishable is 100 from 400.
+XWOBA_SHRINK_K = 400.0
 
 # Pitch-mix shadow arm (pitch_arsenal.py). OFF by default and inert when on:
 # it writes shadow columns for forward testing and never moves a lean, so no

@@ -266,6 +266,77 @@ class TestWalkForward:
         assert abs(med - k_true) / k_true < 0.30, f"planted {k_true}, got {med:.1f}"
 
 
+class TestBullpenPoolCentre:
+    """The pool must be the SHIPPED one, not a lookalike.
+
+    Every other centre in the report describes a population this file defines.
+    This one has to describe the population build_site aggregates, which is
+    only true while the filter is imported rather than copied -- so that is
+    what these assert.
+    """
+
+    @staticmethod
+    def _rec(bf, gs, apps, ipa=1.0, h=0.22):
+        ab = bf * 0.9
+        return {"AB": ab, "H": bf * h, "2B": 0.0, "3B": 0.0, "HR": bf * 0.03,
+                "BB": bf - ab, "IBB": 0.0, "HBP": 0.0, "SF": 0.0,
+                "BF": float(bf), "G": float(apps), "GS": float(gs),
+                "outs": ipa * apps * 3}
+
+    def _wire(self, monkeypatch):
+        import build_site as B
+        totals = {(1, 0): self._rec(250, 0, 60, h=0.18),
+                  (2, 0): self._rec(300, 9, 30, h=0.28),
+                  (3, 0): self._rec(700, 28, 28, 6.0)}
+        roles = {
+            1: {"appearances": 60, "starts": 0, "start_share": 0.0,
+                "avg_ip_per_appearance": 1.0, "batters_faced": 250.0},
+            2: {"appearances": 30, "starts": 9, "start_share": 0.30,
+                "avg_ip_per_appearance": 2.5, "batters_faced": 300.0},
+            3: {"appearances": 28, "starts": 28, "start_share": 1.0,
+                "avg_ip_per_appearance": 6.0, "batters_faced": 700.0},
+        }
+        monkeypatch.setattr(P, "fetch_season_totals",
+                            lambda s, g, verbose=True: totals)
+        monkeypatch.setattr(P, "team_ids", lambda s: [108])
+        monkeypatch.setattr(B, "load_team_pitcher_roles", lambda tid: roles)
+        B._pitcher_roster_cache[108] = [1, 2, 3]
+        return B, totals
+
+    def test_usage_weighting_reproduces_the_aggregate(self, monkeypatch):
+        """weight = team relief BF x (1 - start share), as bullpen_xwoba_aggregate
+        does. Weighting by raw BF instead would over-credit swingmen."""
+        _B, totals = self._wire(monkeypatch)
+        pc = P.bullpen_pool_centre(2026, verbose=False)
+        w1, _ = P.woba(totals[(1, 0)])
+        w2, _ = P.woba(totals[(2, 0)])
+        u1, u2 = 250.0, 300.0 * 0.70
+        assert pc["n"] == 2                       # rotation arm excluded
+        assert pc["usage"]["wtd"] == pytest.approx((w1 * u1 + w2 * u2) / (u1 + u2))
+        assert pc["unweighted"] == pytest.approx((w1 + w2) / 2)
+
+    def test_a_pure_starter_contributes_no_relief_usage(self, monkeypatch):
+        """start_share 1.0 gives weight 0, so he cannot enter the centre even
+        if the role filter admits him."""
+        B, _ = self._wire(monkeypatch)
+        monkeypatch.setattr(B, "RP_MAX_START_SHARE", 1.0)
+        monkeypatch.setattr(B, "RP_MAX_IP_PER_APPEARANCE", 9.0)
+        assert P.bullpen_pool_centre(2026, verbose=False)["n"] == 2
+
+    def test_the_filter_is_build_sites_and_not_a_local_copy(self, monkeypatch):
+        """Tighten build_site's OWN constant; the measured pool must shrink.
+        If this passes with the constant unchanged, the rules were copied."""
+        B, _ = self._wire(monkeypatch)
+        monkeypatch.setattr(B, "RP_MAX_START_SHARE", 0.10)
+        assert P.bullpen_pool_centre(2026, verbose=False)["n"] == 1
+
+    def test_no_members_returns_none_rather_than_a_fabricated_centre(self, monkeypatch):
+        B, _ = self._wire(monkeypatch)
+        monkeypatch.setattr(B, "relief_pitcher_ids",
+                            lambda tid, roles, probable_pid=None: [])
+        assert P.bullpen_pool_centre(2026, verbose=False) is None
+
+
 def test_empty_pull_raises_rather_than_reporting():
     """An empty fetch must not reach the report as a zero-row arm."""
     with pytest.raises(SystemExit):
