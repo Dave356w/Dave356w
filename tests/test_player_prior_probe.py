@@ -269,6 +269,18 @@ def test_shipped_mu_mirrors_build_site_not_a_tidier_version():
     assert P.shipped_mu("SP", None) is None
 
 
+def test_early_split_takes_the_first_months_not_the_balanced_one():
+    """The two splits answer different questions and must not coincide."""
+    periods = {(1, 4): {"BF": 100.0}, (1, 5): {"BF": 100.0},
+               (2, 6): {"BF": 600.0}, (2, 7): {"BF": 100.0}}
+    assert P.early_split(periods, 1) == 4
+    assert P.early_split(periods, 2) == 5
+    assert P.balanced_split(periods) == 5
+    # Not enough months to leave anything on the other side of the boundary.
+    assert P.early_split({(1, 4): {"BF": 10.0}}, 1) is None
+    assert P.early_split(periods, 4) is None
+
+
 def test_balanced_split_divides_batters_faced_not_months():
     periods = {(1, 4): {"BF": 100.0}, (1, 5): {"BF": 100.0},
                (2, 6): {"BF": 600.0}, (2, 7): {"BF": 100.0}}

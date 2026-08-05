@@ -661,6 +661,8 @@ def main(argv=None):
     ap.add_argument("--recency", default=",".join(str(v) for v in RECENCY_WEIGHTS),
                     help="recency ladder, most recent first")
     ap.add_argument("--draws", type=int, default=BOOT_DRAWS)
+    ap.add_argument("--early-months", type=int, default=1,
+                    help="months in period 1 for the early-season split arm")
     ap.add_argument("--priors", default="data",
                     help="directory holding the frozen Savant prior files")
     ap.add_argument("--out", default=None, help="also write the report here")
@@ -726,26 +728,32 @@ def main(argv=None):
         return 1
 
     # ---- rows -------------------------------------------------------------
-    rows_by_pop = {p: [] for p in POPULATIONS}
-    rows_by_pop_season = defaultdict(list)
-    for season in targets:
-        for pop in POPULATIONS:
-            group = "hitting" if pop == "BAT" else "pitching"
-            per = monthly.get((season, group))
-            if not per:
-                continue
-            split = balanced_split(per)
-            if split is None:
-                continue
-            mu = shipped_mu(pop, centres.get(season))
-            if mu is None:
-                continue
-            rs = build_rows(season, per, hist[group], split, pop, a.role_cut,
-                            mu, weights, lookback, centres=hist_centres,
-                            savant_hist=savant_hist,
-                            savant_centres=savant_centres)
-            rows_by_pop[pop].extend(rs)
-            rows_by_pop_season[(pop, season)].extend(rs)
+    def collect(split_fn):
+        """Rows under one choice of period boundary."""
+        by_pop = {p: [] for p in POPULATIONS}
+        by_season = defaultdict(list)
+        for season in targets:
+            for pop in POPULATIONS:
+                group = "hitting" if pop == "BAT" else "pitching"
+                per = monthly.get((season, group))
+                if not per:
+                    continue
+                split = split_fn(per)
+                if split is None:
+                    continue
+                mu = shipped_mu(pop, centres.get(season))
+                if mu is None:
+                    continue
+                rs = build_rows(season, per, hist[group], split, pop,
+                                a.role_cut, mu, weights, lookback,
+                                centres=hist_centres, savant_hist=savant_hist,
+                                savant_centres=savant_centres)
+                by_pop[pop].extend(rs)
+                by_season[(pop, season)].extend(rs)
+        return by_pop, by_season
+
+    rows_by_pop, rows_by_pop_season = collect(balanced_split)
+    early_by_pop, _ = collect(lambda per: early_split(per, a.early_months))
 
     # ---- coverage ---------------------------------------------------------
     say("Coverage -- how many rows a personal prior can even touch")
@@ -806,6 +814,31 @@ def main(argv=None):
     say("  C is held at the pooled fit inside the buckets -- refitting it per")
     say("  bucket would fit four constants and report the best of them.")
     say("")
+
+    # ---- the case the balanced split cannot see -------------------------
+    say(f"Early-season split -- period 1 is the first {a.early_months} month(s)")
+    say("  " + "-" * 74)
+    say("  A low n1 at a MID-season boundary does not mean 'it is April'. It")
+    say("  means this player missed the first half -- hurt, demoted, called up")
+    say("  late. So the n1 buckets above measure playing time, not calendar,")
+    say("  and the early-season case never appears in them. It is the case")
+    say("  where the prior carries most of the published rate, so it is the")
+    say("  one a decision to ship should rest on. Measured here directly.")
+    say("")
+    for pop in POPULATIONS:
+        rs = early_by_pop[pop]
+        if len(rs) < 30:
+            say(f"  {pop}: {len(rs)} rows -- too few to fit")
+            continue
+        say(f"  {pop} -- median n1 "
+            f"{float(np.median(to_arrays(rs, 'recency_role')[0])):.0f}")
+        say(HEAD)
+        scored = score_arms(rs, a.k)
+        for s, (_label, spec, do_fit) in zip(scored, ARMS):
+            ci = (None if spec is None
+                  else paired_bootstrap(rs, spec, do_fit, a.k, a.draws))
+            say(_row(s, ci))
+        say("")
 
     # ---- the same rows, bucketed by HISTORY instead --------------------
     say("By history size -- the variable the n1 table cannot separate")
@@ -946,6 +979,26 @@ def balanced_split(periods):
         if bal > best_bal:
             best, best_bal = m, bal
     return best
+
+
+def early_split(periods, n_months=1):
+    """The first `n_months` of the season as period 1, or None.
+
+    The balanced split answers a question the model does not ask. At a
+    mid-season boundary, a LOW n1 does not mean "it is April" -- it means this
+    player missed the first half: hurt, demoted, platooned, called up late. So
+    the n1 buckets measure playing time, not calendar, and the actual
+    early-season case (everyone's sample is small because the season is young)
+    never appears in them at all.
+
+    That case is the one where the prior carries the most weight -- at n1 = 90
+    against K = 400 the published rate is 82% prior -- so it is the case a
+    decision to ship should rest on. Here it is measured directly.
+    """
+    months = sorted({p for _, p in periods})
+    if len(months) < n_months + 1:
+        return None
+    return months[n_months - 1]
 
 
 def _verdict(say, rows_by_pop, a):
