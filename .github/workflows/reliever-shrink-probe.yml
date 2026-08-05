@@ -41,6 +41,10 @@ on:
         description: 'Bootstrap draws behind the confidence intervals'
         required: false
         default: '2000'
+      wf_max_pitchers:
+        description: 'Cap relievers per season in the walk-forward arm (0 = all)'
+        required: false
+        default: '0'
 
 permissions:
   contents: read
@@ -48,7 +52,7 @@ permissions:
 jobs:
   probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 20        # fail fast if StatsAPI hangs
+    timeout-minutes: 40        # walk-forward adds one game-log call per reliever
     steps:
       - uses: actions/checkout@v4
 
@@ -76,6 +80,7 @@ jobs:
             ${{ inputs.role_cut && format('--role-cut {0}', inputs.role_cut) || '' }} \
             ${{ inputs.shipped && format('--shipped {0}', inputs.shipped) || '' }} \
             ${{ inputs.draws && format('--draws {0}', inputs.draws) || '' }} \
+            ${{ inputs.wf_max_pitchers && format('--wf-max-pitchers {0}', inputs.wf_max_pitchers) || '' }} \
             --out reliever_shrink_probe_report.txt
 
       - name: Upload report

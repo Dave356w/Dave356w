@@ -168,6 +168,104 @@ def test_bound_pinned_minima_are_flagged_not_printed_as_estimates():
     assert P._fmt_k(float("nan")).strip() == "--"
 
 
+class TestWalkForward:
+    """The prior must never contain the outing it predicts.
+
+    A leak there is the failure mode with no symptom: K would fit toward 0
+    (trust the sample completely) because the sample contains the answer, and
+    the report would show a confident small K rather than an error.
+    """
+
+    @staticmethod
+    def _line(bf, h, hr=0, gs=0):
+        ab = bf * 0.9
+        return {"AB": ab, "H": h, "2B": 0.0, "3B": 0.0, "HR": hr,
+                "BB": bf - ab, "IBB": 0.0, "HBP": 0.0, "SF": 0.0,
+                "BF": float(bf), "G": 1.0, "GS": float(gs), "outs": 3.0}
+
+    def _log(self):
+        return [("2026-04-01", self._line(10, 2)),
+                ("2026-04-05", self._line(10, 4)),
+                ("2026-04-09", self._line(10, 0))]
+
+    def test_prior_is_the_strict_sum_of_earlier_outings(self):
+        rows = P.walkforward_pairs(self._log(), role_cut=0.2)
+        assert len(rows) == 2                      # one per outing after the first
+        w1, n1 = P.woba(self._line(10, 2))
+        assert rows[0][0] == pytest.approx(n1)
+        assert rows[0][1] == pytest.approx(w1)     # outing 1 alone
+        merged = P._add(self._line(10, 2), self._line(10, 4))
+        w12, n12 = P.woba(merged)
+        assert rows[1][0] == pytest.approx(n12)
+        assert rows[1][1] == pytest.approx(w12)    # outings 1+2, not 1+2+3
+
+    def test_the_predicted_outing_is_excluded_from_its_own_prior(self):
+        """The leak this whole arm turns on. Make a late outing extreme; the
+        prior for earlier targets must not move."""
+        log = self._log()
+        base = P.walkforward_pairs(log, role_cut=0.2)[0][1]
+        log[2] = ("2026-04-09", self._line(10, 10, hr=10))   # absurd last outing
+        assert P.walkforward_pairs(log, role_cut=0.2)[0][1] == pytest.approx(base)
+
+    def test_role_is_judged_on_the_prior_not_the_whole_season(self):
+        log = [("2026-04-01", self._line(10, 2, gs=0)),
+               ("2026-04-05", self._line(20, 5, gs=1)),
+               ("2026-04-09", self._line(20, 5, gs=1))]
+        assert len(P.walkforward_pairs(log, 0.2)) == 1
+
+    def test_first_outing_yields_no_row(self):
+        one = [("2026-04-01", self._line(10, 2))]
+        assert P.walkforward_pairs(one, 0.2) == []
+
+    def test_walkforward_rows_feed_the_existing_estimator_unchanged(self):
+        """The arm adds no second estimator -- it must produce fit_k's shape."""
+        rows = np.array(P.walkforward_pairs(self._log(), 0.2), dtype=float)
+        assert rows.shape[1] == 5
+
+    @staticmethod
+    def _synth_logs(k_true, n_rp=120, n_out=45, sigma2=0.30, seed=0, mu=0.300):
+        rng = np.random.default_rng(seed)
+        tau2 = sigma2 / k_true
+        logs = []
+        for _ in range(n_rp):
+            th = rng.normal(mu, math.sqrt(tau2))
+            L = []
+            for j in range(n_out):
+                bf = int(rng.integers(3, 7))
+                rate = th + rng.normal(0, math.sqrt(sigma2 / bf))
+                ab, hr, bb = bf * 0.88, bf * 0.03, bf * 0.09
+                fixed = P.WOBA_W["BB"] * bb + P.WOBA_W["HR"] * hr
+                singles = max(0.0, (rate * bf - fixed) / P.WOBA_W["1B"])
+                L.append((f"2026-{4 + j // 30:02d}-{1 + j % 30:02d}",
+                          {"AB": ab, "H": singles + hr, "2B": 0.0, "3B": 0.0,
+                           "HR": hr, "BB": bb, "IBB": 0.0, "HBP": 0.0, "SF": 0.0,
+                           "BF": float(bf), "G": 1.0, "GS": 0.0, "outs": 3.0}))
+            logs.append(L)
+        return logs
+
+    @pytest.mark.parametrize("k_true", [60.0, 400.0])
+    def test_recovers_a_planted_k_from_four_batter_outings(self, k_true):
+        """Per-outing targets are ~4 BF, so each w2 is almost pure noise. The
+        BF-weighted objective still has to find K -- if it cannot, the arm's
+        numbers are decoration.
+
+        Recovery runs ~10-13% HIGH at every planted value tested, consistently
+        enough to be a property of the estimator on this shape rather than
+        draw noise. Recorded, not corrected: the tolerance below is set wide
+        enough to accommodate it, and the report tells the reader to lead with
+        the interval rather than the point.
+        """
+        fits = []
+        for seed in range(4):
+            rows = []
+            for L in self._synth_logs(k_true, seed=seed):
+                rows.extend(P.walkforward_pairs(L, 0.2))
+            r = np.array(rows, dtype=float)
+            fits.append(P.fit_k(r[:, 0], r[:, 1], r[:, 2], r[:, 3], P._pool_mu(r)))
+        med = float(np.median(fits))
+        assert abs(med - k_true) / k_true < 0.30, f"planted {k_true}, got {med:.1f}"
+
+
 def test_empty_pull_raises_rather_than_reporting():
     """An empty fetch must not reach the report as a zero-row arm."""
     with pytest.raises(SystemExit):
