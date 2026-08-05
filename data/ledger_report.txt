@@ -16,13 +16,24 @@ predicted vs actual (backfilled box scores)
     calibration slope -0.73 +/- 1.16 (1.00 = calibrated)
     UNDER-POWERED: se 1.16 cannot separate 1.00 from 0.80; needs ~6400 side-games
     skill vs league-rate baseline -0.0590 (ceiling ~0.04; per-game noise dominates)
+  lean delta   n=15   calibration slope -1.86 +/- 1.89 (1.00 = calibrated; < 1 = over-dispersed)
+    corr -0.263  sign agreement 0.467  (the lean's own hit rate against its target)
+    UNDER-POWERED: se 1.89 cannot separate 1.00 from 0.50
   by prediction family (never pooled — different inputs, different scale against an observed-wOBA actual):
-  v6         SP IP n=  6 bias +0.60
-  v7         SP IP n= 90 bias +0.09
-  v9/v10     wOBA n=194 pred 0.3138 act 0.3021 (-0.0118) slope +0.95±0.38  SP IP n=194 bias +0.08
-  wOBA v1    wOBA n=  2 pred 0.2966 act 0.2784 (-0.0182)  SP IP n=  2 bias +0.11
-  wOBA v2    wOBA n= 30 pred 0.3137 act 0.3088 (-0.0050) slope -0.73±1.16  SP IP n= 30 bias +0.52
-  split v1   wOBA n= 14 pred 0.3221 act 0.3514 (+0.0294) slope -0.78±1.58  SP IP n= 14 bias +0.05
+  v2/v3      net n=188 slope +0.51±0.17
+  v4         net n= 14 slope -0.36±0.81
+  v5         net n= 32 slope +0.12±1.19
+  v6         SP IP n=  6 bias +0.60  net n=  3 slope -1.06±5.44
+  v7         SP IP n= 90 bias +0.09  net n= 45 slope +1.07±1.05
+  v9/v10     wOBA n=194 pred 0.3138 act 0.3021 (-0.0118) slope +0.95±0.38  SP IP n=194 bias +0.08  net n= 97 slope +1.45±0.52
+  wOBA v1    wOBA n=  2 pred 0.2966 act 0.2784 (-0.0182)  SP IP n=  2 bias +0.11  net n=  1
+  wOBA v2    wOBA n= 30 pred 0.3137 act 0.3088 (-0.0050) slope -0.73±1.16  SP IP n= 30 bias +0.52  net n= 15 slope -1.86±1.89
+  split v1   wOBA n= 14 pred 0.3221 act 0.3514 (+0.0294) slope -0.78±1.58  SP IP n= 14 bias +0.05  net n=  7 slope -1.18±0.89
+  xw+plat_consol_v1  net n=  1
+component error (each scored against its own realised phase)
+  SP      n=30   pred 0.3134 act 0.3162 (+0.0028)  MAE 0.0958  slope +0.67±1.00  corr +0.125
+  BP      n=30   pred 0.3025 act 0.3066 (+0.0041)  MAE 0.1254  slope -1.11±2.17  corr -0.096
+  lineup  n=30   pred 0.3220 act 0.3088 (-0.0132)  MAE 0.0610  slope +1.74±1.55  corr +0.208
 model-family history (never pooled into the current-family fit):
   v2/v3   n=189  xwOBA full 110-79  (0.582)  F5 89-75-25  (0.543)
   v4      n= 14  xwOBA full 8-6  (0.571)  F5 6-7-1  (0.462)
