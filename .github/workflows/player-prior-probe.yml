@@ -1,0 +1,98 @@
+name: Player-specific prior probe
+
+# Manual only. Measures whether replacing the shrinkage TARGET -- the league /
+# role centre every rate is regressed toward -- with a player's own regressed
+# career history beats the shipped centre out of sample, at the shipped K.
+#
+# The runner is the point twice over: StatsAPI is not reachable from every dev
+# environment, and the numbers a decision about the shrinkage target would rest
+# on should come from the same place the build runs.
+#
+# Touches nothing: no build, no lean, no ledger, no commit, no Pages deploy.
+# It pulls season totals and monthly splits, prints a report and uploads it.
+# `contents: read` makes that structural.
+#
+# Deliberately outside the `site-build` concurrency group -- it never writes to
+# data/, so it has no reason to queue behind a build.
+on:
+  # Runs itself on any PR that changes the probe, so a probe nobody has
+  # executed cannot merge. Path-filtered, so unrelated PRs are unaffected.
+  pull_request:
+    paths:
+      - 'player_prior_probe.py'
+      - 'tests/test_player_prior_probe.py'
+      - '.github/workflows/player-prior-probe.yml'
+  workflow_dispatch:
+    inputs:
+      targets:
+        description: 'Seasons to score (comma-separated)'
+        required: false
+        default: '2024,2025'
+      history:
+        description: 'Prior seasons pulled for the recency ladder'
+        required: false
+        default: '3'
+      recency:
+        description: 'Recency ladder, most recent first'
+        required: false
+        default: '0.50,0.30,0.20'
+      role_cut:
+        description: 'Max share of appearances started to count as relief'
+        required: false
+        default: '0.20'
+      draws:
+        description: 'Bootstrap draws behind the paired confidence intervals'
+        required: false
+        default: '1500'
+
+# No `k` input. K is read from build_site.XWOBA_SHRINK_K by the probe itself:
+# a workflow-level pin of a value the code already defines is the exact
+# instance CLAUDE.md records under "one value, three homes", and it is not
+# being re-added here. Use `--k` locally for a sensitivity run.
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest
+
+      # The fitter is checked against pools with a planted C, and -- the part
+      # that actually matters -- against pools where history carries NO talent
+      # signal, where the arm must not manufacture a gain. A personal prior has
+      # more freedom than a population centre, so an unguarded fit prints an
+      # improvement that looks exactly like a real one. This gate runs first
+      # and the probe never runs without it.
+      - name: Verify the fitter recovers a planted constant and refuses noise
+        run: python -m pytest tests/test_player_prior_probe.py -q
+
+      - name: Run probe
+        run: |
+          python player_prior_probe.py \
+            ${{ inputs.targets && format('--targets {0}', inputs.targets) || '' }} \
+            ${{ inputs.history && format('--history {0}', inputs.history) || '' }} \
+            ${{ inputs.recency && format('--recency {0}', inputs.recency) || '' }} \
+            ${{ inputs.role_cut && format('--role-cut {0}', inputs.role_cut) || '' }} \
+            ${{ inputs.draws && format('--draws {0}', inputs.draws) || '' }} \
+            --out player_prior_probe_report.txt
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: player-prior-probe
+          path: player_prior_probe_report.txt
+          if-no-files-found: warn
