@@ -24,6 +24,17 @@ name: Freeze completed-season wOBA priors
 # are enforced in the script rather than here, so a local run cannot bypass
 # them either.
 on:
+  # Path-filtered dry run on the PR that changes this code. It fetches from
+  # Savant and prints the row counts but writes and commits NOTHING, so the
+  # call shape and the column names are proven before anyone can dispatch the
+  # writing version -- which, being workflow_dispatch, is not even available
+  # until this file is on the default branch. A leaderboard export that renamed
+  # a column should fail here, not on the run that commits.
+  pull_request:
+    paths:
+      - 'priors_snapshot.py'
+      - 'tests/test_priors_snapshot.py'
+      - '.github/workflows/priors-snapshot.yml'
   workflow_dispatch:
     inputs:
       seasons:
@@ -81,10 +92,13 @@ jobs:
             ${{ inputs.seasons && format('--seasons {0}', inputs.seasons) || '' }} \
             ${{ inputs.role_cut && format('--role-cut {0}', inputs.role_cut) || '' }} \
             ${{ inputs.force && '--force' || '' }} \
-            ${{ inputs.dry_run && '--dry-run' || '' }}
+            ${{ (github.event_name != 'workflow_dispatch' || inputs.dry_run) && '--dry-run' || '' }}
 
+      # Gated on the EVENT, not only on the input. `inputs.dry_run` is empty on
+      # a pull_request run, so a `!inputs.dry_run` condition alone would make
+      # every PR that touches this file try to commit to data/.
       - name: Commit
-        if: ${{ !inputs.dry_run }}
+        if: ${{ github.event_name == 'workflow_dispatch' && !inputs.dry_run }}
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
