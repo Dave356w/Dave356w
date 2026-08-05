@@ -302,6 +302,34 @@ def paired_rates(df):
                                        "batting_side", "pred", "act", "pa"]))
 
 
+def paired_net(df):
+    """Game-level frame of (predicted lean delta, realised wOBA differential).
+
+    `xw_net = home_off_edge - away_off_edge` (grade_leans), so a positive value
+    favours the HOME offense and pairs with `act_woba_home - act_woba_away`.
+    This is one game-level row, not two side rows: the lean is a difference, and
+    differencing two side rows that were themselves crossed is where the sign
+    goes wrong. paired_rates owns the side cross; this owns the difference.
+
+    Why it is worth its own pairing rather than reading off paired_rates: the
+    differential is the quantity the LEAN is actually made from. A model can
+    predict each offense well and still order the *difference* badly, and the
+    difference is what the record scores.
+    """
+    pred = _num(df, "xw_net")
+    act = _num(df, "act_woba_home") - _num(df, "act_woba_away")
+    m = pred.notna() & act.notna()
+    if not m.any():
+        return pd.DataFrame(columns=["game_pk", "model_tag", "pred", "act"])
+    return pd.DataFrame({
+        "game_pk": (df.loc[m, "game_pk"].to_numpy()
+                    if "game_pk" in df.columns else np.nan),
+        "model_tag": (df.loc[m, "model_tag"].to_numpy()
+                      if "model_tag" in df.columns else None),
+        "pred": pred[m].to_numpy(), "act": act[m].to_numpy(),
+    })
+
+
 def paired_sp_ip(df):
     """Long frame of (expected starter IP, actual starter IP). These pair on
     the same side -- both describe that side's starter -- unlike the rates."""
@@ -375,7 +403,8 @@ def actuals_family_line(label, fam):
     """
     rates = paired_rates(fam)
     ip = paired_sp_ip(fam)
-    if rates.empty and ip.empty:
+    net = paired_net(fam)
+    if rates.empty and ip.empty and net.empty:
         return None
     # Each figure carries its OWN n. The two do not move together: v6 and v7
     # stored expected_sp_ip but no mx, so their IP bias is real while their
@@ -391,6 +420,11 @@ def actuals_family_line(label, fam):
     if not ip.empty:
         bits.append(f"SP IP n={len(ip):3d} bias "
                     f"{float((ip['act'] - ip['pred']).mean()):+.2f}")
+    if not net.empty:
+        cal = calibration(net["pred"], net["act"])
+        bits.append(f"net n={len(net):3d}"
+                    + (f" slope {cal['slope']:+.2f}±{cal['se_slope']:.2f}"
+                       if cal else ""))
     return "  ".join(bits)
 
 
@@ -418,7 +452,11 @@ def actuals_summary(df, baseline=None, tags=None):
         d = df[df["model_tag"].astype(str).isin(set(tags))]
     ip = paired_sp_ip(df)          # pooled -- see above
     rates = paired_rates(d)        # family-scoped
-    if ip.empty and rates.empty:
+    # Unscoped means every scale family at once, which is the artifact
+    # documented below. Refusing to print is deliberate: a missing line sends
+    # the reader to that comment, a printed one sends them off with a number.
+    net = paired_net(d) if tags is not None else paired_net(d).iloc[0:0]
+    if ip.empty and rates.empty and net.empty:
         return []
 
     lines = ["predicted vs actual (backfilled box scores)"]
@@ -457,4 +495,59 @@ def actuals_summary(df, baseline=None, tags=None):
         if sk:
             lines.append(f"    skill vs league-rate baseline {sk['skill']:+.4f} "
                          f"(ceiling ~0.04; per-game noise dominates)")
+
+    # The lean delta's own calibration. Family-scoped for the same reason the
+    # rates are, and for one more: `xw_net` units are a scale-family property
+    # (v5's shrinkage halved them), so pooling would regress a mixture of
+    # scales against one actual and call the blend a slope.
+    #
+    # This line exists because pooling produced a wrong answer that looked
+    # right. Measured 2026-08-05, the slope over all 403 graded rows is +0.48
+    # -- "the delta is twice as spread as it should be", which is exactly the
+    # shape of the IP slope above and reads as a finding. It is an artifact.
+    # Pre-v5 rows are unshrunk (sd 0.058) and post-v5 rows are shrunk
+    # (sd 0.025); regressing the mixture against one actual returns a slope
+    # describing no model that ever ran. Per scale family:
+    #
+    #     v2      n=147  +0.48 +/- 0.19      v7      n= 45  +1.07 +/- 1.05
+    #     v3      n= 41  +0.59 +/- 0.40      v9/v10  n= 97  +1.45 +/- 0.52
+    #     v5/v6   n= 35  +0.02 +/- 1.13      wOBA    n= 16  -2.12 +/- 1.82
+    #
+    # So the over-dispersion was real for the UNSHRUNK families and is gone
+    # from the current lineage: v9/v10 sits 0.87 se ABOVE 1.0, if anything
+    # slightly over-shrunk. There is no delta shrink left to apply here, and
+    # applying the pooled 0.48 would have compressed an already-compressed
+    # delta on the strength of a mixing artifact.
+    #
+    # Live tension worth carrying: `calibration` reads slope > 1 as "too
+    # compressed, which is what an over-aggressive shrinkage K produces",
+    # while reliever_shrink_probe.py fits K well above the shipped 100 --
+    # i.e. MORE shrinkage. Both sit inside their own noise, and they point
+    # opposite ways. Reconcile them before moving XWOBA_SHRINK_K.
+    #
+    # WHAT A UNIFORM SHRINK DOES NOT FIX, stated because the obvious reading is
+    # wrong: multiplying every xw_net by the slope does NOT move the clear/strong
+    # labels. lean_strength shrinks the pool's OWN p33/p80 toward
+    # LEAN_STRENGTH_FALLBACK, so scaling the deltas scales the observed
+    # quantiles with them and the ranking is identical -- the labels shift only
+    # through the frozen prior, i.e. only to the extent that prior is on a
+    # different scale from the pool. It also flips no lean, being monotone. So
+    # this line is a MEASUREMENT, and printing it every build is the point: it
+    # is what a win-probability mapping would have to be built on, and what the
+    # LEAN_STRENGTH prior must be re-derived against if the delta is ever put on
+    # a calibrated scale (which would be a new _SCALE_FAMILIES entry).
+    if not net.empty:
+        cal = calibration(net["pred"], net["act"])
+        if cal:
+            lines.append(f"  lean delta   n={len(net):<4d} "
+                         f"calibration slope {cal['slope']:+.2f} "
+                         f"+/- {cal['se_slope']:.2f} "
+                         f"(1.00 = calibrated; < 1 = over-dispersed)")
+            r = float(np.corrcoef(net["pred"], net["act"])[0, 1])
+            agree = float((np.sign(net["pred"]) == np.sign(net["act"])).mean())
+            lines.append(f"    corr {r:+.3f}  sign agreement {agree:.3f}  "
+                         f"(the lean's own hit rate against its target)")
+            if cal["se_slope"] > 0.25:
+                lines.append(f"    UNDER-POWERED: se {cal['se_slope']:.2f} "
+                             f"cannot separate 1.00 from 0.50")
     return lines

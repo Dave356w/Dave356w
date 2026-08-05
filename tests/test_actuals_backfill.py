@@ -247,6 +247,71 @@ class PairingTests(unittest.TestCase):
     def test_empty_inputs_give_empty_frames_not_exceptions(self):
         self.assertTrue(ab.paired_rates(pd.DataFrame()).empty)
         self.assertTrue(ab.paired_sp_ip(pd.DataFrame()).empty)
+        self.assertTrue(ab.paired_net(pd.DataFrame()).empty)
+
+    def test_net_pairs_home_minus_away_on_both_sides(self):
+        """xw_net favours HOME when positive, so it pairs with home - away.
+
+        Signed the other way this still produces a slope, just a negative one,
+        which reads as a broken model rather than as a broken pairing.
+        """
+        led = pd.DataFrame([dict(game_pk=1, model_tag="v", xw_net=0.02,
+                                 act_woba_home=0.400, act_woba_away=0.300)])
+        p = ab.paired_net(led)
+        self.assertEqual(len(p), 1)
+        self.assertAlmostEqual(p.iloc[0].pred, 0.02)
+        self.assertAlmostEqual(p.iloc[0].act, 0.100)     # home - away
+
+    def test_net_is_one_row_per_game_not_two(self):
+        led = pd.DataFrame([dict(game_pk=1, model_tag="v", xw_net=0.01,
+                                 act_woba_home=0.35, act_woba_away=0.30),
+                            dict(game_pk=2, model_tag="v", xw_net=-0.01,
+                                 act_woba_home=0.28, act_woba_away=0.33)])
+        self.assertEqual(len(ab.paired_net(led)), 2)
+
+
+class NetCalibrationScopeTests(unittest.TestCase):
+    """Pooling scale families produces a slope describing no model that ran.
+
+    This is not hypothetical: the pooled ledger reads +0.48 ("over-dispersed")
+    purely because unshrunk pre-v5 rows have ~2.4x the delta spread of the
+    shrunk families, and the current lineage reads +1.45 on its own. The guard
+    is what keeps that number off the report.
+    """
+
+    def _mixed(self):
+        rng = np.random.default_rng(7)
+        rows = []
+        # wide family: predictions 2.5x too spread (true slope 0.4)
+        for _ in range(300):
+            p = rng.normal(0, 0.060)
+            rows.append(dict(game_pk=len(rows), model_tag="wide", xw_net=p,
+                             act_woba_home=0.30 + 0.4 * p + rng.normal(0, 0.10),
+                             act_woba_away=0.30))
+        # narrow family: calibrated (true slope 1.0)
+        for _ in range(300):
+            p = rng.normal(0, 0.024)
+            rows.append(dict(game_pk=len(rows), model_tag="narrow", xw_net=p,
+                             act_woba_home=0.30 + 1.0 * p + rng.normal(0, 0.10),
+                             act_woba_away=0.30))
+        return pd.DataFrame(rows)
+
+    def test_pooling_scale_families_distorts_the_slope(self):
+        led = self._mixed()
+        wide = ab.calibration(*ab.paired_net(led[led.model_tag == "wide"])[["pred", "act"]].T.to_numpy())
+        narrow = ab.calibration(*ab.paired_net(led[led.model_tag == "narrow"])[["pred", "act"]].T.to_numpy())
+        pooled = ab.calibration(*ab.paired_net(led)[["pred", "act"]].T.to_numpy())
+        self.assertLess(abs(wide["slope"] - 0.4), 0.25)
+        self.assertLess(abs(narrow["slope"] - 1.0), 0.45)
+        # the pooled slope is dragged toward the wide family and misses the
+        # narrow family's truth by more than that family's own error
+        self.assertLess(pooled["slope"], narrow["slope"] - 0.2)
+
+    def test_unscoped_summary_refuses_to_print_a_net_slope(self):
+        led = self._mixed()
+        self.assertNotIn("lean delta", "\n".join(ab.actuals_summary(led)))
+        scoped = "\n".join(ab.actuals_summary(led, tags=["narrow"]))
+        self.assertIn("lean delta", scoped)
 
 
 class CalibrationTests(unittest.TestCase):
