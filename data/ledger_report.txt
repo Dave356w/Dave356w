@@ -15,6 +15,22 @@ predicted vs actual (backfilled box scores)
   wOBA v4    wOBA n= 22 pred 0.3084 act 0.2639 (-0.0445) slope -2.10±1.76  SP IP n= 22 bias +0.31  net n= 11 slope -4.82±2.53
   split v1   wOBA n= 14 pred 0.3221 act 0.3514 (+0.0294) slope -0.78±1.58  SP IP n= 14 bias +0.05  net n=  7 slope -1.18±0.89
   xw+plat_consol_v1  net n=  1
+by slate (most recent 14 of 15; monitoring, not trend)
+  scale: per-side rate error sd 0.0897 over 270 paired side-games — read gross outliers, not drift
+  2026-08-05  wOBA        15g  rate n= 30 pred 0.3107 act 0.2786 (-0.0321) MAE 0.0734  SP IP n= 30 bias +0.05 MAE 0.99
+  2026-08-04  wOBA        15g  rate n= 30 pred 0.3137 act 0.3088 (-0.0050) MAE 0.0636  SP IP n= 30 bias +0.52 MAE 1.05
+  2026-08-03  wOBA         1g  rate n=  2 pred 0.2966 act 0.2784 (-0.0182) MAE 0.0915  SP IP n=  2 bias +0.11 MAE 0.87
+  2026-08-03  wOBA/xwOBA   7g  rate n= 14 pred 0.3221 act 0.3514 (+0.0294) MAE 0.0778  SP IP n= 14 bias +0.05 MAE 1.47
+  2026-08-02  xwOBA       15g  rate n= 30 pred 0.3124 act 0.2960 (-0.0164) MAE 0.0814  SP IP n= 30 bias -0.12 MAE 1.13
+  2026-08-01  xwOBA       15g  rate n= 30 pred 0.3121 act 0.3162 (+0.0040) MAE 0.0757  SP IP n= 30 bias +0.16 MAE 0.82
+  2026-07-31  xwOBA       15g  rate n= 30 pred 0.3135 act 0.2992 (-0.0143) MAE 0.0844  SP IP n= 30 bias +0.17 MAE 0.74
+  2026-07-30  xwOBA       10g  rate n= 20 pred 0.3167 act 0.2906 (-0.0261) MAE 0.0547  SP IP n= 20 bias +0.51 MAE 1.05
+  2026-07-29  xwOBA       16g  rate n= 32 pred 0.3114 act 0.2801 (-0.0313) MAE 0.0667  SP IP n= 32 bias +0.52 MAE 0.90
+  2026-07-28  xwOBA       16g  rate n= 30 pred 0.3167 act 0.3109 (-0.0058) MAE 0.0728  SP IP n= 30 bias -0.22 MAE 1.05
+  2026-07-27  xwOBA       12g  rate n= 22 pred 0.3156 act 0.3253 (+0.0098) MAE 0.0760  SP IP n= 22 bias -0.46 MAE 1.21
+  2026-07-26  xwOBA       15g  SP IP n= 30 bias -0.21 MAE 0.87
+  2026-07-25  xwOBA       15g  SP IP n= 30 bias +0.34 MAE 0.79
+  2026-07-24  xwOBA       15g  SP IP n= 30 bias +0.15 MAE 0.96
 model-family history (never pooled into the current-family fit):
   v2/v3   n=189  xwOBA full 110-79  (0.582)  F5 89-75-25  (0.543)
   v4      n= 14  xwOBA full 8-6  (0.571)  F5 6-7-1  (0.462)
