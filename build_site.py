@@ -171,15 +171,17 @@ _RECORD_FAMILIES = {
     # RECORD FAMILY, and this half is not close. It does not change any surviving
     # prediction -- every game that still leans leans identically to v4 -- but it
     # changes WHICH games are decided, and a win-loss line is a property of the
-    # decided set. Measured over the 187 ledger games with a dump beside them, 6
+    # decided set. Measured over the 185 ledger rows carrying starter/bullpen
+    # instrumentation at the bump (the set whose quantiles are quoted below), 6
     # (3.2%) carried a prior-only starter on one side and would now abstain;
     # those 6 graded 3-3 against 96-82 (.539) on the rest. That is n=6 and is
     # quoted as incidence, NOT as evidence the abstained games were bad picks --
     # the case for abstaining is that the input was never measured, which is true
     # whatever those six did. v7 is the precedent: zero-as-abstention got its own
     # family for the same reason. Cost of the reset, stated rather than elided:
-    # the v4 family holds 10 graded rows as of 2026-08-06 and they stay
-    # immutable -- checked in the ledger, not assumed from the bump date.
+    # the v4 family's graded rows stay immutable. Read the count off the ledger
+    # rather than from here -- it was 10 when this shipped on 2026-08-06 and 11
+    # by that afternoon, which is the whole reason not to freeze it in prose.
     "woba+plat_consol_v5": ("woba+plat_consol_v5",),
     # Short-lived wOBA-lineup/xwOBA-arms experiment. It is retained only so
     # immutable dumps and ledger rows remain recognised after full wOBA was
@@ -254,10 +256,12 @@ _SCALE_FAMILIES = {
     # abstention only ever nulls an edge. The only question a shared scale can
     # get wrong is whether dropping the abstained games shifts the quantiles the
     # cutoffs are read from, and measured on the ledger it does not: pooled
-    # p33/p80 over 187 games is 0.0090 / 0.0283 with the 6 prior-only games and
-    # 0.0090 / 0.0283 without them, and within the v9/v10 family alone 0.0127 /
-    # 0.0343 both ways -- unchanged to four decimals. Isolating would reset a
-    # pool that is already only 11 rows deep, for a filter that moves no cutoff.
+    # p33/p80 over those 185 rows is 0.0090 / 0.0283 with the 6 prior-only games
+    # and 0.0090 / 0.0283 without them, and within the v9/v10 family alone
+    # 0.0127 / 0.0343 both ways -- unchanged to four decimals. That is not
+    # vacuous: dropping a *random* 6 of the 185 holds both to four decimals only
+    # ~19% of the time. Isolating would reset a pool that was only 11 rows deep
+    # at the bump, for a filter that moves no cutoff.
     # This is the v6 precedent (a new prediction family inheriting a scale).
     "woba+plat_consol_v4": ("woba+plat_consol_v4", "woba+plat_consol_v5"),
     "woba+plat_consol_v5": ("woba+plat_consol_v4", "woba+plat_consol_v5"),
@@ -5164,10 +5168,14 @@ def _display_grades(led):
 
 
 def _baseline_controls(g):
-    """Trivial-strategy records over the same graded rows, as (label, W, L).
+    """Trivial-strategy records over the rows passed in, as (label, W, L).
 
     A .570 headline means nothing without something to beat. Two controls,
-    both scored on the identical rows the model's record is scored on:
+    both scored on the identical rows the model's record is scored on --
+    which is why the caller passes the *decided* rows, not every graded one.
+    A control needs no lean to score a game, so handed the full graded frame
+    it would happily score the ones v5 abstained on and print a baseline over
+    N+1 games beside a model line over N:
 
       home    -- always take the home side. The null hypothesis for any
                  side-picking model; also the shape of the F5 control already
@@ -5570,13 +5578,23 @@ def render_grades_html(built_txt):
     if g.empty:
         summary = "<div class='gr-note'>No graded games yet.</div>"
     else:
+        # Rows on which the model actually published a decision. A graded row
+        # is a game that was played; a decided row is one this model called.
+        # v5 abstains on an unmeasured starter, so the two diverge, and every
+        # count below has to say which one it is -- ledger_report.txt already
+        # does. Measured from xw_lean, the field that says whether a decision
+        # was published, never by subtracting W and L (that swallows ties).
+        decided = g[g["xw_lean"].notna()]
+        n_abst = int(g["xw_lean"].isna().sum())
         pend_sub = f"{n_pend} pending" + (f" · {n_void} void" if n_void else "")
+        if n_abst:
+            pend_sub += f" · {n_abst} abstained"
         stat("Graded", str(len(g)), pend_sub)
         # Metric read off the graded rows, not the running build -- this page
         # pools every family, so it is "xwOBA" until wOBA rows actually grade.
         from market_backfill import metric_label
         label = metric_label(g)
-        b, p = _rec_parts(g["xw_full"]); stat(f"{label} · full", b, p)
+        b, p = _rec_parts(decided["xw_full"]); stat(f"{label} · full", b, p)
         # vs-market scoreboard (closing DK MLs attached by grade_leans.py via
         # market_backfill; columns absent until the first market run). z leads
         # the cell -- it is the primary metric, per the note below. The bucket
@@ -5600,18 +5618,22 @@ def render_grades_html(built_txt):
         # same games. Muted so they read as the yardstick, not as headlines.
         ctl_labels = {"home": "Always home", "market": "Always chalk"}
         shown = []
-        for key, w, l in _baseline_controls(g):
+        for key, w, l in _baseline_controls(decided):
             if not (w + l):
                 continue
             sub = f"{w / (w + l):.3f}"
-            if w + l != len(g):
+            # Against the decided count, not len(g): a control scored on every
+            # graded row matches len(g) exactly when the difference is the
+            # abstentions, so this marker went silent in the one case it exists
+            # to catch.
+            if w + l != len(decided):
                 sub += f" · n={w + l}"
             stat(ctl_labels[key], f"{w}-{l}", sub, tone="dim")
             shown.append(key)
         ctl_what = {"home": "always the home side",
                     "market": "always the devigged closing favourite"}
         if shown:
-            notes.append("controls on the same graded rows — "
+            notes.append("controls on the same decided rows — "
                          + ", ".join(ctl_what[k] for k in shown))
         # Provenance, not a blanket claim: state how many rows the ledger can
         # actually show locked pregame.
