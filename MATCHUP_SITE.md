@@ -620,7 +620,10 @@ four times since (wOBA v1, v2, then v3 and v4 each isolating) and nobody
 recomputed. The numerator moved because `K` is now **400**, not 100, which cuts
 residual cell noise; the denominator moved because v3 compressed `|xw_net|` and
 v4 dispersed it again. The current `SCALE_TAGS` family is v4 alone and holds
-**zero graded rows**, so the median is not computable from it yet at all. Do not
+**11 rows, none of them graded** — which does not block the median, since
+`lean_strength_scale()` counts pending rows too (`|xw_net|` is pregame and needs
+no outcome), but does make it noise: median `|xw_net|` 0.0062 over those 11, as
+of 2026-08-06. Do not
 read 69% as today's figure, and do not read `K ≈ 600` as today's requirement —
 the build already sits two-thirds of the way there. Recompute both before this
 arm is argued either way.
