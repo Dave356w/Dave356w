@@ -309,36 +309,48 @@ def attach_market(df, col=COL, verbose=True):
 
 
 # --------------------------------------------------------------- analysis ---
+def metric_series(df):
+    """Per-row metric label, index-aligned to `df`.
+
+    `model_metric` is authoritative; rows written before that column existed
+    fall back to their tag prefix.
+
+    This is the derivation. `metric_label` is its collapse to one name, and a
+    caller that needs to GROUP by metric — the per-slate block in
+    actuals_backfill — takes the rows themselves rather than re-deriving the
+    prefix rule beside this one. Two copies of this rule is exactly how the
+    vs-market cell went missing.
+    """
+    tag = df.get("model_tag")
+    if tag is None:
+        return pd.Series("xwOBA", index=getattr(df, "index", None), dtype=object)
+    tag = pd.Series(tag).astype(str)
+    from_tag = pd.Series(np.select(
+        [tag.str.startswith("woba+"), tag.str.startswith("split+")],
+        ["wOBA", "wOBA/xwOBA"],
+        default="xwOBA",
+    ), index=tag.index)
+    metric = df.get("model_metric")
+    if metric is None:
+        return from_tag
+    metric = pd.Series(metric)
+    return metric.where(metric.notna(), from_tag).astype(str)
+
+
 def metric_label(df, mixed="Model"):
     """Name of the primary rate behind a set of ledger rows, read off the rows.
 
     The metric is a property of the rows being rendered, never of the running
     build: every public surface here draws pooled history, so a build-time
     constant would relabel 381 xwOBA games "wOBA" the morning the tag flips.
-    `model_metric` is authoritative; rows written before that column existed
-    fall back to their tag prefix. A frame spanning both metrics gets `mixed`.
+    A frame spanning both metrics gets `mixed`.
 
     One home for the derivation, deliberately: build_site's display surfaces,
     the ledger report, and the vs-market summary all need the same answer, and
     a lookup keyed on one copy while another copy names the bucket is exactly
     how the vs-market cell went missing.
     """
-    tag = df.get("model_tag")
-    if tag is None:
-        return "xwOBA"
-    tag = pd.Series(tag).astype(str).reset_index(drop=True)
-    from_tag = np.select(
-        [tag.str.startswith("woba+"), tag.str.startswith("split+")],
-        ["wOBA", "wOBA/xwOBA"],
-        default="xwOBA",
-    )
-    metric = df.get("model_metric")
-    if metric is None:
-        labels = pd.Series(from_tag)
-    else:
-        metric = pd.Series(metric).reset_index(drop=True)
-        labels = metric.where(metric.notna(), pd.Series(from_tag)).astype(str)
-    uniq = labels.dropna().unique().tolist()
+    uniq = metric_series(df).dropna().unique().tolist()
     if not uniq:
         return "xwOBA"
     return uniq[0] if len(uniq) == 1 else mixed

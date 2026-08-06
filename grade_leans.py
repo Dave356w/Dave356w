@@ -54,7 +54,8 @@ import requests
 
 from market_backfill import MARKET_COLS, attach_market, metric_label
 from actuals_backfill import (ACTUAL_COLS, attach_actuals, actuals_summary,
-                              actuals_family_line, components_summary)
+                              actuals_family_line, components_summary,
+                              slate_lines)
 
 DATA_DIR    = os.environ.get("DATA_DIR", "data")
 LEDGER_PATH = os.path.join(DATA_DIR, "mlb_lean_ledger.csv")
@@ -733,6 +734,15 @@ def report(led):
     # component pairs and the others are simply absent -- which is the honest
     # state, not a gap to fill with the joint number.
     for _ln in components_summary(led, tags=RECORD_TAGS):
+        say(_ln)
+
+    # Whole ledger, NOT RECORD_TAGS, and the exception is the point: every
+    # block above scores one prediction family because a level is only
+    # comparable within one. This one is scoped by DATE and keeps pooling legal
+    # by grouping on the metric instead, which is what lets it survive a bump —
+    # scoped to the record family it would have gone blank the morning wOBA v5
+    # landed, on exactly the slates a per-slate check exists to watch.
+    for _ln in slate_lines(led):
         say(_ln)
 
     families = _model_family_grades(led)

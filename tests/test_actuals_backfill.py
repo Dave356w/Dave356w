@@ -501,5 +501,96 @@ class SummaryTests(unittest.TestCase):
         self.assertIn("n=2", out)          # one game, two sides -- not four
 
 
+class SlateBreakdownTests(unittest.TestCase):
+    """The per-slate block is date-scoped where everything else is
+    family-scoped, so what it must not do is let that scope pool two metrics."""
+
+    def _game(self, date, tag, pk, pred=0.32, act=0.30, ip_pred=5.0, ip_act=5.5):
+        return dict(game_pk=pk, game_date=date, model_tag=tag,
+                    mx_xwoba_away=pred, mx_xwoba_home=pred,
+                    act_woba_away=act, act_woba_home=act,
+                    act_pa_away=38, act_pa_home=38,
+                    expected_sp_ip_away=ip_pred, expected_sp_ip_home=ip_pred,
+                    act_sp_ip_away=ip_act, act_sp_ip_home=ip_act)
+
+    def test_one_date_spanning_two_metrics_gives_two_lines(self):
+        """2026-08-03 really is like this: split v1 rows beside wOBA v1 ones.
+
+        Pooled, the date would print a single 0.400 mean that describes neither
+        model -- the same error the family scoping upstream exists to prevent,
+        arriving through a date instead of through a tag.
+        """
+        led = pd.DataFrame([
+            self._game("2026-08-03", "woba+plat_consol_v1", 1, act=0.300),
+            self._game("2026-08-03", "split+plat_consol_v1", 2, act=0.500),
+        ])
+        out = ab.slate_lines(led)
+        dated = [ln for ln in out if ln.strip().startswith("2026-08-03")]
+        self.assertEqual(len(dated), 2)
+        self.assertTrue(any("wOBA " in ln and "act 0.3000" in ln for ln in dated))
+        self.assertTrue(any("wOBA/xwOBA" in ln and "act 0.5000" in ln for ln in dated))
+        self.assertNotIn("0.4000", "\n".join(dated))
+
+    def test_most_recent_first_and_the_window_says_what_it_hides(self):
+        led = pd.DataFrame([self._game(f"2026-08-0{i}", "woba+plat_consol_v5", i)
+                            for i in (1, 2, 3)])
+        out = ab.slate_lines(led, limit=2)
+        self.assertIn("most recent 2 of 3", out[0])
+        body = [ln for ln in out if ln.strip().startswith("2026-")]
+        self.assertTrue(body[0].strip().startswith("2026-08-03"))
+        self.assertNotIn("2026-08-01", "\n".join(body))
+
+    def test_the_error_scale_comes_from_every_pair_not_just_the_window(self):
+        """The sd is the outcome's noise, so it takes every row it can get --
+        including slates the window drops. A scale computed from the two slates
+        on screen would move with the window, which is not a property any
+        noise floor has."""
+        led = pd.DataFrame([self._game(f"2026-08-0{i}", "woba+plat_consol_v5", i,
+                                       act=0.20 + 0.05 * i)
+                            for i in (1, 2, 3)])
+        out = ab.slate_lines(led, limit=1)
+        self.assertIn("over 6 paired side-games", out[1])
+
+    def test_a_slate_with_no_actuals_is_absent_rather_than_zero(self):
+        """Today's slate is pending until first pitch resolves it. A row of
+        zeros for it would read as a perfectly-calibrated day."""
+        led = pd.DataFrame([
+            self._game("2026-08-05", "woba+plat_consol_v4", 1),
+            dict(game_pk=2, game_date="2026-08-06", model_tag="woba+plat_consol_v5",
+                 mx_xwoba_away=0.32, mx_xwoba_home=0.31, expected_sp_ip_away=5.0),
+        ])
+        out = "\n".join(ab.slate_lines(led))
+        self.assertIn("2026-08-05", out)
+        self.assertNotIn("2026-08-06", out)
+
+    def test_no_slope_is_printed_at_slate_size(self):
+        """Deliberate: ~30 side-pairs carries an se near +/-1.5, so a slope
+        here would be noise wearing a finding's clothes. The cumulative and
+        per-family blocks are where slopes belong."""
+        rng = np.random.default_rng(11)
+        led = pd.DataFrame([
+            self._game("2026-08-05", "woba+plat_consol_v4", i,
+                       pred=float(rng.normal(0.316, 0.017)),
+                       act=float(rng.normal(0.316, 0.084)))
+            for i in range(15)])
+        out = "\n".join(ab.slate_lines(led))
+        self.assertNotIn("slope", out)
+
+    def test_ip_only_slate_claims_no_rate(self):
+        led = pd.DataFrame([dict(game_pk=1, game_date="2026-07-25", model_tag="v7",
+                                 expected_sp_ip_away=5.0, expected_sp_ip_home=6.0,
+                                 act_sp_ip_away=4.5, act_sp_ip_home=6.5)])
+        out = "\n".join(ab.slate_lines(led))
+        self.assertIn("SP IP n=  2", out)
+        self.assertNotIn("rate n=", out)
+
+    def test_frames_without_dates_or_rows_give_no_lines(self):
+        self.assertEqual(ab.slate_lines(pd.DataFrame()), [])
+        self.assertEqual(ab.slate_lines(pd.DataFrame([{"game_pk": 1}])), [])
+        self.assertEqual(
+            ab.slate_lines(pd.DataFrame([{"game_pk": 1, "game_date": "2026-08-05"}])),
+            [])
+
+
 if __name__ == "__main__":
     unittest.main()
