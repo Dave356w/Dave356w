@@ -1805,7 +1805,11 @@ def fetch_all(slate_date):
 # CELL 4 -- STATCAST (xwOBA) MATCHUP
 # ============================================================
 STATCAST_RATE_COLS = ["xwOBA", "xBA", "xSLG", "Hard Hit%", "EV", "LA°", "K%", "BB%"]
-WEIGHT_COL = "BBE"
+# No WEIGHT_COL here any more. It named "BBE" as the lineup composite's weight
+# and had been dead since v4 made slot-PA weighting unconditional; the constant
+# outlived the branch that read it. BBE is still a real column on the stat
+# frame and still weights the batted-ball league anchors, which are genuinely
+# per-BBE rates -- it just no longer weights a per-PA rate.
 USE_WEIGHTED = True
 ADD_STATS = {"EV", "LA°"}
 
@@ -2066,7 +2070,7 @@ def matchup_value(B, P, stat, L):
 
 def coerce_numeric(df, cols):
     df = df.copy()
-    for c in set(cols) | {WEIGHT_COL}:
+    for c in cols:
         if c in df.columns:
             s = (df[c].astype(str)
                  .str.replace("%", "", regex=False)
@@ -2099,18 +2103,30 @@ def slot_pa_weights(order):
     return o.map(LINEUP_SLOT_PA)
 
 
-def lineup_weight(g, fallback_col):
-    """Slot-PA weights for a lineup group, falling back to season volume.
+def lineup_weight(g):
+    """Slot-PA weights for a lineup group, or None when the order is unusable.
 
-    Uses expected PA-per-order-slot when enabled and a usable batting_order is
-    present; otherwise returns the group's season-volume weight column so
-    behavior is unchanged wherever the order is unavailable.
+    This used to take a `fallback_col` and return that season-volume column
+    (`WEIGHT_COL = "BBE"`) when the batting order was missing -- a per-BBE
+    denominator under a per-PA rate, which would have underweighted
+    three-true-outcome bats. It was unreachable: `hitter_rows` assigns
+    `batting_order` as `enumerate(lu, start=1)` for every lineup slot and the
+    column projection carries it, so `slot_pa_weights` always yields at least
+    one non-null weight for a lineup group. Measured on frames built through
+    `build_tables` -> `segment_pitcher_blocks` -- posted, partial, 10-man, a
+    hitter absent from the leaderboard, and a side with no BBE at all -- the
+    returned vector was the slot vector on every group, while the BBE
+    composite differed by up to 0.008 wOBA. Dead, not equivalent, so deleting
+    it moves nothing and removes the way it could have.
+
+    None (no usable order) is left to the caller: the platoon path already
+    substitutes split PA, and the lineup path lets `wmean` take an equal mean.
     """
     if USE_SLOT_PA_WEIGHTS and BATTING_ORDER_COL in getattr(g, "columns", []):
         w = slot_pa_weights(g[BATTING_ORDER_COL])
         if w.notna().any():
             return w
-    return g.get(fallback_col) if hasattr(g, "get") else None
+    return None
 
 
 def shrink_xwoba(x, n, prior, k):
@@ -2357,7 +2373,7 @@ def aggregate_lineup(H, rate_cols, weighted=True, shrink_prior=None, shrink_k=No
                "n_opp_hitters": len(g)}
         # Weight the lineup composite by expected PA per batting-order slot
         # (top of the order sees more pitches) rather than by season BBE volume.
-        w = lineup_weight(g, WEIGHT_COL)
+        w = lineup_weight(g)
         for c in rate_cols:
             if c not in g.columns:
                 continue
@@ -2869,7 +2885,7 @@ def build_platoon_matchup(pitcher_rows_df, opp_hitters_df, people,
         # Fall back to season split PA (clip 0-PA splits to 1 so prior-driven
         # bats still count as lineup exposure, incl. SP OPS display) wherever the
         # batting order is unavailable.
-        lineup_w = lineup_weight(g, None)
+        lineup_w = lineup_weight(g)
         if lineup_w is None or not pd.Series(lineup_w).notna().any():
             lineup_w = pd.to_numeric(g["split_pa"], errors="coerce").fillna(0).clip(lower=1)
         opp_ops_raw = _wmean(g["ops_vs_hand_raw"], lineup_w)

@@ -316,9 +316,13 @@ Model version `xw+plat_consol_v4` re-weights the lineup composites:
   batting-order slot* (leadoff ~4.61 PA/game → 9-hole ~3.76, `LINEUP_SLOT_PA`)
   instead of by each hitter's season volume (batted-ball events / handedness
   split PA). Slot weighting reflects tonight's in-game exposure rather than who
-  has simply logged the most playing time; it falls back to the old
-  season-volume weights wherever a batting order is unavailable
-  (`USE_SLOT_PA_WEIGHTS`). This changes the prediction math, so v4 starts a new
+  has simply logged the most playing time. As shipped it fell back to the old
+  season-volume weights wherever a batting order was unavailable
+  (`USE_SLOT_PA_WEIGHTS`) — a branch that never ran, since `hitter_rows`
+  assigns every lineup slot an order, and which was **deleted on 2026-08-06**
+  after being measured as a no-op on frames from the real builder. The lineup
+  composite is slot-weighted or, if an order ever went missing, an equal mean;
+  it is never BBE-weighted. This changes the prediction math, so v4 starts a new
   `RECORD_TAGS` family and its games never mix with v2/v3 in the records.
 
 Model version `xw+plat_consol_v5` adds xwOBA shrinkage on top of v4:

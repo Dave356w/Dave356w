@@ -4,17 +4,14 @@ Things found while aligning the docs to `woba+plat_consol_v4`, none of which
 were changed in that pass. Each entry states what was verified and what would
 settle it; the heading says whether it has since been acted on.
 
-**Status as of 2026-08-06.** §3 is instrumented (the abstention it asks for is
-still open, and deliberately so — it bumps `MODEL_TAG` and wants incidence
-measured under v4 first). §4 and the footer label in §5 are fixed. §2 settled
-itself. **§1 is still open** and is the one thing here that cannot be closed
-from this environment: the zero-diff build it asks for needs live StatsAPI and
-Savant fetches, and outbound access to both is blocked here. It is a real
-deletion waiting on a real build, not a deferral of judgement.
+**Status as of 2026-08-06.** §1 is deleted. §3 is instrumented (the abstention
+it asks for is still open, and deliberately so — it bumps `MODEL_TAG` and wants
+incidence measured under v4 first). §4 and the footer label in §5 are fixed. §2
+settled itself.
 
 ---
 
-## 1. `WEIGHT_COL = "BBE"` is dead on the lineup path
+## 1. `WEIGHT_COL = "BBE"` is dead on the lineup path — *deleted 2026-08-06*
 
 `build_site.py:1808` defines `WEIGHT_COL = "BBE"`, and `aggregate_lineup:2360`
 passes it to `lineup_weight(g, WEIGHT_COL)`. That looks like the lineup
@@ -42,12 +39,38 @@ lineage) slot-PA change; the comment at `:2359` says so.
 `BBE` itself is not dead — at `:1572` it correctly weights the batted-ball
 baselines (`GB%`/`FB%`/`LD%`/`Pull%`…), which genuinely are per-BBE rates.
 
-**Why it wasn't deleted.** Removing the constant and the fallback branch is the
-subtractive fix this repo's standards ask for, and by the argument above it is a
-no-op. But "no-op" rests on reading, not on a run: if `batting_order` were ever
-absent, behaviour would change from BBE-weighted to an equal mean, and that is
-lean-path. Deleting it deserves a build against a frozen `SLATE_DATE` showing a
-zero diff, in its own commit, rather than riding along with a docs change.
+**Why it wasn't deleted at the time.** Removing the constant and the fallback
+branch is the subtractive fix this repo's standards ask for, and by the argument
+above it is a no-op. But "no-op" rested on reading, not on a run: if
+`batting_order` were ever absent, behaviour would change from BBE-weighted to an
+equal mean, and that is lean-path. It wanted a build against a frozen
+`SLATE_DATE` showing a zero diff, in its own commit.
+
+**How it was settled instead.** That build is not available — the environment's
+network policy denies `statsapi.mlb.com` and `baseballsavant.mlb.com` at the
+proxy (`CONNECT` → 403), so no live slate can be fetched here. The substitute is
+the same measurement one step in from the fetch: frames built through the real
+path (`build_tables` → `segment_pitcher_blocks` → the groupby
+`aggregate_lineup` uses), with the weight vector `lineup_weight` returned
+compared per group against the slot-PA vector alone. Six lineup groups, chosen
+to be adversarial — a 10-man card, a hitter absent from the leaderboard, a side
+with no BBE at all, and one with BBE stacked against the slot order — and the
+returned vector was the slot vector on **every** group. Zero differences, so
+every downstream number is identical by construction.
+
+The same run shows it is not a vacuous check: had the fallback been reached,
+those composites would have moved by up to **0.008 wOBA** (per-group deltas
++0.0012, +0.0077, −0.0082, −0.0064, +0.0001, +0.0004). Dead, not equivalent.
+
+`lineup_weight` now takes only the group and returns `None` when the order is
+unusable; `WEIGHT_COL` and the `set(cols) | {WEIGHT_COL}` coercion that existed
+only to feed it are gone. The two tests that asserted the BBE fallback now
+assert its absence — an equal mean, specifically *not* the .320 BBE answer —
+and a new test drives the real frame builder and fails if any lineup group ever
+stops carrying a usable batting order, which is the invariant that made the
+branch unreachable. `BBE` stays in `STAT_COLS`: it is a column the leaderboard
+supplies, not a branch, and it still weights the batted-ball anchors that are
+genuinely per-BBE.
 
 ---
 

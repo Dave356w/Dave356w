@@ -1,3 +1,4 @@
+import inspect
 import os
 import re
 import tempfile
@@ -1066,19 +1067,91 @@ class BattingOrderSlotWeightingTests(unittest.TestCase):
         self.assertNotAlmostEqual(out.loc[0, "opp_xwOBA"], .350)
         self.assertNotAlmostEqual(out.loc[0, "opp_xwOBA"], .320)
 
-    def test_aggregate_lineup_falls_back_to_bbe_when_disabled(self):
-        H = self._lineup([(1, .400, 100), (9, .300, 400)])
-        with mock.patch.object(build_site, "USE_SLOT_PA_WEIGHTS", False):
-            out = build_site.aggregate_lineup(H, ["xwOBA"], weighted=True)
-        expected = (100 * .400 + 400 * .300) / 500  # BBE-weighted == .320
-        self.assertAlmostEqual(out.loc[0, "opp_xwOBA"], expected)
+    def test_no_order_is_an_equal_mean_not_a_bbe_mean(self):
+        """The BBE fallback is gone in both ways it could be reached.
 
-    def test_aggregate_lineup_falls_back_when_order_missing(self):
-        H = self._lineup([(1, .400, 100), (9, .300, 400)]).drop(columns=["batting_order"])
+        These two asserted the removed behaviour -- a per-PA rate weighted by a
+        per-BBE denominator, which underweights three-true-outcome bats. BBE is
+        now ignored by the lineup composite whether the order is missing or the
+        slot weighting is switched off; `wmean` takes an equal mean, and the
+        .320 BBE answer is specifically what must not come back.
+        """
+        H = self._lineup([(1, .400, 100), (9, .300, 400)])
+        no_order = H.drop(columns=["batting_order"])
+        with mock.patch.object(build_site, "USE_SLOT_PA_WEIGHTS", False):
+            disabled = build_site.aggregate_lineup(H, ["xwOBA"], weighted=True)
         with mock.patch.object(build_site, "USE_SLOT_PA_WEIGHTS", True):
-            out = build_site.aggregate_lineup(H, ["xwOBA"], weighted=True)
-        expected = (100 * .400 + 400 * .300) / 500  # falls back to BBE == .320
-        self.assertAlmostEqual(out.loc[0, "opp_xwOBA"], expected)
+            missing = build_site.aggregate_lineup(no_order, ["xwOBA"],
+                                                  weighted=True)
+        for out in (disabled, missing):
+            self.assertAlmostEqual(out.loc[0, "opp_xwOBA"], .350)
+            self.assertNotAlmostEqual(out.loc[0, "opp_xwOBA"], .320)
+
+    def test_lineup_weight_takes_no_fallback_column(self):
+        """Signature is the guard: nothing can pass a season-volume column in
+        again without this failing."""
+        self.assertEqual(
+            list(inspect.signature(build_site.lineup_weight).parameters), ["g"])
+        self.assertFalse(hasattr(build_site, "WEIGHT_COL"))
+
+    def test_every_lineup_group_from_the_real_frame_builder_carries_its_order(self):
+        """Why deleting the fallback moves nothing: it was unreachable.
+
+        Drives the actual path -- build_tables -> segment_pitcher_blocks -> the
+        groupby aggregate_lineup uses -- and asserts every lineup group yields
+        usable slot weights, including a 10-man card and a hitter missing from
+        the leaderboard. If that ever stops holding, the composite silently
+        becomes an equal mean, so this is the assertion that has to fail first.
+        """
+        people, batter_stat, lineups = {}, {}, {}
+        pid = 100
+        for gpk in (1, 2):
+            sides = []
+            for n in ((9, 10) if gpk == 1 else (9, 9)):
+                lu = []
+                for slot in range(n):
+                    pid += 1
+                    people[pid] = {"name": f"B{pid}", "bats": "R", "pos": "SS",
+                                   "throws": "R"}
+                    if not (gpk == 2 and slot == 4):      # one absent from Savant
+                        batter_stat[pid] = {"PA": 300.0, "BBE": 200.0,
+                                            "xwOBA": 0.320}
+                    lu.append(pid)
+                sides.append(lu)
+            lineups[gpk] = (sides[0], sides[1])
+        sp = {}
+        for gpk in (1, 2):
+            for who in ("away", "home"):
+                pid += 1
+                people[pid] = {"name": f"SP{pid}", "bats": "R", "pos": "P",
+                               "throws": "R"}
+                batter_stat.setdefault(pid, {"PA": 400.0, "BBE": 150.0,
+                                             "xwOBA": 0.300})
+                sp[(gpk, who)] = pid
+        slate = pd.DataFrame([{
+            "game_pk": gpk, "game_date": "2026-08-06",
+            "game_datetime_utc": "2026-08-06T23:05:00Z",
+            "matchup": f"A{gpk} @ H{gpk}", "away_team": f"A{gpk}",
+            "home_team": f"H{gpk}",
+            "away_probable_pitcher": f"SP{sp[(gpk, 'away')]}",
+            "home_probable_pitcher": f"SP{sp[(gpk, 'home')]}",
+            "away_probable_pitcher_id": sp[(gpk, "away")],
+            "home_probable_pitcher_id": sp[(gpk, "home")],
+            "savant_preview_url": "",
+        } for gpk in (1, 2)])
+
+        pdf, _ = build_site.build_tables(slate, lineups, batter_stat,
+                                         batter_stat, {}, {}, people)
+        _, H = build_site.segment_pitcher_blocks(pdf,
+                                                 build_site.STATCAST_RATE_COLS)
+        self.assertIn(build_site.BATTING_ORDER_COL, H.columns)
+        groups = list(H.groupby(["game_pk", "faced_pitcher"], sort=False))
+        self.assertEqual(len(groups), 4)
+        for _, g in groups:
+            w = build_site.lineup_weight(g)
+            self.assertIsNotNone(w)
+            self.assertTrue(pd.Series(w).reset_index(drop=True).equals(
+                build_site.slot_pa_weights(g[build_site.BATTING_ORDER_COL])))
 
 
 class XwobaShrinkageTests(unittest.TestCase):
