@@ -1,12 +1,12 @@
-LEAN LEDGER — 9 graded games  [woba+plat_consol_v4]
-wOBA lean   full: 4-5  (0.444)   F5: 4-3-2  (0.571)
-platoon lean full: 5-4  (0.556)   F5: 3-4-2  (0.429)   (reliable-only, n=9)
-wOBA on same subset  full: 4-5  (0.444)   F5: 4-3-2  (0.571)
+LEAN LEDGER — 10 graded games  [woba+plat_consol_v4]
+wOBA lean   full: 5-5  (0.500)   F5: 4-3-3  (0.571)
+platoon lean full: 5-5  (0.500)   F5: 3-4-3  (0.429)   (reliable-only, n=10)
+wOBA on same subset  full: 5-5  (0.500)   F5: 4-3-3  (0.571)
 wOBA F5 by |Δ| tercile:
-  low  0-1-2  (0.000)   (Δ 0.003–0.006, n=3)
-  mid  1-2  (0.333)   (Δ 0.006–0.006, n=3)
+  low  0-2-2  (0.000)   (Δ 0.003–0.006, n=4)
+  mid  1-1-1  (0.500)   (Δ 0.006–0.009, n=3)
   hi   3-0  (1.000)   (Δ 0.009–0.018, n=3)
-DIVERGE h2h (F5): wOBA 3 — platoon 2  (n=5)
+DIVERGE h2h (F5): wOBA 3 — platoon 2  (n=6)
 home F5 baseline: 0.857  (n=7)
 weight fit: 7 usable F5 decisions (gate 120)
 predicted vs actual (backfilled box scores)
@@ -46,6 +46,6 @@ model-family history (never pooled into the current-family fit):
   wOBA v1 n=  1  wOBA full 0-1  (0.000)  F5 0-1  (0.000)
   wOBA v2 n= 15  wOBA full 6-9  (0.400)  F5 7-6-2  (0.538)
   wOBA v3 n=  4  wOBA full 3-1  (0.750)  F5 4-0  (1.000)
-  wOBA v4 n=  9  wOBA full 4-5  (0.444)  F5 4-3-2  (0.571)
+  wOBA v4 n= 10  wOBA full 5-5  (0.500)  F5 4-3-3  (0.571)
   split v1 n=  7  wOBA/xwOBA full 4-3  (0.571)  F5 3-4  (0.429)
   xw+plat_consol_v1 n=  1  xwOBA full 0-1  (0.000)  F5 0-0-1
