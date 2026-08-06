@@ -38,7 +38,7 @@ prediction math. Two separate tag families gate two different questions:
 These are different equivalence relations and they do disagree. The authority is
 `_RECORD_FAMILIES` / `_SCALE_FAMILIES` in `build_site.py` (records mirrored in
 `grade_leans.py`) — not this table, which is a reading aid. Current model is
-**wOBA v4**.
+**wOBA v5**.
 
 | tag | what changed | record family | scale family |
 |---|---|---|---|
@@ -55,6 +55,7 @@ These are different equivalence relations and they do disagree. The authority is
 | wOBA v2 | exposure-centred 0.021 starter platoon gap replaces universal ±0.010 | wOBA v2 | wOBA v1+v2 |
 | wOBA v3 | `XWOBA_SHRINK_K` 100 → 400 (fitted); reliever target moves to the relief pool's own unweighted centre | wOBA v3 | wOBA v3 |
 | wOBA v4 | shrinkage *target* becomes the player's own recency-weighted 2023–2025 history, not a population centre | wOBA v4 | wOBA v4 |
+| wOBA v5 | abstain when a side's starter has no measured season line | wOBA v5 | wOBA v4+v5 |
 | split v1 | one-slate wOBA-lineup/xwOBA-arms test; abandoned before grading | split v1 | split v1 |
 
 The wOBA forward test is intentionally isolated from xwOBA in both namespaces.
@@ -76,6 +77,29 @@ wOBA units both times, materially different spread, which is exactly what a scal
 family separates. Neither inherited anything; both are argued in the comments
 above `_RECORD_FAMILIES` and `_SCALE_FAMILIES`, which is where the argument
 belongs.
+
+**wOBA v5 is the counter-precedent to v4, one namespace at a time.** It answers
+the two questions differently, and both halves are measured. Record: isolated,
+because it changes *which games are decided* — 6 of the 187 ledger games with a
+dump beside them (3.2%) carried a prior-only starter on one side and would now
+publish nothing — and a win-loss line is a property of the decided set, not
+only of the arithmetic. Scale: **shared with v4**, because every surviving
+`|xw_net|` is bit-identical (the abstention only nulls an edge; it never
+rescales one) and dropping the abstained games moves no cutoff — pooled p33/p80
+over those 187 games is 0.0090 / 0.0283 with them and 0.0090 / 0.0283 without,
+and within v9/v10 alone 0.0127 / 0.0343 either way. That is v6's precedent
+(a new prediction family inheriting a scale) applied to a filter rather than to
+a construction change. The reset costs the 10 graded rows v4 held on
+2026-08-06 — counted in the ledger, not inferred from the bump.
+
+Two things not to read into it. The 6 abstained games graded 3-3 against
+96-82 (.539) on the rest; at n=6 that is incidence, not evidence they were bad
+picks, and the argument for abstaining does not depend on it — the input was
+never measured either way. And v5 is the first mechanism in this repo that can
+produce a **graded row with no lean**: the ledger holds 418 graded rows and
+zero undecided ones today, because v7's zero-delta abstention has never once
+fired at full precision. `_rec()` drops those rows while `len()` counts them,
+so every count that mixes the two now says which it is.
 
 `split v1` remains an isolated historical namespace because its dump and
 pending ledger rows existed before full wOBA was restored. It is not an active

@@ -5,11 +5,12 @@ published as a static site by GitHub Actions on a pregame trigger.
 
 **<https://dave356w.github.io/Dave356w/>**
 
-Current forward-test model: `woba+plat_consol_v4` — observed wOBA supplies
+Current forward-test model: `woba+plat_consol_v5` — observed wOBA supplies
 every active rate; rates are regressed with a fitted `K = 400` toward each
 player's own recency-weighted 2023–2025 history rather than a population
-centre; and the starter platoon prior uses exposure-centred 0.021 gaps instead
-of a symmetric ±0.010 around each hitter's season line.
+centre; the starter platoon prior uses exposure-centred 0.021 gaps instead of a
+symmetric ±0.010 around each hitter's season line; and a game whose starter has
+no measured season line publishes no lean at all.
 
 | Where to look | For |
 |---|---|

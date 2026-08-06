@@ -4,10 +4,9 @@ Things found while aligning the docs to `woba+plat_consol_v4`, none of which
 were changed in that pass. Each entry states what was verified and what would
 settle it; the heading says whether it has since been acted on.
 
-**Status as of 2026-08-06.** §1 is deleted. §3 is instrumented (the abstention
-it asks for is still open, and deliberately so — it bumps `MODEL_TAG` and wants
-incidence measured under v4 first). §4 and the footer label in §5 are fixed. §2
-settled itself.
+**Status as of 2026-08-06.** Everything on this list is closed. §1 is deleted,
+§3 is instrumented *and* abstaining (shipped as wOBA v5), §4 and the footer
+label in §5 are fixed, and §2 settled itself.
 
 ---
 
@@ -137,11 +136,21 @@ test only works pre-v4, when the prior was the league centre; under a personal
 prior the defaulted value is no longer identifiable after the fact, which is the
 argument for recording it at build time rather than inferring it later.
 
-**What is still open:** suppressing the lean. That is an abstention, it changes
-what grades, and it bumps `MODEL_TAG` — so it waits on the incidence the field
-above now measures under v4, rather than being argued from a 1.5% figure
-measured on a different lineage. The v7 zero-as-abstention rule is the precedent
-for treating it as a first-class outcome.
+**The abstention shipped too, on 2026-08-06 as `woba+plat_consol_v5`** — asked
+for directly rather than waiting on v4 incidence, which is worth recording since
+this entry had argued for waiting. A side whose starter is `prior_only` now
+publishes no lean, through the same NaN-edge path a missing bullpen already
+takes; `starter_xwOBA` still records the prior, so the abstention's cause stays
+auditable. New record family (the decided set changes), v4's scale family
+(nothing is rescaled, and dropping the abstained games moves no cutoff) — both
+halves measured, in the PR and in `CLAUDE.md`. The v7 zero-as-abstention rule
+was the precedent; v5 is the first mechanism here that has actually produced a
+graded-but-undecided row, since v7's never fires at full precision.
+
+What the wait would have bought is still worth having: incidence under v4 is
+unmeasured, and the 3.2%-of-games figure the decision was argued from comes from
+the xwOBA lineage, where the prior was the league centre. Recheck it once v5 has
+rows.
 
 The original entry, minus its false premise:
 
