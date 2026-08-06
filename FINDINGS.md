@@ -44,7 +44,15 @@ zero diff, in its own commit, rather than riding along with a docs change.
 
 ---
 
-## 2. A version note asserts graded rows that do not exist
+## 2. A version note asserted graded rows that did not exist — since settled
+
+**Resolved 2026-08-06 by the rows arriving, not by an edit.** The four v3 rows
+graded overnight, so the comment is now true. Recounted from
+`data/mlb_lean_ledger.csv` on 2026-08-06: `woba+plat_consol_v3` is 4 graded, 0
+pending, and `data/ledger_report.txt` prints
+`wOBA v3 n=4  wOBA full 3-1 (0.750)  F5 4-0 (1.000)`. `woba+plat_consol_v4` is
+still 11 pending, 0 graded. Nothing was patched; the entry stays as the record
+of an assumption that happened to come true. The original finding follows.
 
 The `_RECORD_FAMILIES` comment on `woba+plat_consol_v4` (`build_site.py:167`)
 reads: *"The v3 family had its own graded rows and they stay immutable."*
@@ -69,6 +77,10 @@ which point the sentence becomes true by accident. A comment that is wrong today
 and right tomorrow should not be rewritten twice. It is recorded in `CLAUDE.md`
 under the latent-gap list instead, with the instruction to check the ledger
 rather than the comment.
+
+*That is what happened: the rows graded the next morning and the sentence is
+true by outcome. The instruction stands unchanged — a version note is evidence
+of what someone expected, not of what the ledger holds.*
 
 ---
 
@@ -115,9 +127,9 @@ stops asserting something false. Do not invent positions.
 
 - **Footer zone label.** `_legend_head` (`:4096`) renders
   `· first pitch times Pacific`, which names only the game clocks while the
-  build stamp beside it is also Pacific (`_built_text_now`, `:5728`, uses
+  build stamp beside it is also Pacific (`_built_text_now`, `:5736`, uses
   `datetime.now(PT)`). The convention is deliberate and documented at
-  `:3179-3186` — one zone, stated once — but the label undersells it. A
+  `:3177-3185` — one zone, stated once — but the label undersells it. A
   one-word change, no behaviour.
 
 - **`compare_v8_v9.py` compares against a version with no graded rows.** Already
@@ -130,6 +142,9 @@ stops asserting something false. Do not invent positions.
   §"Why it is dark" computed a 69% noise-to-lean ratio at `K = 100` against a
   median `|xw_net|` of 0.0188. `K` is now 400 (cuts the numerator) and the
   scale family has reset twice (v3 compressed the denominator, v4 dispersed
-  it), and the current `SCALE_TAGS` family holds zero graded rows so the median
-  is not yet computable. Flagged in place in that section rather than
-  recomputed, because recomputing it needs a graded v4 pool that does not exist.
+  it). Flagged in place in that section rather than recomputed: the v4 pool is
+  11 rows and its median `|xw_net|` of 0.0062 is noise at that size. Note the
+  correction made 2026-08-06 — the section previously said the median was "not
+  computable" because v4 has no graded rows, which reads the wrong rule.
+  `lean_strength_scale()` counts pending rows too, since `|xw_net|` is a
+  pregame quantity; what the ratio waits on is a bigger pool, not a graded one.

@@ -108,22 +108,22 @@ the map is the authority on a historical question and deleting the entry would
 lose the answer. What it means in practice is that "the v8/v9/v10 scale pool"
 is the v9/v10 pool, and any provenance note claiming v8 rows is wrong.
 
-Third, and **live rather than historical: wOBA v3 has no graded rows either.**
-The `_RECORD_FAMILIES` comment on `woba+plat_consol_v4` says "The v3 family had
-its own graded rows and they stay immutable." As of 2026-08-05 that is not true —
-v3 holds 4 rows, all `pending`, all from today's slate, and none has ever
-graded. The claim was written the same day v3 shipped, describing rows that did
-not exist yet.
+Third, **now settled the way it was predicted to settle: wOBA v3's graded rows
+arrived the day after the note that assumed them.** The `_RECORD_FAMILIES`
+comment on `woba+plat_consol_v4` says "The v3 family had its own graded rows
+and they stay immutable." Written 2026-08-05, the day v3 shipped, that
+described rows which did not exist: v3 held 4 rows, all `pending`, none ever
+graded. They graded overnight. As of 2026-08-06 the ledger holds 4 graded v3
+rows and no pending ones, and `data/ledger_report.txt` prints
+`wOBA v3 n=4  wOBA full 3-1 (0.750)  F5 4-0 (1.000)`.
 
-This differs from the v8 case in one way that matters: v8's is settled, but
-v3's is not. Those 4 rows carry a pregame lock and may well grade tonight under
-the v3 tag, at which point the comment becomes true by accident. That is the
-reason it is recorded here rather than corrected in the source — a comment that
-is wrong today and right tomorrow should not be rewritten twice. **Check the
-ledger before quoting it.** What must not happen is the comment being read as
-evidence that a v3 record exists; it was an assumption, not a measurement, and
-it is the third instance of a version note asserting rows a build had not yet
-produced.
+So the sentence in the source is true today, and it was left alone rather than
+corrected and re-corrected — which is why this was recorded here instead of
+patched. Keep the instance anyway: it is the third case of a version note
+asserting rows a build had not yet produced (v8 above, and the
+`wOBA full 217-164` front-page incident), and turning out right a day later
+does not convert an assumption into a measurement. **Check the ledger before
+quoting a family's record**; a 4-row line is not one either way.
 
 When you bump `MODEL_TAG`, decide both questions explicitly in the PR body.
 Silence defaults to a new record family and inherited units — which is wrong
@@ -157,8 +157,13 @@ precedent — they are how the fix is known to look.
   (wOBA v1+v2, n=16) the observed p80 ran well under the 0.032 prior while p33
   sat close to 0.015 — **no longer describes the current scale family and has
   been retired rather than restated.** v3 and v4 each started a fresh
-  `_SCALE_FAMILIES` entry, so `SCALE_TAGS` today selects v4 alone, and v4 has
-  **zero graded rows** (11 pending, all 2026-08-05). Carrying that direction
+  `_SCALE_FAMILIES` entry, so `SCALE_TAGS` today selects v4 alone, and the v4
+  pool is **n=11** (2026-08-06). Note what counts: `lean_strength_scale()`
+  takes every `SCALE_TAGS` row regardless of grade status, because `|xw_net|`
+  is a pregame quantity — so "v4 has no graded rows" is true and irrelevant
+  here, and the constraint is thinness, not gradedness. At n=11 the observed
+  p33/p80 are 0.0059 / 0.0153 and the shrunk cutoffs 0.0141 / 0.0303,
+  essentially the prior. Carrying the old direction
   forward would have been the anti-pattern itself: a number measured on one
   distribution, quoted against another, with a bump in between that provably
   changed the spread in a *known direction opposite to v3's*. Recompute from
@@ -274,8 +279,13 @@ precedent — they are how the fix is known to look.
 - **Public claims the data can't support.** `grades.html` asserted every row
   locked before first pitch while `lock_status` was null on the pre-v3 rows.
   Fixed by `_lock_provenance()`, which now states the split instead of the
-  whole — currently "168 of 317 rows carry a pregame lock timestamp; 149 legacy
-  rows predate that instrumentation." Report provenance, don't assert coverage.
+  whole — "*n* of *N* rows carry a pregame lock timestamp; 149 legacy rows
+  predate that instrumentation." Only the 149 is fixed; the verified count and
+  the total move with every build, so read them off the page or call
+  `_lock_provenance()` rather than quoting a pair from here. (A pair frozen
+  into this file on 2026-08-02 read 168 of 317 and was 277 of 426 four days
+  later — the constants-frozen-from-data entry above, in prose.)
+  Report provenance, don't assert coverage.
   The same entry recurred one level down: `_lock_provenance()` counted the
   unverified remainder *by subtraction* and the page labelled all of it
   "legacy rows predate that instrumentation", which would have described a

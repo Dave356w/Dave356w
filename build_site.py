@@ -5162,15 +5162,23 @@ def market_context_records():
 #
 # The rule this block has always stated: invalidated by any MODEL_TAG bump that
 # changes the delta scale -- i.e. whenever _SCALE_FAMILIES gains a new entry.
-# wOBA v1 added one, so these two numbers are now a prior carried over from a
-# retired family. It is not re-derived here because there is nothing yet to
-# re-derive from: measured 2026-08-03 the wOBA v1 pool is n=6, whose own p33/p80
-# (0.0145 / 0.0371) is noise at that size, and freezing it would be the very
-# anti-pattern this comment exists to prevent. Shrinkage plus the slate top-up
-# in lean_strength_scale() bounds the damage meanwhile -- at n=6 the shrunk
-# cutoffs are 0.0150 / 0.0323, essentially the prior.
+# Four bumps have added one since (wOBA v1; v2 sharing v1; then v3 and v4 each
+# isolating), so these two numbers are a prior carried over from a retired
+# family. Do not re-derive them against whichever family this comment happens to
+# name -- name the one SCALE_TAGS resolves to when you read it, since a stale
+# family name here is the same defect as a stale literal. That family is v4
+# alone as of 2026-08-06, and its pool is far too thin to freeze: n=11, own
+# p33/p80 0.0059 / 0.0153, which at that size is noise, and copying it in would
+# be the very anti-pattern this comment exists to prevent. Shrinkage plus the
+# slate top-up in lean_strength_scale() bound the damage meanwhile -- at n=11
+# the shrunk cutoffs are 0.0141 / 0.0303, essentially the prior.
 #
-# WHAT TO DO: once the wOBA v1 pool passes ~60 graded-or-pending rows, recompute
+# Every row in the family counts toward that n, graded or pending, because
+# lean_strength_scale() ranks a pregame magnitude and needs no outcome. A fresh
+# family being ungraded is therefore not what blocks a re-derivation; its size
+# is.
+#
+# WHAT TO DO: once the current SCALE_TAGS pool passes ~60 rows, recompute
 # p33/p80 from that family alone and replace these literals, then update this
 # provenance. Pool growth is otherwise NOT an invalidation -- this is a prior,
 # and re-deriving it from the same family it is shrunk against every build would
