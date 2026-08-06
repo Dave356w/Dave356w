@@ -1915,6 +1915,23 @@ class ModelTagProvenanceTests(unittest.TestCase):
         self.assertEqual(
             market_backfill.metric_label(woba.set_axis([4, 17])), "wOBA")
 
+    def test_metric_series_labels_each_row_and_keeps_the_frame_index(self):
+        """`metric_label` is this collapsed to one name. The per-row form is
+        what lets the per-slate block GROUP by metric instead of re-deriving
+        the tag-prefix rule beside this one; a caller that reindexed silently
+        would attach a wOBA label to an xwOBA row on the one mixed date.
+        """
+        mixed = pd.DataFrame(
+            {"model_tag": ["xw+plat_consol_v10", "woba+plat_consol_v1",
+                           "split+plat_consol_v1"],
+             "model_metric": [np.nan, "wOBA", None]},
+            index=[7, 2, 9],
+        )
+        s = market_backfill.metric_series(mixed)
+        self.assertEqual(list(s.index), [7, 2, 9])
+        self.assertEqual(list(s), ["xwOBA", "wOBA", "wOBA/xwOBA"])
+        self.assertEqual(market_backfill.metric_label(mixed), "Model")
+
     def test_public_pages_do_not_name_a_metric_no_graded_row_used(self):
         """End-to-end guard on the three surfaces that publish the record.
 

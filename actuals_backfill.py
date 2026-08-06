@@ -28,6 +28,8 @@ import numpy as np
 import pandas as pd
 import requests
 
+from market_backfill import metric_series
+
 BOX_URL = "https://statsapi.mlb.com/api/v1/game/{gamePk}/boxscore"
 THROTTLE_S = 0.15
 TIMEOUT = 10
@@ -768,4 +770,77 @@ def actuals_summary(df, baseline=None, tags=None):
             if cal["se_slope"] > 0.25:
                 lines.append(f"    UNDER-POWERED: se {cal['se_slope']:.2f} "
                              f"cannot separate 1.00 from 0.50")
+    return lines
+
+
+# Display-only cap on the per-slate block. The ledger keeps every slate; this
+# section answers "did anything break recently", and an unbounded listing adds
+# a line a day to a report nobody would then scroll. Raising or lowering it
+# changes what is printed and nothing that is computed, which is the only
+# reason a bare integer is acceptable here at all -- it is not a threshold any
+# number crosses, and no line reads differently on either side of it.
+SLATE_WINDOW = 14
+
+
+def slate_lines(df, limit=SLATE_WINDOW):
+    """Per-slate predicted-vs-actual, most recent first. Empty list if nothing pairs.
+
+    Everything else in this module aggregates over a prediction family and is
+    read for a trend. This block is the opposite question -- one slate at a
+    time, for the failure that shows up as a single bad day: a lineup source
+    degrading, an opener misread, a slate built against stale rates. Those are
+    invisible in a 366-row cumulative mean and obvious in one line.
+
+    Grouped by (date, metric), not by date, because a date can span both --
+    2026-08-03 carries `split v1` rows beside `wOBA v1` ones -- and an
+    xwOBA-input prediction and a wOBA-input one are not the same measurement
+    against an observed-wOBA actual. Grouping by the thing that makes pooling
+    legal costs one extra line on the one day it applies, and no special case.
+
+    Bias and MAE only. NO SLOPES, deliberately: a 15-game slate is ~30
+    side-pairs, where `calibration` returns an se near +/-1.5 -- a figure whose
+    own error bar spans every conclusion anyone would draw from it. The header
+    prints the error sd the lines are read against for the same reason. What
+    one slate can show is a gross outlier; that is all this claims to show.
+    """
+    if "game_date" not in getattr(df, "columns", []):
+        return []
+    d = df.copy()
+    d["_metric"] = metric_series(d)
+    groups = []
+    for (date, metric), g in d.groupby(["game_date", "_metric"], dropna=False):
+        rates, ip = paired_rates(g), paired_sp_ip(g)
+        if rates.empty and ip.empty:
+            continue
+        groups.append((str(date), str(metric), len(g), rates, ip))
+    if not groups:
+        return []
+    groups.sort(key=lambda t: t[0], reverse=True)
+    shown = groups[:limit]
+
+    head = f"by slate (most recent {len(shown)} of {len(groups)}; monitoring, not trend)"
+    lines = [head]
+    # The scale the lines are read against, derived here rather than quoted:
+    # a slate's rate bias means nothing without the per-side spread it sits in.
+    # Pooling every family for THIS number and no other is deliberate -- it is
+    # the dispersion of a ~38-PA game outcome, which is a property of baseball
+    # and not of the family that predicted it. The family-scoped rule upstream
+    # governs LEVELS, where the metrics genuinely disagree.
+    allr = paired_rates(df)
+    if len(allr) > 1:
+        sd = float((allr["act"] - allr["pred"]).std())
+        lines.append(f"  scale: per-side rate error sd {sd:.4f} over {len(allr)} "
+                     f"paired side-games — read gross outliers, not drift")
+    for date, metric, n_games, rates, ip in shown:
+        bits = [f"  {date}  {metric:<10} {n_games:>3d}g"]
+        if not rates.empty:
+            err = rates["act"] - rates["pred"]
+            bits.append(f"rate n={len(rates):>3d} pred {rates['pred'].mean():.4f} "
+                        f"act {rates['act'].mean():.4f} ({err.mean():+.4f}) "
+                        f"MAE {err.abs().mean():.4f}")
+        if not ip.empty:
+            err = ip["act"] - ip["pred"]
+            bits.append(f"SP IP n={len(ip):>3d} bias {err.mean():+.2f} "
+                        f"MAE {err.abs().mean():.2f}")
+        lines.append("  ".join(bits))
     return lines
