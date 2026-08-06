@@ -1,24 +1,7 @@
-LEAN LEDGER — 10 graded games  [woba+plat_consol_v4]
-wOBA lean   full: 5-5  (0.500)   F5: 4-3-3  (0.571)
-platoon lean full: 5-5  (0.500)   F5: 3-4-3  (0.429)   (reliable-only, n=10)
-wOBA on same subset  full: 5-5  (0.500)   F5: 4-3-3  (0.571)
-wOBA F5 by |Δ| tercile:
-  low  0-2-2  (0.000)   (Δ 0.003–0.006, n=4)
-  mid  1-1-1  (0.500)   (Δ 0.006–0.009, n=3)
-  hi   3-0  (1.000)   (Δ 0.009–0.018, n=3)
-DIVERGE h2h (F5): wOBA 3 — platoon 2  (n=6)
-home F5 baseline: 0.857  (n=7)
-weight fit: 7 usable F5 decisions (gate 120)
+no graded games yet.
 predicted vs actual (backfilled box scores)
-  starter IP   n=362  bias +0.12 IP  MAE 0.96 IP   (drives the phase weight q)
-    IP calibration slope +0.734 +/- 0.059 (1.00 = calibrated; < 1 = over-dispersed)
-  offense wOBA n=18   pred mean 0.3094  actual mean 0.2530  (-0.0564)
-    calibration slope -0.67 +/- 1.91 (1.00 = calibrated)
-    UNDER-POWERED: se 1.91 cannot separate 1.00 from 0.80; needs ~6400 side-games
-    skill vs league-rate baseline +0.0659 (ceiling ~0.04; per-game noise dominates)
-  lean delta   n=9    calibration slope -5.05 +/- 4.55 (1.00 = calibrated; < 1 = over-dispersed)
-    corr -0.387  sign agreement 0.444  (the lean's own hit rate against its target)
-    UNDER-POWERED: se 4.55 cannot separate 1.00 from 0.50
+  starter IP   n=364  bias +0.13 IP  MAE 0.96 IP   (drives the phase weight q)
+    IP calibration slope +0.725 +/- 0.058 (1.00 = calibrated; < 1 = over-dispersed)
   by prediction family (never pooled — different inputs, different scale against an observed-wOBA actual):
   v2/v3      net n=188 slope +0.51±0.17
   v4         net n= 14 slope -0.36±0.81
@@ -29,13 +12,9 @@ predicted vs actual (backfilled box scores)
   wOBA v1    wOBA n=  2 pred 0.2966 act 0.2784 (-0.0182)  SP IP n=  2 bias +0.11  net n=  1
   wOBA v2    wOBA n= 30 pred 0.3137 act 0.3088 (-0.0050) slope -0.73±1.16  SP IP n= 30 bias +0.52  net n= 15 slope -1.86±1.89
   wOBA v3    wOBA n=  8 pred 0.3171 act 0.3191 (+0.0019) slope +4.10±3.06  SP IP n=  8 bias -0.68  net n=  4 slope +3.41±1.90
-  wOBA v4    wOBA n= 18 pred 0.3094 act 0.2530 (-0.0564) slope -0.67±1.91  SP IP n= 18 bias +0.14  net n=  9 slope -5.05±4.55
+  wOBA v4    wOBA n= 20 pred 0.3089 act 0.2574 (-0.0515) slope -0.60±1.84  SP IP n= 20 bias +0.31  net n= 10 slope -4.78±4.29
   split v1   wOBA n= 14 pred 0.3221 act 0.3514 (+0.0294) slope -0.78±1.58  SP IP n= 14 bias +0.05  net n=  7 slope -1.18±0.89
   xw+plat_consol_v1  net n=  1
-component error (each scored against its own realised phase)
-  SP      n=18   pred 0.3126 act 0.2583 (-0.0544)  MAE 0.0896  slope -0.43±1.41  corr -0.076
-  BP      n=18   pred 0.2965 act 0.2280 (-0.0685)  MAE 0.0931  slope -1.73±2.69  corr -0.159
-  lineup  n=18   pred 0.3194 act 0.2530 (-0.0664)  MAE 0.0793  slope -1.73±2.94  corr -0.146
 model-family history (never pooled into the current-family fit):
   v2/v3   n=189  xwOBA full 110-79  (0.582)  F5 89-75-25  (0.543)
   v4      n= 14  xwOBA full 8-6  (0.571)  F5 6-7-1  (0.462)
