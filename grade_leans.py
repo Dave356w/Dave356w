@@ -193,6 +193,14 @@ AUDIT_COLS = [
     "opener_reason_away", "opener_reason_home",
     "opener_confidence_away", "opener_confidence_home",
     "pitching_basis_away", "pitching_basis_home",
+    # Whether the starter rate beside it was measured or defaulted to the
+    # player's prior, and the BF behind it. A starter missing from the
+    # leaderboard publishes a prior-shaped number that reads like a
+    # measurement; these two make that filterable, so the incidence can be
+    # counted off the ledger before anyone argues for abstaining on it.
+    # NaN on legacy rows; never backfilled, never read by grading.
+    "sp_rate_basis_away", "sp_rate_basis_home",
+    "sp_rate_bf_away", "sp_rate_bf_home",
     # v6 workload/blend audit. The P_* fields above hold the actual model
     # pitching input; these preserve its starter and bullpen components.
     "starter_xwoba_away", "starter_xwoba_home",
@@ -242,6 +250,8 @@ MODEL_FIELDS = [
     "opener_reason_away","opener_reason_home",
     "opener_confidence_away","opener_confidence_home",
     "pitching_basis_away","pitching_basis_home",
+    "sp_rate_basis_away","sp_rate_basis_home",
+    "sp_rate_bf_away","sp_rate_bf_home",
     "starter_xwoba_away","starter_xwoba_home",
     "bullpen_xwoba_away","bullpen_xwoba_home",
     "expected_sp_ip_away","expected_sp_ip_home",
@@ -290,7 +300,8 @@ def load_ledger():
                   "opener_away", "opener_home",
                   "opener_reason_away", "opener_reason_home",
                   "opener_confidence_away", "opener_confidence_home",
-                  "pitching_basis_away", "pitching_basis_home"):
+                  "pitching_basis_away", "pitching_basis_home",
+                  "sp_rate_basis_away", "sp_rate_basis_home"):
             led[c] = led[c].astype(object)
         return led
     return pd.DataFrame(columns=list(dict.fromkeys(
@@ -427,6 +438,10 @@ def rows_from_dump(xw_df, pl_df):
             opener_confidence_home=h.get("opener_confidence", np.nan),
             pitching_basis_away=a.get("pitching_basis", np.nan),
             pitching_basis_home=h.get("pitching_basis", np.nan),
+            sp_rate_basis_away=a.get("starter_rate_basis", np.nan),
+            sp_rate_basis_home=h.get("starter_rate_basis", np.nan),
+            sp_rate_bf_away=a.get("starter_rate_bf", np.nan),
+            sp_rate_bf_home=h.get("starter_rate_bf", np.nan),
             starter_xwoba_away=a.get("starter_xwOBA", np.nan),
             starter_xwoba_home=h.get("starter_xwOBA", np.nan),
             bullpen_xwoba_away=a.get("bullpen_xwOBA", np.nan),

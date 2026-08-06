@@ -2446,6 +2446,25 @@ def build_matchup(P, agg, rate_cols, league_baseline, shrink_prior=None, shrink_
                "opp_team": opp_team, "n_opp": int(a["n_opp_hitters"])}
         for c in rate_cols:
             pv = pd.to_numeric(pr.get(c), errors="coerce")
+            if c == XWOBA_SHRINK_COL:
+                # Was tonight's published starter rate measured, or defaulted?
+                # A starter absent from the leaderboard arrives here with no
+                # rate and no BF, and _shrink_one returns the prior unchanged --
+                # so the card prints a plausible number that contains no
+                # observation of this arm, and until now nothing said so. At
+                # K=400 against a personal prior the defaulted value is not even
+                # distinguishable by eye from a measured one.
+                #
+                # Two states and a count, deliberately: the boolean says whether
+                # an observation exists at all, and starter_rate_bf carries how
+                # much of one, so "thin" stays a number to read rather than a
+                # tier to cross. Instrumentation only -- pv, the lean, the
+                # ledger's xw_net and every grade are untouched by these two
+                # keys, which is why this carries no MODEL_TAG implication.
+                _bf = pd.to_numeric(pr.get("PA"), errors="coerce")
+                rec["starter_rate_basis"] = ("measured" if pd.notna(pv)
+                                             else "prior_only")
+                rec["starter_rate_bf"] = float(_bf) if pd.notna(_bf) else 0.0
             # Regress the starter's xwOBA-allowed toward the league prior by
             # batters faced (PA), so a short-sample starter isn't taken at face
             # value. This shrunk value drives the lean and the SP card display.
@@ -3449,7 +3468,12 @@ def _hitter_row_html(i, hr):
     xw_c = f"<td class='r mach'{xw_title}>{f3(hr['xw'])}{xw_mark}</td>"
     return (f"<tr><td class='ord'>{i}</td>"
             f"<td class='nm' title='{nm_text}'>{nm_link}{b}</td>"
-            f"<td class='pos'>{_esc(hr['pos'])}</td>"
+            # Roster primary, from people.primaryPosition -- the Savant lineup
+            # payload this row is built from carries ids, not card positions.
+            # Three SS on one card is three players whose *roster* primary is
+            # SS, and the column has no header to say so, so the cell does.
+            f"<td class='pos' title='roster primary position, not tonight’s "
+            f"lineup card'>{_esc(hr['pos'])}</td>"
             f"<td class='pct r'>{bar}</td>{xw_c}</tr>")
 
 
@@ -3490,6 +3514,14 @@ def _side_html(sp_abbr, d, league_baseline):
               "role-filtered bullpen aggregate.'>"
               f"{'opener · bullpen' if has_fullgame else 'opener'}</span>") \
               if d.get("is_opener") else ""
+    # A starter with no leaderboard line still prints a rate -- his prior, which
+    # under wOBA v4 is his own regressed history and looks exactly like a
+    # measurement. Say which it is on the card, next to the rate it qualifies.
+    # The lean is unchanged: this flag reports the input, it does not gate it.
+    no_line = ("<span class='flag warn' title='No season line for this starter "
+               f"on the leaderboard: the {MODEL_RATE_LABEL} shown is his prior, "
+               "and the lean leans on the lineup half.'>prior only</span>"
+               if str(d.get("sp_rate_basis") or "") == "prior_only" else "")
     comp = (f"{d['R']}R/{d['L']}L" + (f"/{d['S']}S" if d["S"] else "")) if d["has_pl"] else "—"
     padv = f" · {d['padv']} plt-adv" if d["has_pl"] else ""
     lb = league_baseline or {}
@@ -3532,7 +3564,7 @@ def _side_html(sp_abbr, d, league_baseline):
         f"<section class='side'>"
         f"<div class='matchlab'>{sp_team} starter → {opp_team} bats</div>"
         f"<div class='sp'><div class='who'><span class='nm'>"
-        f"{_mlb_player_link(d['p'], d.get('player_id'))}</span>{badge}{tier}{opener}</div>"
+        f"{_mlb_player_link(d['p'], d.get('player_id'))}</span>{badge}{tier}{opener}{no_line}</div>"
         f"<div class='role'>faces the {opp_team} lineup"
         f"<span class='mach'> · {comp}{padv}{pitching_note}</span></div>"
         f"<div class='sp-bars'>{bars}</div>"
@@ -3979,6 +4011,8 @@ def _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
                      expected_sp_ip=_f(r.get("expected_sp_ip")),
                      bullpen_xw=_f(r.get("bullpen_xwOBA")),
                      pitching_basis=r.get("pitching_basis"),
+                     sp_rate_basis=r.get("starter_rate_basis"),
+                     sp_rate_bf=_f(r.get("starter_rate_bf")),
                      has_pl=False, R=0, L=0, S=0, padv=0,
                      pl_sp=None, pl_sp_raw=None, pl_mx=None, pl_edge=None,
                      pl_reliable=False,
@@ -4092,8 +4126,11 @@ def _legend_head(model_label, built_txt):
         head += f" · built {built_txt}"
     elif date:
         head += f" · {date}"
+    # "first pitch times" undersold it: the build stamp beside it is Pacific
+    # too (_built_text_now uses datetime.now(PT)), and it is the other bare
+    # clock on the page. One zone, stated once, has to cover both.
     return (f"<div class='legend'><div class='lg-title'>{head}"
-            "<em> · first pitch times Pacific</em></div></div>")
+            "<em> · all times Pacific</em></div></div>")
 
 
 FONT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "fonts")

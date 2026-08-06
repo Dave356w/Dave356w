@@ -104,7 +104,17 @@ slot (`LINEUP_SLOT_PA`, 4.61 leadoff → 3.76 for the 9-hole):
 its own target rather than one shared centre:
 
 - `P_SP` — the probable starter's season wOBA-allowed, shrunk by BF toward his
-  own 2023–2025 prior.
+  own 2023–2025 prior. A starter with **no leaderboard line at all** has no rate
+  and no BF, so the shrink returns the prior unchanged and the card would
+  otherwise publish a defaulted number that reads like a measured one — under
+  v4 all the more so, since the prior is his own history. Each side therefore
+  carries `starter_rate_basis` (`measured` / `prior_only`) and
+  `starter_rate_bf`, dumped and ledgered as `sp_rate_basis_*` / `sp_rate_bf_*`,
+  and a `prior only` badge renders beside the starter on the card. Reporting
+  only: the lean still uses the prior-driven value. Measured over the 403
+  side-games in the committed dumps, 6 (1.5%) published a starter rate equal to
+  the league prior to full float precision, each with a null `K%` — no
+  leaderboard row.
 - `P_BP` — a role-filtered bullpen pool: active roster minus the probable,
   keeping pitchers with start share ≤ `0.35` and ≤ `3.0` IP per appearance
   (loose enough to retain bulk relievers, tight enough to drop rotation arms).

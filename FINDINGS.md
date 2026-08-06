@@ -1,9 +1,16 @@
-# Findings — verified, deliberately not acted on
+# Findings — verified, with what was done about each
 
-Things found while aligning the docs to `woba+plat_consol_v4` that are real but
-were **not** changed in that pass, because each needs a decision this repo makes
-in a PR body rather than a doc commit. Each entry states what was verified and
-what would settle it. Nothing here has been patched.
+Things found while aligning the docs to `woba+plat_consol_v4`, none of which
+were changed in that pass. Each entry states what was verified and what would
+settle it; the heading says whether it has since been acted on.
+
+**Status as of 2026-08-06.** §3 is instrumented (the abstention it asks for is
+still open, and deliberately so — it bumps `MODEL_TAG` and wants incidence
+measured under v4 first). §4 and the footer label in §5 are fixed. §2 settled
+itself. **§1 is still open** and is the one thing here that cannot be closed
+from this environment: the zero-diff build it asks for needs live StatsAPI and
+Savant fetches, and outbound access to both is blocked here. It is a real
+deletion waiting on a real build, not a deferral of judgement.
 
 ---
 
@@ -84,12 +91,39 @@ of what someone expected, not of what the ledger holds.*
 
 ---
 
-## 3. The xwOBA lens has no reliability gate
+## 3. The xwOBA lens has no reliability gate — *instrumented 2026-08-06; the abstention is still open*
 
-The platoon lens carries `low_sample`, `pit_low_sample` and `reliable`
-(`:2831`, `:2877`), and `_pl_chip` greys the chip and prints a `prior-driven`
-badge when they trip. **The primary lens has no equivalent** — there is no
-`xw_reliable` anywhere.
+**Correction first: this entry's opening sentence was wrong, and it was wrong in
+the way this repo has a rule against.** It said `_pl_chip` greys the chip and
+prints a `prior-driven` badge. There is no `_pl_chip` in `build_site.py`, and no
+`_xw_strip` either — both were recalled, not read. What is real: the platoon
+lens computes `low_sample`, `pit_low_sample` and `reliable` (`:2831`, `:2877`)
+and passes `pl_reliable` into the card dict (`:3997`), where **nothing reads
+it** — the platoon lens is no longer surfaced on the cards at all. So there was
+no greyed-chip precedent to mirror; the primary lens was not missing a gate the
+other lens had.
+
+**What shipped.** `build_matchup` now records `starter_rate_basis`
+(`measured` / `prior_only`) and `starter_rate_bf` per side, dumped, ledgered as
+`sp_rate_basis_*` / `sp_rate_bf_*` (in `AUDIT_COLS` and `MODEL_FIELDS`, so a
+pregame refresh updates them after a scratch), and rendered as a `prior only`
+badge beside the starter. Incidence, measured over the 403 side-games in the
+committed dumps: **6 (1.5%)** published a starter rate equal to the league prior
+to full float precision, every one with a null `K%` — no leaderboard row. That
+test only works pre-v4, when the prior was the league centre; under a personal
+prior the defaulted value is no longer identifiable after the fact, which is the
+argument for recording it at build time rather than inferring it later.
+
+**What is still open:** suppressing the lean. That is an abstention, it changes
+what grades, and it bumps `MODEL_TAG` — so it waits on the incidence the field
+above now measures under v4, rather than being argued from a 1.5% figure
+measured on a different lineage. The v7 zero-as-abstention rule is the precedent
+for treating it as a first-class outcome.
+
+The original entry, minus its false premise:
+
+The failure mode is worse than a visibly broken card. There is no `xw_reliable`
+anywhere.
 
 The failure mode is worse than a visibly broken card. A starter absent from the
 Savant leaderboard does not render `nan`: the `_shrink_one` call at `:2456`
@@ -99,16 +133,9 @@ wOBA v4 this is *more* consequential, not less — at `K = 400` the prior alread
 supplies most of a published rate, so the gap between "we measured this arm" and
 "we defaulted this arm" is invisible in the output value itself.
 
-**What it needs.** A per-side boolean and a reason string, greyed chip in
-`_xw_strip`, suppressed lean pill in `cmb_card`, and a ledger-filterable field.
-Suppressing a lean is an abstention, so it changes what grades and bumps
-`MODEL_TAG` — new record family, inherited units, argued in the PR. The v7
-zero-as-abstention rule is the precedent for treating that as a first-class
-outcome.
-
 ---
 
-## 4. `Pos.` is the roster primary position, not the lineup card position
+## 4. `Pos.` is the roster primary position, not the lineup card position — *fixed 2026-08-06*
 
 `gf_lineups` (`:757`) extracts ids only from the Savant `gf?game_pk=` payload.
 `Pos.` comes from `load_people` → `primaryPosition.abbreviation` (`:583`) and is
@@ -116,21 +143,30 @@ rendered per lineup slot at `:3260`. A team fielding three shortstops on the
 card is that: three players whose *roster* primary is SS, one of whom is playing
 second tonight.
 
-Display-only, so no `MODEL_TAG` implication. Two acceptable fixes: pull the
-per-slot position out of the `gf` payload if it is reliably present (needs a
-live fetch to confirm — not verified here), or relabel the column `Prim.` so it
-stops asserting something false. Do not invent positions.
+Display-only, so no `MODEL_TAG` implication. Two acceptable fixes were named:
+pull the per-slot position out of the `gf` payload if it is reliably present
+(needs a live fetch to confirm — still not verified), or relabel the column so
+it stops asserting something false. **Neither, as written, was available: the
+lineup table renders no header row at all** (`_lineup_details` says so in a
+comment), so there was no `Pos.` label to rename — the false assertion is the
+cell value, not a heading. Fixed where the claim actually lives: the cell now
+carries `title='roster primary position, not tonight's lineup card'`, the same
+pattern as the team-backfill asterisk one column over. Positions are still not
+invented.
 
 ---
 
 ## 5. Smaller, verified, unfixed
 
-- **Footer zone label.** `_legend_head` (`:4096`) renders
-  `· first pitch times Pacific`, which names only the game clocks while the
-  build stamp beside it is also Pacific (`_built_text_now`, `:5736`, uses
-  `datetime.now(PT)`). The convention is deliberate and documented at
-  `:3177-3185` — one zone, stated once — but the label undersells it. A
-  one-word change, no behaviour.
+- **Footer zone label — fixed 2026-08-06.** `_legend_head` rendered
+  `· first pitch times Pacific`, which named only the game clocks while the
+  build stamp beside it is also Pacific (`_built_text_now` uses
+  `datetime.now(PT)`). The convention is deliberate and documented on
+  `_fmt_pt_clock` — one zone, stated once — but the label undersold it. Now
+  `· all times Pacific`. The test that guarded it pinned the old sentence
+  verbatim and failed on the wording; it now asserts the claim (the zone is
+  named, exactly once, and not scoped to one kind of clock), which is the
+  frozen-literal-in-a-test anti-pattern from `CLAUDE.md` caught one more time.
 
 - **`compare_v8_v9.py` compares against a version with no graded rows.** Already
   recorded in `CLAUDE.md` as inert and deliberately kept: the map is the
