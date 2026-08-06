@@ -1141,12 +1141,20 @@ class GameClockTests(unittest.TestCase):
         # The how-to-read guide used to carry this; when it was deleted the
         # clause moved to the stamp rather than being dropped, because bare
         # local clocks with no stated local are ambiguous.
+        #
+        # Asserted as the claim, not as the sentence: this once pinned the
+        # literal "first pitch times Pacific" and so failed when the label was
+        # widened to cover the build stamp -- which is also a bare Pacific
+        # clock, and was never covered by a first-pitch-only label. What has to
+        # hold is that the zone is named, once, and not scoped to one kind of
+        # clock.
         stamp = b._legend_head("MLB matchup leans", "9:00 AM")
-        self.assertIn("first pitch times Pacific", stamp)
+        self.assertIn("Pacific", stamp)
+        self.assertNotIn("first pitch times Pacific", stamp)
         html = b.render_combined_html(
             pd.DataFrame(columns=["game_pk", "side"]), pd.DataFrame(),
             pd.DataFrame(), "9:00 AM")
-        self.assertEqual(html.count("first pitch times Pacific"), 1)
+        self.assertEqual(html.count("Pacific"), 1)
 
     def test_build_stamp_keeps_its_zone(self):
         # A timestamp without a zone is ambiguous; a slate of local first

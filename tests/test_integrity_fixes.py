@@ -2056,3 +2056,103 @@ class ReliefPoolPriorTests(unittest.TestCase):
                   for i, v in self._stat().items()}
         moved = build_site.relief_pool_prior([5], hotter, {5: self._roles()})
         self.assertAlmostEqual(moved - base, 0.050, places=12)
+
+
+class StarterRateBasisTests(unittest.TestCase):
+    """A defaulted starter rate has to be distinguishable from a measured one.
+
+    A starter missing from the leaderboard arrives at `build_matchup` with a
+    NaN rate and no BF; `_shrink_one` then returns the prior, so the card and
+    the ledger carry a plausible number that contains no observation of that
+    arm. Under wOBA v4 the prior is his own regressed history, which makes the
+    defaulted value indistinguishable by eye from a measured one. These assert
+    the instrumentation that separates the two -- not any change to the lean.
+    """
+
+    LEAGUE = {"xwOBA": 0.3163}
+
+    def _frames(self, rate, pa):
+        col = build_site.XWOBA_SHRINK_COL
+        P = pd.DataFrame([{
+            "game_pk": 1, "Name": "Arm", "game_date": "2026-08-06",
+            "game_datetime_utc": "2026-08-06T23:05:00Z", "matchup": "AAA @ BBB",
+            "away_team": "AAA", "home_team": "BBB", "player_id": 99,
+            "PA": pa, col: rate,
+        }])
+        agg = pd.DataFrame([{
+            "game_pk": 1, "faced_pitcher": "Arm", "pitcher_side": "away",
+            "n_opp_hitters": 9, f"opp_{col}": 0.320,
+            "opp_xwOBA_neutral": 0.318, "opp_xwOBA_vs_sp": 0.320,
+            "platoon_delta_sp": 0.002,
+        }])
+        return P, agg
+
+    def _row(self, rate, pa):
+        col = build_site.XWOBA_SHRINK_COL
+        P, agg = self._frames(rate, pa)
+        out = build_site.build_matchup(P, agg, [col], self.LEAGUE,
+                                       shrink_prior=self.LEAGUE[col],
+                                       shrink_k=build_site.XWOBA_SHRINK_K)
+        self.assertEqual(len(out), 1)
+        return out.iloc[0]
+
+    def test_a_measured_arm_is_labelled_measured_with_its_bf(self):
+        r = self._row(0.290, 400)
+        self.assertEqual(r["starter_rate_basis"], "measured")
+        self.assertEqual(r["starter_rate_bf"], 400.0)
+
+    def test_a_missing_arm_is_labelled_prior_only(self):
+        r = self._row(np.nan, np.nan)
+        self.assertEqual(r["starter_rate_basis"], "prior_only")
+        self.assertEqual(r["starter_rate_bf"], 0.0)
+
+    def test_the_published_rate_alone_cannot_reveal_the_default(self):
+        """Why the flag is needed: the defaulted value is exactly the prior,
+        a number the model publishes for measured arms too."""
+        missing = self._row(np.nan, np.nan)
+        self.assertAlmostEqual(float(missing["pit_xwOBA"]),
+                               self.LEAGUE["xwOBA"], places=12)
+
+    def test_flagging_does_not_move_the_lean(self):
+        """Instrumentation only -- no MODEL_TAG implication. The edge a
+        measured arm produces is unchanged by the two new keys, which is the
+        claim that keeps this out of prediction math."""
+        r = self._row(0.290, 400)
+        shrunk = build_site._shrink_one(
+            0.290, 400, build_site.player_prior_one(99, self.LEAGUE["xwOBA"]),
+            build_site.XWOBA_SHRINK_K)
+        self.assertAlmostEqual(float(r["pit_xwOBA"]), shrunk, places=12)
+        self.assertAlmostEqual(
+            float(r["edge_xwOBA_sp"]),
+            build_site.matchup_value(shrunk, 0.320, build_site.XWOBA_SHRINK_COL,
+                                     self.LEAGUE["xwOBA"]) - self.LEAGUE["xwOBA"],
+            places=12)
+
+    def test_prior_only_arm_is_marked_on_the_card(self):
+        """The whole point of the flag: a defaulted rate is visible as one, and
+        a measured arm carries no badge -- one that always showed would say
+        nothing."""
+        side = dict(
+            t="R", pl_fl={}, R=5, L=4, S=0, has_pl=False, padv=0,
+            era_l5=0.0, era_l5_gs=1, era_season=3.65, is_opener=False,
+            pit_xw=.311, pit_k=24.0, pit_bb=10.0, pit_hh=35.0,
+            pl_sp=None, pl_sp_raw=None, pl_edge=None, pl_reliable=False,
+            xw_edge=-.009, p="Arm", opp_abbr="TB", lu_status="posted",
+            opp_xw=None, pl_mx=None, hitters=[],
+            pitching_basis="starter_bullpen_sequential", expected_sp_ip=5.4,
+            sp_rate_basis="prior_only", sp_rate_bf=0.0,
+        )
+        lg = {"ERA": 4.20, "xwOBA": .317, "K%": 22.0, "Hard Hit%": 39.0,
+              "OPS": .720}
+        self.assertIn("prior only", build_site._side_html("HOME", side, lg))
+        side.update(sp_rate_basis="measured", sp_rate_bf=420.0)
+        self.assertNotIn("prior only", build_site._side_html("HOME", side, lg))
+
+    def test_both_fields_persist_and_refresh_in_the_ledger(self):
+        """A field the pregame refresh cannot update would freeze at the first
+        snapshot of the day, which is how a scratched starter would keep the
+        replaced arm's label."""
+        for c in ("sp_rate_basis_away", "sp_rate_basis_home",
+                  "sp_rate_bf_away", "sp_rate_bf_home"):
+            self.assertIn(c, grade_leans.AUDIT_COLS)
+            self.assertIn(c, grade_leans.MODEL_FIELDS)
