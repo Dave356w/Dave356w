@@ -175,7 +175,11 @@ An abstained game is graded (it was played) but undecided, so it carries no
 `xw_lean` and no W/L. That is the first mechanism here that produces such a
 row: v7's exact-zero abstention has never fired at full precision. Counts that
 mix graded rows with decided ones now say which is which — `ledger_report.txt`
-prints the abstained count and the grades page labels the row `no lean`.
+prints the abstained count, and on the grades page the row reads `no lean`, the
+Graded tile states how many rows were abstained, and **the baseline controls are
+scored on the decided rows only**. That last one is the part a control gets
+wrong by default: it needs no lean to score a game, so over the full graded
+frame it publishes a baseline over more games than the record beside it.
 
 Not in the lean: the platoon-OPS lens (computed, graded, ledger-only) and the
 pitch-mix shadow arm (off by default). Both are described below.
@@ -201,12 +205,13 @@ The v4 instrumentation (`starter_rate_basis`, `starter_rate_bf`, ledgered as
 Nothing about a surviving prediction changes: the abstention only nulls an
 edge. **New `RECORD_TAGS` family, `SCALE_TAGS` shared with v4** — and both
 halves are measured, not inherited. The record isolates because the *decided
-set* changes: over the 187 ledger games with a dump beside them, 6 (3.2%)
-carried a prior-only starter on one side and would now publish nothing. The
-scale is shared because every surviving `|xw_net|` is bit-identical and
-dropping those 6 moves no cutoff — pooled p33/p80 0.0090 / 0.0283 with them and
-0.0090 / 0.0283 without, and 0.0127 / 0.0343 either way inside v9/v10. That is
-the v6 precedent (new prediction family, inherited scale) applied to a filter.
+set* changes: over the 185 ledger rows that carried starter/bullpen
+instrumentation at the bump, 6 (3.2%) carried a prior-only starter on one side
+and would now publish nothing. The scale is shared because every surviving
+`|xw_net|` is bit-identical and dropping those 6 moves no cutoff — pooled
+p33/p80 0.0090 / 0.0283 with them and 0.0090 / 0.0283 without, and
+0.0127 / 0.0343 either way inside v9/v10. That is the v6 precedent (new
+prediction family, inherited scale) applied to a filter.
 
 Those 6 games graded 3-3 against 96-82 (.539) on the rest. At n=6 that is
 incidence, not evidence they were bad picks — and the case for abstaining does

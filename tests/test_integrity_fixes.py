@@ -1770,7 +1770,42 @@ class BaselineControlTests(unittest.TestCase):
             page = build_site.render_grades_html("test build")
         self.assertIn("Always home", page)
         self.assertIn("Always chalk", page)
-        self.assertIn("controls on the same graded rows", page)
+        self.assertIn("controls on the same decided rows", page)
+
+    def test_an_abstained_game_is_scored_by_neither_the_record_nor_a_control(self):
+        """v5 abstains, so a graded row can carry no lean. A control needs no
+        lean to score a game, so handed every graded row it would publish a
+        baseline over more games than the record it sits beside -- and the
+        `n=` marker would stay silent, because that control's n matches the
+        graded count exactly."""
+        def row(pk, lean, full, fa, fh):
+            return dict(game_pk=pk, game_date="2026-08-07", away="A", home="B",
+                        away_sp="P1", home_sp="P2", status="graded",
+                        model_tag="woba+plat_consol_v5", xw_lean=lean,
+                        xw_delta=.01, xw_full=full, xw_f5=full,
+                        full_away=fa, full_home=fh, close_p_home=.6,
+                        lock_status="pregame")
+        ledger = pd.DataFrame([
+            row(1, "B", "W", 2, 4),          # decided, home won
+            row(2, "B", "L", 5, 3),          # decided, away won
+            row(3, None, None, 1, 7),        # ABSTAINED -- played, never called
+        ])
+        decided = ledger[ledger["xw_lean"].notna()]
+        self.assertEqual(
+            dict((k, (w, l)) for k, w, l in build_site._baseline_controls(decided)),
+            {"home": (1, 1), "market": (1, 1)},
+            "controls must ignore the game the model abstained on",
+        )
+        # Scored over every graded row instead, the home control would read
+        # 2-1 -- three games against the record's two.
+        self.assertEqual(
+            dict((k, (w, l)) for k, w, l in build_site._baseline_controls(ledger))["home"],
+            (2, 1))
+        with mock.patch.object(build_site, "load_ledger_df", return_value=ledger):
+            page = build_site.render_grades_html("test build")
+        self.assertIn("1 abstained", page)          # the count is stated
+        self.assertIn(">1-1<", page)                # controls over the 2 decided
+        self.assertNotIn(">2-1<", page)             # never the 3-game baseline
 
 
 class LockProvenanceTests(unittest.TestCase):

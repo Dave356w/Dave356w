@@ -80,26 +80,35 @@ belongs.
 
 **wOBA v5 is the counter-precedent to v4, one namespace at a time.** It answers
 the two questions differently, and both halves are measured. Record: isolated,
-because it changes *which games are decided* — 6 of the 187 ledger games with a
-dump beside them (3.2%) carried a prior-only starter on one side and would now
-publish nothing — and a win-loss line is a property of the decided set, not
-only of the arithmetic. Scale: **shared with v4**, because every surviving
-`|xw_net|` is bit-identical (the abstention only nulls an edge; it never
-rescales one) and dropping the abstained games moves no cutoff — pooled p33/p80
-over those 187 games is 0.0090 / 0.0283 with them and 0.0090 / 0.0283 without,
-and within v9/v10 alone 0.0127 / 0.0343 either way. That is v6's precedent
-(a new prediction family inheriting a scale) applied to a filter rather than to
-a construction change. The reset costs the 10 graded rows v4 held on
-2026-08-06 — counted in the ledger, not inferred from the bump.
+because it changes *which games are decided* — 6 of the 185 ledger rows that
+carried starter/bullpen instrumentation at the bump (3.2%) had a prior-only
+starter on one side and would now publish nothing — and a win-loss line is a
+property of the decided set, not only of the arithmetic. Scale: **shared with
+v4**, because every surviving `|xw_net|` is bit-identical (the abstention only
+nulls an edge; it never rescales one) and dropping the abstained games moves no
+cutoff — pooled p33/p80 over those 185 rows is 0.0090 / 0.0283 with them and
+0.0090 / 0.0283 without, and within v9/v10 alone 0.0127 / 0.0343 either way.
+That is v6's precedent (a new prediction family inheriting a scale) applied to
+a filter rather than to a construction change. The reset costs v4's graded
+rows, whose count you should read off the ledger rather than from here.
+
+The `185` is a correction: the PR, `MATCHUP_SITE.md` and this file all said
+`187`, and no row set of that size exists. The quoted quantiles pin the set
+exactly — `starter_xwoba_*` / `bullpen_xwoba_*` / `expected_sp_ip_*` /
+`pitching_basis_*` all resolve to the same 185 rows in the ledger as of
+`6b540ae~1`, and all four give 0.0090 / 0.0283. Nothing downstream moves; the
+argument was right and its denominator was not. Same category as the count
+below it, which is why both are fixed here rather than restated.
 
 Two things not to read into it. The 6 abstained games graded 3-3 against
 96-82 (.539) on the rest; at n=6 that is incidence, not evidence they were bad
 picks, and the argument for abstaining does not depend on it — the input was
 never measured either way. And v5 is the first mechanism in this repo that can
-produce a **graded row with no lean**: the ledger holds 418 graded rows and
-zero undecided ones today, because v7's zero-delta abstention has never once
-fired at full precision. `_rec()` drops those rows while `len()` counts them,
-so every count that mixes the two now says which it is.
+produce a **graded row with no lean**: the ledger holds no undecided rows yet,
+because v7's zero-delta abstention has never once fired at full precision.
+`_rec()` drops those rows while `len()` counts them, so every count that mixes
+the two must say which it is — see the controls entry below for the one surface
+that did not.
 
 `split v1` remains an isolated historical namespace because its dump and
 pending ledger rows existed before full wOBA was restored. It is not an active
@@ -181,13 +190,18 @@ precedent — they are how the fix is known to look.
   (wOBA v1+v2, n=16) the observed p80 ran well under the 0.032 prior while p33
   sat close to 0.015 — **no longer describes the current scale family and has
   been retired rather than restated.** v3 and v4 each started a fresh
-  `_SCALE_FAMILIES` entry, so `SCALE_TAGS` today selects v4 alone, and the v4
-  pool is **n=11** (2026-08-06). Note what counts: `lean_strength_scale()`
+  `_SCALE_FAMILIES` entry. Note what counts: `lean_strength_scale()`
   takes every `SCALE_TAGS` row regardless of grade status, because `|xw_net|`
-  is a pregame quantity — so "v4 has no graded rows" is true and irrelevant
-  here, and the constraint is thinness, not gradedness. At n=11 the observed
-  p33/p80 are 0.0059 / 0.0153 and the shrunk cutoffs 0.0141 / 0.0303,
-  essentially the prior. Carrying the old direction
+  is a pregame quantity — so "v5 has no graded rows" is true and irrelevant
+  here, and the constraint is thinness, not gradedness.
+
+  This paragraph used to name a pool — "`SCALE_TAGS` today selects v4 alone,
+  n=11, observed p33/p80 0.0059 / 0.0153" — and **that went stale within a day
+  of being written**, which is this very entry's own failure mode in prose. v5
+  shares v4's scale family, so `SCALE_TAGS` resolves to `(v4, v5)` and the pool
+  is both families' rows, not v4's. The figure is deliberately not refreshed to
+  a new literal: call `lean_strength_scale()` and read `.size`, then take the
+  quantiles off what it returns. Carrying the old direction
   forward would have been the anti-pattern itself: a number measured on one
   distribution, quoted against another, with a bump in between that provably
   changed the spread in a *known direction opposite to v3's*. Recompute from
@@ -240,6 +254,47 @@ precedent — they are how the fix is known to look.
   0.178 ± 0.070 against a 0.196 ceiling for a perfect model. Its 95% CI spans
   near-zero to above that ceiling. Do not quote those two as findings.
 
+- **A past slate's dump is overwritten by a post-hoc rebuild.** `SLATE_DATE`
+  rolls over at 3am ET, and the daily grading cron fires at 04:17 UTC — 00:17
+  ET — so it still names *yesterday's* slate. It re-runs the full build for
+  that date against today's Savant leaderboard and unconditionally rewrites
+  `data/leans_<yesterday>_woba.csv` (`build_site.py:~5954`). Measured across
+  every committed dump that carries `snapshot_utc`: **every past slate's dump
+  is a post-first-pitch rebuild.** `leans_2026-08-05_woba.csv` carries
+  `model_tag=woba+plat_consol_v5` and `snapshot_utc=2026-08-06T04:18Z`, while
+  all 15 of that slate's ledger rows are v3/v4 with pregame snapshots and
+  different numbers — game 822866's `starter_xwoba_away` is 0.327266 in the
+  ledger and 0.336786 in the dump. The dump on disk is stamped with a tag whose
+  math produced none of that slate's rows.
+
+  **The ledger is not affected and the guard is load-bearing.** `ingest()`
+  re-reads every dump on every run and admits a row only when
+  `lock_status == "pregame"`; the rebuilt 08-05 dump is `late_snapshot` on all
+  30 sides and is rejected wholesale. Verified: 0 of 437 ledger rows have
+  `snapshot >= scheduled_start`, and `lock_status` holds 287 `pregame`, 1
+  `pregame_recovered`, 149 legacy, **0 `late_snapshot`**. Do not weaken that
+  check — it is the only thing standing between the rebuild and the ledger.
+
+  What it costs is provenance, and the cost is already being paid. The dump is
+  the sole per-slate record of what the model actually saw, and for every past
+  slate it has been replaced by what a later model saw with a later
+  leaderboard. So: any measurement that joins ledger rows to "the dump beside
+  them" is reading post-hoc data — including `FINDINGS.md`'s prior-only
+  incidence ("6 of the 403 side-games in the committed dumps"), and
+  `compare_v8_v9.py`, which globs `data/leans_*_xw.csv` and therefore compares
+  against a v8 dump that is itself a rebuild of the 07-26 slate. It also biases
+  monitoring toward optimism: `sp_bf_per_ip` is missing on 4 of 301 committed
+  side-games (1.3%), but on **3 of 22 tonight** (13.6%) — a rebuilt dump has a
+  full extra day of StatsAPI behind it, so the historical rate is measured on
+  data the pregame build never had.
+
+  Not fixed here, because the fix is a behaviour change to the daily pass and
+  deserves its own decision rather than a drive-by. The options are to skip the
+  dump write when `SLATE_DATE` is not the current ET date, to write the rebuild
+  under a distinct name, or to accept it and stop citing dumps as pregame
+  evidence. Display/provenance only — no lean, grade or ledger row moves, so no
+  `MODEL_TAG` implication whichever way it goes.
+
 **Resolved — keep as precedent**
 
 - **One value, three homes.** `.github/workflows/build.yml` pinned `MODEL_TAG`,
@@ -276,13 +331,23 @@ precedent — they are how the fix is known to look.
   if one is visually noisy, mute it or move it to the ledger as a column — do
   not delete it.
 
-  Read those three numbers as of that commit, not as standing facts — the page
-  scores `RECORD_TAGS`, so the headline reset when v9 started a new family. On
-  2026-08-02 the current family reads **45-37 (.549)** over 82 graded games,
-  against **42-40 (.512)** always-home and **49-33 (.598)** always-chalk. The
-  model is ahead of the coin-flip control and behind the closing line on a
-  sample far too small to separate them — which is the controls doing their
-  job. Do not quote a control figure from this file; recompute it.
+  Read those three numbers as of that commit, not as standing facts. **And do
+  not read the sentence this paragraph used to open with** — "the page scores
+  `RECORD_TAGS`, so the headline reset when v9 started a new family" — which is
+  wrong about the code and was verified so on 2026-08-06. `build_site`'s
+  `_record_grades()` has *no production caller*; every public surface renders
+  `_display_grades()`, i.e. every graded family pooled, which is exactly why
+  the front page could publish `wOBA full 217-164` over 381 xwOBA games (see
+  the metric-label instance below). A `MODEL_TAG` bump does not reset the
+  public headline. It resets `ledger_report.txt`, which is the artifact that
+  does score `RECORD_TAGS`. The 45-37 (.549) / 42-40 / 49-33 line quoted here
+  for 2026-08-02 was the *report's* current-family line, not the page's.
+
+  Controls, whatever the row set: the model ahead of the coin-flip control and
+  behind the closing line, on a sample far too small to separate them — which
+  is the controls doing their job. Do not quote a control figure from this
+  file; recompute it. Since 2026-08-06 they are scored on the **decided** rows,
+  not every graded one — see the abstention instance below.
 
 - **Threshold cliffs.** Two instances, same shape. The old
   `use = fam if len(fam) >= 60 else pooled` scale selector switched
@@ -333,6 +398,26 @@ precedent — they are how the fix is known to look.
   lookup so a mismatch is now unrepresentable. A build-time constant must never
   name historical rows — the metric is a property of the rows, and the tag flips
   a slate before the first row under it grades.
+
+  Fourth instance, found by an end-to-end check on 2026-08-06 and fixed the
+  same day: **the grades page scored its baseline controls on every graded row
+  while scoring the model on the decided ones.** A control needs no lean to
+  score a game — always-home only reads the final score — so the moment v5's
+  first abstention grades, `Always home` covers one more game than the record
+  beside it, under a note reading "controls on the same graded rows". The `n=`
+  marker that exists to catch exactly this compared the control's `w + l`
+  against `len(g)`, the *graded* count, which is also inflated by the
+  abstention — so the one discrepancy it was written for is the one it cannot
+  see. Reproduced on a three-row frame (two decided, one abstained): the page
+  rendered `wOBA · full 1-1 (.500)` beside `Always home 2-1 (.667)`, no `n=`,
+  the control apparently beating the model on a game the model declined to
+  call. Fixed by deriving `decided = g[g["xw_lean"].notna()]` once and passing
+  it to the record, the controls and the marker alike, with the abstained count
+  stated on the Graded tile from `xw_lean.isna()` — measured, not subtracted,
+  per the instance above. Zero rows are affected today; v5 shipped the
+  mechanism that arms it. **A control is only a control if it is scored on the
+  rows the model was scored on — when a model gains the ability to abstain,
+  every baseline beside it inherits that filter.**
 - **Internal and public artifacts disagreeing.** `data/ledger_report.txt` once
   said the current family had no graded games while the site published a pooled
   record. Both now render from the same ledger through
