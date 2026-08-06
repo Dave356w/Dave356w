@@ -2229,3 +2229,131 @@ class StarterRateBasisTests(unittest.TestCase):
                   "sp_rate_bf_away", "sp_rate_bf_home"):
             self.assertIn(c, grade_leans.AUDIT_COLS)
             self.assertIn(c, grade_leans.MODEL_FIELDS)
+
+
+class StarterAbstentionTests(unittest.TestCase):
+    """wOBA v5: a side whose starter has no measured rate publishes no lean.
+
+    The rate itself is unchanged -- `starter_xwOBA` still carries the prior the
+    model used, because blanking it would hide the abstention's own cause. What
+    goes undefined is everything the decision rests on, through the same
+    NaN-edge path a missing bullpen already takes.
+    """
+
+    L = {"xwOBA": 0.3163}
+
+    def _matchup(self, basis):
+        return pd.DataFrame([{
+            "game_pk": 1, "side": "away", "pitcher": "Arm",
+            "starter_xwOBA": 0.305, "opp_xwOBA_vs_sp": 0.325,
+            "opp_xwOBA_neutral": 0.315, "starter_rate_basis": basis,
+            "starter_rate_bf": 0.0 if basis == "prior_only" else 400.0,
+        }])
+
+    _PLAN = {(1, "away"): {
+        "bullpen_xwOBA": 0.330, "expected_sp_ip": 6.0, "bullpen_pitchers": 7,
+        "bullpen_relief_bf": 900, "sp_bf_per_ip": 4.3, "bp_bf_per_ip": 4.2,
+        "pitching_basis": "starter_bullpen_sequential", "opener": False,
+    }}
+
+    def _apply(self, basis):
+        return build_site.apply_pitching_plans(
+            self._matchup(basis), self._PLAN, self.L).iloc[0]
+
+    def test_a_measured_starter_still_produces_an_edge(self):
+        r = self._apply("measured")
+        self.assertTrue(pd.notna(r["edge_xwOBA"]))
+        self.assertEqual(r["pitching_basis"], "starter_bullpen_sequential")
+
+    def test_an_unmeasured_starter_suppresses_the_lean(self):
+        r = self._apply("prior_only")
+        for c in ("edge_xwOBA", "mx_xwOBA", "edge_xwOBA_sp", "mx_xwOBA_sp",
+                  "pit_xwOBA"):
+            self.assertTrue(pd.isna(r[c]), c)
+        self.assertEqual(r["pitching_basis"], "starter_unmeasured_no_lean")
+
+    def test_the_abstention_keeps_the_rate_it_abstained_on(self):
+        """Auditability: the ledger has to show what was defaulted, not just
+        that something was."""
+        r = self._apply("prior_only")
+        self.assertEqual(r["starter_xwOBA"], 0.305)
+        self.assertEqual(r["starter_rate_basis"], "prior_only")
+
+    def test_the_bullpen_phase_survives_the_abstention(self):
+        """Only the starter half is unmeasured. Nulling the bullpen phase too
+        would lose a measurement the model did make."""
+        r = self._apply("prior_only")
+        self.assertTrue(pd.notna(r["mx_xwOBA_bp"]))
+        self.assertTrue(pd.notna(r["edge_xwOBA_bp"]))
+
+    def test_a_suppressed_edge_becomes_no_ledger_lean(self):
+        """End of the chain: a NaN edge on one side leaves the game with no
+        xw_net and therefore no lean to grade."""
+        self.assertIsNone(grade_leans._fx(float("nan")))
+        r = self._apply("prior_only")
+        self.assertIsNone(grade_leans._fx(r["edge_xwOBA"]))
+
+    def test_the_card_says_why_there_is_no_lean(self):
+        side = dict(
+            t="R", pl_fl={}, R=5, L=4, S=0, has_pl=False, padv=0,
+            era_l5=0.0, era_l5_gs=1, era_season=3.65, is_opener=False,
+            pit_xw=None, pit_k=24.0, pit_bb=10.0, pit_hh=35.0,
+            pl_sp=None, pl_sp_raw=None, pl_edge=None, pl_reliable=False,
+            xw_edge=None, p="Arm", opp_abbr="TB", lu_status="posted",
+            opp_xw=None, pl_mx=None, hitters=[], expected_sp_ip=5.4,
+            pitching_basis="starter_unmeasured_no_lean",
+            sp_rate_basis="prior_only", sp_rate_bf=0.0,
+        )
+        html = build_site._side_html("HOME", side, {"ERA": 4.2, "xwOBA": .317,
+                                                    "K%": 22.0, "OPS": .720})
+        self.assertIn("starter unmeasured; no lean", html)
+        self.assertIn("prior only", html)
+
+    def test_v5_isolates_the_record_and_shares_v4s_scale(self):
+        """Both questions, decided explicitly -- silence defaults to the wrong
+        answer about half the time."""
+        v4, v5 = "woba+plat_consol_v4", "woba+plat_consol_v5"
+        self.assertEqual(build_site._RECORD_FAMILIES[v5], (v5,))
+        self.assertEqual(build_site._SCALE_FAMILIES[v5], (v4, v5))
+        self.assertEqual(build_site._SCALE_FAMILIES[v4], (v4, v5))
+        self.assertEqual(grade_leans._RECORD_FAMILIES[v5], (v5,))
+
+
+class AbstentionReportingTests(unittest.TestCase):
+    """An abstained game is graded but undecided. Every count that mixes the
+    two has to say which it is, or the record silently loses a game."""
+
+    def _led(self):
+        return pd.DataFrame([
+            {"status": "graded", "xw_lean": "NYM", "xw_full": "W",
+             "xw_f5": "W", "model_tag": "woba+plat_consol_v5"},
+            {"status": "graded", "xw_lean": "TB", "xw_full": "L",
+             "xw_f5": "L", "model_tag": "woba+plat_consol_v5"},
+            {"status": "graded", "xw_lean": np.nan, "xw_full": np.nan,
+             "xw_f5": np.nan, "model_tag": "woba+plat_consol_v5"},
+        ])
+
+    def test_abstentions_are_counted_from_the_lean_not_by_subtraction(self):
+        led = self._led()
+        self.assertEqual(grade_leans._abstained(led), 1)
+        # A tie is not an abstention: it has a lean and a T grade.
+        tie = pd.DataFrame([{"status": "graded", "xw_lean": "NYM",
+                             "xw_full": np.nan, "xw_f5": "T",
+                             "model_tag": "woba+plat_consol_v5"}])
+        self.assertEqual(grade_leans._abstained(tie), 0)
+
+    def test_the_record_line_excludes_the_abstained_game(self):
+        led = self._led()
+        self.assertEqual(grade_leans._rec(led["xw_full"]), "1-1  (0.500)")
+        self.assertEqual(len(led), 3)
+
+    def test_the_grades_page_names_the_abstention(self):
+        r = pd.Series({
+            "status": "graded", "away": "MIA", "home": "NYM",
+            "away_sp": "A", "home_sp": "B", "xw_lean": np.nan,
+            "xw_delta": np.nan, "full_away": 3, "full_home": 5,
+            "xw_full": np.nan, "pitching_basis_away": "starter_unmeasured_no_lean",
+            "pitching_basis_home": "starter_bullpen_sequential",
+        })
+        html = build_site._grades_row(r)
+        self.assertIn("no lean", html)

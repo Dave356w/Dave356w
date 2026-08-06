@@ -147,14 +147,28 @@ def test_the_prior_never_leaves_the_interval_between_centre_and_history(frozen):
 # --------------------------------------------------------------------------
 # the tag, which is how any of this stays readable later
 # --------------------------------------------------------------------------
-def test_v4_starts_its_own_record_and_scale_family():
-    assert B.MODEL_TAG == "woba+plat_consol_v4"
-    assert B._RECORD_FAMILIES["woba+plat_consol_v4"] == ("woba+plat_consol_v4",)
-    assert B._SCALE_FAMILIES["woba+plat_consol_v4"] == ("woba+plat_consol_v4",)
-    # And it must not have been quietly added to an older family.
-    for tag, fam in B._RECORD_FAMILIES.items():
-        if tag != "woba+plat_consol_v4":
-            assert "woba+plat_consol_v4" not in fam
+def test_v4_keeps_its_own_record_line_and_never_joins_an_older_family():
+    """v4's isolation, asserted as the claim rather than as the current tag.
+
+    This pinned `MODEL_TAG == "woba+plat_consol_v4"` and so failed on the v5
+    bump for a reason with nothing to do with what it guards -- the same
+    frozen-literal-in-a-test shape CLAUDE.md already records twice. What has to
+    hold about v4 is that its graded rows stay its own, and that it was never
+    quietly folded into a family that predates it. A LATER tag joining v4's
+    scale pool is a separate decision, argued where the map is defined; it is
+    not this test's business.
+    """
+    v4 = "woba+plat_consol_v4"
+    assert B._RECORD_FAMILIES[v4] == (v4,)
+    assert v4 in B._SCALE_FAMILIES[v4]
+    older = [t for t in B._RECORD_FAMILIES if t < v4]
+    for tag in older:
+        assert v4 not in B._RECORD_FAMILIES[tag]
+        assert v4 not in B._SCALE_FAMILIES.get(tag, ())
+    # Whatever the current tag is, both maps have to know about it -- an
+    # unlisted tag silently isolates itself in both namespaces.
+    assert B.MODEL_TAG in B._RECORD_FAMILIES
+    assert B.MODEL_TAG in B._SCALE_FAMILIES
 
 
 def test_the_grader_agrees_with_the_build_about_the_tag():
@@ -163,8 +177,8 @@ def test_the_grader_agrees_with_the_build_about_the_tag():
     import grade_leans
 
     assert grade_leans.MODEL_TAG == B.MODEL_TAG
-    assert (grade_leans._RECORD_FAMILIES["woba+plat_consol_v4"]
-            == B._RECORD_FAMILIES["woba+plat_consol_v4"])
+    assert (grade_leans._RECORD_FAMILIES[B.MODEL_TAG]
+            == B._RECORD_FAMILIES[B.MODEL_TAG])
 
 
 def test_the_constant_is_read_from_one_place():

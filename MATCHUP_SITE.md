@@ -23,7 +23,7 @@ is no longer surfaced on the cards (the display is wOBA-only).
 
 ---
 
-## The current model — `woba+plat_consol_v4`
+## The current model — `woba+plat_consol_v5`
 
 **Read this section for what the code does today.** Everything below it is a
 changelog: each version note describes a *delta* against its predecessor, and
@@ -50,7 +50,9 @@ table with a conservative 0.021 strong-side/weak-side gap, replacing the
 symmetric ±0.010 that every lineage through wOBA v1 used.
 
 v3 and v4 each start a clean record family **and** a clean scale family, argued
-in `_RECORD_FAMILIES` / `_SCALE_FAMILIES` rather than inherited. None of the
+in `_RECORD_FAMILIES` / `_SCALE_FAMILIES` rather than inherited. v5 splits the
+two questions: a clean record family, because it changes which games are
+decided, but v4's scale family, because it rescales nothing. None of the
 wOBA lineage pools with xwOBA history in either namespace. Legacy dump/ledger
 columns such as `xw_net` remain only as a compatibility schema and every new row
 carries `model_metric=wOBA`.
@@ -110,11 +112,11 @@ its own target rather than one shared centre:
   v4 all the more so, since the prior is his own history. Each side therefore
   carries `starter_rate_basis` (`measured` / `prior_only`) and
   `starter_rate_bf`, dumped and ledgered as `sp_rate_basis_*` / `sp_rate_bf_*`,
-  and a `prior only` badge renders beside the starter on the card. Reporting
-  only: the lean still uses the prior-driven value. Measured over the 403
-  side-games in the committed dumps, 6 (1.5%) published a starter rate equal to
-  the league prior to full float precision, each with a null `K%` — no
-  leaderboard row.
+  and a `prior only` badge renders beside the starter on the card. **Since v5
+  that side abstains**: the rate is still recorded, but the game publishes no
+  lean (see §8). Measured over the 403 side-games in the committed dumps, 6
+  (1.5%) published a starter rate equal to the league prior to full float
+  precision, each with a null `K%` — no leaderboard row.
 - `P_BP` — a role-filtered bullpen pool: active roster minus the probable,
   keeping pitchers with start share ≤ `0.35` and ≤ `3.0` IP per appearance
   (loose enough to retain bulk relievers, tight enough to drop rotation arms).
@@ -154,10 +156,26 @@ carries the *home* offense's edge). Its sign is the lean; an exact zero is an
 decision — three decimals are a display format only, and a nonzero delta too
 small to show renders `<0.001`.
 
-**8. Degradation.** If either side lacks a valid bullpen aggregate, the starter
-phase is still shown but the game's full-game lean is **suppressed** and the
-side is marked `pitching_basis=starter_only_no_fullgame_lean`. v10 never treats
-a probable starter as nine innings.
+**8. Degradation and abstention.** Two cases, one mechanism — the side's edge
+goes undefined, so the game publishes no lean:
+
+- If either side lacks a valid bullpen aggregate, the starter phase is still
+  shown but the full-game lean is **suppressed** and the side is marked
+  `pitching_basis=starter_only_no_fullgame_lean`. v10 never treats a probable
+  starter as nine innings.
+- **v5:** if a side's starter has no leaderboard line, his rate is his prior
+  rather than a measurement (`starter_rate_basis=prior_only`), so the game
+  **abstains** and the side is marked
+  `pitching_basis=starter_unmeasured_no_lean`. `starter_xwOBA` still records
+  the prior that was used — blanking it would hide the abstention's own cause —
+  and the bullpen phase, which *was* measured, survives. The card reads
+  `starter unmeasured; no lean` beside the `prior only` badge.
+
+An abstained game is graded (it was played) but undecided, so it carries no
+`xw_lean` and no W/L. That is the first mechanism here that produces such a
+row: v7's exact-zero abstention has never fired at full precision. Counts that
+mix graded rows with decided ones now say which is which — `ledger_report.txt`
+prints the abstained count and the grades page labels the row `no lean`.
 
 Not in the lean: the platoon-OPS lens (computed, graded, ledger-only) and the
 pitch-mix shadow arm (off by default). Both are described below.
@@ -169,6 +187,30 @@ pitch-mix shadow arm (off by default). Both are described below.
 Each note below is the delta that version introduced, kept for provenance —
 ledger rows are immutable and a row's `model_tag` is only interpretable against
 the version note that produced it.
+
+### wOBA v5 — abstain on an unmeasured starter
+
+`woba+plat_consol_v5` publishes no lean for a game in which either side's
+probable has no Savant line. Such a starter reaches the model with no rate and
+no BF, so shrinkage returns his prior unchanged; under v4 that prior is his own
+regressed 2023–2025 history, which makes the defaulted value indistinguishable
+from a measured one in the output and unrecoverable from the ledger afterwards.
+The v4 instrumentation (`starter_rate_basis`, `starter_rate_bf`, ledgered as
+`sp_rate_basis_*` / `sp_rate_bf_*`) is what this reads.
+
+Nothing about a surviving prediction changes: the abstention only nulls an
+edge. **New `RECORD_TAGS` family, `SCALE_TAGS` shared with v4** — and both
+halves are measured, not inherited. The record isolates because the *decided
+set* changes: over the 187 ledger games with a dump beside them, 6 (3.2%)
+carried a prior-only starter on one side and would now publish nothing. The
+scale is shared because every surviving `|xw_net|` is bit-identical and
+dropping those 6 moves no cutoff — pooled p33/p80 0.0090 / 0.0283 with them and
+0.0090 / 0.0283 without, and 0.0127 / 0.0343 either way inside v9/v10. That is
+the v6 precedent (new prediction family, inherited scale) applied to a filter.
+
+Those 6 games graded 3-3 against 96-82 (.539) on the rest. At n=6 that is
+incidence, not evidence they were bad picks — and the case for abstaining does
+not rest on it. The input was never measured either way.
 
 ### wOBA v4 — personal shrinkage priors
 

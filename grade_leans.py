@@ -59,7 +59,7 @@ from actuals_backfill import (ACTUAL_COLS, attach_actuals, actuals_summary,
 DATA_DIR    = os.environ.get("DATA_DIR", "data")
 LEDGER_PATH = os.path.join(DATA_DIR, "mlb_lean_ledger.csv")
 REPORT_PATH = os.path.join(DATA_DIR, "ledger_report.txt")
-MODEL_TAG   = os.environ.get("MODEL_TAG", "woba+plat_consol_v4")
+MODEL_TAG   = os.environ.get("MODEL_TAG", "woba+plat_consol_v5")
 MODEL_METRIC_LABEL = os.environ.get(
     "MODEL_METRIC_LABEL",
     "wOBA" if MODEL_TAG.startswith("woba+") else "xwOBA",
@@ -97,6 +97,9 @@ _RECORD_FAMILIES = {
     # v4: player-specific shrinkage targets. New record family --
     # see _RECORD_FAMILIES in build_site.py, which is the authority.
     "woba+plat_consol_v4": ("woba+plat_consol_v4",),
+    # v5: abstain when a side's starter has no measured rate. New record
+    # family -- it changes which games are decided; see build_site.
+    "woba+plat_consol_v5": ("woba+plat_consol_v5",),
     # Historical one-slate experiment; isolated from the restored full-wOBA
     # family but still recognised by the immutable ledger.
     "split+plat_consol_v1": ("split+plat_consol_v1",),
@@ -118,6 +121,7 @@ MODEL_FAMILY_TAGS = (
     ("wOBA v2", ("woba+plat_consol_v2",)),
     ("wOBA v3", ("woba+plat_consol_v3",)),
     ("wOBA v4", ("woba+plat_consol_v4",)),
+    ("wOBA v5", ("woba+plat_consol_v5",)),
     ("split v1", ("split+plat_consol_v1",)),
 )
 N_FIT_MIN   = 120
@@ -620,6 +624,18 @@ def _logit_fit(X, y, iters=60):
     return b, np.sqrt(np.diag(cov))
 
 
+def _abstained(fam):
+    """Graded rows that published no lean.
+
+    v5 abstains when a side's starter has no measured rate, so a game can be
+    graded (it was played, the score is in) and still carry no decision. `_rec`
+    drops those rows and `len()` counts them, so a line that prints both
+    without saying so reads as an unexplained missing game. Count them from
+    `xw_lean` -- the field that says whether a decision was published -- not by
+    subtracting W and L, which would also swallow ties."""
+    return int(fam["xw_lean"].isna().sum()) if "xw_lean" in fam else 0
+
+
 def _record_grades(led):
     """Graded rows whose tags share the current prediction methodology."""
     return led[(led["status"] == "graded") & (led["model_tag"].isin(RECORD_TAGS))].copy()
@@ -647,7 +663,10 @@ def report(led):
     if g.empty:
         say("no graded games yet.")
     else:
-        say(f"LEAN LEDGER — {len(g)} graded games  [{' + '.join(RECORD_TAGS)}]")
+        _abs = _abstained(g)
+        say(f"LEAN LEDGER — {len(g)} graded games"
+            + (f" ({len(g) - _abs} with a lean, {_abs} abstained)" if _abs else "")
+            + f"  [{' + '.join(RECORD_TAGS)}]")
         say(f"{MODEL_METRIC_LABEL} lean   full: {_rec(g['xw_full'])}   F5: {_rec(g['xw_f5'])}")
         ov = g[g["ops_valid"] == True]                                # noqa: E712
         if len(ov):
@@ -721,9 +740,11 @@ def report(led):
         say("model-family history (never pooled into the current-family fit):")
         for label, fam in families:
             metric = metric_label(fam)
+            _abs = _abstained(fam)
             say(
                 f"  {label:7} n={len(fam):3}  "
-                f"{metric} full {_rec(fam['xw_full'])}  F5 {_rec(fam['xw_f5'])}"
+                + (f"({_abs} abstained)  " if _abs else "")
+                + f"{metric} full {_rec(fam['xw_full'])}  F5 {_rec(fam['xw_f5'])}"
             )
     txt = "\n".join(lines)
     print("=" * 60); print(txt); print("=" * 60)

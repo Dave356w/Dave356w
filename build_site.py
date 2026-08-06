@@ -101,7 +101,7 @@ USE_TEAM_LOGOS = os.environ.get("USE_TEAM_LOGOS", "1") != "0"
 LOGO_CDN = "https://www.mlbstatic.com/team-logos"
 DATA_DIR = os.environ.get("DATA_DIR", "data")            # grading ledger home
 LEDGER_PATH = os.path.join(DATA_DIR, "mlb_lean_ledger.csv")
-MODEL_TAG = os.environ.get("MODEL_TAG", "woba+plat_consol_v4")  # keep in sync with grade_leans.py
+MODEL_TAG = os.environ.get("MODEL_TAG", "woba+plat_consol_v5")  # keep in sync with grade_leans.py
 if not MODEL_TAG.startswith("woba+"):
     raise RuntimeError(
         "This build fetches observed wOBA; refusing to stamp it with a non-wOBA MODEL_TAG"
@@ -166,6 +166,21 @@ _RECORD_FAMILIES = {
     # of the platoon term. Those are different predictions and they get a clean
     # record. The v3 family had its own graded rows and they stay immutable.
     "woba+plat_consol_v4": ("woba+plat_consol_v4",),
+    # v5 abstains: a side whose starter has no leaderboard line contributes his
+    # prior, not a measurement, so that game publishes no lean at all. NEW
+    # RECORD FAMILY, and this half is not close. It does not change any surviving
+    # prediction -- every game that still leans leans identically to v4 -- but it
+    # changes WHICH games are decided, and a win-loss line is a property of the
+    # decided set. Measured over the 187 ledger games with a dump beside them, 6
+    # (3.2%) carried a prior-only starter on one side and would now abstain;
+    # those 6 graded 3-3 against 96-82 (.539) on the rest. That is n=6 and is
+    # quoted as incidence, NOT as evidence the abstained games were bad picks --
+    # the case for abstaining is that the input was never measured, which is true
+    # whatever those six did. v7 is the precedent: zero-as-abstention got its own
+    # family for the same reason. Cost of the reset, stated rather than elided:
+    # the v4 family holds 10 graded rows as of 2026-08-06 and they stay
+    # immutable -- checked in the ledger, not assumed from the bump date.
+    "woba+plat_consol_v5": ("woba+plat_consol_v5",),
     # Short-lived wOBA-lineup/xwOBA-arms experiment. It is retained only so
     # immutable dumps and ledger rows remain recognised after full wOBA was
     # restored; it never pools with the active wOBA record.
@@ -233,7 +248,19 @@ _SCALE_FAMILIES = {
     # materially wider spread, which is exactly what a scale family separates.
     # Pooling v3 and v4 magnitudes would rank two distributions against one set
     # of cutoffs and relabel every game in the crossed band.
-    "woba+plat_consol_v4": ("woba+plat_consol_v4",),
+    # v4 and v5 SHARE a scale family, argued rather than inherited. v5 removes
+    # rows from the magnitude pool; it does not rescale the ones that remain --
+    # every surviving |xw_net| is bit-identical to what v4 produced, because the
+    # abstention only ever nulls an edge. The only question a shared scale can
+    # get wrong is whether dropping the abstained games shifts the quantiles the
+    # cutoffs are read from, and measured on the ledger it does not: pooled
+    # p33/p80 over 187 games is 0.0090 / 0.0283 with the 6 prior-only games and
+    # 0.0090 / 0.0283 without them, and within the v9/v10 family alone 0.0127 /
+    # 0.0343 both ways -- unchanged to four decimals. Isolating would reset a
+    # pool that is already only 11 rows deep, for a filter that moves no cutoff.
+    # This is the v6 precedent (a new prediction family inheriting a scale).
+    "woba+plat_consol_v4": ("woba+plat_consol_v4", "woba+plat_consol_v5"),
+    "woba+plat_consol_v5": ("woba+plat_consol_v4", "woba+plat_consol_v5"),
     # The mixed-metric delta has its own units. Historical recognition does
     # not make it compatible with the active full-wOBA scale.
     "split+plat_consol_v1": ("split+plat_consol_v1",),
@@ -2716,8 +2743,21 @@ def apply_pitching_plans(matchup_df, pitching_plans, league_baseline):
         out.at[idx, "opener"] = bool(plan.get("opener"))
         out.at[idx, "opener_reason"] = plan.get("opener_reason")
         out.at[idx, "opener_confidence"] = plan.get("opener_confidence")
+        # v5 abstention. A starter with no leaderboard line contributes his
+        # prior, not a measurement, so the starter phase -- and with it this
+        # side's edge and the game's lean -- is not something this model
+        # measured. Abstain rather than publish a decision built on a default.
+        #
+        # `starter_xwOBA` still carries the prior: the column records what was
+        # used, and blanking it would hide the abstention's own cause. Only the
+        # lean-bearing quantities go undefined, through the same NaN-edge path a
+        # missing bullpen already takes -- no second suppression mechanism.
+        unmeasured_sp = str(row.get("starter_rate_basis") or "") == "prior_only"
+        lean_starter = None if unmeasured_sp else starter
         basis = plan.get("pitching_basis")
-        if starter is None or bullpen is None or expected_ip is None:
+        if unmeasured_sp:
+            basis = "starter_unmeasured_no_lean"
+        elif starter is None or bullpen is None or expected_ip is None:
             basis = "starter_only_no_fullgame_lean"
         elif not basis:
             basis = (
@@ -2732,7 +2772,7 @@ def apply_pitching_plans(matchup_df, pitching_plans, league_baseline):
         out.at[idx, "sp_bf_per_ip"] = sp_rate
         out.at[idx, "bp_bf_per_ip"] = bp_rate
         phases = sequential_xwoba_phases(
-            b_neutral, b_vs_sp, starter, bullpen, league, expected_ip,
+            b_neutral, b_vs_sp, lean_starter, bullpen, league, expected_ip,
             sp_bf_per_ip=sp_rate, bp_bf_per_ip=bp_rate,
         )
         for col, value in phases.items():
@@ -2742,9 +2782,10 @@ def apply_pitching_plans(matchup_df, pitching_plans, league_baseline):
         # B_SP and B_0 differ. Keep it only as a diagnostic when both phases
         # are valid; never leave the starter value looking like a nine-inning
         # fallback when the bullpen is unavailable.
-        if starter is not None and bullpen is not None and pd.notna(phases["sp_share"]):
+        if (lean_starter is not None and bullpen is not None
+                and pd.notna(phases["sp_share"])):
             out.at[idx, "pit_xwOBA"] = (
-                phases["sp_share"] * starter + phases["bp_share"] * bullpen
+                phases["sp_share"] * lean_starter + phases["bp_share"] * bullpen
             )
         else:
             out.at[idx, "pit_xwOBA"] = np.nan
@@ -3570,6 +3611,8 @@ def _side_html(sp_abbr, d, league_baseline):
     pitching_note = (
         f" · model {exp_ip:.1f} IP + bullpen"
         if exp_ip is not None and has_fullgame
+        else " · starter unmeasured; no lean"
+        if d.get("pitching_basis") == "starter_unmeasured_no_lean"
         else " · starter only; no full-game lean"
         if d.get("pitching_basis") == "starter_only_no_fullgame_lean"
         else ""
@@ -5429,8 +5472,17 @@ def _grades_row(r, show_ml=False):
     # (class, phone label, html). data-l only surfaces in the stacked phone
     # layout, so it stays short; the column heads carry the full names. The
     # slate date is carried by the group header row, not repeated per row.
+    # A graded row with no lean is an abstention, not a missing value. v5
+    # abstains when a side's starter had no measured rate, and "—" alone would
+    # read as legacy data the ledger never captured.
+    abstained = (status == "graded" and not isinstance(r["xw_lean"], str)
+                 and any(str(r.get(c)) == "starter_unmeasured_no_lean"
+                         for c in ("pitching_basis_away", "pitching_basis_home")))
+    lean_cell = ("<span class='muted' title='no lean published: a starter had "
+                 "no measured season line'>no lean</span>" if abstained
+                 else _lean_cell(r["xw_lean"], r["xw_delta"]))
     cells = [("c-game", "Game", game),
-             ("c-lean", "Lean", _lean_cell(r["xw_lean"], r["xw_delta"]))]
+             ("c-lean", "Lean", lean_cell)]
     if show_ml:
         cells.append(("c-ml", "ML", _lean_ml_cell(r, "xw_lean")))
     cells += [("c-final", "Final", final),
