@@ -15,7 +15,7 @@ predicted vs actual (backfilled box scores)
   offense wOBA n=22   pred mean 0.3082  actual mean 0.3419  (+0.0337)
     calibration slope +2.11 +/- 1.42 (1.00 = calibrated)
     UNDER-POWERED: se 1.42 cannot separate 1.00 from 0.80; needs ~6400 side-games
-    skill vs league-rate baseline +0.0118 (ceiling ~0.04; per-game noise dominates)
+    skill vs league-rate baseline +0.0119 (ceiling ~0.04; per-game noise dominates)
   lean delta   n=11   calibration slope +4.58 +/- 1.82 (1.00 = calibrated; < 1 = over-dispersed)
     corr +0.642  sign agreement 0.545  (the lean's own hit rate against its target)
     UNDER-POWERED: se 1.82 cannot separate 1.00 from 0.50
