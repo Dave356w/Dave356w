@@ -104,11 +104,18 @@ Two things not to read into it. The 6 abstained games graded 3-3 against
 96-82 (.539) on the rest; at n=6 that is incidence, not evidence they were bad
 picks, and the argument for abstaining does not depend on it — the input was
 never measured either way. And v5 is the first mechanism in this repo that can
-produce a **graded row with no lean**: the ledger holds no undecided rows yet,
-because v7's zero-delta abstention has never once fired at full precision.
-`_rec()` drops those rows while `len()` counts them, so every count that mixes
-the two must say which it is — see the controls entry below for the one surface
-that did not.
+produce a **graded row with no lean** — and as of 2026-08-09 it has. The
+sentence here used to read "the ledger holds no undecided rows yet"; it fired on
+2026-08-08, DET@SF, where Jackson Jobe carried no measured season line
+(`pitching_basis_away=starter_unmeasured_no_lean`), and that row has since
+graded. It is the only leanless row in 482. v7's zero-delta abstention still has
+never once fired at full precision, so v5 remains the only mechanism that
+actually produces these. `_rec()` drops those rows while `len()` counts them, so
+every count that mixes the two must say which it is — see the controls entry
+below for the one surface that did not, now a live discrepancy rather than an
+armed one. `ledger_report.txt` states the split correctly today
+(`55 graded games (54 with a lean, 1 abstained)`), and the grades page scores
+its controls on the 54.
 
 `split v1` remains an isolated historical namespace because its dump and
 pending ledger rows existed before full wOBA was restored. It is not an active

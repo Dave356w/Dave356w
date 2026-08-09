@@ -4,9 +4,10 @@ Things found while aligning the docs to `woba+plat_consol_v4`, none of which
 were changed in that pass. Each entry states what was verified and what would
 settle it; the heading says whether it has since been acted on.
 
-**Status as of 2026-08-06.** Everything on this list is closed. §1 is deleted,
-§3 is instrumented *and* abstaining (shipped as wOBA v5), §4 and the footer
-label in §5 are fixed, and §2 settled itself.
+**Status as of 2026-08-09.** Everything on this list is closed. §1 is deleted,
+§3 is instrumented *and* abstaining (shipped as wOBA v5, first fired 2026-08-08,
+incidence now measured), §4 and the footer label in §5 are fixed, and §2 settled
+itself.
 
 ---
 
@@ -113,7 +114,7 @@ of what someone expected, not of what the ledger holds.*
 
 ---
 
-## 3. The xwOBA lens has no reliability gate — *instrumented 2026-08-06; the abstention is still open*
+## 3. The xwOBA lens has no reliability gate — *instrumented 2026-08-06; abstention shipped as wOBA v5, first fired and incidence measured 2026-08-09*
 
 **Correction first: this entry's opening sentence was wrong, and it was wrong in
 the way this repo has a rule against.** It said `_pl_chip` greys the chip and
@@ -145,12 +146,22 @@ auditable. New record family (the decided set changes), v4's scale family
 (nothing is rescaled, and dropping the abstained games moves no cutoff) — both
 halves measured, in the PR and in `CLAUDE.md`. The v7 zero-as-abstention rule
 was the precedent; v5 is the first mechanism here that has actually produced a
-graded-but-undecided row, since v7's never fires at full precision.
+graded-but-undecided row, since v7's never fires at full precision. **That
+sentence was written before any such row existed** — the fourth instance of a
+version note asserting rows a build had not yet produced. It came true on
+2026-08-08 (DET@SF, Jackson Jobe, no measured season line) and the row has
+graded, but it was an assumption when written, not a measurement.
 
-What the wait would have bought is still worth having: incidence under v4 is
-unmeasured, and the 3.2%-of-games figure the decision was argued from comes from
-the xwOBA lineage, where the prior was the league centre. Recheck it once v5 has
-rows.
+**Recheck settled, 2026-08-09.** v5 now has 56 rows / 112 side-games, so the
+incidence the wait was for is measurable: **1 of 112 side-games (0.89%)** carries
+`sp_rate_basis=prior_only`, i.e. **1 of 56 games (1.8%)** abstains on at least
+one side. That is roughly half the 3.2%-of-games figure the decision was argued
+from, and it should be: that figure came from the xwOBA lineage, where the prior
+was the league centre and the identification test was exact-equality to it.
+Under v4's personal prior the defaulted value is no longer identifiable after the
+fact, which is why `sp_rate_basis` is recorded at build time — this number is
+read off that field, not inferred. n=112 side-games, so 0.89% is one event; read
+it as an order of magnitude, not a rate.
 
 The original entry, minus its false premise:
 
