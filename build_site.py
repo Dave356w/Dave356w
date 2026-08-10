@@ -278,6 +278,15 @@ STATCAST_SELECTIONS = ["pa", "k_percent", "bb_percent", MODEL_RATE_SOURCE_COL,
                        "xba", "xslg",
                        "exit_velocity_avg", "launch_angle_avg", "hard_hit_percent"]
 
+# Cache namespace for the custom leaderboard. A constant rather than a literal
+# at the fetch site for one reason: it is keyed to the SELECTION SET, so it must
+# change whenever STATCAST_SELECTIONS does -- otherwise a same-day cache written
+# under an older column set is reused and the requested column comes back
+# missing. Making both a pair of module constants is what lets shadow_metric.py
+# repoint the metric and its cache together; a literal at the fetch site could
+# only be repointed by patching the function.
+STATCAST_CACHE_NS = "custom_woba_v1"
+
 # Batted-ball direction/tendency rates with true league-wide anchors.
 BATTED_RATE_COLS_FOR_BASELINE = ["GB%", "FB%", "LD%", "PU%", "Pull%", "Straight%", "Oppo%"]
 
@@ -534,9 +543,10 @@ def load_stat_lookups(player_type):
     cust = cached_csv(
         f"https://baseballsavant.mlb.com/leaderboard/custom?year={SEASON}"
         f"&type={player_type}&min=1&selections={sel}&csv=true",
-        # New namespace prevents a same-day xwOBA-only cache from being reused
-        # after this lineage switches the requested Savant column to wOBA.
-        f"custom_woba_v1_{player_type}")
+        # Namespace is keyed to the selection set (see STATCAST_CACHE_NS): a
+        # same-day cache written under a different column set must never be
+        # reused, or the requested rate comes back missing.
+        f"{STATCAST_CACHE_NS}_{player_type}")
     bb = cached_csv(
         f"https://baseballsavant.mlb.com/leaderboard/batted-ball?type={player_type}"
         f"&year={SEASON}&min=1&csv=true",

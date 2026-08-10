@@ -121,6 +121,24 @@ jobs:
           OUT_DIR: public
         run: python build_site.py
 
+      # Paired xwOBA shadow arm. Writes data/shadow_<date>_xw.csv and nothing
+      # else: no lean, no index.html, no ledger row (grade_leans globs
+      # leans_*, this is shadow_*). It exists because the wOBA-vs-xwOBA
+      # question cannot be settled by comparing the two eras -- they were
+      # different games, and five things changed at once. Same slate, both
+      # metrics, is the only comparison with the power to resolve it.
+      #
+      # AFTER the primary build, and continue-on-error, both deliberately: this
+      # step must never be able to cost a slate's pregame rows, which cannot be
+      # re-derived later without lookahead. It also makes its own Savant fetch
+      # under its own cache namespace, because it requests a different column.
+      - name: xwOBA shadow arm (inert; forward test only)
+        continue-on-error: true
+        env:
+          SLATE_DATE: ${{ needs.plan.outputs.slate_date }}
+          CACHE_DIR: .savant_cache
+        run: python shadow_metric.py
+
       # Second grading pass ingests the dumps the build just wrote (new
       # games + pending-row refresh for SP scratches). Idempotent; graded
       # rows are never touched.

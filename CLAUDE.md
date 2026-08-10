@@ -457,6 +457,51 @@ Using a stored rate without its centre imports that season's run environment
 into today's prediction — the same error as freezing a constant off the ledger,
 one artifact out.
 
+## The xwOBA shadow arm
+
+`shadow_metric.py` writes `data/shadow_<date>_xw.csv` each slate: the same
+games, built on Savant xwOBA instead of wOBA. It publishes nothing — no lean,
+no `index.html`, no ledger row — and its rows carry `shadow_xw+plat_consol_v1`,
+a tag deliberately absent from `_RECORD_FAMILIES` and `_SCALE_FAMILIES`. **Never
+pool a shadow row into a record or a delta scale.** A test asserts the tag is in
+neither map.
+
+It exists because the wOBA-versus-xwOBA question **cannot be settled by
+comparing the two eras**, and the temptation to try is strong: the wOBA rows sit
+at .482 against always-home .600 while the xwOBA rows sat at .570 against .503,
+and the net correlation fell from +0.273 (v9/v10, n=97) to +0.038 (v4+v5,
+n=65). Both facts are real and neither is evidence, for two reasons. Five things
+changed in six days — metric, platoon prior, `K` 100→400, personal priors,
+abstention — and only wOBA v1+v2 isolates the metric, at n=16 with a
+correlation CI of [-0.816, +0.288]. And the eras were *different games*: over
+the xwOBA rows always-home ran .515 and always-chalk .619; over the wOBA rows
+.600 and .565. A sequential comparison measures the schedule as much as the
+model. Unpaired, xwOBA-minus-wOBA is d_corr +0.283 with CI [-0.010, +0.560] —
+it does not separate, and on that trajectory it never will. Paired on the same
+games the metrics correlate ~0.9, so se falls ~0.142 → ~0.045 and a true gap of
+0.09 resolves inside a month. That is the whole argument for the arm, and the
+reason the answer to "should we revert to xwOBA" was *measure it* rather than
+*yes* or *no*.
+
+Two things to know before touching it. It makes its **own** Savant fetch under
+its own `STATCAST_CACHE_NS`, because it requests a different column and reusing
+a cache written under another selection set returns a CSV missing the rate —
+`STATCAST_SELECTIONS` and the cache namespace are a pair and must move together.
+And the dump is `shadow_*`, not `leans_*`, because `grade_leans` globs
+`leans_*_xw.csv`, which matches any leans-prefixed name ending `_xw.csv`: a
+suffix-based name would have been ledgered as a real pending row. That is a
+prefix decision, not a naming preference, and a test pins both halves against
+`grade_leans`' actual globs rather than a copy of them.
+
+**Unverified, knowingly:** Savant is unreachable from the dev environment and
+from CI, so the selection name `xwoba` has never been confirmed against the live
+endpoint. The first run's log line `shadow: rate column 'xwoba' resolved on N/M
+players` is the verification. A low `N` means the name is wrong — and because
+the arm has its own cache namespace, its own dump and `continue-on-error`, being
+wrong costs a log line. Do not add the column to the primary
+`STATCAST_SELECTIONS` until that log says it resolved; that would put an
+unverified column on the path that produces irreplaceable pregame rows.
+
 ## Before opening a PR
 
 ```
