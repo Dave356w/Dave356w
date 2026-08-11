@@ -24,6 +24,8 @@ no measured season line publishes no lean at all.
 pip install -r requirements.txt
 python build_site.py          # writes public/index.html for today's ET slate
 
+python shadow_report.py       # paired wOBA-vs-xwOBA read on the shadow dumps
+
 pip install pytest            # deliberately not in requirements.txt
 python validate_data_files.py # run both before opening a PR
 python -m pytest tests/ -q    # also CI-gated on every PR and push to main

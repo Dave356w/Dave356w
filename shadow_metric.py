@@ -42,17 +42,27 @@ so a shadow fault must never be able to fail the job that produces them. Run it
 as its own workflow step with `continue-on-error: true`, after the primary
 build has already written its dump.
 
-UNVERIFIED, ON PURPOSE, AND HOW TO VERIFY
------------------------------------------
-`baseballsavant.mlb.com` is blocked from the development environment, so the
-Savant selection name `xwoba` could not be confirmed against the live endpoint.
-It is the documented column and matches the `xba`/`xslg` convention already in
-STATCAST_SELECTIONS, but it is an assumption until a real run proves it. The
-first run's log line `shadow: rate column 'xwoba' resolved on N/M players` IS
-the verification -- a low N means the selection name is wrong, and because this
-arm has its own cache namespace and its own dump, being wrong costs a log line
-and nothing else. Do not "fix" it by adding the column to the primary
-STATCAST_SELECTIONS until that log says it resolved.
+VERIFIED IN PRODUCTION (2026-08-10)
+----------------------------------
+This section used to say the Savant selection name `xwoba` was an assumption:
+`baseballsavant.mlb.com` is blocked from the development environment and from
+CI, so it had never been confirmed against the live endpoint, and the first
+run's log line was nominated as the verification. It has now run. Actions run
+31435698461 logged `shadow: rate column 'xwoba' resolved on 20/20 players`, and
+the same job printed a distinct league baseline for the shadow arm (xwOBA
+0.31548 against the primary's wOBA 0.31628 on the same slate and the same
+leaderboard), so the column resolved and it is not a relabelled copy of `woba`.
+The check stays in the code -- it is cheap and it is what would catch Savant
+renaming the column -- but it is no longer an open question.
+
+Note what `_coverage` actually measures: the rate on the SLATE's pitcher rows,
+which is 20-30 players, not the ~800-row leaderboard. That is enough to catch a
+wrong selection name (a missing column resolves on zero) and it is not a
+coverage statistic for the leaderboard. Do not read it as one.
+
+Resolving the name is not a reason to add the column to the primary
+STATCAST_SELECTIONS. The arm is a forward test; the primary build has no use
+for a second rate.
 
 USAGE
 -----
