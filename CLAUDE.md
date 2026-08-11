@@ -302,6 +302,24 @@ precedent — they are how the fix is known to look.
   evidence. Display/provenance only — no lean, grade or ledger row moves, so no
   `MODEL_TAG` implication whichever way it goes.
 
+  **The shadow arm inherits this and has no ledger behind it.** `shadow_metric`
+  runs as a step of the same build, so the shadow dump is rewritten by the same
+  post-rollover pass: `shadow_2026-08-10_xw.csv` on disk is stamped
+  `2026-08-11T06:50Z` against a 23:07Z first pitch, and 08-09's only committed
+  version is the 03:06Z rebuild — the arm landed at 02:56Z that morning, so a
+  pregame 08-09 dump never existed. For the primary this costs provenance and
+  the ledger holds the pregame truth; for the shadow arm the dump *is* the
+  record, and git history is the only place a pregame version survives (08-10
+  has four, the last at 23:01Z, six minutes before first pitch).
+  What this does **not** break is the pairing, and that distinction is the
+  whole reason the arm is worth reading: primary and shadow are written 20-40
+  seconds apart in the same job from the same leaderboard, so dump-against-dump
+  is honest even when both are rebuilds. It is dump-against-*ledger* that is
+  contaminated — a pregame wOBA decision against an xwOBA one with an extra day
+  behind it. `shadow_report.py` pairs the dumps for that reason, prints each
+  slate's provenance instead of assuming it, and will run the ledger join under
+  `--ledger-join` so the bias can be sized rather than argued.
+
 **Resolved — keep as precedent**
 
 - **One value, three homes.** `.github/workflows/build.yml` pinned `MODEL_TAG`,
