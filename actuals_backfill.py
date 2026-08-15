@@ -104,6 +104,12 @@ ACTUAL_META_COLS = ["act_schema"]
 ACTUAL_COLS = (ACTUAL_BAT_COLS + ACTUAL_RATE_COLS + ACTUAL_PIT_COLS
                + ACTUAL_SP_LINE_COLS + ACTUAL_META_COLS)
 
+# Side-games needed to separate a 0.15 correlation at 80% power, from
+# dispersion_probe.n_for_r(). Stated so the report can mark its own read
+# under-powered rather than printing a slope that reads as a verdict; the probe
+# is the authority and a test pins the two together.
+DISPERSION_N_MIN = 347
+
 _SETTLED = ("full_away", "full_home")
 
 
@@ -601,7 +607,14 @@ def calibration(pred, act):
     m = np.isfinite(x) & np.isfinite(y)
     x, y = x[m], y[m]
     n = x.size
-    if n < 3 or x.std() <= 0:
+    # `x.std() <= 0` never fires for a constant column: subtracting the mean
+    # leaves float dust, so 60 identical values give std 1.1e-16 rather than 0.
+    # polyfit then returns a meaningless slope with an se around 1e13 -- a
+    # statistic with no usable sampling distribution, printed as though it were
+    # a measurement, which is the exact shape CLAUDE.md files under "public
+    # claims the data can't support". Compare the spread to the magnitude
+    # rather than to zero.
+    if n < 3 or x.std() <= 1e-12 * max(1.0, abs(float(x.mean()))):
         return None
     b, a = np.polyfit(x, y, 1)
     resid = y - (a + b * x)
@@ -737,6 +750,35 @@ def actuals_summary(df, baseline=None, tags=None):
         if sk:
             lines.append(f"    skill vs league-rate baseline {sk['skill']:+.4f} "
                          f"(ceiling ~0.04; per-game noise dominates)")
+
+        # Lineup dispersion, printed every build for the reason the IP slope is:
+        # the question needs ~12 slates of rows that did not exist when the
+        # column shipped, and a check that waits for someone to remember it is
+        # the deferral this repo has already got wrong once.
+        #
+        # This is the headline read only. `dispersion_probe.py` is the full one
+        # -- it controls for the backfill count, reports the zero-backfill
+        # subset, and scores the game-level differential and run margin, which
+        # is the question the record actually settles. A test pins this slope
+        # against the probe's H1 so the two cannot drift into disagreeing.
+        #
+        # `calibration(sd, residual)` is the same estimator the lines above use,
+        # not a second one: slope of the residual on dispersion, with its se.
+        # Positive means concentrated lineups beat the mean they are averaged
+        # into. Family-scoped like every rate line here, which also happens to
+        # be free -- no row predating the column can carry one.
+        if "sd" in rates and rates["sd"].notna().any():
+            d = rates[rates["sd"].notna()]
+            dcal = calibration(d["sd"], d["act"] - d["pred"])
+            if dcal:
+                lines.append(
+                    f"  lineup dispersion n={dcal['n']:<4d} "
+                    f"residual slope {dcal['slope']:+.2f} +/- {dcal['se_slope']:.2f} "
+                    f"(> 0 = concentrated lineups beat their mean)")
+                if dcal["n"] < DISPERSION_N_MIN:
+                    lines.append(
+                        f"    UNDER-POWERED: needs ~{DISPERSION_N_MIN} side-games "
+                        f"to separate a 0.15 correlation; see dispersion_probe.py")
 
     # The lean delta's own calibration. Family-scoped for the same reason the
     # rates are, and for one more: `xw_net` units are a scale-family property

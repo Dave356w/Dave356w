@@ -144,3 +144,79 @@ def test_an_empty_read_says_so_rather_than_going_quiet(tmp_path, monkeypatch):
     out = "\n".join(dp.run())
     assert "rows with a dispersion value AND an outcome: 0" in out
     assert "side-games" in out          # the expected-first-read estimate
+
+
+# --------------------------------------------------------------------------
+# the standing read in ledger_report.txt
+# --------------------------------------------------------------------------
+def _graded_with_sd(n=60, slope=0.8, seed=1):
+    """Rows carrying dispersion and an outcome, with a planted relationship."""
+    rng = np.random.default_rng(seed)
+    sd = rng.uniform(0.012, 0.045, n)
+    pred = 0.300 + rng.normal(0, 0.004, n)      # real spread, not a constant
+    return pd.DataFrame([
+        dict(game_pk=i, model_tag="xw+plat_consol_v12", status="graded",
+             mx_xwoba_away=pred[i],
+             act_woba_home=pred[i] + slope * (sd[i] - sd.mean())
+             + rng.normal(0, 0.05),
+             act_pa_home=38, opp_xwoba_sd_away=sd[i],
+             lineup_savant_backfill_away=0)
+        for i in range(n)
+    ])
+
+
+def test_the_report_prints_the_dispersion_read_with_its_uncertainty():
+    led = _graded_with_sd()
+    out = "\n".join(ab.actuals_summary(led, baseline=0.3163,
+                                       tags=("xw+plat_consol_v12",)))
+    assert "lineup dispersion" in out
+    assert "+/-" in out, "a slope without its se is the thing this repo deletes"
+    assert "UNDER-POWERED" in out, "60 rows is far below the stated threshold"
+    assert "dispersion_probe.py" in out, "the full read must be pointed at"
+
+
+def test_the_report_and_the_probe_cannot_drift_apart():
+    """The headline slope must equal the probe's H1 raw slope on one dataset.
+
+    Two readings of the same quantity that disagree is worse than one reading:
+    whichever is quoted becomes the answer, and nothing says which was meant.
+    """
+    led = _graded_with_sd()
+    rates = ab.paired_rates(led)
+    have = rates[rates["sd"].notna()]
+    report_fit = ab.calibration(have["sd"], have["act"] - have["pred"])
+    probe_fit = dp.ols(have["sd"], have["act"] - have["pred"])
+    assert report_fit["slope"] == pytest.approx(probe_fit["slope"], rel=1e-9)
+    assert report_fit["se_slope"] == pytest.approx(probe_fit["se"], rel=1e-9)
+    assert report_fit["n"] == probe_fit["n"]
+
+
+def test_the_power_threshold_is_the_probe_s_own_number():
+    """One value, one home -- the report must not carry a stale copy."""
+    assert ab.DISPERSION_N_MIN == dp.n_for_r(0.15)
+
+
+def test_no_dispersion_rows_prints_no_dispersion_line():
+    """Every row graded before the column existed; the line must stay absent
+    rather than render an empty or zero read."""
+    led = _graded_with_sd()
+    led["opp_xwoba_sd_away"] = np.nan
+    out = "\n".join(ab.actuals_summary(led, baseline=0.3163,
+                                       tags=("xw+plat_consol_v12",)))
+    assert "lineup dispersion" not in out
+
+
+def test_a_constant_predictor_yields_no_fit_rather_than_a_fake_one():
+    """REGRESSION. `x.std() <= 0` never fired for a constant column -- the mean
+    subtraction leaves float dust, so 60 identical values give std 1.1e-16.
+    polyfit then returned a slope with an se around 1e13: a number with no
+    sampling distribution, printed as though it were a measurement.
+    """
+    y = list(np.random.default_rng(0).normal(0.31, 0.05, 60))
+    assert ab.calibration([0.310] * 60, y) is None
+    assert ab.calibration([0.310 + 1e-17 * i for i in range(60)], y) is None
+    # A real spread still fits, and the guard is relative so small-magnitude
+    # predictors are not swallowed by an absolute epsilon.
+    assert ab.calibration(list(np.linspace(0.28, 0.34, 60)), y) is not None
+    tiny = [1e-6 * i for i in range(60)]
+    assert ab.calibration(tiny, y) is not None
