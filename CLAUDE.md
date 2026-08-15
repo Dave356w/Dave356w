@@ -750,9 +750,13 @@ them cannot be smoke-tested locally; run the workflow.
 
 Do not re-derive these by hand; they have readouts.
 
-- **Lineup dispersion** — `dispersion_probe.py`. First read at ~347 side-games,
-  roughly 12 slates from 2026-08-15. Zero rows today: the column ships on new
-  rows only and no graded row predates it can ever be backfilled.
+- **Lineup dispersion** — the headline slope prints in `ledger_report.txt`
+  every build once rows exist, marked UNDER-POWERED until ~347 side-games
+  (roughly 12 slates from 2026-08-15); `dispersion_probe.py` is the full read
+  and controls for the backfill count, the zero-backfill subset and the
+  game-level margin. A test pins the two together so they cannot drift into
+  disagreeing. Zero rows today: the column ships on new rows only, and no row
+  graded before it existed can ever be backfilled.
 - **The v11/v12 scale-family share** — argued, not measured, because
   no-lookahead forbids rebuilding a past slate. Falsifier named in
   `_SCALE_FAMILIES`: compare median `|xw_net|` on the first graded v11/v12 rows
