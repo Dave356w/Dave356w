@@ -38,8 +38,11 @@
 # SP-vs-lineup weight fit: logs d_lineup / d_sp per game; once >= N_FIT_MIN
 # graded F5 decisions accumulate, fits logit(home F5 win) ~ d_lineup + d_sp.
 # The symmetric multiplicative-ratio matchup gives both components equal
-# first-order weight; a stable departure is the reweight:
-# net_w = d_lineup + w·d_sp.
+# first-order weight, and the fit reports the CONTRAST that tests it --
+# b_lineup - b_sp*(sd_lu/sd_sp), zero under equal weight -- with a standard
+# error. A stable departure would motivate the reweight net_w = d_lineup +
+# w*d_sp; the contrast is the evidence, and it is diagnostic output only:
+# nothing here feeds back into a lean, a delta or a grade.
 # ============================================================
 import glob
 import math
@@ -137,7 +140,16 @@ MODEL_FAMILY_TAGS = (
     ("v11", ("xw+plat_consol_v11",)),
     ("v12", ("xw+plat_consol_v12",)),
 )
-N_FIT_MIN   = 120
+# Numerical floor on the weight fit, NOT an evidence threshold. It was 120,
+# chosen to suppress a ratio that is unreadable at small n; the ratio is gone
+# and coefficients printed with their standard errors are honest at any size --
+# `+0.122 +/- 0.227` says "indistinguishable from zero" without needing to be
+# hidden. What remains is that a logit on very few rows can fail to converge or
+# return a meaningless covariance, so this is now sized for that and nothing
+# else. Raising it back to hide an uncertain number would be the claims-the-
+# data-cannot-support entry inverted: withholding the uncertainty instead of
+# overstating the estimate.
+N_FIT_MIN   = 30
 _FINAL  = {"Final", "Game Over", "Completed Early"}
 _VOID   = {"Postponed", "Cancelled"}
 
@@ -642,7 +654,54 @@ def _logit_fit(X, y, iters=60):
         if np.max(np.abs(step)) < 1e-10: break
     p = 1.0 / (1.0 + np.exp(-X @ b)); Wd = p * (1 - p)
     cov = np.linalg.inv(X.T @ (X * Wd[:, None]) + np.eye(X.shape[1]) * 1e-9)
-    return b, np.sqrt(np.diag(cov))
+    # The full covariance is returned, not just its diagonal, because the
+    # question this fit exists to answer is about a CONTRAST of two
+    # coefficients and the off-diagonal term is part of its variance.
+    # Discarding it here is what forced the old ratio form, which needs no
+    # covariance only because it has no usable standard error at all.
+    return b, np.sqrt(np.diag(cov)), cov
+
+
+def symmetry_contrast(b, cov, sd_lineup, sd_sp):
+    """(difference, se, z) testing equal first-order weight on the two inputs.
+
+    Replaces `implied w = b_sp / b_lineup`, which was dropped rather than
+    reformatted. `b_lineup` is not distinguishable from zero, so that ratio is
+    Cauchy-like: bootstrapped over the 82 graded v9/v10 rows its median is
+    +0.02, but 48% of resamples flip its sign, 3.6% land beyond |5|, and its
+    mean and sd do not converge with resample count. There is no standard error
+    to print beside it -- which is why none ever was -- and a bare `+0.12`
+    reads as a measurement of a relative weight that the data cannot support.
+    On the same ledger it read +0.12 on v9/v10, -2.61 pooled and +4.77 on the
+    wOBA rows: three numbers, one underlying non-result.
+
+    The hypothesis is unchanged and now well posed. `w = 1` means equal weight
+    in NATIVE units, i.e. `b_sp/sd_sp == b_lineup/sd_lu`, so with coefficients
+    fitted on standardised inputs the contrast is
+
+        c'b,  c = (0, 1, -sd_lineup/sd_sp)
+
+    and its variance is `c' cov c`. The off-diagonal covariance term is part of
+    that and is why `_logit_fit` returns the full matrix: a difference of two
+    correlated coefficients has a usable sampling distribution exactly where
+    their ratio does not.
+
+    Returns (nan, nan, None) when the contrast has no positive variance, so the
+    caller prints nothing rather than a z built on a zero denominator.
+    """
+    b = np.asarray(b, dtype=float)
+    cov = np.asarray(cov, dtype=float)
+    if not np.isfinite(sd_sp) or sd_sp <= 0 or not np.isfinite(sd_lineup):
+        return float("nan"), float("nan"), None
+    c = np.array([0.0, 1.0, -(sd_lineup / sd_sp)])
+    if b.shape[0] != 3 or cov.shape != (3, 3):
+        return float("nan"), float("nan"), None
+    diff = float(c @ b)
+    var = float(c @ cov @ c)
+    if not np.isfinite(var) or var <= 0:
+        return diff, float("nan"), None
+    se = math.sqrt(var)
+    return diff, se, diff / se
 
 
 def _abstained(fam):
@@ -714,12 +773,36 @@ def report(led):
             dsp = (fit["d_sp"]     - fit["d_sp"].mean())     / fit["d_sp"].std()
             X = np.column_stack([np.ones(len(fit)), dlu.values, dsp.values])
             y = (fit["f5_home"] > fit["f5_away"]).astype(float).values
-            b, se = _logit_fit(X, y)
-            raw_lu = b[1] / fit["d_lineup"].std(); raw_sp = b[2] / fit["d_sp"].std()
-            ratio = raw_sp / raw_lu if raw_lu else np.nan
-            say(f"  b_lineup={b[1]:+.3f}±{se[1]:.3f}  b_sp={b[2]:+.3f}±{se[2]:.3f}  HFA={b[0]:+.3f}")
-            say(f"  implied w = b_sp/b_lineup = {ratio:+.2f}  "
-                "(symmetric matchup ratio ⇒ ≈ +1.00)")
+            b, se, cov = _logit_fit(X, y)
+            say(f"  b_lineup={b[1]:+.3f}±{se[1]:.3f}  b_sp={b[2]:+.3f}±{se[2]:.3f}  "
+                f"HFA={b[0]:+.3f}  (per sd)")
+            # The symmetry test, as a CONTRAST rather than a ratio.
+            #
+            # This line used to print `implied w = b_sp/b_lineup`. It was
+            # dropped, not reformatted: b_lineup is not distinguishable from
+            # zero, so the ratio is Cauchy-like -- bootstrapped over the 82
+            # v9/v10 rows its median is +0.02 but 48% of resamples flip sign,
+            # 3.6% land beyond |5|, and its mean and sd do not converge. There
+            # is no standard error to print beside it, which is why none ever
+            # was, and a bare +0.12 reads as a measurement of a relative weight
+            # that the data cannot support.
+            #
+            # The hypothesis is unchanged and is now well posed. `w = 1` means
+            # equal weight in NATIVE units, i.e. b_sp/sd_sp == b_lineup/sd_lu,
+            # so the contrast is c'b with c = (0, 1, -sd_lu/sd_sp) and its
+            # variance is c'(cov)c -- the off-diagonal term included. A
+            # difference of two coefficients has a usable sampling
+            # distribution exactly where their ratio does not.
+            diff, se_diff, z = symmetry_contrast(
+                b, cov, fit["d_lineup"].std(), fit["d_sp"].std())
+            if z is not None:
+                say(f"  symmetry test  b_lineup - b_sp*(sd_lu/sd_sp) = "
+                    f"{diff:+.3f} ± {se_diff:.3f}  z={z:+.2f}"
+                    f"  ({'no departure from equal weight' if abs(z) < 2 else 'DEPARTURE from equal weight'})")
+                say("  (equal first-order weight is what the symmetric "
+                    "multiplicative matchup implies; z is the evidence "
+                    "against it. Diagnostic only -- nothing here feeds back "
+                    "into a lean, a delta or a grade.)")
     # Predicted-vs-actual is scored on RECORD_TAGS only, for the same reason
     # the record is: rates from different prediction families are not
     # commensurable, and pooling them would make a calibration slope describe
