@@ -22,6 +22,8 @@ matching grade_leans' d_sp = P_awaySP - P_homeSP.
 import numpy as np
 import pandas as pd
 
+import build_site
+
 RNG = np.random.default_rng(20260810)
 
 
@@ -32,7 +34,17 @@ def load(tags=None, metric=None):
         d = d[d["model_tag"].isin(tags)]
     if metric is not None:
         d = d[d["model_metric"] == metric]
-    n = lambda c: pd.to_numeric(d[c], errors="coerce")
+    def n(c):
+        """Numeric column, all-NaN when absent.
+
+        Absent is the normal case for a column introduced by the current
+        MODEL_TAG: `expected_sp_ip_raw_*` landed with v12 and no v12 row has
+        graded yet, so a strict `d[c]` would make this probe unrunnable on the
+        very history it exists to read.
+        """
+        if c not in d.columns:
+            return pd.Series(np.nan, index=d.index, dtype="float64")
+        return pd.to_numeric(d[c], errors="coerce")
 
     # League baseline is recoverable per row: mx_sp - edge_sp.
     L = n("mx_xwoba_sp_away") - n("edge_xwoba_sp_away")
@@ -44,10 +56,14 @@ def load(tags=None, metric=None):
         "Bh_sp": n("opp_xwoba_vs_sp_away"), "Bh_nu": n("opp_xwoba_neutral_away"),
         "Ph_sp": n("starter_xwoba_away"),   "Ph_bp": n("bullpen_xwoba_away"),
         "qh": n("sp_share_away"), "iph": n("expected_sp_ip_away"),
+        "iph_raw": n("expected_sp_ip_raw_away"),
+        "rh_sp": n("sp_bf_per_ip_away"), "rh_bp": n("bp_bf_per_ip_away"),
         # away offense faces the HOME staff
         "Ba_sp": n("opp_xwoba_vs_sp_home"), "Ba_nu": n("opp_xwoba_neutral_home"),
         "Pa_sp": n("starter_xwoba_home"),   "Pa_bp": n("bullpen_xwoba_home"),
         "qa": n("sp_share_home"), "ipa": n("expected_sp_ip_home"),
+        "ipa_raw": n("expected_sp_ip_raw_home"),
+        "ra_sp": n("sp_bf_per_ip_home"), "ra_bp": n("bp_bf_per_ip_home"),
         "L": L,
         "net_ship": n("xw_net"),
         "act": n("act_woba_home") - n("act_woba_away"),
@@ -70,6 +86,71 @@ def add(B, P, L):
     return B + P - L
 
 
+def q_from_ip(ip, r_sp, r_bp, game_innings=9.0):
+    """Starter's PA share from expected IP -- build_site's formula, mirrored.
+
+    Falls back to the innings share when either BF/IP rate is missing, which is
+    what `sequential_xwoba_phases` does and is the same number whenever the two
+    rates are equal.
+    """
+    ip = np.clip(pd.to_numeric(ip, errors="coerce").astype(float), 0.0, game_innings)
+    ip_bp = game_innings - ip
+    r_sp = pd.to_numeric(r_sp, errors="coerce").astype(float)
+    r_bp = pd.to_numeric(r_bp, errors="coerce").astype(float)
+    pa_sp, pa_bp = ip * r_sp, ip_bp * r_bp
+    tot = pa_sp + pa_bp
+    usable = np.isfinite(r_sp) & np.isfinite(r_bp) & (r_sp > 0) & (r_bp > 0) & (tot > 0)
+    return pd.Series(np.where(usable, pa_sp / tot, ip / game_innings), index=ip.index)
+
+
+def calibrated_q(f):
+    """(q_home, q_away, label) with the shipped IP calibration applied.
+
+    THIS CANDIDATE USED TO BE A FROZEN LITERAL -- `qs = 0.756`, the calibration
+    slope as measured on 2026-08-04, applied by shrinking `q` directly. Two
+    things broke it at v12, and both are worth keeping written down because the
+    second is the subtler one:
+
+      * The slope is no longer a hypothesis. v12 ships a per-build refit, so a
+        literal here benchmarks the model against a stale version of itself.
+        The fit is read from `build_site` instead.
+      * `f.qh` is the SHIPPED phase weight, read off the ledger's
+        `sp_share_*`. On a v12 row that weight ALREADY contains the
+        calibration, so shrinking it again would double-apply the correction --
+        the exact compounding hazard `expected_sp_ip_raw_*` exists to prevent
+        inside the build, reappearing one artifact out. So the candidate is
+        rebuilt from the RAW IP (`expected_sp_ip_raw_*`, falling back to the
+        published column on pre-v12 rows, where they are the same number) and
+        `q` is re-derived rather than shrunk.
+
+    On v12 rows this reproduces the shipped `q`, which is the point: after the
+    bump the candidate IS the baseline and the row should show no difference.
+
+    Honest caveat on what this measures: the fit comes from the whole ledger,
+    including the rows being scored here, so as a retrospective counterfactual
+    it flatters the candidate slightly. The unbiased read on whether
+    calibration helps is the walk-forward benchmark behind
+    `build_site.SP_IP_CALIBRATION_K`, which scores each slate against a fit
+    that never saw it. This row answers a different question: what the shipped
+    correction does to the LEAN, not whether it improves the IP estimate.
+    """
+    fit = build_site.sp_ip_calibration()
+    raw_h = f.iph_raw.where(f.iph_raw.notna(), f.iph)
+    raw_a = f.ipa_raw.where(f.ipa_raw.notna(), f.ipa)
+    if not fit:
+        return f.qh, f.qa, "q from calibrated IP (no fit)"
+    cal_h = raw_h.map(lambda v: build_site.calibrate_sp_ip(v, fit))
+    cal_a = raw_a.map(lambda v: build_site.calibrate_sp_ip(v, fit))
+    qh = q_from_ip(cal_h, f.rh_sp, f.rh_bp)
+    qa = q_from_ip(cal_a, f.ra_sp, f.ra_bp)
+    # Where q cannot be rebuilt (a missing BF/IP pair on a legacy row), keep the
+    # shipped weight rather than substituting an innings-share approximation
+    # into a candidate that is supposed to differ by the calibration alone.
+    qh = qh.where(f.rh_sp.notna() & f.rh_bp.notna(), f.qh)
+    qa = qa.where(f.ra_sp.notna() & f.ra_bp.notna(), f.qa)
+    return qh, qa, "q from calibrated IP"
+
+
 def blend(f, comb, qh, qa):
     """One side's full-game matchup value, both sides, differenced."""
     h = qh * comb(f.Bh_sp, f.Ph_sp, f.L) + (1 - qh) * comb(f.Bh_nu, f.Ph_bp, f.L)
@@ -88,11 +169,8 @@ def candidates(f):
     # --- same signals, different PHASE WEIGHT
     C["q fixed 0.5"] = blend(f, log5, 0.5, 0.5)
     C["q = pooled mean"] = blend(f, log5, f.qh.mean(), f.qa.mean())
-    qs = 0.756  # the measured IP calibration slope, shrunk toward the mean
-    C["q shrunk x0.756"] = blend(
-        f, log5,
-        f.qh.mean() + qs * (f.qh - f.qh.mean()),
-        f.qa.mean() + qs * (f.qa - f.qa.mean()))
+    qh_cal, qa_cal, cal_label = calibrated_q(f)
+    C[cal_label] = blend(f, log5, qh_cal, qa_cal)
     C["q = 1 (starter only)"] = blend(f, log5, 1.0, 1.0)
     C["q = 0 (bullpen only)"] = blend(f, log5, 0.0, 0.0)
 
@@ -159,6 +237,10 @@ def run(label, f):
         r = np.corrcoef(reb[ok], f["net_ship"][ok])[0, 1]
         mad = float((reb[ok] - f["net_ship"][ok]).abs().max())
         print(f"rebuild check vs shipped xw_net: corr {r:.6f}  max|diff| {mad:.2e}")
+    fit = build_site.sp_ip_calibration()
+    if fit:
+        print(f"IP calibration in force: act = {fit[0]:+.3f} + {fit[1]:.3f}*pred "
+              f"(n={fit[2]}, weight {fit[3]:.3f})")
     C = candidates(f)
     base = C["CURRENT log5, q=PA share"]
     print(f"\n{'candidate':32s} {'n':>4s} {'corr':>7s} {'sign':>6s} {'W-L':>6s}   "
