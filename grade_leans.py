@@ -245,6 +245,7 @@ AUDIT_COLS = [
     # v9 sequential-phase audit. Suffixes identify the pitcher side; the
     # opponent-lineup fields therefore describe the offense facing that side.
     "opp_xwoba_neutral_away", "opp_xwoba_neutral_home",
+    "opp_xwoba_sd_away", "opp_xwoba_sd_home",
     "opp_xwoba_vs_sp_away", "opp_xwoba_vs_sp_home",
     "platoon_delta_sp_away", "platoon_delta_sp_home",
     "sp_share_away", "sp_share_home",
@@ -291,6 +292,7 @@ MODEL_FIELDS = [
     "sp_bf_per_ip_away","sp_bf_per_ip_home",
     "bp_bf_per_ip_away","bp_bf_per_ip_home",
     "opp_xwoba_neutral_away","opp_xwoba_neutral_home",
+    "opp_xwoba_sd_away","opp_xwoba_sd_home",
     "opp_xwoba_vs_sp_away","opp_xwoba_vs_sp_home",
     "platoon_delta_sp_away","platoon_delta_sp_home",
     "sp_share_away","sp_share_home",
@@ -495,6 +497,12 @@ def rows_from_dump(xw_df, pl_df):
             bp_bf_per_ip_home=h.get("bp_bf_per_ip", np.nan),
             opp_xwoba_neutral_away=a.get("opp_xwOBA_neutral", np.nan),
             opp_xwoba_neutral_home=h.get("opp_xwOBA_neutral", np.nan),
+            # Slot-PA-weighted sd of the nine shrunk rates behind the composite
+            # above. Diagnostic: it makes "do good hitters get averaged down"
+            # measurable, and nothing reads it back into a lean. Absent on every
+            # row written before it existed, which is most of the ledger.
+            opp_xwoba_sd_away=a.get("opp_xwOBA_sd", np.nan),
+            opp_xwoba_sd_home=h.get("opp_xwOBA_sd", np.nan),
             opp_xwoba_vs_sp_away=a.get("opp_xwOBA_vs_sp", np.nan),
             opp_xwoba_vs_sp_home=h.get("opp_xwOBA_vs_sp", np.nan),
             platoon_delta_sp_away=a.get("platoon_delta_sp", np.nan),
