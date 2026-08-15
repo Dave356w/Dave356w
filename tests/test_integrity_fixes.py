@@ -14,6 +14,12 @@ import grade_leans
 import market_backfill
 import schedule_gate
 
+# Read, never copied. This column is named for the active metric, so a literal
+# here would silently stop matching the moment the metric changes -- and the
+# failure mode is not a red test but a green one measuring the wrong thing: an
+# unrecognised backfill flag just means the bat gets shrunk like any other.
+BACKFILL_COL = build_site.MODEL_RATE_TEAM_BACKFILL_COL
+
 
 def _dump_rows(game_pk, game_date, snapshot, start):
     common = dict(
@@ -681,10 +687,10 @@ class PostedLineupBackfillTests(unittest.TestCase):
         H = pd.DataFrame([
             dict(game_pk=1, faced_pitcher="SP", pitcher_side="away",
                  batting_side="home", xwOBA=.340, PA=0, BBE=0,
-                 batting_order=1, wOBA_team_backfill=True),
+                 batting_order=1, **{BACKFILL_COL: True}),
             dict(game_pk=1, faced_pitcher="SP", pitcher_side="away",
                  batting_side="home", xwOBA=.300, PA=600, BBE=200,
-                 batting_order=2, wOBA_team_backfill=False),
+                 batting_order=2, **{BACKFILL_COL: False}),
         ])
         prior, k = .317, 175.0
         out = build_site.aggregate_lineup(
@@ -1610,7 +1616,7 @@ class PlatoonXwobaAdjustmentTests(unittest.TestCase):
         H = pd.DataFrame([
             dict(game_pk=1, faced_pitcher="SP", pitcher_side="away",
                  batting_side="home", xwOBA=.340, PA=0, BBE=0, batting_order=1,
-                 wOBA_team_backfill=True, bats="L", **{self.THR: "R"}),
+                 bats="L", **{BACKFILL_COL: True, self.THR: "R"}),
         ])
         agg = build_site.aggregate_lineup(H, ["xwOBA"], weighted=True,
                                           shrink_prior=.317, shrink_k=175.0)
@@ -1888,21 +1894,53 @@ class ModelTagProvenanceTests(unittest.TestCase):
         self.assertNotIn("woba+plat_consol_v2",
                          build_site._SCALE_FAMILIES["woba+plat_consol_v3"])
 
-    def test_every_active_rate_source_is_observed_woba(self):
-        # The subject is the metric. Pinning the version made this fail on a
-        # bump that changed no rate source at all.
-        self.assertTrue(build_site.MODEL_TAG.startswith("woba+"))
-        self.assertEqual(build_site.MODEL_RATE_SOURCE_COL, "woba")
-        self.assertEqual(build_site.MODEL_RATE_LABEL, "wOBA")
-        self.assertIn("woba", build_site.STATCAST_SELECTIONS)
-        self.assertNotIn("xwoba", build_site.STATCAST_SELECTIONS)
+    def test_every_active_rate_source_agrees_on_one_metric(self):
+        """The five constants that name the active rate must not disagree.
+
+        The subject is INTERNAL CONSISTENCY, not which metric won. This used to
+        assert wOBA specifically and would have had to be rewritten on the v11
+        revert for a reason that has nothing to do with what it protects -- the
+        real hazard is a half-applied metric switch, where the tag says one
+        thing and the fetched column is another. Written this way it holds
+        through the next swap too.
+
+        `woba` and `xwoba` are BOTH real Savant selections, which is exactly
+        why a half-switch would not raise: the wrong one resolves fine.
+        """
+        prefix, label, col = {
+            "wOBA": ("woba+", "wOBA", "woba"),
+            "xwOBA": ("xw+", "xwOBA", "xwoba"),
+        }[build_site.MODEL_RATE_LABEL]
+        self.assertTrue(build_site.MODEL_TAG.startswith(prefix))
+        self.assertEqual(build_site.MODEL_RATE_SOURCE_COL, col)
+        self.assertEqual(build_site.MODEL_RATE_LABEL, label)
+        self.assertIn(col, build_site.STATCAST_SELECTIONS)
+        # Exactly one rate is fetched: the other must not ride along.
+        other = "xwoba" if col == "woba" else "woba"
+        self.assertNotIn(other, build_site.STATCAST_SELECTIONS)
+        # The cache namespace is keyed to the selection set; a stale namespace
+        # serves a CSV that has no column under the new name.
+        self.assertIn(col, build_site.STATCAST_CACHE_NS)
         self.assertEqual(build_site.XWOBA_SHRINK_COL,
                          build_site.MODEL_RATE_INTERNAL_COL)
+        # The shadow arm must run the OTHER metric, or it is not a comparison.
+        import shadow_metric
+        self.assertEqual(shadow_metric.SHADOW_SOURCE_COL, other)
 
-    def test_savant_woba_wins_even_if_export_also_contains_xwoba(self):
+    def test_active_metric_wins_even_if_export_contains_both_rates(self):
+        """A Savant export carrying both rates must yield the ACTIVE one.
+
+        The internal key is `xwOBA` under either metric -- it is a
+        compatibility schema, not a claim about the statistic -- so reading the
+        wrong column produces a plausible number under the right key and
+        nothing raises. Values are deliberately far apart so a mix-up cannot
+        pass on rounding.
+        """
+        active = build_site.MODEL_RATE_SOURCE_COL
+        other = "xwoba" if active == "woba" else "woba"
         custom = pd.DataFrame({
             "player_id": [123], "pa": [50],
-            "woba": [.401], "xwoba": [.201],
+            active: [.401], other: [.201],
         })
         batted = pd.DataFrame({"id": [123], "bbe": [20]})
         with mock.patch.object(build_site, "cached_csv",
@@ -1910,9 +1948,9 @@ class ModelTagProvenanceTests(unittest.TestCase):
             stat, _, _ = build_site.load_stat_lookups("batter")
         self.assertAlmostEqual(stat[123][build_site.MODEL_RATE_INTERNAL_COL], .401)
         custom_url, cache_name = fetch.call_args_list[0].args
-        self.assertIn("selections=pa,k_percent,bb_percent,woba,", custom_url)
-        self.assertNotIn(",xwoba,", custom_url)
-        self.assertEqual(cache_name, "custom_woba_v1_batter")
+        self.assertIn(f"selections=pa,k_percent,bb_percent,{active},", custom_url)
+        self.assertNotIn(f",{other},", custom_url)
+        self.assertEqual(cache_name, f"{build_site.STATCAST_CACHE_NS}_batter")
 
     def test_pooled_record_is_named_for_its_rows_not_the_running_build(self):
         """A public record labelled with MODEL_RATE_LABEL is a false claim.
@@ -1970,13 +2008,22 @@ class ModelTagProvenanceTests(unittest.TestCase):
     def test_public_pages_do_not_name_a_metric_no_graded_row_used(self):
         """End-to-end guard on the three surfaces that publish the record.
 
-        Ledger is all xwOBA, MODEL_RATE_LABEL is wOBA -- the exact 2026-08-03
-        state. No page may print "wOBA" over these rows.
+        The 2026-08-03 state: every graded row on one metric while
+        MODEL_RATE_LABEL names the other. Built from whichever metric the
+        running build is NOT, so the mismatch keeps reproducing through any
+        future revert instead of quietly becoming a no-op the day the tag
+        happens to agree with the rows.
         """
+        other_tag, other_label = (
+            ("woba+plat_consol_v2", "wOBA")
+            if build_site.MODEL_RATE_LABEL == "xwOBA"
+            else ("xw+plat_consol_v10", "xwOBA")
+        )
         ledger = pd.DataFrame([
             dict(game_pk=1, game_date="2026-07-20", away="A", home="B",
                  away_sp="P1", home_sp="P2", status="graded",
-                 model_tag="xw+plat_consol_v10", xw_lean="B", xw_delta=.01,
+                 model_tag=other_tag, model_metric=other_label,
+                 xw_lean="B", xw_delta=.01,
                  xw_full="W", xw_f5="W", full_away=2, full_home=4,
                  close_p_home=.6, close_home_ml=-140, close_away_ml=120,
                  f5_away=1, f5_home=2, f5_close_p_home=np.nan,
@@ -1984,14 +2031,15 @@ class ModelTagProvenanceTests(unittest.TestCase):
                  ops_valid=False, ops_lean=None, lock_status="pregame"),
             dict(game_pk=2, game_date="2026-07-21", away="C", home="D",
                  away_sp="P3", home_sp="P4", status="graded",
-                 model_tag="xw+plat_consol_v9", xw_lean="C", xw_delta=.02,
+                 model_tag=other_tag, model_metric=other_label,
+                 xw_lean="C", xw_delta=.02,
                  xw_full="L", xw_f5="L", full_away=1, full_home=3,
                  close_p_home=.6, close_home_ml=-140, close_away_ml=120,
                  f5_away=0, f5_home=2, f5_close_p_home=np.nan,
                  f5_close_home_ml=np.nan, f5_close_away_ml=np.nan,
                  ops_valid=False, ops_lean=None, lock_status="pregame"),
         ])
-        self.assertEqual(build_site.MODEL_RATE_LABEL, "wOBA")
+        self.assertNotEqual(build_site.MODEL_RATE_LABEL, other_label)
         with mock.patch.object(build_site, "load_ledger_df", return_value=ledger):
             pages = {
                 "record strip": build_site.records_strip_html(),
@@ -1999,12 +2047,19 @@ class ModelTagProvenanceTests(unittest.TestCase):
                 "team page": build_site.render_team_grades_html("test build"),
             }
         for name, page in pages.items():
-            self.assertIn("xwOBA", page, f"{name} lost its metric label")
-            # "wOBA" only ever as the tail of "xwOBA" -- a bare one is the bug.
-            self.assertIsNone(
-                re.search(r"(?<!x)wOBA", page),
-                f"{name} credits xwOBA rows to wOBA",
-            )
+            self.assertIn(other_label, page, f"{name} lost its metric label")
+            # CSS comments discuss both metrics by name and are not content.
+            # Stripping them is narrower than relaxing the assertion: what is
+            # under test is what a reader SEES credited to these rows.
+            body = re.sub(r"/\*.*?\*/", "", page, flags=re.S)
+            if other_label == "xwOBA":
+                # A bare "wOBA" is the bug; the tail of "xwOBA" is not.
+                self.assertIsNone(
+                    re.search(r"(?<!x)wOBA", body),
+                    f"{name} credits xwOBA rows to wOBA")
+            else:
+                self.assertNotIn("xwOBA", body,
+                                 f"{name} credits wOBA rows to xwOBA")
         # The vs-market cell is looked up by that same label; a mismatch used
         # to drop it silently rather than raise.
         self.assertIn("vs mkt", pages["record strip"])

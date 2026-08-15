@@ -1,4 +1,11 @@
-"""Offline guards for the xwOBA shadow arm.
+"""Offline guards for the metric shadow arm.
+
+The arm ran xwOBA against a wOBA primary until v11 and runs wOBA against an
+xwOBA primary after it, so nothing here names a metric as a literal. Each test
+derives the primary from build_site and the shadow from shadow_metric and
+asserts the RELATIONSHIP -- that they differ, that every constant moves
+together, that neither leaks into the other. Written against literals these
+would all have gone red on the swap for reasons unrelated to what they guard.
 
 Savant is unreachable from CI as well as from the dev environment, so nothing
 here fetches. What these assert is the part that can be wrong silently: that
@@ -34,30 +41,37 @@ def _restore():
 def test_importing_shadow_does_not_move_the_primary_metric():
     """Import must be inert -- the daily build imports build_site too."""
     fresh = importlib.reload(bs)
-    assert fresh.MODEL_RATE_SOURCE_COL == "woba"
-    assert fresh.MODEL_RATE_LABEL == "wOBA"
-    assert "woba" in fresh.STATCAST_SELECTIONS
-    assert "xwoba" not in fresh.STATCAST_SELECTIONS
+    primary = fresh.MODEL_RATE_SOURCE_COL
+    assert primary != sm.SHADOW_SOURCE_COL, (
+        "the shadow arm must run the metric the primary does not")
+    assert {"woba", "xwoba"} == {primary, sm.SHADOW_SOURCE_COL}
+    assert fresh.MODEL_RATE_LABEL == ("wOBA" if primary == "woba" else "xwOBA")
+    assert primary in fresh.STATCAST_SELECTIONS
+    assert sm.SHADOW_SOURCE_COL not in fresh.STATCAST_SELECTIONS
 
 
 def test_patch_repoints_every_metric_constant():
+    primary_ns = bs.STATCAST_CACHE_NS
+    primary_col = bs.MODEL_RATE_SOURCE_COL
     cfg = sm.patch()
-    assert cfg["source_col"] == "xwoba"
-    assert cfg["label"] == "xwOBA"
+    assert cfg["source_col"] == sm.SHADOW_SOURCE_COL
+    assert cfg["label"] == sm.SHADOW_LABEL
     assert cfg["tag"] == sm.SHADOW_TAG
     # The two built at import time from the source column -- the silent-failure
-    # pair. Patching the source column alone would request `woba` and then look
-    # for an `xwoba` that was never fetched.
-    assert "xwoba" in cfg["selections"] and "woba" not in cfg["selections"]
-    assert cfg["cache_ns"] != "custom_woba_v1"
+    # pair. Patching the source column alone would request the primary's rate
+    # and then look for a column that was never fetched.
+    assert sm.SHADOW_SOURCE_COL in cfg["selections"]
+    assert primary_col not in cfg["selections"]
+    assert cfg["cache_ns"] != primary_ns
 
 
 def test_selection_set_swaps_one_column_and_keeps_the_rest():
     before = list(bs.STATCAST_SELECTIONS)
+    primary_col = bs.MODEL_RATE_SOURCE_COL
     cfg = sm.patch()
     assert len(cfg["selections"]) == len(before)
-    assert set(before) - set(cfg["selections"]) == {"woba"}
-    assert set(cfg["selections"]) - set(before) == {"xwoba"}
+    assert set(before) - set(cfg["selections"]) == {primary_col}
+    assert set(cfg["selections"]) - set(before) == {sm.SHADOW_SOURCE_COL}
 
 
 def test_internal_schema_name_is_left_alone():
@@ -97,9 +111,16 @@ def test_shadow_dump_is_not_ingestable():
     pending row. Asserted against grade_leans' actual patterns.
     """
     pats = _grade_leans_dump_globs()
-    name = f"{sm.SHADOW_PREFIX}_2026-08-10_xw.csv"
+    name = f"{sm.SHADOW_PREFIX}_2026-08-10_{sm.SHADOW_SUFFIX}.csv"
     for p in pats:
         assert not fnmatch.fnmatch(name, p), f"shadow dump {name} matches {p}"
+    # Both generations, not just the current one: the arm wrote `_xw` dumps
+    # before v11 and `_woba` after it, and either would be catastrophic to
+    # ingest. The prefix is what makes both safe -- prove it for both.
+    for suffix in ("xw", "woba"):
+        old = f"{sm.SHADOW_PREFIX}_2026-08-10_{suffix}.csv"
+        for p in pats:
+            assert not fnmatch.fnmatch(old, p), f"shadow dump {old} matches {p}"
 
 
 def test_the_naive_suffix_would_have_been_ingested():
@@ -111,9 +132,29 @@ def test_the_naive_suffix_would_have_been_ingested():
 
 
 def test_primary_dump_name_still_ingests():
-    """Sanity on the reader: the real dump must match, or the globs moved."""
+    """The dump the build actually writes must be one grade_leans ingests.
+
+    This is the highest-cost silent failure in the repo: a dump written under
+    a suffix outside grade_leans' globs is never ledgered, and the slate's
+    pregame rows cannot be recovered afterwards without lookahead. The suffix
+    moved from `woba` to `xw` at v11, so it is read off build_site rather than
+    written here as a literal -- a literal would keep passing while the build
+    wrote somewhere else entirely.
+    """
     pats = _grade_leans_dump_globs()
-    assert any(fnmatch.fnmatch("leans_2026-08-10_woba.csv", p) for p in pats)
+    real = f"leans_2026-08-10_{bs.DUMP_SUFFIX}.csv"
+    assert any(fnmatch.fnmatch(real, p) for p in pats), (
+        f"{real} matches none of {pats} -- this slate would be lost")
+
+
+def test_the_dump_suffix_names_the_metric_inside_it():
+    """A `_woba.csv` full of xwOBA rows would mislead every later reader,
+    including shadow_report's filename fallback."""
+    assert bs.DUMP_SUFFIX == ("woba" if bs.MODEL_RATE_SOURCE_COL == "woba"
+                              else "xw")
+    assert sm.SHADOW_SUFFIX == ("woba" if sm.SHADOW_SOURCE_COL == "woba"
+                                else "xw")
+    assert bs.DUMP_SUFFIX != sm.SHADOW_SUFFIX
 
 
 def test_shadow_tag_is_in_no_family_map():

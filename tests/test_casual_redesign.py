@@ -195,13 +195,31 @@ class LeanStrengthTests(unittest.TestCase):
             self.assertIsNone(b.lean_strength_scale())
             self.assertIsNone(b.lean_strength_scale([]))
 
-    def test_v8_v9_v10_share_a_scale_family(self):
+    def test_v8_v9_v10_v11_share_a_scale_family(self):
         # v9 - v8 is one term worth ~6% of matchup dispersion and flips no
         # leans; v10 only re-weights a convex combination of the same two
-        # phases. All three measure |xw_net| on the same units.
-        fam = ("xw+plat_consol_v8", "xw+plat_consol_v9", "xw+plat_consol_v10")
+        # phases; v11 keeps the metric, K and target that set the units and
+        # differs by three changes each scale-preserving on an established
+        # precedent (see _SCALE_FAMILIES). All four measure |xw_net| on the
+        # same units, and the relation must be symmetric -- a tag missing from
+        # one of the four tuples would pool one way and not the other.
+        fam = ("xw+plat_consol_v8", "xw+plat_consol_v9", "xw+plat_consol_v10",
+               "xw+plat_consol_v11")
         for tag in fam:
             self.assertEqual(b._SCALE_FAMILIES[tag], fam)
+
+    def test_v11_shares_no_record_line_with_the_family_it_shares_units_with(self):
+        # The two questions are answered differently and deliberately: v11
+        # changes which games are decided (abstention) and moves every lean a
+        # little (platoon centring, relief target), so it starts a clean record
+        # while inheriting the delta scale. Sharing both would have pooled a
+        # different model's win-loss line.
+        self.assertEqual(b._RECORD_FAMILIES["xw+plat_consol_v11"],
+                         ("xw+plat_consol_v11",))
+        self.assertIn("xw+plat_consol_v9",
+                      b._SCALE_FAMILIES["xw+plat_consol_v11"])
+        self.assertNotIn("xw+plat_consol_v9",
+                         b._RECORD_FAMILIES["xw+plat_consol_v11"])
 
     def test_slate_deltas_helper(self):
         def game(ae, he, **kw):
@@ -224,7 +242,11 @@ class PercentileTests(unittest.TestCase):
         pa = rng.integers(5, 650, n)
         true = rng.normal(.315, .030, n)
         obs = true + rng.normal(0, .35 / np.sqrt(np.maximum(pa, 1)), n)
-        self.cust = pd.DataFrame({"woba": obs, "pa": pa})
+        # Keyed off the active source column, not a literal: build_pctile_ref
+        # reads the rate under whatever name the build fetches, so a hardcoded
+        # "woba" here silently yields an empty reference (and pctile_rank then
+        # returns None) the moment the metric changes.
+        self.cust = pd.DataFrame({b.MODEL_RATE_SOURCE_COL: obs, "pa": pa})
 
     def test_shrinkage_pulls_small_sample_toward_middle(self):
         ref, _ = b.build_pctile_ref(self.cust, .312, 130.0, 300.0)

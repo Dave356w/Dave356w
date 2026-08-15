@@ -124,7 +124,23 @@ SAVANT_CUSTOM = ("https://baseballsavant.mlb.com/leaderboard/custom"
                  "?year={season}&type={player_type}&min=1"
                  "&selections=pa,{rate}&csv=true")
 
-RATE_COL = build_site.MODEL_RATE_SOURCE_COL      # "woba"; read, never copied
+# The frozen files are wOBA-denominated and IMMUTABLE, so this is pinned to
+# "woba" rather than following build_site.MODEL_RATE_SOURCE_COL.
+#
+# It used to follow it, which was correct for exactly as long as the primary
+# metric was wOBA. v11 reverted the primary to xwOBA, and a metric-following
+# constant would then have written xwOBA rows into `woba_priors_<season>.csv`
+# and xwOBA centres into `woba_prior_centres.csv` -- same filenames, same
+# column headers (`woba_wtd`, `woba_unw`), a different statistic inside, and no
+# error anywhere. Every existing ledger row built against those priors would
+# stop being reconcilable, which is the one thing the immutability rule exists
+# to prevent.
+#
+# If an xwOBA prior set is ever wanted, it needs its OWN filenames and centre
+# columns, not these. `player_priors.PRIORS_PREFIX` is the matching half and
+# names the same metric; `build_site.player_prior_history` refuses to load
+# these files under a non-wOBA model, so the mismatch cannot reach a lean.
+RATE_COL = "woba"
 
 
 def fetch_leaderboard(season, player_type, tries=4):

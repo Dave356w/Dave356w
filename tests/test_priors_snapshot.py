@@ -11,6 +11,7 @@ import pandas as pd
 import pytest
 
 import build_site
+import player_priors
 import priors_snapshot as S
 
 
@@ -135,9 +136,31 @@ def test_rows_without_a_usable_rate_are_dropped_not_zero_filled():
     assert [r["player_id"] for r in rows] == [3]
 
 
-def test_the_rate_column_is_read_from_build_site_not_copied():
-    """One value, one home -- the prior must freeze the metric the build ships."""
-    assert S.RATE_COL == build_site.MODEL_RATE_SOURCE_COL
+def test_the_frozen_rate_column_matches_the_files_it_writes():
+    """The prior files are wOBA-denominated and immutable, so RATE_COL is
+    pinned to wOBA rather than following the build's active metric.
+
+    This test used to assert the opposite (`RATE_COL == MODEL_RATE_SOURCE_COL`)
+    and that was right for exactly as long as the build ran wOBA. Following the
+    build across the v11 revert would have written xwOBA rows into
+    `woba_priors_<season>.csv`, under `woba_wtd`/`woba_unw` headers, with no
+    error anywhere -- and every ledger row built against the old priors would
+    have stopped being reconcilable. What actually has to hold is that the
+    column, the filenames and the centre headers all name ONE metric.
+    """
+    assert S.RATE_COL == "woba"
+    assert "woba_priors_" in S.PRIORS_TEMPLATE
+    assert S.CENTRES_PATH.endswith("woba_prior_centres.csv")
+    assert {"woba_wtd", "woba_unw"} <= set(S.CENTRE_COLUMNS)
+    # The reading side must name the same metric, or the pair drifts.
+    assert player_priors.PRIORS_PREFIX == "woba_priors_"
+    assert player_priors.CENTRES_NAME == "woba_prior_centres.csv"
+
+
+def test_a_non_woba_build_cannot_reach_the_frozen_woba_priors(monkeypatch):
+    """The guard that makes the pin above safe rather than merely tidy."""
+    monkeypatch.setattr(build_site, "MODEL_RATE_LABEL", "xwOBA")
+    assert build_site.player_prior_history() == ({}, {})
 
 
 # --------------------------------------------------------------------------

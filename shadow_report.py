@@ -61,21 +61,51 @@ TARGET_SE = 0.045
 TARGET_GAP = 0.09
 
 
+# Which Savant rate a dump actually holds. Read off `model_metric`, never off
+# the filename or the running build's constants: v11 swapped which metric is
+# primary and which is shadow, so "the shadow dump" names a SIDE, not a
+# statistic, and the six pre-v11 slates hold the opposite assignment from every
+# slate after them. The filename is the fallback only for a dump written before
+# the column existed.
+_SUFFIX_METRIC = {"xw": "xwOBA", "woba": "wOBA", "split": "wOBA/xwOBA"}
+
+
+def dump_metric(df, path):
+    col = df.get("model_metric")
+    if col is not None:
+        vals = pd.Series(col).dropna().astype(str).unique().tolist()
+        if len(vals) == 1:
+            return vals[0]
+        if len(vals) > 1:
+            return None
+    m = re.search(r"_(\w+)\.csv$", os.path.basename(path))
+    return _SUFFIX_METRIC.get(m.group(1)) if m else None
+
+
 def _slate_dates():
-    """Dates that have BOTH a shadow dump and a primary dump beside it."""
-    out = []
-    for p in sorted(glob.glob(os.path.join(DATA_DIR, f"{sm.SHADOW_PREFIX}_*_xw.csv"))):
-        m = re.search(r"_(\d{4}-\d{2}-\d{2})_xw\.csv$", os.path.basename(p))
-        if not m:
-            continue
-        d = m.group(1)
-        primary = [q for q in
-                   (os.path.join(DATA_DIR, f"leans_{d}_{s}.csv")
-                    for s in ("woba", "xw", "split"))
-                   if os.path.exists(q)]
-        if primary:
-            out.append((d, p, primary[0]))
-    return out
+    """Dates that have BOTH a shadow dump and a primary dump beside it.
+
+    Globs every shadow suffix, not just `_xw`: the arm wrote xwOBA dumps before
+    v11 and wOBA dumps after it, and a report that saw only one generation
+    would silently shrink its own sample at the changeover.
+    """
+    out, seen = [], set()
+    for suf in ("xw", "woba"):
+        pat = os.path.join(DATA_DIR, f"{sm.SHADOW_PREFIX}_*_{suf}.csv")
+        for p in sorted(glob.glob(pat)):
+            m = re.search(r"_(\d{4}-\d{2}-\d{2})_" + suf + r"\.csv$",
+                          os.path.basename(p))
+            if not m or m.group(1) in seen:
+                continue
+            d = m.group(1)
+            primary = [q for q in
+                       (os.path.join(DATA_DIR, f"leans_{d}_{s}.csv")
+                        for s in ("woba", "xw", "split"))
+                       if os.path.exists(q)]
+            if primary:
+                seen.add(d)
+                out.append((d, p, primary[0]))
+    return sorted(out)
 
 
 def game_nets(df):
@@ -157,21 +187,45 @@ def build_frame(pairs, use_ledger_net=False):
     led = led.drop_duplicates(subset="game_pk", keep="last").set_index("game_pk")
     frames, prov = [], []
     for d, spath, ppath in pairs:
-        xs, ws = game_nets(pd.read_csv(spath)), game_nets(pd.read_csv(ppath))
+        sdf, pdf = pd.read_csv(spath), pd.read_csv(ppath)
+        smet, pmet = dump_metric(sdf, spath), dump_metric(pdf, ppath)
+        # net_w and net_x are keyed to the METRIC, not to which side of the
+        # arm produced them, so d_corr means "xwOBA minus wOBA" on every slate
+        # regardless of which one the primary was that day. Without this the
+        # v11 changeover would silently flip the sign of half the sample.
+        by_metric = {smet: game_nets(sdf), pmet: game_nets(pdf)}
+        if smet == pmet or "wOBA" not in by_metric or "xwOBA" not in by_metric:
+            print(f"  {d}: SKIPPED -- dumps do not pair one wOBA against one "
+                  f"xwOBA (primary {pmet!r}, shadow {smet!r})")
+            continue
+        ws, xs = by_metric["wOBA"], by_metric["xwOBA"]
         xkind, xsnap, xstart = _provenance(xs)
         prov.append((d, os.path.basename(spath), xkind, xsnap, xstart,
                      _provenance(ws)[0]))
         f = pd.DataFrame({"net_w": ws["net"], "net_x": xs["net"]})
         f["matchup"], f["date"] = xs["matchup"], d
         frames.append(f)
+    if not frames:
+        raise SystemExit("shadow_report: no slate paired one wOBA dump against "
+                         "one xwOBA dump; nothing to compare")
     f = pd.concat(frames)
     g = led.reindex(f.index)
     f["net_led"] = pd.to_numeric(g["xw_net"], errors="coerce")
+    f["led_metric"] = g.get("model_metric")
     f["status"] = g["status"]
     f["margin"] = (pd.to_numeric(g["full_home"], errors="coerce")
                    - pd.to_numeric(g["full_away"], errors="coerce"))
     if use_ledger_net:
-        f["net_w"] = f["net_led"]
+        # The ledger's `xw_net` is a legacy KEY name, not a statement of which
+        # statistic is in it -- pre-v11 rows hold wOBA, v11 rows hold xwOBA. So
+        # substitute it into whichever column matches each row's own
+        # model_metric. Overwriting net_w unconditionally (correct while the
+        # ledger was wOBA) would compare a v11 xwOBA ledger net against the
+        # wOBA arm and call the metric difference contamination.
+        lm = f["led_metric"].astype(str)
+        for metric, col in (("wOBA", "net_w"), ("xwOBA", "net_x")):
+            m = (lm == metric) & f["net_led"].notna()
+            f.loc[m, col] = f.loc[m, "net_led"]
     return f, prov
 
 
@@ -211,7 +265,9 @@ def report(n_boot=20000, ledger_join=False):
     graded = dec[dec.margin.notna()]
     print(f"\ngraded and both-decided: {len(graded)}")
     if len(graded) >= 3:
-        for name, col in (("wOBA  (dump)", "net_w"), ("xwOBA (shadow)", "net_x")):
+        # Labelled by metric only. Which arm was primary changed at v11, so
+        # naming a side here would be wrong for half the sample.
+        for name, col in (("wOBA", "net_w"), ("xwOBA", "net_x")):
             w, l = _record(graded[col], graded.margin)
             pct = f"{w/(w+l):.3f}" if w + l else "  -  "
             print(f"  {name:16s} record {w}-{l} ({pct})  "
@@ -240,8 +296,8 @@ def report(n_boot=20000, ledger_join=False):
     if ledger_join:
         fl, _ = build_frame(pairs, use_ledger_net=True)
         j = fl.dropna(subset=["net_w", "net_x"])
-        print("\ncontaminated join (ledger's PREGAME wOBA net vs the shadow dump) "
-              "— run to size the bias, not to draw a conclusion:")
+        print("\ncontaminated join (the ledger's PREGAME net vs the same-day "
+              "dumps) — run to size the bias, not to draw a conclusion:")
         print(f"  corr(ledger net, same-day dump net) = {_corr(f.net_led.dropna(), f.net_w.reindex(f.net_led.dropna().index)):+.4f}")
         print(f"  mean |ledger - dump| = {(f.net_led - f.net_w).abs().mean():.5f} "
               f"against median |net| {f.net_w.abs().median():.4f}")

@@ -1,25 +1,36 @@
-"""Paired xwOBA shadow arm: what the SAME slate would have leaned on xwOBA.
+"""Paired wOBA shadow arm: what the SAME slate would have leaned on wOBA.
 
 WHY THIS EXISTS
 ---------------
-The wOBA lineage sits behind its controls (41-44 against always-home 51-34)
-while the xwOBA lineage sat ahead of them, and the delta's correlation with the
-realised differential fell from +0.273 (v9/v10, n=97) to +0.038 (v4+v5, n=65).
-That is directionally consistent with the metric switch having cost something,
-and it is NOT evidence of it, for two reasons the ledger cannot get around:
+This arm used to run xwOBA against a wOBA primary. v11 reverted the primary to
+xwOBA, so the arm swapped sides and now runs wOBA. Its purpose is unchanged and
+so is its argument: the metric question cannot be settled by comparing the two
+ERAS, only by running both metrics over the SAME games.
 
-  * Five things changed in six days -- metric, platoon prior, K 100->400,
-    personal priors, abstention. Only wOBA v1+v2 isolates the metric, n=16,
-    CI on its correlation [-0.816, +0.288].
-  * The eras were different games. Over the xwOBA rows always-home ran .515 and
-    always-chalk .619; over the wOBA rows .600 and .565. A sequential
-    comparison is measuring the schedule as much as the model.
+That is not a stale caution -- it is what the arm measured. Over its first six
+paired slates (68 graded, both arms decided) the two metrics correlate +0.91 on
+net, flip 9 of 77 leans, and separate by d_corr +0.008 with a 95% CI of
+[-0.108, +0.128]. The sequential records over the same period looked far more
+decisive than that (wOBA 29-39 against xwOBA 34-34 on identical games), which is
+exactly the illusion pairing exists to remove. The revert to xwOBA was an
+operator decision taken with that CI on the table, not a finding that xwOBA won.
 
-Unpaired, se(d_corr) is ~0.142 and the xwOBA-minus-wOBA CI is [-0.010, +0.560]
--- it does not separate, and on this trajectory it never will. Run both metrics
-over the SAME games and the metrics correlate ~0.9, so se falls to ~0.045: a
-true gap of 0.09 resolves inside a month of slates. That is the entire argument
-for pairing, and it is why this arm exists rather than a revert.
+So the arm keeps running, pointed the other way, and the question keeps
+accumulating a paired answer. If wOBA is genuinely better, this is the surface
+that will say so -- se ~0.045 at ~9 more slates, 80% power on a 0.09 gap at ~18.
+If it is not, that is worth knowing too, and neither answer comes from the
+win-loss line on the front page.
+
+WHAT THE ARM ALREADY PAID FOR
+-----------------------------
+The `xwoba` Savant selection name is on the PRIMARY build's critical path under
+v11. It is there safely only because this arm resolved it against the live
+endpoint first: Actions run 31435698461 logged `shadow: rate column 'xwoba'
+resolved on 20/20 players` and printed a distinct league baseline (xwOBA
+0.31548 against the primary's wOBA 0.31628 on the same slate and leaderboard),
+proving the column exists and is not a relabelled copy of `woba`. Verifying an
+unproven column on a shadow arm before it can ever cost a pregame row is the
+posture; `woba` now sits on this side with five weeks of production behind it.
 
 WHAT IT DOES NOT DO
 -------------------
@@ -82,11 +93,18 @@ import build_site as bs
 # The Savant column this arm swaps in, and the label/tag its rows carry. The tag
 # is deliberately OUTSIDE every family map in build_site: a shadow row shares a
 # record line and a delta scale with nothing, and must never be pooled into one.
-SHADOW_SOURCE_COL = "xwoba"
-SHADOW_LABEL = "xwOBA"
-SHADOW_TAG = "shadow_xw+plat_consol_v1"
+SHADOW_SOURCE_COL = "woba"
+SHADOW_LABEL = "wOBA"
+SHADOW_TAG = "shadow_woba+plat_consol_v1"
 
-# The dump is `shadow_<date>_xw.csv`, NOT `leans_<date>_something`. grade_leans
+# The dump suffix names the metric inside it, so the six xwOBA-arm dumps
+# written before v11 stay readable as what they are and the wOBA-arm dumps
+# written after it are never confused for them. shadow_report reads the metric
+# off each dump's `model_metric` column rather than off the filename, but the
+# filenames should not lie either.
+SHADOW_SUFFIX = "woba"
+
+# The dump is `shadow_<date>_<suffix>.csv`, NOT `leans_<date>_something`. grade_leans
 # ingests `leans_*_xw.csv`, `leans_*_split.csv` and `leans_*_woba.csv`, and
 # `leans_*_xw.csv` matches any leans-prefixed name ending `_xw.csv` -- so a
 # suffix like `leans_<date>_shadow_xw.csv` would be silently ledgered as a real
@@ -103,21 +121,30 @@ def patch():
     Every one of these is read at CALL time except the two that are built at
     import time from MODEL_RATE_SOURCE_COL -- STATCAST_SELECTIONS and the cache
     namespace -- which is exactly why they have to be set here too. Patching the
-    source column alone would request `woba`, read the primary's cache, and then
-    look for an `xwoba` column that was never fetched, yielding an all-NaN rate
-    that still writes a plausible-looking dump. That silent mode is the one this
-    function exists to make impossible.
+    source column alone would request the PRIMARY's rate, read the primary's
+    cache, and then look for a column that was never fetched, yielding an
+    all-NaN rate that still writes a plausible-looking dump. That silent mode is
+    the one this function exists to make impossible.
+
+    The selection swap reads the primary column off `bs` BEFORE overwriting it,
+    rather than naming it as a literal. When this arm ran xwOBA against a wOBA
+    primary the literal `"woba"` was correct and invisible; v11 swapped which
+    metric is on which side, and a literal would have quietly stopped matching
+    and left the primary's rate in the selection set. Deriving it means the two
+    arms can swap again without touching this function.
 
     MODEL_RATE_INTERNAL_COL is deliberately NOT patched: the internal/dump
-    schema name is already "xwOBA" for both metrics (it is a compatibility
-    schema, not a statement about which statistic is inside), so leaving it
-    alone is what keeps the shadow dump readable by the same tooling.
+    schema name is "xwOBA" for both metrics (it is a compatibility schema, not
+    a statement about which statistic is inside), so leaving it alone is what
+    keeps the shadow dump readable by the same tooling.
     """
+    primary_col = bs.MODEL_RATE_SOURCE_COL
     bs.MODEL_RATE_SOURCE_COL = SHADOW_SOURCE_COL
     bs.MODEL_RATE_LABEL = SHADOW_LABEL
     bs.MODEL_TAG = SHADOW_TAG
     bs.STATCAST_SELECTIONS = [
-        c if c != "woba" else SHADOW_SOURCE_COL for c in bs.STATCAST_SELECTIONS
+        SHADOW_SOURCE_COL if c == primary_col else c
+        for c in bs.STATCAST_SELECTIONS
     ]
     # Keyed to the selection set, so it MUST differ from the primary's.
     bs.STATCAST_CACHE_NS = f"custom_{SHADOW_SOURCE_COL}_v1"
@@ -182,7 +209,7 @@ def run(dry_run=False):
     if "game_datetime_utc" in matchup_df.columns:
         matchup_df["scheduled_start_utc"] = matchup_df["game_datetime_utc"]
 
-    path = f"{bs.DATA_DIR}/{SHADOW_PREFIX}_{bs.SLATE_DATE}_xw.csv"
+    path = f"{bs.DATA_DIR}/{SHADOW_PREFIX}_{bs.SLATE_DATE}_{SHADOW_SUFFIX}.csv"
     matchup_df.to_csv(path, index=False)
     bs.log(f"shadow: wrote {path} ({len(matchup_df)} rows)")
     return 0

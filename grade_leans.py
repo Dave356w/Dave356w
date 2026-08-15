@@ -60,7 +60,7 @@ from actuals_backfill import (ACTUAL_COLS, attach_actuals, actuals_summary,
 DATA_DIR    = os.environ.get("DATA_DIR", "data")
 LEDGER_PATH = os.path.join(DATA_DIR, "mlb_lean_ledger.csv")
 REPORT_PATH = os.path.join(DATA_DIR, "ledger_report.txt")
-MODEL_TAG   = os.environ.get("MODEL_TAG", "woba+plat_consol_v5")
+MODEL_TAG   = os.environ.get("MODEL_TAG", "xw+plat_consol_v11")
 MODEL_METRIC_LABEL = os.environ.get(
     "MODEL_METRIC_LABEL",
     "wOBA" if MODEL_TAG.startswith("woba+") else "xwOBA",
@@ -104,6 +104,11 @@ _RECORD_FAMILIES = {
     # Historical one-slate experiment; isolated from the restored full-wOBA
     # family but still recognised by the immutable ledger.
     "split+plat_consol_v1": ("split+plat_consol_v1",),
+    # v11: metric back to xwOBA, K back to 100, population shrinkage target --
+    # keeping the exposure-centred platoon offsets, the relief-pool target and
+    # the starter abstention. New record family; build_site._RECORD_FAMILIES is
+    # the authority and carries the per-piece argument.
+    "xw+plat_consol_v11": ("xw+plat_consol_v11",),
 }
 RECORD_TAGS = tuple(
     t.strip() for t in os.environ.get(
@@ -124,6 +129,7 @@ MODEL_FAMILY_TAGS = (
     ("wOBA v4", ("woba+plat_consol_v4",)),
     ("wOBA v5", ("woba+plat_consol_v5",)),
     ("split v1", ("split+plat_consol_v1",)),
+    ("v11", ("xw+plat_consol_v11",)),
 )
 N_FIT_MIN   = 120
 _FINAL  = {"Final", "Game Over", "Completed Early"}

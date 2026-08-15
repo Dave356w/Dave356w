@@ -38,7 +38,7 @@ prediction math. Two separate tag families gate two different questions:
 These are different equivalence relations and they do disagree. The authority is
 `_RECORD_FAMILIES` / `_SCALE_FAMILIES` in `build_site.py` (records mirrored in
 `grade_leans.py`) — not this table, which is a reading aid. Current model is
-**wOBA v5**.
+**v11** — Savant xwOBA, `XWOBA_SHRINK_K = 100`, population shrinkage targets.
 
 | tag | what changed | record family | scale family |
 |---|---|---|---|
@@ -57,6 +57,7 @@ These are different equivalence relations and they do disagree. The authority is
 | wOBA v4 | shrinkage *target* becomes the player's own recency-weighted 2023–2025 history, not a population centre | wOBA v4 | wOBA v4 |
 | wOBA v5 | abstain when a side's starter has no measured season line | wOBA v5 | wOBA v4+v5 |
 | split v1 | one-slate wOBA-lineup/xwOBA-arms test; abandoned before grading | split v1 | split v1 |
+| v11 | revert to xwOBA + K=100 + population target, keeping v2's platoon centring, v3's relief-pool target and v5's abstention | v11 | 8+9+10+11 |
 
 The wOBA forward test is intentionally isolated from xwOBA in both namespaces.
 Observed wOBA changes the predictions and its sampling distribution is not the
@@ -64,7 +65,49 @@ xwOBA delta scale. v2 starts a clean record because the platoon prior moves
 predictions, but shares v1's strength scale: the metric is unchanged and each
 handedness pair retains essentially the same total gap (0.021 versus 0.020).
 Internal `xwOBA`/`xw_*` dump and ledger keys remain a compatibility schema for
-immutable history; new rows must carry `model_metric=wOBA`.
+immutable history; every row must carry `model_metric` explicitly. Under v11
+that schema and the statistic agree again, which is *more* dangerous rather than
+less: the keys stop being an obvious lie and start looking like documentation.
+They are not. Read the metric from `model_metric`, never from a key name and
+never from the running build's constants — `market_backfill.metric_label()` is
+the one derivation, and `shadow_report.dump_metric()` is its per-dump twin.
+
+**v11 reverts the metric to xwOBA and `K` to 100 and the shrinkage target to the
+population centre, and this table's job is to stop that being read as a
+finding.** No measurement said xwOBA beat wOBA: the paired shadow arm exists
+because the era comparison cannot answer it, and at six slates it reports
+d_corr +0.008 with CI [-0.108, +0.128]. No measurement said K=100 beat K=400 —
+`reliever_shrink_probe` fits K three ways on n=53,464 and every interval
+excludes 100. No measurement said the population centre beat personal priors —
+the out-of-sample probe says the opposite, the forward lineup-component read
+says the reverse, and bootstrapped that forward read is +0.128 with CI
+[-0.054, +0.301]. It was an operator decision taken with all of that on the
+table, and the code comments state it that way at each site. Do not let a later
+reader convert it into evidence, and do not quote the wOBA lineage's 63-76 as
+the reason: over those same rows always-home ran .604.
+
+What v11 does *not* revert is the part with evidence independent of those three
+knobs — v2's exposure-centred platoon offsets (a construction fix: the season
+line is already exposure-weighted), v3's relief-pool shrink target (the league
+batter centre is the centre of no subpool; the relief pool sits 0.0102 below
+it, at any `K`), and v5's abstention. That split is the whole content of the
+change and it is argued piece by piece in `_RECORD_FAMILIES`.
+
+v11 is also the counter-precedent for a **shared scale across a reverted
+metric**: it isolates its record and joins the v8/v9/v10 delta pool, because
+the three ways it differs from v10 are each scale-preserving on a precedent
+already in this table (platoon centring moved median |net| 0.7% at v1→v2;
+abstention left v4/v5 quantiles identical; a uniform re-centring cancels in a
+difference). Unlike v3, v4 and v10, that half is **argued, not measured** — no
+lookahead means a past slate cannot be rebuilt to check it. The falsifier is
+named in `_SCALE_FAMILIES`: compare median |xw_net| on the first graded v11
+rows against the v9/v10 pool, and split the family if it moved.
+
+The frozen `data/woba_priors_*.csv` are wOBA-denominated and stay that way.
+`priors_snapshot.RATE_COL` is pinned to `woba` rather than following the build,
+and `player_prior_history()` refuses to serve them to a non-wOBA build — so
+`PLAYER_PRIORS=1` under v11 does nothing at all. Restoring v4 needs a wOBA
+build, or an xwOBA prior set under its own filenames.
 
 v3 and v4 each isolate in **both** namespaces, and in both cases the scale half
 is arithmetic rather than judgement — which is what makes them the useful
@@ -220,13 +263,35 @@ precedent — they are how the fix is known to look.
   it, but mere pool growth does not — it is a prior, and re-deriving it from the
   family it is shrunk against would make it the data.
 
-  `HEAT_DOMAINS` is the same shape one level out and is now on notice too: its
-  saturation ranges were calibrated on the xwOBA spread, and the one slate built
-  under both metrics shows the starter-allowed rate widening (sd 0.0161 →
-  0.0215) while the lineup composite does not move (0.0089 both ways) — a
-  starter rate is one player's observed outcome, a lineup is nine shrunk ones
-  averaged. Recorded in a comment rather than patched: n=14 is one slate, not a
-  distribution. Display-only, so no `MODEL_TAG` implication either way.
+  **v11 lands this entry somewhere it has not been before: back on the family
+  the constant was fitted to.** `SCALE_TAGS` now resolves to the
+  v8/v9/v10/v11 pool, which is the v9/v10 rows plus whatever v11 writes, and
+  `LEAN_STRENGTH_FALLBACK` was re-derived for exactly that family. Measured at
+  the revert, n=99, observed p33/p80 **0.0127 / 0.0343** against the frozen
+  0.015 / 0.032 — the same distribution it was read off, close enough that the
+  prior is doing its job rather than fighting the data. So the five wOBA-era
+  bumps did not leave a stale constant behind; they left a constant temporarily
+  pointed at the wrong family, and the revert points it back.
+
+  That is a reprieve, not a fix, and the entry stays live for the reason it was
+  written: the number is still a literal, and the next `_SCALE_FAMILIES` entry
+  re-stales it exactly as the last four did. Do not quote 0.0127 / 0.0343
+  either — recompute from whatever `SCALE_TAGS` resolves to when you need it.
+  Note also that v11 is *pooled into* this family on an argued rather than
+  measured basis, so the first graded v11 rows are the check on both things at
+  once: if median |xw_net| has moved, the family split is wrong AND this
+  constant is stale again.
+
+  `HEAT_DOMAINS` is the same shape one level out, and v11 changes what is known
+  about it rather than settling it. Its saturation ranges were calibrated on the
+  xwOBA spread and the model is back on xwOBA, so the mismatch the entry was
+  filed for is gone for now. The measurement behind it stands and is worth
+  keeping: the one slate built under both metrics showed the starter-allowed
+  rate widening under wOBA (sd 0.0161 → 0.0215) while the lineup composite did
+  not move (0.0089 both ways) — a starter rate is one player's observed outcome,
+  a lineup is nine shrunk ones averaged. n=14 is one slate, not a distribution,
+  and it is now a fact about the metric the model does not run. Display-only,
+  so no `MODEL_TAG` implication either way.
 
 - **A measured defect deferred, with the fix that would recreate the entry
   above.** The first backfilled actuals (2026-08-04, `actuals_backfill`) show
@@ -265,7 +330,8 @@ precedent — they are how the fix is known to look.
   rolls over at 3am ET, and the daily grading cron fires at 04:17 UTC — 00:17
   ET — so it still names *yesterday's* slate. It re-runs the full build for
   that date against today's Savant leaderboard and unconditionally rewrites
-  `data/leans_<yesterday>_woba.csv` (`build_site.py:~5954`). Measured across
+  `data/leans_<yesterday>_<DUMP_SUFFIX>.csv` — `_woba.csv` while the wOBA
+  lineage ran, `_xw.csv` again under v11. Measured across
   every committed dump that carries `snapshot_utc`: **every past slate's dump
   is a post-first-pitch rebuild.** `leans_2026-08-05_woba.csv` carries
   `model_tag=woba+plat_consol_v5` and `snapshot_utc=2026-08-06T04:18Z`, while
@@ -289,7 +355,17 @@ precedent — they are how the fix is known to look.
   them" is reading post-hoc data — including `FINDINGS.md`'s prior-only
   incidence ("6 of the 403 side-games in the committed dumps"), and
   `compare_v8_v9.py`, which globs `data/leans_*_xw.csv` and therefore compares
-  against a v8 dump that is itself a rebuild of the 07-26 slate. It also biases
+  against a v8 dump that is itself a rebuild of the 07-26 slate.
+
+  **v11 changes that glob's population and this is recorded, not patched.**
+  The primary dump suffix is `_xw` again, so `data/leans_*_xw.csv` now matches
+  v11 dumps alongside the pre-wOBA ones. That is not obviously wrong — the
+  script recomputes both the v8 and v9 forms from a dump's own phase columns
+  and never reads `model_tag`, and a v11 dump carries the same columns at the
+  same `K=100`, so pooling it measures the same formula difference on more
+  slates. It IS wrong to keep describing the output as "over 24 eligible games
+  of v8/v9 dumps" once v11 rows are in it. Read the row count off the run
+  rather than off any prose, here or in the script. It also biases
   monitoring toward optimism: `sp_bf_per_ip` is missing on 4 of 301 committed
   side-games (1.3%), but on **3 of 22 tonight** (13.6%) — a rebuilt dump has a
   full extra day of StatsAPI behind it, so the historical rate is measured on
@@ -475,50 +551,70 @@ Using a stored rate without its centre imports that season's run environment
 into today's prediction — the same error as freezing a constant off the ledger,
 one artifact out.
 
-## The xwOBA shadow arm
+## The metric shadow arm
 
-`shadow_metric.py` writes `data/shadow_<date>_xw.csv` each slate: the same
-games, built on Savant xwOBA instead of wOBA. It publishes nothing — no lean,
-no `index.html`, no ledger row — and its rows carry `shadow_xw+plat_consol_v1`,
-a tag deliberately absent from `_RECORD_FAMILIES` and `_SCALE_FAMILIES`. **Never
-pool a shadow row into a record or a delta scale.** A test asserts the tag is in
-neither map.
+`shadow_metric.py` writes one extra dump per slate: the same games, built on
+whichever rate the primary build is **not**. It publishes nothing — no lean, no
+`index.html`, no ledger row — and its rows carry a `shadow_*` tag deliberately
+absent from `_RECORD_FAMILIES` and `_SCALE_FAMILIES`. **Never pool a shadow row
+into a record or a delta scale.** A test asserts the tag is in neither map.
+
+**It swapped sides at v11 and that is the point, not a complication.** Until
+v11 the primary ran wOBA and the arm ran xwOBA (`shadow_<date>_xw.csv`,
+`shadow_xw+plat_consol_v1`); since v11 the primary runs xwOBA and the arm runs
+wOBA (`shadow_<date>_woba.csv`, `shadow_woba+plat_consol_v1`). So *"the shadow
+dump"* names a **side of the comparison, not a statistic**, and the committed
+dumps hold both assignments. Anything reading them must key off `model_metric`
+— `shadow_report.dump_metric()` does, falling back to the filename suffix only
+for dumps written before that column existed, and `build_frame` assigns
+`net_w`/`net_x` by metric so `d_corr` means "xwOBA minus wOBA" on every slate
+either side of the changeover. Keying off primary-vs-shadow would silently flip
+the sign of half the sample.
 
 It exists because the wOBA-versus-xwOBA question **cannot be settled by
-comparing the two eras**, and the temptation to try is strong: the wOBA rows sit
-at .482 against always-home .600 while the xwOBA rows sat at .570 against .503,
-and the net correlation fell from +0.273 (v9/v10, n=97) to +0.038 (v4+v5,
-n=65). Both facts are real and neither is evidence, for two reasons. Five things
-changed in six days — metric, platoon prior, `K` 100→400, personal priors,
-abstention — and only wOBA v1+v2 isolates the metric, at n=16 with a
-correlation CI of [-0.816, +0.288]. And the eras were *different games*: over
-the xwOBA rows always-home ran .515 and always-chalk .619; over the wOBA rows
-.600 and .565. A sequential comparison measures the schedule as much as the
-model. Unpaired, xwOBA-minus-wOBA is d_corr +0.283 with CI [-0.010, +0.560] —
-it does not separate, and on that trajectory it never will. Paired on the same
-games the metrics correlate ~0.9, so se falls ~0.142 → ~0.045 and a true gap of
-0.09 resolves inside a month. That is the whole argument for the arm, and the
-reason the answer to "should we revert to xwOBA" was *measure it* rather than
-*yes* or *no*.
+comparing the two eras**, and the temptation to try is exactly what produced
+v11. The wOBA rows sit at 63-76 against always-home 84-55 while the xwOBA rows
+sat at 217-164 against 193-188; the v9/v10-versus-wOBA-v5 gap is z = +1.63.
+Real, and not evidence: the eras were *different games* — always-home ran .515
+over the xwOBA rows and .604 over the wOBA ones — and five things changed in
+six days, of which only wOBA v1+v2 isolates the metric, at n=16.
+
+**What the arm has actually measured, which is the number to quote:** 6 paired
+slates, 68 graded with both arms decided, metrics correlating +0.91 on net, 9
+of 77 leans flipped, **d_corr +0.008 with CI [-0.108, +0.128]**. It does not
+separate. Sequentially over those same 68 games the records read wOBA 29-39
+against xwOBA 34-34 — a five-game gap on identical schedules, which is the
+illusion pairing exists to remove. Pairing buys ~2x on se; the projection is
+se ~0.045 at ~9 more slates and 80% power on a 0.09 gap at ~18.
+
+So v11 reverted the metric **without** the arm having answered the question,
+and the arm keeps running so the question keeps accumulating a paired answer
+under the revert. Do not retire it because the primary is back on xwOBA — that
+is precisely when a one-sided read would look most convincing.
 
 Two things to know before touching it. It makes its **own** Savant fetch under
 its own `STATCAST_CACHE_NS`, because it requests a different column and reusing
 a cache written under another selection set returns a CSV missing the rate —
 `STATCAST_SELECTIONS` and the cache namespace are a pair and must move together.
-And the dump is `shadow_*`, not `leans_*`, because `grade_leans` globs
-`leans_*_xw.csv`, which matches any leans-prefixed name ending `_xw.csv`: a
-suffix-based name would have been ledgered as a real pending row. That is a
-prefix decision, not a naming preference, and a test pins both halves against
-`grade_leans`' actual globs rather than a copy of them.
+`patch()` now reads the primary column off `build_site` before overwriting it
+rather than naming it as a literal, which is what let the two arms swap without
+touching that function. And the dump is `shadow_*`, not `leans_*`, because
+`grade_leans` globs `leans_*_xw.csv`, which matches any leans-prefixed name
+ending `_xw.csv`: a suffix-based name would have been ledgered as a real
+pending row. That is a prefix decision, not a naming preference, and a test
+pins both halves — under both suffixes — against `grade_leans`' actual globs
+rather than a copy of them.
 
-**Unverified, knowingly:** Savant is unreachable from the dev environment and
-from CI, so the selection name `xwoba` has never been confirmed against the live
-endpoint. The first run's log line `shadow: rate column 'xwoba' resolved on N/M
-players` is the verification. A low `N` means the name is wrong — and because
-the arm has its own cache namespace, its own dump and `continue-on-error`, being
-wrong costs a log line. Do not add the column to the primary
-`STATCAST_SELECTIONS` until that log says it resolved; that would put an
-unverified column on the path that produces irreplaceable pregame rows.
+**The arm paid for itself before v11 shipped, and this is the precedent to
+keep.** `xwoba` is now on the primary build's critical path. It is there safely
+only because the arm resolved the name against the live endpoint first: Savant
+is unreachable from the dev environment and from CI, so the selection name had
+never been confirmed until Actions run 31435698461 logged `shadow: rate column
+'xwoba' resolved on 20/20 players` and printed a distinct league baseline
+(xwOBA 0.31548 against wOBA 0.31628, same slate, same leaderboard) — proving
+the column exists and is not a relabelled copy. **Never put an unverified
+Savant column on the path that produces irreplaceable pregame rows.** Verify it
+on the shadow arm, where being wrong costs a log line, and promote it after.
 
 ## Before opening a PR
 
