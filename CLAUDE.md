@@ -381,6 +381,39 @@ precedent — they are how the fix is known to look.
 
 **Resolved — keep as precedent**
 
+- **A statistic with no usable sampling distribution.** `ledger_report.txt`
+  printed `implied w = b_sp/b_lineup` from the SP-vs-lineup logit fit, with no
+  standard error beside it — because it has none. `b_lineup` is not
+  distinguishable from zero (+0.122 ± 0.227 over the 82 graded v9/v10 rows), so
+  the ratio is Cauchy-like: bootstrapped, its median is +0.02 but **48% of
+  resamples flip its sign**, 3.6% land beyond |5|, and its mean and sd do not
+  converge with resample count. On the same ledger it read +0.12 on v9/v10,
+  −2.61 pooled and +4.77 on the wOBA rows — three numbers, one underlying
+  non-result, each of which reads as a measurement of a relative weight.
+
+  Fixed by **deleting** the ratio, not by widening its gate. The hypothesis is
+  unchanged and is now well posed: `w = 1` is `b_sp = b_lineup` in native
+  units, so the report prints the contrast `b_lineup − b_sp·(sd_lu/sd_sp)` with
+  the standard error from `c′·cov·c`. That is why `_logit_fit` now returns the
+  full covariance rather than its diagonal — the off-diagonal term is part of a
+  difference's variance, and discarding it is what left the ratio as the only
+  available form. Same data, readable answer: `+0.107 ± 0.245, z = +0.44`, no
+  departure from equal weight.
+
+  **The gate came down as a consequence, and that is the reusable part.**
+  `N_FIT_MIN` was 120 — sized to hide a statistic that is unreadable at small
+  n, not to establish evidence. Coefficients printed with their standard errors
+  are honest at *any* size (`+0.122 ± 0.227` says "indistinguishable from zero"
+  without needing suppression), so the floor dropped to 30 and now covers only
+  logit convergence. When a threshold exists to hide an unreadable number, fix
+  the number and the threshold dissolves — the same move as the shrinkage
+  weights elsewhere in this file, one level up: the cure for a hard gate is
+  usually to remove whatever needed gating.
+
+  Diagnostic only. Nothing in this fit feeds back into a lean, a delta or a
+  grade — verified, not assumed: `b`, `se` and `cov` are locals inside
+  `report()` and reach only `say()`. No `MODEL_TAG` implication.
+
 - **A deferred defect, shipped at its own gate.** `expected_sp_ip` was measured
   **over-dispersed** on the first backfilled actuals (2026-08-04): slope
   0.756 ± 0.063 over 306 side-games, 3.9 se below 1.0, bias +0.096 IP
