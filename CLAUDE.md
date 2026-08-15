@@ -38,7 +38,8 @@ prediction math. Two separate tag families gate two different questions:
 These are different equivalence relations and they do disagree. The authority is
 `_RECORD_FAMILIES` / `_SCALE_FAMILIES` in `build_site.py` (records mirrored in
 `grade_leans.py`) — not this table, which is a reading aid. Current model is
-**v11** — Savant xwOBA, `XWOBA_SHRINK_K = 100`, population shrinkage targets.
+**v12** — Savant xwOBA, `XWOBA_SHRINK_K = 100`, population shrinkage
+targets, calibrated expected starter IP.
 
 | tag | what changed | record family | scale family |
 |---|---|---|---|
@@ -58,6 +59,7 @@ These are different equivalence relations and they do disagree. The authority is
 | wOBA v5 | abstain when a side's starter has no measured season line | wOBA v5 | wOBA v4+v5 |
 | split v1 | one-slate wOBA-lineup/xwOBA-arms test; abandoned before grading | split v1 | split v1 |
 | v11 | revert to xwOBA + K=100 + population target, keeping v2's platoon centring, v3's relief-pool target and v5's abstention | v11 | 8+9+10+11 |
+| v12 | `expected_sp_ip` calibrated per build against its own backfilled actuals (over-dispersed, slope 0.735) | v12 | 8+9+10+11+12 |
 
 The wOBA forward test is intentionally isolated from xwOBA in both namespaces.
 Observed wOBA changes the predictions and its sampling distribution is not the
@@ -71,6 +73,20 @@ less: the keys stop being an obvious lie and start looking like documentation.
 They are not. Read the metric from `model_metric`, never from a key name and
 never from the running build's constants — `market_backfill.metric_label()` is
 the one derivation, and `shadow_report.dump_metric()` is its per-dump twin.
+
+**v12 is the counter-precedent to v11 on the record question: a bump whose
+decision-equivalence measurement argued for *sharing* and which isolated
+anyway, for a reason that has nothing to do with the model.** The expected-IP
+calibration flips 1 lean in 254 with mean |Δ net| 0.00067 against a median
+|xw_net| of 0.01694 — the same order as v10's reweight, which earned a shared
+line. Sharing a record exists to avoid resetting a *graded sample* for a change
+that decides the same games; v11 had no graded rows, so there was no sample to
+protect and a clean line was free. Read that as cost-benefit, not as "a bump
+means isolate" — if v11 had graded rows, the measurement above argues the other
+way, and it is recorded in `_RECORD_FAMILIES` so a later reader can see which
+way the evidence pointed independently of what the reset happened to cost. The
+scale half is the ordinary v10 argument and is measured: `q` is a convex weight
+between the same two phases, so the units are untouched.
 
 **v11 reverts the metric to xwOBA and `K` to 100 and the shrinkage target to the
 population centre, and this table's job is to stop that being read as a
@@ -293,39 +309,6 @@ precedent — they are how the fix is known to look.
   and it is now a fact about the metric the model does not run. Display-only,
   so no `MODEL_TAG` implication either way.
 
-- **A measured defect deferred, with the fix that would recreate the entry
-  above.** The first backfilled actuals (2026-08-04, `actuals_backfill`) show
-  `expected_sp_ip` is **over-dispersed**: regressing actual on predicted over
-  306 side-games gives slope **0.756 ± 0.063**, 3.9 se below 1.0. Bias on the
-  same rows is +0.096 IP (t = 1.31) — a spread problem, not a level one.
-  Starters predicted short go 0.69 IP longer than predicted; those predicted
-  deep go 0.12 shorter. Shrinking toward the mean by 0.76 cuts IP MSE 5.2%.
-
-  Not fixed, on two grounds. It flips 1 of 80 graded v9/v10 leans (mean
-  |Δ net| 0.00067 against a median |xw_net| of 0.019), so the case is
-  correctness of a directly-observed input, not performance — and correctness
-  fixes can wait for a stable estimate. And 306 side-games of July/August is
-  thin for a slope that is plausibly seasonal: pitch counts climb early and
-  clubs get cautious in September, so this may not be the September slope.
-
-  **Gate: re-fit at ~600 side-games** (roughly 2026-08-25). The report prints
-  `IP calibration slope` every build so the number arrives without anyone
-  remembering to look. If it holds near 0.75, ship it — but as a per-build
-  derivation off the accumulating actuals, never as a frozen `a + b·pred`.
-  A literal fitted today is exactly the constants-frozen-from-data entry
-  above, with a fresher date on it. It is lean-path (it moves `q`, so `mx`),
-  so it bumps `MODEL_TAG`; at 1 flip in 80 it shares both families on the v10
-  precedent, but argue that in the PR rather than inheriting it.
-
-  Two companion readings from the same backfill, both recorded rather than
-  acted on. The realized phase weight (`act_sp_bf / act_pa`, the share of PAs
-  the starter actually faced) carries the same over-dispersion in the units
-  that matter — slope 0.746, bias +0.017, MAE 0.101 over 210 side-games — so
-  the defect is in the workload estimate, not in the BF/IP conversion. And the
-  rate metric says nothing yet: calibration slope 0.953 ± 0.380, corr
-  0.178 ± 0.070 against a 0.196 ceiling for a perfect model. Its 95% CI spans
-  near-zero to above that ceiling. Do not quote those two as findings.
-
 - **A past slate's dump is overwritten by a post-hoc rebuild.** `SLATE_DATE`
   rolls over at 3am ET, and the daily grading cron fires at 04:17 UTC — 00:17
   ET — so it still names *yesterday's* slate. It re-runs the full build for
@@ -397,6 +380,59 @@ precedent — they are how the fix is known to look.
   `--ledger-join` so the bias can be sized rather than argued.
 
 **Resolved — keep as precedent**
+
+- **A deferred defect, shipped at its own gate.** `expected_sp_ip` was measured
+  **over-dispersed** on the first backfilled actuals (2026-08-04): slope
+  0.756 ± 0.063 over 306 side-games, 3.9 se below 1.0, bias +0.096 IP
+  (t = 1.31) — a spread problem, not a level one. It was deliberately NOT
+  fixed then, on two grounds: it flipped 1 lean in 80, so the case was
+  correctness of a directly-observed input rather than performance, and 306
+  side-games of July/August is thin for a slope that is plausibly seasonal.
+  The entry set an explicit gate — **re-fit at ~600 side-games** — and had
+  `actuals_backfill` print `IP calibration slope` every build so the number
+  would arrive without anyone remembering to look.
+
+  It arrived. At n=586 the slope read **+0.735 ± 0.048**, 5.5 se below 1.0,
+  and v12 shipped the fix. Keep the whole shape as precedent: a measured
+  defect, a stated reason not to act, a numeric gate, a self-reporting
+  instrument, and a fix at the gate rather than at the first sighting.
+
+  **What it shipped as matters as much as when.** The deferral warned that a
+  fitted literal would be the constants-frozen-from-data entry with a fresher
+  date on it, so `sp_ip_calibration()` re-fits from the ledger on every build
+  and no `a + b·pred` appears in the source. Two design points came out of the
+  other entries here rather than out of this one:
+
+  * The correction is shrunk toward the **identity map** by sample size,
+    `cal(p) = w·(a + b·p) + (1−w)·p` with `w = n/(n+K)`, so `n = 0` returns `p`
+    exactly. No `if n >= N`, no day on which every workload estimate jumps —
+    the threshold-cliff entry applied a third time.
+  * `K = 50` was picked by **walk-forward benchmark**, not taste: fit on every
+    prior slate, score the next, over 586 side-games and 23 slates. Calibration
+    beats no-calibration by +4.1% / +4.0% / +3.8% out-of-sample IP MSE at
+    K = 25 / 50 / 100, against +3.4% at K = 0 — so the shrinkage earns its
+    place early. Bootstrapped over slates, K=50 is the argmin most often
+    (131/400) and every candidate's CI excludes zero. The curve is flat from
+    10 to 100 and the comment says so: what is distinguishable is calibrated
+    from uncalibrated, not 25 from 50.
+
+  The one genuinely new hazard was **a fit that consumes its own output**.
+  From v12 the published `expected_sp_ip` is calibrated, so refitting against
+  it would compound the correction every build and pull the estimator toward
+  the mean without limit. The dump and ledger therefore carry
+  `expected_sp_ip_raw_*`, and the fit reads raw where present, falling back to
+  the published column for pre-v12 rows — which are raw by definition, and are
+  the entire sample on the first build after the bump. A correction that
+  feeds on its own output has no fixed point worth having; store the input.
+
+  Two companion readings from the same backfill are still **not** acted on.
+  The realized phase weight (`act_sp_bf / act_pa`) carries the same
+  over-dispersion in the units that matter — slope 0.746, bias +0.017, MAE
+  0.101 over 210 side-games — which is why the fix targets the workload
+  estimate and not the BF/IP conversion. And the rate metric still says
+  nothing: calibration slope 0.953 ± 0.380, corr 0.178 ± 0.070 against a 0.196
+  ceiling, a CI spanning near-zero to above that ceiling. Do not quote those
+  two as findings.
 
 - **One value, three homes.** `.github/workflows/build.yml` pinned `MODEL_TAG`,
   `RECORD_TAGS`, and `SCALE_TAGS` job-level while both modules also defaulted

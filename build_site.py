@@ -104,7 +104,7 @@ USE_TEAM_LOGOS = os.environ.get("USE_TEAM_LOGOS", "1") != "0"
 LOGO_CDN = "https://www.mlbstatic.com/team-logos"
 DATA_DIR = os.environ.get("DATA_DIR", "data")            # grading ledger home
 LEDGER_PATH = os.path.join(DATA_DIR, "mlb_lean_ledger.csv")
-MODEL_TAG = os.environ.get("MODEL_TAG", "xw+plat_consol_v11")  # keep in sync with grade_leans.py
+MODEL_TAG = os.environ.get("MODEL_TAG", "xw+plat_consol_v12")  # keep in sync with grade_leans.py
 if not MODEL_TAG.startswith("xw+"):
     raise RuntimeError(
         "This build fetches Savant xwOBA; refusing to stamp it with a non-xwOBA MODEL_TAG"
@@ -245,6 +245,28 @@ _RECORD_FAMILIES = {
     # Everything from v6-v10 (expected-IP blend, phase split, PA-share
     # weighting) is untouched -- the revert stops at wOBA v1.
     "xw+plat_consol_v11": ("xw+plat_consol_v11",),
+    # v12 calibrates `expected_sp_ip` against its own backfilled actuals. The
+    # estimator is over-dispersed -- regressing actual on predicted over 586
+    # side-games gives slope +0.735 +/- 0.048, 5.5 se below 1.0 -- and `q`, the
+    # starter's share of plate appearances, is a function of it. The fix is a
+    # per-build OLS refit shrunk toward the identity map, never a frozen
+    # `a + b*pred`; see SP_IP_CALIBRATION_K.
+    #
+    # NEW RECORD FAMILY, and the argument is not the usual one. On decision
+    # equivalence alone this would SHARE with v11 on the v10 precedent: over
+    # the 254 ledger rows carrying both phases it flips 1 lean (0.4%), with
+    # mean |d net| 0.00067 against a median |xw_net| of 0.01694 (4.0%) -- the
+    # same order as the reweight that earned v9/v10 a shared line.
+    #
+    # It is isolated anyway because the usual argument is a COST-BENEFIT one
+    # and the cost is zero here. Sharing exists to avoid resetting a graded
+    # sample for a change that decides the same games; v11 has no graded rows
+    # yet, so there is no sample to protect and a clean line for a lean-path
+    # change is free. Do not generalise this into "bump means isolate" -- if
+    # v11 had graded rows the 1-flip measurement above would have argued for
+    # sharing, and it is recorded here so a later reader can see which way the
+    # evidence pointed independently of what the reset cost.
+    "xw+plat_consol_v12": ("xw+plat_consol_v12",),
 }
 RECORD_TAGS = tuple(
     t.strip() for t in os.environ.get(
@@ -307,13 +329,27 @@ _SCALE_FAMILIES = {
     # so the other three are documentation of the equivalence class, not live
     # behaviour -- same reason the v8 entries stay despite matching zero rows.
     "xw+plat_consol_v8": ("xw+plat_consol_v8", "xw+plat_consol_v9",
-                          "xw+plat_consol_v10", "xw+plat_consol_v11"),
+                          "xw+plat_consol_v10", "xw+plat_consol_v11",
+                          "xw+plat_consol_v12"),
     "xw+plat_consol_v9": ("xw+plat_consol_v8", "xw+plat_consol_v9",
-                          "xw+plat_consol_v10", "xw+plat_consol_v11"),
+                          "xw+plat_consol_v10", "xw+plat_consol_v11",
+                          "xw+plat_consol_v12"),
     "xw+plat_consol_v10": ("xw+plat_consol_v8", "xw+plat_consol_v9",
-                           "xw+plat_consol_v10", "xw+plat_consol_v11"),
+                           "xw+plat_consol_v10", "xw+plat_consol_v11",
+                           "xw+plat_consol_v12"),
     "xw+plat_consol_v11": ("xw+plat_consol_v8", "xw+plat_consol_v9",
-                           "xw+plat_consol_v10", "xw+plat_consol_v11"),
+                           "xw+plat_consol_v10", "xw+plat_consol_v11",
+                           "xw+plat_consol_v12"),
+    # v12 SHARES the scale, and unlike v11's half this one is measured. The
+    # calibration only moves `q`, a convex weight between the same two phases,
+    # so the delta keeps its units by construction -- v10's argument exactly.
+    # Measured on the 254 ledger rows with both phases: mean |d net| 0.00067,
+    # max 0.00542, against a median |xw_net| of 0.01694. That is 4.0% of a
+    # typical magnitude, inside the 1.6-3.4% band that earned v9/v10 a shared
+    # scale, and one lean flips.
+    "xw+plat_consol_v12": ("xw+plat_consol_v8", "xw+plat_consol_v9",
+                           "xw+plat_consol_v10", "xw+plat_consol_v11",
+                           "xw+plat_consol_v12"),
     # wOBA has a different sampling distribution from xwOBA, so it cannot
     # share magnitude cutoffs with any xwOBA lineage.
     # v2 changes the centre of the starter platoon prior but retains observed
@@ -1286,6 +1322,113 @@ def expected_pitcher_ip(profile, classification=None):
     return float(np.clip(estimate, SP_IP_MIN, SP_IP_MAX))
 
 
+# --- v12: the expected-IP estimator is calibrated against its own actuals ---
+# `expected_pitcher_ip` is OVER-DISPERSED: regressing actual starter IP on the
+# pregame estimate over the backfilled box scores gives a slope well under 1,
+# so starters predicted short go longer than predicted and starters predicted
+# deep go shorter. Bias is small and not significant; this is a spread problem.
+# It matters because `q` -- the starter's share of plate appearances -- is a
+# function of this number, so every over-dispersed estimate tilts the phase
+# weight behind `mx`.
+#
+# THE FIX IS A PER-BUILD DERIVATION, NOT A FITTED LITERAL, and that is the
+# whole design. Freezing today's `a + b*pred` into the source would be the
+# constants-frozen-from-data anti-pattern with a fresh date on it -- the slope
+# is plausibly seasonal (pitch counts climb early, clubs get cautious in
+# September), so a September build must fit September's slope. The ledger
+# accumulates actuals on every grading pass, so the fit arrives on its own.
+#
+# The correction is shrunk toward the IDENTITY MAP by sample size:
+#
+#     cal(p) = w*(a + b*p) + (1 - w)*p,   w = n / (n + SP_IP_CALIBRATION_K)
+#
+# so n = 0 returns `p` exactly. That is the threshold-cliff lesson applied
+# again: there is no `if n >= N` gate to cross, no day on which every starter's
+# workload estimate jumps, and no branch to keep in sync. An empty ledger and a
+# full one are the two ends of one expression.
+#
+# K = 50 side-games, chosen by walk-forward benchmark rather than by taste:
+# fitting on every prior slate and scoring the next one, over 586 side-games /
+# 23 slates, the calibration beats no-calibration by +4.1% (K=25), +4.0%
+# (K=50), +3.8% (K=100) in out-of-sample IP MSE, against +3.4% for K=0 (no
+# shrinkage at all -- shrinkage does earn its place early). Bootstrapping over
+# slates, K=50 is the argmin most often (131/400) and every candidate's 95% CI
+# excludes zero. DO NOT READ THE SECOND DIGIT: the curve is flat from 10 to
+# 100 and 25 vs 50 vs 100 are not distinguishable on this sample. What is
+# distinguishable is calibrated from uncalibrated.
+SP_IP_CALIBRATION_K = 50.0
+_sp_ip_cal_state = {}
+
+
+def sp_ip_calibration(led=None):
+    """(intercept, slope, n, w) mapping the raw IP estimate onto its actuals.
+
+    Fitted on `expected_sp_ip_raw` where present and on `expected_sp_ip` where
+    it is not. That fallback is what makes the fit self-sustaining rather than
+    self-consuming: from v12 on the dump carries the RAW estimate beside the
+    published one, and the fit must always read the raw column, or each build
+    would calibrate an already-calibrated number and compound the correction.
+    Rows written before v12 hold a raw value under the published name, so they
+    join the same fit with no special case.
+
+    Uses only rows whose games have finished -- an actual IP exists only after
+    the box score is backfilled -- so there is no lookahead here: tonight's
+    slate is calibrated against completed games, never against itself.
+
+    Returns None when the ledger is missing, unreadable or has fewer than two
+    usable pairs, and the caller then publishes the raw estimate unchanged.
+    """
+    if "fit" in _sp_ip_cal_state:
+        return _sp_ip_cal_state["fit"]
+    fit = None
+    led = load_ledger_df() if led is None else led
+    if led is not None:
+        def col(name):
+            """Numeric column as a Series, all-NaN when the column is absent.
+
+            `pd.to_numeric(led.get(missing))` returns a scalar NaN rather than
+            a Series, which is how a missing column reaches `.where` and raises
+            on an attribute it does not have. Pre-v12 ledgers have no
+            `expected_sp_ip_raw_*` at all, so that path is the normal one on
+            the first build after this ships, not an edge case.
+            """
+            if name not in getattr(led, "columns", ()):
+                return pd.Series(np.nan, index=led.index, dtype="float64")
+            return pd.to_numeric(led[name], errors="coerce")
+
+        pred, act = [], []
+        for side in ("away", "home"):
+            raw = col(f"expected_sp_ip_raw_{side}")
+            pub = col(f"expected_sp_ip_{side}")
+            p = raw.where(raw.notna(), pub)
+            a = col(f"act_sp_ip_{side}")
+            m = p.notna() & a.notna()
+            pred.append(p[m].to_numpy())
+            act.append(a[m].to_numpy())
+        if pred:
+            p = np.concatenate(pred)
+            a = np.concatenate(act)
+            if p.size >= 2 and float(np.std(p)) > 1e-9:
+                slope, intercept = np.polyfit(p, a, 1)
+                n = int(p.size)
+                w = n / (n + SP_IP_CALIBRATION_K)
+                fit = (float(intercept), float(slope), n, float(w))
+    _sp_ip_cal_state["fit"] = fit
+    return fit
+
+
+def calibrate_sp_ip(raw, fit=None):
+    """Apply `sp_ip_calibration` to one raw estimate. Identity without a fit."""
+    v = _f(raw)
+    if v is None:
+        return raw
+    fit = sp_ip_calibration() if fit is None else fit
+    if not fit:
+        return v
+    intercept, slope, _n, w = fit
+    return float(w * (intercept + slope * v) + (1.0 - w) * v)
+
+
 def build_pitching_plans(slate_df, recent_profiles, pitcher_stat,
                          league_baseline):
     """Expected-IP + role-filtered bullpen plan for every probable-pitcher side."""
@@ -1293,6 +1436,14 @@ def build_pitching_plans(slate_df, recent_profiles, pitcher_stat,
     classifications = opener_classifications(recent_profiles)
     league_prior = _f((league_baseline or {}).get("xwOBA"))
     shrink_k = XWOBA_SHRINK_K
+    # Fitted once per build, from completed games only.
+    ip_cal = sp_ip_calibration()
+    if ip_cal:
+        _a, _b, _n, _w = ip_cal
+        log(f"  expected-IP calibration: act = {_a:+.3f} + {_b:.3f}*pred "
+            f"(n={_n}, weight {_w:.3f}); 1.000 = already calibrated")
+    else:
+        log("  expected-IP calibration: no usable actuals -> raw estimate")
     roles_by_team = {}
     bullpen_by_pair = {}
 
@@ -1327,9 +1478,13 @@ def build_pitching_plans(slate_df, recent_profiles, pitcher_stat,
                 continue
             pid, tid = int(pid), int(tid)
             classification = classifications.get(pid)
-            expected_ip = expected_pitcher_ip(
+            # Raw first, then calibrated. Both are carried: the published value
+            # drives `q`, and the raw one is what every future fit regresses
+            # against (see sp_ip_calibration).
+            raw_ip = expected_pitcher_ip(
                 (recent_profiles or {}).get(pid), classification
             )
+            expected_ip = calibrate_sp_ip(raw_ip, ip_cal)
 
             pair = (tid, pid)
             if pair not in bullpen_by_pair:
@@ -1355,6 +1510,7 @@ def build_pitching_plans(slate_df, recent_profiles, pitcher_stat,
                 "opener_confidence": (classification or {}).get("confidence"),
                 "pitching_basis": basis,
                 "expected_sp_ip": expected_ip,
+                "expected_sp_ip_raw": raw_ip,
                 "bullpen_xwOBA": None if bullpen is None else bullpen.get("xwOBA"),
                 "bullpen_pitchers": None if bullpen is None else bullpen.get("pitcher_count"),
                 "bullpen_relief_bf": None if bullpen is None else bullpen.get("relief_bf"),
@@ -2856,6 +3012,7 @@ def apply_pitching_plans(matchup_df, pitching_plans, league_baseline):
     for col, default in (
         ("bullpen_xwOBA", np.nan),
         ("expected_sp_ip", np.nan),
+        ("expected_sp_ip_raw", np.nan),
         ("sp_share", np.nan),
         ("bp_share", np.nan),
         ("mx_xwOBA_sp", np.nan),
@@ -2895,6 +3052,7 @@ def apply_pitching_plans(matchup_df, pitching_plans, league_baseline):
         out.at[idx, "starter_xwOBA"] = starter
         out.at[idx, "bullpen_xwOBA"] = bullpen
         out.at[idx, "expected_sp_ip"] = expected_ip
+        out.at[idx, "expected_sp_ip_raw"] = _f(plan.get("expected_sp_ip_raw"))
         out.at[idx, "bullpen_pitchers"] = plan.get("bullpen_pitchers")
         out.at[idx, "bullpen_relief_bf"] = plan.get("bullpen_relief_bf")
         out.at[idx, "opener"] = bool(plan.get("opener"))
