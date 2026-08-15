@@ -2432,6 +2432,47 @@ def wmean(vals, wts):
     return float(np.average(vals[m], weights=wts[m]))
 
 
+def wsd(vals, wts):
+    """Slot-PA-weighted sd of a lineup's shrunk rates. NaN below two bats.
+
+    Instrumentation for one question the composite cannot answer: `B_0` is a
+    weighted MEAN, so a lineup of nine .310 bats and a lineup of one .400 and
+    eight .299 bats publish the same number. This records how concentrated the
+    talent behind that mean was, so "do good hitters get averaged down" becomes
+    a measurement rather than an argument -- regress the rate residual, and the
+    lean's error against run margin, on this.
+
+    DIAGNOSTIC ONLY. It reaches the dump and ledger and nothing else; no lean,
+    delta, edge or grade reads it, which is why adding it carries no MODEL_TAG
+    implication. Two things to know before using it:
+
+      * It is measured on the NEUTRAL, post-shrinkage values -- the same
+        vector `opp_xwOBA_neutral` averages. Post-shrinkage because that is
+        what the model actually believes about each bat; pre-platoon because
+        dispersion should describe the lineup, not tonight's handedness draw.
+      * A team-backfilled hitter carries the team aggregate, so he sits at
+        (roughly) the mean by construction and deflates this. Control for it
+        with `lineup_savant_backfill_*`, which the ledger already carries --
+        do not read a low value as a flat lineup without checking that first.
+
+    Population (not sample) sd, weighted by the same slot vector as the mean,
+    so mean and sd describe the same weighting. Falls back to an unweighted sd
+    when no usable weights exist, matching `wmean`'s degradation.
+    """
+    vals = pd.to_numeric(pd.Series(vals).reset_index(drop=True), errors="coerce")
+    if vals.notna().sum() < 2:
+        return np.nan
+    if wts is None:
+        return float(vals.std(ddof=0, skipna=True))
+    wts = pd.to_numeric(pd.Series(wts).reset_index(drop=True), errors="coerce")
+    m = vals.notna() & wts.notna() & (wts > 0)
+    if m.sum() < 2:
+        return float(vals.std(ddof=0, skipna=True))
+    v, k = vals[m].to_numpy(float), wts[m].to_numpy(float)
+    mu = float(np.average(v, weights=k))
+    return float(np.sqrt(np.average((v - mu) ** 2, weights=k)))
+
+
 def slot_pa_weights(order):
     """Map a batting-order (1-9) series to expected PA/game weights.
 
@@ -2757,6 +2798,10 @@ def aggregate_lineup(H, rate_cols, weighted=True, shrink_prior=None, shrink_k=No
                     if weighted
                     else rec["opp_xwOBA_neutral_mean"]
                 )
+                # How concentrated the talent behind that mean was. See wsd:
+                # diagnostic only, and computed on this same vector so the
+                # mean and its dispersion always describe one lineup.
+                rec["opp_xwOBA_sd"] = wsd(vals, w if weighted else None)
 
                 # Platoon term last, on the shrunk (or backfilled) value: it is
                 # a matchup fact about tonight, not a season rate to regress.
@@ -2838,6 +2883,9 @@ def build_matchup(P, agg, rate_cols, league_baseline, shrink_prior=None, shrink_
                 rec["opp_xwOBA_neutral"] = neutral
                 rec["opp_xwOBA_vs_sp"] = vs_sp
                 rec["platoon_delta_sp"] = a.get("platoon_delta_sp")
+                # Diagnostic; carried to the dump so it reaches the ledger.
+                # Never read back into a matchup value -- see wsd.
+                rec["opp_xwOBA_sd"] = a.get("opp_xwOBA_sd")
                 # The generic opp_xwOBA remains the starter-adjusted alias.
                 ov = vs_sp
             L = league_baseline.get(c, np.nan)

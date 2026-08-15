@@ -245,6 +245,7 @@ AUDIT_COLS = [
     # v9 sequential-phase audit. Suffixes identify the pitcher side; the
     # opponent-lineup fields therefore describe the offense facing that side.
     "opp_xwoba_neutral_away", "opp_xwoba_neutral_home",
+    "opp_xwoba_sd_away", "opp_xwoba_sd_home",
     "opp_xwoba_vs_sp_away", "opp_xwoba_vs_sp_home",
     "platoon_delta_sp_away", "platoon_delta_sp_home",
     "sp_share_away", "sp_share_home",
@@ -291,6 +292,7 @@ MODEL_FIELDS = [
     "sp_bf_per_ip_away","sp_bf_per_ip_home",
     "bp_bf_per_ip_away","bp_bf_per_ip_home",
     "opp_xwoba_neutral_away","opp_xwoba_neutral_home",
+    "opp_xwoba_sd_away","opp_xwoba_sd_home",
     "opp_xwoba_vs_sp_away","opp_xwoba_vs_sp_home",
     "platoon_delta_sp_away","platoon_delta_sp_home",
     "sp_share_away","sp_share_home",
@@ -495,6 +497,12 @@ def rows_from_dump(xw_df, pl_df):
             bp_bf_per_ip_home=h.get("bp_bf_per_ip", np.nan),
             opp_xwoba_neutral_away=a.get("opp_xwOBA_neutral", np.nan),
             opp_xwoba_neutral_home=h.get("opp_xwOBA_neutral", np.nan),
+            # Slot-PA-weighted sd of the nine shrunk rates behind the composite
+            # above. Diagnostic: it makes "do good hitters get averaged down"
+            # measurable, and nothing reads it back into a lean. Absent on every
+            # row written before it existed, which is most of the ledger.
+            opp_xwoba_sd_away=a.get("opp_xwOBA_sd", np.nan),
+            opp_xwoba_sd_home=h.get("opp_xwOBA_sd", np.nan),
             opp_xwoba_vs_sp_away=a.get("opp_xwOBA_vs_sp", np.nan),
             opp_xwoba_vs_sp_home=h.get("opp_xwOBA_vs_sp", np.nan),
             platoon_delta_sp_away=a.get("platoon_delta_sp", np.nan),
@@ -736,12 +744,43 @@ def _model_family_grades(led):
     return out
 
 
-def report(led):
+def report_text(led):
+    """Build the report body. PURE -- no printing, no file write.
+
+    Split out because `report()` writes REPORT_PATH as a side effect, so any
+    call made to inspect the output silently overwrote `data/ledger_report.txt`
+    -- a bot-owned artifact -- with whatever frame was passed in. That bit
+    during development: calling it on a filtered ledger rewrote the committed
+    report from a partial row set. Tests and ad-hoc inspection use this; only
+    `report()` touches the filesystem.
+    """
     lines = []
     say = lines.append
     g = _record_grades(led)
     if g.empty:
-        say("no graded games yet.")
+        # Name the scope. This said "no graded games yet." full stop, which is
+        # true of RECORD_TAGS and reads as "the ledger is empty" -- on the
+        # morning v12 shipped, 40 lines above a family history covering 534
+        # graded rows. A MODEL_TAG bump empties this block by design and every
+        # bump reproduces the sentence, so the fix belongs here rather than in
+        # a release note nobody reads twice.
+        #
+        # The prior-family count is measured off the ledger, never derived by
+        # subtracting what this block would have shown -- see _lock_provenance
+        # in build_site for the same rule and the reason for it.
+        prior = 0
+        if "status" in getattr(led, "columns", ()):
+            prior = int((led["status"] == "graded").sum())
+        tag = " + ".join(RECORD_TAGS)
+        if prior:
+            say(f"no graded games yet under {tag} — {prior} graded rows of "
+                "prior-family history below (see \"model-family history\").")
+            say("  The current-family record, |Δ| terciles and weight fit "
+                "resume once rows accumulate; everything printed below is "
+                "either pooled across families or scoped per family, and is "
+                "unaffected.")
+        else:
+            say("no graded games yet.")
     else:
         _abs = _abstained(g)
         say(f"LEAN LEDGER — {len(g)} graded games"
@@ -859,10 +898,16 @@ def report(led):
                 + (f"({_abs} abstained)  " if _abs else "")
                 + f"{metric} full {_rec(fam['xw_full'])}  F5 {_rec(fam['xw_f5'])}"
             )
-    txt = "\n".join(lines)
+    return "\n".join(lines)
+
+
+def report(led):
+    """Print the report and write it to REPORT_PATH. The only writer."""
+    txt = report_text(led)
     print("=" * 60); print(txt); print("=" * 60)
     with open(REPORT_PATH, "w") as f:
         f.write(txt + "\n")
+    return txt
 
 def main():
     os.makedirs(DATA_DIR, exist_ok=True)
