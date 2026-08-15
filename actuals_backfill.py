@@ -422,6 +422,15 @@ def paired_rates(df):
         pred = _num(df, f"mx_xwoba_{pit_side}")
         act = _num(df, f"act_woba_{bat_side}")
         pa = _num(df, f"act_pa_{bat_side}")
+        # `opp_xwoba_sd_<pit_side>` and `lineup_savant_backfill_<pit_side>` are
+        # written on the same row as `mx_xwoba_<pit_side>` and describe the same
+        # offense, so they take the identical cross. They ride along here rather
+        # than being re-derived by a caller, for the reason in the docstring: a
+        # wrong cross yields a plausible near-zero correlation, not an error.
+        # `backfill` matters because a Savant-missing hitter carries the team
+        # aggregate and sits at the mean by construction, deflating `sd`.
+        sd = _num(df, f"opp_xwoba_sd_{pit_side}")
+        bfill = _num(df, f"lineup_savant_backfill_{pit_side}")
         m = pred.notna() & act.notna()
         if not m.any():
             continue
@@ -433,10 +442,12 @@ def paired_rates(df):
             "pitching_side": pit_side, "batting_side": bat_side,
             "pred": pred[m].to_numpy(), "act": act[m].to_numpy(),
             "pa": pa[m].to_numpy(),
+            "sd": sd[m].to_numpy(), "backfill": bfill[m].to_numpy(),
         }))
     return (pd.concat(rows, ignore_index=True) if rows
             else pd.DataFrame(columns=["game_pk", "model_tag", "pitching_side",
-                                       "batting_side", "pred", "act", "pa"]))
+                                       "batting_side", "pred", "act", "pa",
+                                       "sd", "backfill"]))
 
 
 def paired_net(df):
@@ -455,15 +466,26 @@ def paired_net(df):
     """
     pred = _num(df, "xw_net")
     act = _num(df, "act_woba_home") - _num(df, "act_woba_away")
+    # Dispersion difference, oriented to MATCH xw_net: home offense minus away.
+    # The home offense is described on the AWAY-pitcher row, so the home term is
+    # `opp_xwoba_sd_away`. That is the same cross paired_rates applies, and
+    # differencing it here rather than in a caller is the rule this function
+    # already states -- paired_rates owns the side cross, this owns the
+    # difference. Reversed, it would report a real effect with the wrong sign.
+    d_sd = _num(df, "opp_xwoba_sd_away") - _num(df, "opp_xwoba_sd_home")
+    # Run margin, same orientation, for the question the record actually scores.
+    margin = _num(df, "full_home") - _num(df, "full_away")
     m = pred.notna() & act.notna()
     if not m.any():
-        return pd.DataFrame(columns=["game_pk", "model_tag", "pred", "act"])
+        return pd.DataFrame(columns=["game_pk", "model_tag", "pred", "act",
+                                     "d_sd", "margin"])
     return pd.DataFrame({
         "game_pk": (df.loc[m, "game_pk"].to_numpy()
                     if "game_pk" in df.columns else np.nan),
         "model_tag": (df.loc[m, "model_tag"].to_numpy()
                       if "model_tag" in df.columns else None),
         "pred": pred[m].to_numpy(), "act": act[m].to_numpy(),
+        "d_sd": d_sd[m].to_numpy(), "margin": margin[m].to_numpy(),
     })
 
 
