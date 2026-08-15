@@ -62,21 +62,24 @@ REQUEST_DELAY = 0.25
 
 # Column carrying a hitter's 1-9 batting-order slot through the pipeline.
 BATTING_ORDER_COL = "batting_order"
-# wOBA is the active model input for this forward-test lineage. The pipeline's
-# old xwOBA-shaped dump/ledger keys are intentionally retained below as a
-# compatibility schema so historical xwOBA rows remain readable; every new
-# dump also carries model_metric="wOBA" to make the underlying statistic
-# explicit. These constants define the source of truth for all active batter,
-# starter, bullpen, league-prior, percentile, and pitch-mix inputs.
-MODEL_RATE_SOURCE_COL = "woba"
-MODEL_RATE_LABEL = "wOBA"
-MODEL_RATE_INTERNAL_COL = "xwOBA"  # stable legacy dump/ledger schema only
+# Savant xwOBA is the active model input. v11 restores it after the wOBA
+# forward test (wOBA v1-v5) ran 63-76 against always-home 84-55; see
+# _RECORD_FAMILIES for what the revert keeps and what the evidence for each
+# piece actually was. The dump/ledger keys have always been xwOBA-shaped, so
+# under this metric the compatibility schema and the statistic agree again --
+# but they are still two different things, and every dump carries
+# model_metric explicitly rather than letting the key names imply it.
+# These constants define the source of truth for all active batter, starter,
+# bullpen, league-prior, percentile, and pitch-mix inputs.
+MODEL_RATE_SOURCE_COL = "xwoba"
+MODEL_RATE_LABEL = "xwOBA"
+MODEL_RATE_INTERNAL_COL = "xwOBA"  # stable dump/ledger schema, both metrics
 # True only for a posted hitter absent from the season Savant leaderboard, who
 # therefore carries the active team's PA-weighted rate. Purely an in-process
 # frame column -- it reaches no dump, ledger, or audit schema -- so it carries
 # one name, not an alias pair. An alias would drift the way the workflow's
 # MODEL_TAG pin did.
-MODEL_RATE_TEAM_BACKFILL_COL = "wOBA_team_backfill"
+MODEL_RATE_TEAM_BACKFILL_COL = "xwOBA_team_backfill"
 # Expected plate appearances per game by batting-order slot. A lineup turns over
 # from the top, so the leadoff man bats ~4.6 times while the 9-hole bats ~3.8 --
 # roughly a 22% spread in in-game exposure across the order. We weight lineup
@@ -101,10 +104,10 @@ USE_TEAM_LOGOS = os.environ.get("USE_TEAM_LOGOS", "1") != "0"
 LOGO_CDN = "https://www.mlbstatic.com/team-logos"
 DATA_DIR = os.environ.get("DATA_DIR", "data")            # grading ledger home
 LEDGER_PATH = os.path.join(DATA_DIR, "mlb_lean_ledger.csv")
-MODEL_TAG = os.environ.get("MODEL_TAG", "woba+plat_consol_v5")  # keep in sync with grade_leans.py
-if not MODEL_TAG.startswith("woba+"):
+MODEL_TAG = os.environ.get("MODEL_TAG", "xw+plat_consol_v11")  # keep in sync with grade_leans.py
+if not MODEL_TAG.startswith("xw+"):
     raise RuntimeError(
-        "This build fetches observed wOBA; refusing to stamp it with a non-wOBA MODEL_TAG"
+        "This build fetches Savant xwOBA; refusing to stamp it with a non-xwOBA MODEL_TAG"
     )
 _RECORD_FAMILIES = {
     # v3 changed only ledger locking/identity; its prediction math is v2.
@@ -187,6 +190,61 @@ _RECORD_FAMILIES = {
     # immutable dumps and ledger rows remain recognised after full wOBA was
     # restored; it never pools with the active wOBA record.
     "split+plat_consol_v1": ("split+plat_consol_v1",),
+    # v11 reverts the metric to Savant xwOBA, K to 100, and the shrinkage
+    # target to the population centre -- and KEEPS the three post-v10 changes
+    # whose evidence is independent of those three. NEW RECORD FAMILY, which
+    # is not the interesting half; what needs arguing is the composition, so
+    # each piece is listed with what actually decided it.
+    #
+    # REVERTED
+    #   metric wOBA -> xwOBA. Decided by the operator, not by a measurement,
+    #     and the honest statement of the evidence is that there is none
+    #     either way: the paired shadow arm exists precisely because the
+    #     sequential comparison cannot settle it, and at 6 slates it reports
+    #     d_corr +0.008 with CI [-0.108, +0.128]. The wOBA lineage's 63-76
+    #     against always-home 84-55 is real and is not evidence -- the eras
+    #     were different games. The shadow arm now runs wOBA, so the question
+    #     keeps accumulating a paired answer under the revert.
+    #   K 400 -> 100. This one overrides a direct measurement and the override
+    #     is deliberate: `reliever_shrink_probe.py` fits K three ways
+    #     (walk-forward 391 [293,519] on n=53,464; within-season 600/384/577)
+    #     and every interval excludes 100. Nothing here disputes that fit. It
+    #     is reverted because the operator asked for the K=100 model back, and
+    #     that is a legitimate call to make against a fit -- but do not read
+    #     the revert as a finding that 100 beat 400. Nothing measured that.
+    #   personal shrinkage targets -> population centre, via PLAYER_PRIORS=0,
+    #     which restores the v3 target expression exactly (H -> 0) rather than
+    #     adding a branch. Note the flag alone will not undo this under v11 --
+    #     the frozen priors are wOBA and an xwOBA build refuses them; see
+    #     USE_PLAYER_PRIORS. The out-of-sample probe favours personal priors by
+    #     +7% to +25% weighted MSE with CIs excluding zero; the forward read on
+    #     the ledger points the other way (lineup-component corr +0.124 on the
+    #     v9/v10 rows against -0.004 on v5's) and does NOT separate either --
+    #     bootstrapped, that difference is +0.128 with CI [-0.054, +0.301].
+    #     Reverted on the operator's call, with both measurements on the record.
+    #
+    # KEPT, each because its evidence is independent of metric, K and target
+    #   exposure-centred platoon offsets (wOBA v2). Not an empirical fit: a
+    #     hitter's season line is ALREADY a platoon blend at his real exposure,
+    #     so treating it as the midpoint of a 50/50 mix is arithmetically wrong
+    #     whatever rate is inside it. Same conservative gap as the old
+    #     universal term (0.021 against 0.020).
+    #   relief-pool shrink target (wOBA v3's other half). Measured before it
+    #     shipped: the league PA-weighted batter centre is the centre of no
+    #     subpool, and the relief pool sits 0.0102 below it. That bias exists
+    #     at any K -- K only decides how much of it lands. `relief_pool_prior`
+    #     notes K and this target had to RISE together, because raising K
+    #     against the old target would have doubled the bias; the reverse
+    #     direction is safe, since lowering K just gives a correct centre less
+    #     weight. Reverting it would restore a measured bias for no reason.
+    #   starter abstention (wOBA v5). A side whose starter has no leaderboard
+    #     line contributes a prior, not a measurement, and that is true of
+    #     xwOBA at K=100 exactly as it was of wOBA at K=400. It makes no
+    #     performance claim and never did.
+    #
+    # Everything from v6-v10 (expected-IP blend, phase split, PA-share
+    # weighting) is untouched -- the revert stops at wOBA v1.
+    "xw+plat_consol_v11": ("xw+plat_consol_v11",),
 }
 RECORD_TAGS = tuple(
     t.strip() for t in os.environ.get(
@@ -214,16 +272,48 @@ RECORD_TAGS = tuple(
 # 0 lean flips over 24 eligible games. That is a units-preserving change, so
 # the two pool for delta-scale ranking. RECORD_TAGS is a separate question and
 # is deliberately left isolated.
+# v11 SHARES the v8/v9/v10 scale family, argued rather than inherited, and it
+# is the one decision here that is argued rather than measured -- no-lookahead
+# means a past slate cannot be rebuilt to check it. Same metric, same K=100,
+# same batter and starter target, so the three ways v11 differs from v10 are
+# each scale-preserving by a precedent already set in this file:
+#
+#   * exposure-centred platoon offsets: total gap 0.020 -> 0.021. The identical
+#     change under wOBA (v1 -> v2) moved median |net| 0.7% and shared a scale
+#     family on that basis.
+#   * abstention: only ever nulls an edge, never rescales a surviving one --
+#     the v4/v5 precedent, where pooled p33/p80 was identical with and without
+#     the abstained rows.
+#   * relief-pool shrink target: the ONLY piece without a direct precedent.
+#     It shifts both sides' bullpen aggregates by roughly the same amount, so
+#     it largely cancels in a difference -- the same argument the batter
+#     re-centring diagnostic makes above ("a uniform re-centring cancels",
+#     0 flips over 99 rows). It does not cancel exactly, because each
+#     reliever's prior weight K/(n+K) varies with his BF, but that residual is
+#     second-order and at K=100 the prior carries far less of the rate than
+#     the K=400 build this target was designed against.
+#
+# THE FALSIFIER, since this is argued: compare median |xw_net| on the first
+# graded v11 rows against the v9/v10 pool. If it has moved materially, split
+# v11 into its own scale family -- do not leave the pooling in place because
+# it was convenient. Sharing is what gives the strength cutoffs a real pool on
+# day one instead of restarting them for the ninth time.
 _SCALE_FAMILIES = {
     "xw+plat_consol_v5": ("xw+plat_consol_v5", "xw+plat_consol_v6"),
     "xw+plat_consol_v6": ("xw+plat_consol_v5", "xw+plat_consol_v6"),
     "xw+plat_consol_v7": ("xw+plat_consol_v7",),
+    # v11 is listed in all four tuples to keep the relation symmetric. Only the
+    # v11 entry can ever be selected (SCALE_TAGS derives from the CURRENT tag),
+    # so the other three are documentation of the equivalence class, not live
+    # behaviour -- same reason the v8 entries stay despite matching zero rows.
     "xw+plat_consol_v8": ("xw+plat_consol_v8", "xw+plat_consol_v9",
-                          "xw+plat_consol_v10"),
+                          "xw+plat_consol_v10", "xw+plat_consol_v11"),
     "xw+plat_consol_v9": ("xw+plat_consol_v8", "xw+plat_consol_v9",
-                          "xw+plat_consol_v10"),
+                          "xw+plat_consol_v10", "xw+plat_consol_v11"),
     "xw+plat_consol_v10": ("xw+plat_consol_v8", "xw+plat_consol_v9",
-                           "xw+plat_consol_v10"),
+                           "xw+plat_consol_v10", "xw+plat_consol_v11"),
+    "xw+plat_consol_v11": ("xw+plat_consol_v8", "xw+plat_consol_v9",
+                           "xw+plat_consol_v10", "xw+plat_consol_v11"),
     # wOBA has a different sampling distribution from xwOBA, so it cannot
     # share magnitude cutoffs with any xwOBA lineage.
     # v2 changes the centre of the starter platoon prior but retains observed
@@ -285,7 +375,18 @@ STATCAST_SELECTIONS = ["pa", "k_percent", "bb_percent", MODEL_RATE_SOURCE_COL,
 # missing. Making both a pair of module constants is what lets shadow_metric.py
 # repoint the metric and its cache together; a literal at the fetch site could
 # only be repointed by patching the function.
-STATCAST_CACHE_NS = "custom_woba_v1"
+STATCAST_CACHE_NS = "custom_xwoba_v1"
+
+# Suffix of the per-slate dump, `leans_<date>_<DUMP_SUFFIX>.csv`. One constant
+# rather than a literal at the write site, because grade_leans ingests a fixed
+# set of globs (`leans_*_xw.csv`, `_split.csv`, `_woba.csv`) and a dump written
+# under a suffix outside that set is silently never ledgered -- a slate's rows
+# lost with no error, and unrecoverable afterwards without lookahead. The
+# suffix names the metric inside: xwOBA rows land in `_xw.csv` again under v11,
+# and the wOBA lineage's `_woba.csv` dumps stay exactly where they are.
+# test_primary_dump_name_still_ingests pins this against grade_leans' own
+# globs, reading the suffix from here rather than repeating it.
+DUMP_SUFFIX = "xw"
 
 # Batted-ball direction/tendency rates with true league-wide anchors.
 BATTED_RATE_COLS_FOR_BASELINE = ["GB%", "FB%", "LD%", "PU%", "Pull%", "Straight%", "Oppo%"]
@@ -1910,7 +2011,17 @@ XWOBA_SHRINK_COL = "xwOBA"
 # why `dMSE vs 100` is the column the probe tells you to read first -- so 350
 # and 450 are not distinguishable here and precision beyond "about 400" would
 # be false. What is distinguishable is 100 from 400.
-XWOBA_SHRINK_K = 400.0
+#
+# v11 REVERTS THIS TO 100 AND THE FIT ABOVE STILL STANDS. Read the two together
+# rather than assuming the comment was updated to match: every arm above
+# excludes 100, and nothing has been measured since that disputes them. K is
+# back at 100 because the operator asked for the K=100 model, which is a call
+# they get to make -- but it is an override of this fit, not a refutation of
+# it, and the sequential record difference that motivated it does not separate
+# (v9/v10 .567 against wOBA v5 .454 is z = +1.63, on eras whose always-home
+# baselines were .515 and .574). If K is ever revisited, re-run the probe
+# rather than re-reading this paragraph.
+XWOBA_SHRINK_K = 100.0
 
 # --- v4: the shrinkage TARGET is the player, not the pool ------------------
 # K says how hard to regress. This says what to regress toward. Until v4 every
@@ -1945,7 +2056,24 @@ XWOBA_SHRINK_K = 400.0
 #
 # Turning this off restores the v3 behaviour exactly, and so does an empty
 # data/woba_priors_*.csv -- the population centre is the H = 0 limit.
-USE_PLAYER_PRIORS = os.environ.get("PLAYER_PRIORS", "1") == "1"
+# v11 DEFAULTS THIS OFF, restoring the population centre. The probe results
+# above are unchanged and unrefuted -- they measure per-player rate MSE out of
+# sample, and they win there. What moved is a different quantity: on the
+# ledger, the lineup component's correlation with its own realised phase ran
+# +0.124 over the 194 v9/v10 side-games (population centre) against -0.004
+# over v5's 220 (personal priors). Those can both be true -- better individual
+# rates need not survive aggregation into a nine-batter composite -- and the
+# forward difference does not separate either (+0.128, CI [-0.054, +0.301]).
+# Off by operator decision with both readings on the record, not because the
+# probe was found wrong.
+#
+# `PLAYER_PRIORS=1` alone does NOT restore v4 under v11, and the escape hatch
+# should not be described as if it does: the frozen priors are wOBA-
+# denominated, so `player_prior_history` refuses to serve them to an xwOBA
+# build and every caller degrades to the population centre. Restoring v4 means
+# a wOBA build AND this flag, or freezing an xwOBA prior set under its own
+# filenames first.
+USE_PLAYER_PRIORS = os.environ.get("PLAYER_PRIORS", "0") == "1"
 
 _player_prior_state = {}
 
@@ -1956,7 +2084,22 @@ def player_prior_history():
     Absent is not an error: every caller degrades to the population centre,
     which is the v3 behaviour. A daily build must not fail to produce a page
     because a snapshot file is missing.
+
+    A METRIC MISMATCH is an error, and it is the one this guard exists for.
+    The frozen files hold wOBA (`priors_snapshot.RATE_COL` is pinned to it, and
+    the centres carry `woba_wtd`/`woba_unw` headers). Under v11 the model runs
+    on xwOBA with PLAYER_PRIORS off, so nothing reads them -- but turning
+    PLAYER_PRIORS back on would shrink an xwOBA rate toward a wOBA-denominated
+    personal centre. The two are close enough that the result looks entirely
+    plausible and is silently wrong, which is exactly the failure mode
+    `shadow_metric.patch` describes for its cache namespace. Refuse instead:
+    degrade to the population centre and say why, rather than publish it.
     """
+    if MODEL_RATE_LABEL != "wOBA":
+        log(f"  player priors are wOBA-denominated and this build runs "
+            f"{MODEL_RATE_LABEL} -> population centres "
+            f"(frozen priors would be a metric mismatch)")
+        return {}, {}
     if "loaded" not in _player_prior_state:
         try:
             hist, centres = player_priors.load_priors(PRIORS_DIR)
@@ -5983,7 +6126,7 @@ def main():
             for col, series in lu_cols.items():
                 frame[col] = frame["game_pk"].map(series)
     os.makedirs(DATA_DIR, exist_ok=True)
-    matchup_df.to_csv(os.path.join(DATA_DIR, f"leans_{SLATE_DATE}_woba.csv"), index=False)
+    matchup_df.to_csv(os.path.join(DATA_DIR, f"leans_{SLATE_DATE}_{DUMP_SUFFIX}.csv"), index=False)
     if matchup_platoon_df is not None and not matchup_platoon_df.empty:
         matchup_platoon_df.to_csv(os.path.join(DATA_DIR, f"leans_{SLATE_DATE}_pl.csv"), index=False)
 

@@ -73,3 +73,104 @@ def test_report_refuses_to_pool_a_shadow_row(monkeypatch):
     monkeypatch.setitem(bs._RECORD_FAMILIES, sm.SHADOW_TAG, (sm.SHADOW_TAG,))
     with pytest.raises(AssertionError):
         sr.report(n_boot=1)
+
+
+# --------------------------------------------------------------------------
+# which side is which metric (v11 swapped them)
+# --------------------------------------------------------------------------
+def _metric_frame(metric, edge_away, edge_home):
+    f = _frame(edge_away, edge_home)
+    f["model_metric"] = metric
+    return f
+
+
+def test_dump_metric_is_read_from_the_rows_not_the_filename():
+    """`shadow_*` names a SIDE of the arm, not a statistic.
+
+    Before v11 the shadow ran xwOBA; after it the shadow runs wOBA and the
+    primary runs xwOBA. Keying off the filename or off the running build would
+    label half the committed dumps with the wrong metric and silently flip the
+    sign of d_corr on that half.
+    """
+    assert sr.dump_metric(_metric_frame("wOBA", .01, 0.0), "x.csv") == "wOBA"
+    assert sr.dump_metric(_metric_frame("xwOBA", .01, 0.0), "x.csv") == "xwOBA"
+    # A dump written before the column existed falls back to its suffix.
+    bare = _frame(.01, 0.0)
+    assert sr.dump_metric(bare, "shadow_2026-08-10_xw.csv") == "xwOBA"
+    assert sr.dump_metric(bare, "leans_2026-08-10_woba.csv") == "wOBA"
+    # A frame spanning both names no metric rather than guessing one.
+    mixed = _metric_frame("wOBA", .01, 0.0)
+    mixed.loc[1, "model_metric"] = "xwOBA"
+    assert sr.dump_metric(mixed, "shadow_2026-08-10_woba.csv") is None
+
+
+def test_net_columns_follow_the_metric_across_the_v11_swap(tmp_path, monkeypatch):
+    """net_x is the xwOBA net on EVERY slate, whichever arm produced it.
+
+    Built as two slates with the roles reversed -- the pre-v11 assignment and
+    the post-v11 one -- with the same xwOBA net on both. If the report keyed
+    off primary/shadow instead of off the metric, the second slate's nets would
+    land in the opposite columns and d_corr would be measuring the changeover.
+    """
+    monkeypatch.setattr(sr, "DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(sr, "LEDGER", str(tmp_path / "led.csv"))
+    pd.DataFrame([{"game_pk": 1, "status": "graded", "xw_net": .01,
+                   "model_metric": "xwOBA", "full_home": 4, "full_away": 2}]
+                 ).to_csv(tmp_path / "led.csv", index=False)
+
+    # 2026-08-10: shadow was xwOBA, primary was wOBA (pre-v11).
+    _metric_frame("xwOBA", .02, 0.0).to_csv(
+        tmp_path / "shadow_2026-08-10_xw.csv", index=False)
+    _metric_frame("wOBA", .05, 0.0).to_csv(
+        tmp_path / "leans_2026-08-10_woba.csv", index=False)
+    # 2026-08-20: shadow is wOBA, primary is xwOBA (post-v11). Same values,
+    # opposite sides.
+    _metric_frame("wOBA", .05, 0.0).to_csv(
+        tmp_path / "shadow_2026-08-20_woba.csv", index=False)
+    _metric_frame("xwOBA", .02, 0.0).to_csv(
+        tmp_path / "leans_2026-08-20_xw.csv", index=False)
+
+    pairs = sr._slate_dates()
+    assert [d for d, _, _ in pairs] == ["2026-08-10", "2026-08-20"]
+    f, _ = sr.build_frame(pairs)
+    # net = away-row edge - home-row edge, per game_nets.
+    assert list(f.net_x.round(6)) == [.02, .02]
+    assert list(f.net_w.round(6)) == [.05, .05]
+
+
+def test_a_slate_whose_dumps_share_one_metric_is_skipped_not_pooled(
+        tmp_path, monkeypatch):
+    """Two xwOBA dumps are not a comparison. Skip loudly, never silently."""
+    monkeypatch.setattr(sr, "DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(sr, "LEDGER", str(tmp_path / "led.csv"))
+    pd.DataFrame([{"game_pk": 1, "status": "graded", "xw_net": .01,
+                   "model_metric": "xwOBA", "full_home": 4, "full_away": 2}]
+                 ).to_csv(tmp_path / "led.csv", index=False)
+    _metric_frame("xwOBA", .02, 0.0).to_csv(
+        tmp_path / "shadow_2026-08-20_woba.csv", index=False)
+    _metric_frame("xwOBA", .02, 0.0).to_csv(
+        tmp_path / "leans_2026-08-20_xw.csv", index=False)
+    with pytest.raises(SystemExit):
+        sr.build_frame(sr._slate_dates())
+
+
+def test_ledger_join_substitutes_into_the_column_matching_its_metric(
+        tmp_path, monkeypatch):
+    """`xw_net` is a legacy KEY name; pre-v11 rows hold wOBA, v11 rows xwOBA.
+
+    Overwriting net_w unconditionally was right only while the ledger was
+    wOBA. Under v11 it would compare an xwOBA ledger net against the wOBA arm
+    and report the metric difference as contamination.
+    """
+    monkeypatch.setattr(sr, "DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(sr, "LEDGER", str(tmp_path / "led.csv"))
+    pd.DataFrame([{"game_pk": 1, "status": "graded", "xw_net": .033,
+                   "model_metric": "xwOBA", "full_home": 4, "full_away": 2}]
+                 ).to_csv(tmp_path / "led.csv", index=False)
+    _metric_frame("wOBA", .05, 0.0).to_csv(
+        tmp_path / "shadow_2026-08-20_woba.csv", index=False)
+    _metric_frame("xwOBA", .02, 0.0).to_csv(
+        tmp_path / "leans_2026-08-20_xw.csv", index=False)
+    f, _ = sr.build_frame(sr._slate_dates(), use_ledger_net=True)
+    assert f.net_x.iloc[0] == pytest.approx(.033)   # ledger is xwOBA
+    assert f.net_w.iloc[0] == pytest.approx(.05)    # wOBA arm untouched

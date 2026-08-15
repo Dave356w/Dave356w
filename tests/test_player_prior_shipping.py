@@ -39,6 +39,12 @@ def frozen(monkeypatch):
     monkeypatch.setitem(B._player_prior_state, "loaded", (hist, centres))
     monkeypatch.setattr(B, "SEASON", 2026)
     monkeypatch.setattr(B, "USE_PLAYER_PRIORS", True)
+    # The frozen files are wOBA-denominated and `player_prior_history` refuses
+    # to serve them to a build running another metric, so the label has to say
+    # wOBA for this machinery to be reachable at all. Pinned here rather than
+    # left implicit: under v11 the shipped build is xwOBA and these tests would
+    # otherwise all pass trivially against a disabled code path.
+    monkeypatch.setattr(B, "MODEL_RATE_LABEL", "wOBA")
     return hist, centres
 
 
@@ -195,3 +201,20 @@ def test_the_committed_snapshot_covers_the_three_prior_seasons():
         assert (season, "BAT") in centres
         assert (season, "RP") in centres
         assert any(season in seasons for seasons in hist.values())
+
+
+def test_priors_are_refused_when_the_build_runs_another_metric(frozen,
+                                                              monkeypatch):
+    """A wOBA-denominated personal prior must never shrink an xwOBA rate.
+
+    The two rates are close enough that the mixed result looks entirely
+    plausible and nothing raises -- the same silent mode `shadow_metric.patch`
+    guards its cache namespace against. v11 runs xwOBA with priors off, so this
+    is the guard on someone turning PLAYER_PRIORS back on without also
+    freezing an xwOBA prior set.
+    """
+    monkeypatch.setattr(B, "MODEL_RATE_LABEL", "xwOBA")
+    assert B.player_prior_history() == ({}, {})
+    # And the callers degrade to the population centre rather than erroring.
+    assert B.player_prior_one(101, MU) == MU
+    assert B.player_prior_vector([101, 202], MU) == MU
