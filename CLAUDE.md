@@ -685,6 +685,83 @@ the column exists and is not a relabelled copy. **Never put an unverified
 Savant column on the path that produces irreplaceable pregame rows.** Verify it
 on the shadow arm, where being wrong costs a log line, and promote it after.
 
+## Probes and standing monitors
+
+Before proposing an improvement, check whether an instrument for it already
+exists — several questions in this repo have been asked twice because the
+answer was sitting in a probe nobody ran. And before *deferring* one, leave an
+instrument behind: the expected-IP fix landed at its stated gate only because
+`actuals_backfill` printed its slope every build, and the same deferral without
+that line would still be waiting.
+
+**Standing monitors** print on every build and need no one to remember them.
+`data/ledger_report.txt` carries the current-family record and F5, the |Δ|
+terciles, the per-family and per-slate predicted-vs-actual, the component error
+(SP / BP / lineup each against its own realised phase), the IP calibration
+slope, the SP-vs-lineup coefficients and their symmetry contrast. The grades
+page carries the baseline controls and the lock provenance. Read these before
+writing a new probe.
+
+**Probes run on demand.** Five read committed artifacts and run anywhere:
+
+| probe | question |
+|---|---|
+| `interaction_probe.py` | do single signals or other combiners beat `B·P/L`? |
+| `dispersion_probe.py` | does a concentrated lineup beat the mean it is averaged into? |
+| `bp_ablation.py` | does removing the bullpen term change any decision? |
+| `compare_v8_v9.py` | what the v9 sequential form changed against v8 |
+| `shadow_report.py` | what the paired metric arm can and cannot settle |
+
+Seven need a live API and therefore a GitHub runner — `espn_403_probe`,
+`matchup_form_probe`, `phase_actuals_probe`, `pitch_arsenal_probe`,
+`player_prior_probe`, `pythag_control_probe`, `reliever_shrink_probe`. Each has
+a workflow under `.github/workflows/` and each says so in its own header. Savant
+and StatsAPI are unreachable from the dev environment, so a probe that needs
+them cannot be smoke-tested locally; run the workflow.
+
+### Rules these have earned
+
+- **A deferred decision needs a numeric gate and a self-reporting instrument.**
+  Not one or the other. `expected_sp_ip` is the worked example: measured
+  over-dispersed, deliberately not fixed, gate set at ~600 side-games, slope
+  printed every build, fixed at the gate.
+- **Fix the test before the data exists.** `dispersion_probe` was written while
+  the column it reads had zero graded rows, so its cuts could not be chosen to
+  suit an outcome. A test written after seeing the data is a different and
+  weaker kind of evidence; if you add one later, say so in the output.
+- **Print the standard error; never suppress the number.** A statistic that is
+  unreadable at small n is a statistic to fix, not to gate — see the ratio
+  instance in the anti-patterns above. A hidden number invites someone to
+  recompute it without the caveat.
+- **Verify an unproven external input on a shadow arm before the critical
+  path.** The `xwoba` selection name reached the primary build only after the
+  arm resolved it against the live endpoint, where being wrong cost a log line
+  instead of a slate.
+- **A probe that hardcodes a model constant goes stale and starts benchmarking
+  the model against an old copy of itself.** `interaction_probe` froze the IP
+  calibration slope at `0.756` and, once v12 shipped a per-build fit, would have
+  double-applied it. Read live values off the module.
+- **Say what a probe cannot answer.** `player_prior_probe` cannot count lean
+  flips; `shadow_report` cannot settle the metric from unpaired eras; the
+  dump-versus-ledger join is contaminated by the post-rollover rebuild. Each
+  says so in its own header, and those sentences are load-bearing.
+
+### Instrumented and waiting
+
+Do not re-derive these by hand; they have readouts.
+
+- **Lineup dispersion** — `dispersion_probe.py`. First read at ~347 side-games,
+  roughly 12 slates from 2026-08-15. Zero rows today: the column ships on new
+  rows only and no graded row predates it can ever be backfilled.
+- **The v11/v12 scale-family share** — argued, not measured, because
+  no-lookahead forbids rebuilding a past slate. Falsifier named in
+  `_SCALE_FAMILIES`: compare median `|xw_net|` on the first graded v11/v12 rows
+  against the v9/v10 pool and split the family if it moved.
+- **The metric question** — the shadow arm, running wOBA under an xwOBA
+  primary. Needs roughly 18 paired slates for 80% power on a 0.09 gap.
+- **`LEAN_STRENGTH_FALLBACK`** — recompute from whatever `SCALE_TAGS` resolves
+  to rather than quoting any number in this file.
+
 ## Before opening a PR
 
 ```
