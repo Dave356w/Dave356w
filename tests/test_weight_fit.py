@@ -122,3 +122,64 @@ def test_the_gate_is_a_numerical_floor_not_an_evidence_threshold():
     with standard errors are honest at any n, so the floor now only has to keep
     the logit from returning a meaningless covariance."""
     assert gl.N_FIT_MIN <= 60
+
+
+# --------------------------------------------------------------------------
+# the empty-current-family header
+# --------------------------------------------------------------------------
+def _real_ledger():
+    """The committed ledger, as the column template. report() reads a wide
+    schema and a hand-built frame would test a shape the function never sees."""
+    import pandas as pd
+    return pd.read_csv(gl.LEDGER_PATH, low_memory=False)
+
+
+def _first_line(led):
+    """First body line, via the PURE builder.
+
+    Deliberately not `report()`: that writes REPORT_PATH, so a test calling it
+    would overwrite the committed `data/ledger_report.txt` with a report built
+    from this fixture's filtered frame. A test must not mutate a bot-owned
+    artifact to read one.
+    """
+    return gl.report_text(led).splitlines()[0]
+
+
+def test_an_empty_current_family_names_its_scope_and_the_history():
+    """A MODEL_TAG bump empties the current-family block by design.
+
+    "no graded games yet." full stop is true of RECORD_TAGS and reads as "the
+    ledger is empty" -- which it was not on the morning v12 shipped, with
+    hundreds of graded rows printed below it. Counts are read off the frame
+    rather than pinned, so the Actions bot grading overnight cannot fail this.
+    """
+    led = _real_ledger()
+    led = led[~led["model_tag"].isin(gl.RECORD_TAGS)]      # force the empty case
+    graded = int((led["status"] == "graded").sum())
+    assert graded > 0, "fixture needs prior-family history to be meaningful"
+    head = _first_line(led)
+    assert "no graded games yet" in head
+    assert gl.RECORD_TAGS[0] in head, "the message must name the family it means"
+    assert str(graded) in head, "the surviving history must be counted, not implied"
+
+
+def test_a_genuinely_empty_ledger_claims_no_history():
+    """The count is measured, so zero prior rows must not produce a claim of
+    history -- the subtraction failure one level out."""
+    led = _real_ledger()
+    led = led[led["status"] == "__none__"]                 # no rows at all
+    assert _first_line(led).strip() == "no graded games yet."
+
+
+def test_a_populated_current_family_still_leads_with_its_record():
+    """The empty branch must not swallow the normal header."""
+    led = _real_ledger()
+    tag = led.loc[led["status"] == "graded", "model_tag"].iloc[0]
+    head = _first_line(led)
+    if head.startswith("LEAN LEDGER"):
+        return                                              # already populated
+    import unittest.mock as mock
+    with mock.patch.object(gl, "RECORD_TAGS", (tag,)):
+        head = _first_line(led)
+    assert head.startswith("LEAN LEDGER")
+    assert "no graded games yet" not in head
