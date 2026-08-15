@@ -60,7 +60,7 @@ from actuals_backfill import (ACTUAL_COLS, attach_actuals, actuals_summary,
 DATA_DIR    = os.environ.get("DATA_DIR", "data")
 LEDGER_PATH = os.path.join(DATA_DIR, "mlb_lean_ledger.csv")
 REPORT_PATH = os.path.join(DATA_DIR, "ledger_report.txt")
-MODEL_TAG   = os.environ.get("MODEL_TAG", "xw+plat_consol_v11")
+MODEL_TAG   = os.environ.get("MODEL_TAG", "xw+plat_consol_v12")
 MODEL_METRIC_LABEL = os.environ.get(
     "MODEL_METRIC_LABEL",
     "wOBA" if MODEL_TAG.startswith("woba+") else "xwOBA",
@@ -109,6 +109,11 @@ _RECORD_FAMILIES = {
     # the starter abstention. New record family; build_site._RECORD_FAMILIES is
     # the authority and carries the per-piece argument.
     "xw+plat_consol_v11": ("xw+plat_consol_v11",),
+    # v12: expected_sp_ip calibrated per build against its own actuals. New
+    # record family -- it flips 1 lean in 254, which on the v10 precedent would
+    # have argued for sharing, but v11 had no graded rows so the reset is free.
+    # build_site._RECORD_FAMILIES is the authority and carries the argument.
+    "xw+plat_consol_v12": ("xw+plat_consol_v12",),
 }
 RECORD_TAGS = tuple(
     t.strip() for t in os.environ.get(
@@ -130,6 +135,7 @@ MODEL_FAMILY_TAGS = (
     ("wOBA v5", ("woba+plat_consol_v5",)),
     ("split v1", ("split+plat_consol_v1",)),
     ("v11", ("xw+plat_consol_v11",)),
+    ("v12", ("xw+plat_consol_v12",)),
 )
 N_FIT_MIN   = 120
 _FINAL  = {"Final", "Game Over", "Completed Early"}
@@ -217,6 +223,7 @@ AUDIT_COLS = [
     "starter_xwoba_away", "starter_xwoba_home",
     "bullpen_xwoba_away", "bullpen_xwoba_home",
     "expected_sp_ip_away", "expected_sp_ip_home",
+    "expected_sp_ip_raw_away", "expected_sp_ip_raw_home",
     "bullpen_pitchers_away", "bullpen_pitchers_home",
     "bullpen_relief_bf_away", "bullpen_relief_bf_home",
     # v10 records the measured BF/IP behind the PA-share blend weight, so a
@@ -266,6 +273,7 @@ MODEL_FIELDS = [
     "starter_xwoba_away","starter_xwoba_home",
     "bullpen_xwoba_away","bullpen_xwoba_home",
     "expected_sp_ip_away","expected_sp_ip_home",
+    "expected_sp_ip_raw_away","expected_sp_ip_raw_home",
     "bullpen_pitchers_away","bullpen_pitchers_home",
     "bullpen_relief_bf_away","bullpen_relief_bf_home",
     "sp_bf_per_ip_away","sp_bf_per_ip_home",
@@ -459,6 +467,12 @@ def rows_from_dump(xw_df, pl_df):
             bullpen_xwoba_home=h.get("bullpen_xwOBA", np.nan),
             expected_sp_ip_away=a.get("expected_sp_ip", np.nan),
             expected_sp_ip_home=h.get("expected_sp_ip", np.nan),
+            # The uncalibrated estimate, carried so every future calibration
+            # fit regresses against the raw number rather than against its own
+            # previous output. Absent on pre-v12 rows, where the published
+            # value IS the raw one.
+            expected_sp_ip_raw_away=a.get("expected_sp_ip_raw", np.nan),
+            expected_sp_ip_raw_home=h.get("expected_sp_ip_raw", np.nan),
             bullpen_pitchers_away=a.get("bullpen_pitchers", np.nan),
             bullpen_pitchers_home=h.get("bullpen_pitchers", np.nan),
             bullpen_relief_bf_away=a.get("bullpen_relief_bf", np.nan),

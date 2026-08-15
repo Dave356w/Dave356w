@@ -23,7 +23,7 @@ is no longer surfaced on the cards (the display is xwOBA-only).
 
 ---
 
-## The current model — `xw+plat_consol_v11`
+## The current model — `xw+plat_consol_v12`
 
 **Read this section for what the code does today.** Everything below it is a
 changelog: each version note describes a *delta* against its predecessor, and
@@ -71,8 +71,10 @@ a construction fix rather than a fit — a hitter's season line is already a
 platoon blend at his real exposure, so treating it as the midpoint of a 50/50
 mix is arithmetically wrong whatever rate is inside it.
 
-Everything from v6–v10 is untouched: the expected-IP starter/bullpen blend, the
-starter/bullpen phase split, and the PA-share phase weighting.
+Everything from v6–v10 is structurally untouched: the expected-IP
+starter/bullpen blend, the starter/bullpen phase split, and the PA-share phase
+weighting. v12 calibrates the expected-IP estimator that feeds the phase
+weight — see §"v12" — but the construction around it is v10's.
 
 v11 starts a clean **record** family — it changes which games are decided and
 moves every lean a little — while joining the v8/v9/v10 **scale** family, since
@@ -224,6 +226,52 @@ pitch-mix shadow arm (off by default). Both are described below.
 Each note below is the delta that version introduced, kept for provenance —
 ledger rows are immutable and a row's `model_tag` is only interpretable against
 the version note that produced it.
+
+### v12 — expected starter IP calibrated against its own actuals
+
+`expected_pitcher_ip` is **over-dispersed**. Regressing actual starter IP on the
+pregame estimate over 586 backfilled side-games gives slope **+0.735 ± 0.048**,
+5.5 se below 1.0: starters predicted short go longer than predicted and
+starters predicted deep go shorter. Bias is +0.086 IP and not significant —
+this is a spread problem, not a level one. It reaches the lean because `q`, the
+starter's share of plate appearances, is a function of this number.
+
+**The fix is a per-build refit, never a fitted literal.** `sp_ip_calibration()`
+regresses actual on raw predicted across the ledger's completed games on every
+build; no `a + b·pred` appears in the source. The slope is plausibly seasonal —
+pitch counts climb early and clubs get cautious in September — so a September
+build has to fit September's slope, and the ledger accumulates the actuals to
+let it.
+
+The correction is shrunk toward the **identity map** by sample size:
+
+```
+cal(p) = w·(a + b·p) + (1 − w)·p,    w = n / (n + SP_IP_CALIBRATION_K)
+```
+
+`n = 0` returns `p` exactly, so an empty ledger and a full one are two ends of
+one expression rather than two branches with a gate between them. `K = 50`
+side-games was chosen by walk-forward benchmark (fit on every prior slate,
+score the next): calibration beats no-calibration by +4.1% / +4.0% / +3.8%
+out-of-sample IP MSE at `K = 25 / 50 / 100`, against +3.4% at `K = 0`, so the
+shrinkage earns its place early. Bootstrapped over slates, `K = 50` is the
+argmin most often and every candidate's CI excludes zero. The curve is flat
+from 10 to 100 — what is distinguishable is calibrated from uncalibrated, not
+25 from 50.
+
+**The dump and ledger now carry `expected_sp_ip_raw_*`.** The published
+`expected_sp_ip` is calibrated, so a fit that regressed against it would
+compound the correction on every build and pull the estimator toward the mean
+without limit. The fit reads the raw column where it exists and falls back to
+the published one for pre-v12 rows, which are raw by definition and are the
+entire sample on the first build after the bump.
+
+**Families.** New record family, and the argument is unusual: on decision
+equivalence it would have *shared* with v11 — 1 lean flips in 254, mean
+|Δ net| 0.00067 against a median |xw_net| of 0.01694 — but v11 had no graded
+rows, so the reset cost nothing and a clean line for a lean-path change was
+free. Shared scale family with v8–v11, measured and on v10's precedent: `q` is
+a convex weight between the same two phases, so the delta keeps its units.
 
 ### v11 — revert to xwOBA, K=100 and population targets
 

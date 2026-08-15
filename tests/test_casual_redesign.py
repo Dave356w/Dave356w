@@ -195,16 +195,18 @@ class LeanStrengthTests(unittest.TestCase):
             self.assertIsNone(b.lean_strength_scale())
             self.assertIsNone(b.lean_strength_scale([]))
 
-    def test_v8_v9_v10_v11_share_a_scale_family(self):
+    def test_the_k100_xwoba_lineage_shares_one_scale_family(self):
         # v9 - v8 is one term worth ~6% of matchup dispersion and flips no
         # leans; v10 only re-weights a convex combination of the same two
         # phases; v11 keeps the metric, K and target that set the units and
         # differs by three changes each scale-preserving on an established
-        # precedent (see _SCALE_FAMILIES). All four measure |xw_net| on the
-        # same units, and the relation must be symmetric -- a tag missing from
-        # one of the four tuples would pool one way and not the other.
+        # precedent; v12 only calibrates `q`, which is the v10 argument again
+        # and is measured (mean |d net| 0.00067 against median |xw_net| 0.017).
+        # All five measure |xw_net| on the same units, and the relation must be
+        # symmetric -- a tag missing from one tuple would pool one way and not
+        # the other.
         fam = ("xw+plat_consol_v8", "xw+plat_consol_v9", "xw+plat_consol_v10",
-               "xw+plat_consol_v11")
+               "xw+plat_consol_v11", "xw+plat_consol_v12")
         for tag in fam:
             self.assertEqual(b._SCALE_FAMILIES[tag], fam)
 
@@ -214,12 +216,10 @@ class LeanStrengthTests(unittest.TestCase):
         # little (platoon centring, relief target), so it starts a clean record
         # while inheriting the delta scale. Sharing both would have pooled a
         # different model's win-loss line.
-        self.assertEqual(b._RECORD_FAMILIES["xw+plat_consol_v11"],
-                         ("xw+plat_consol_v11",))
-        self.assertIn("xw+plat_consol_v9",
-                      b._SCALE_FAMILIES["xw+plat_consol_v11"])
-        self.assertNotIn("xw+plat_consol_v9",
-                         b._RECORD_FAMILIES["xw+plat_consol_v11"])
+        for tag in ("xw+plat_consol_v11", "xw+plat_consol_v12"):
+            self.assertEqual(b._RECORD_FAMILIES[tag], (tag,))
+            self.assertIn("xw+plat_consol_v9", b._SCALE_FAMILIES[tag])
+            self.assertNotIn("xw+plat_consol_v9", b._RECORD_FAMILIES[tag])
 
     def test_slate_deltas_helper(self):
         def game(ae, he, **kw):
