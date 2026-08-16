@@ -147,6 +147,87 @@ def test_primary_dump_name_still_ingests():
         f"{real} matches none of {pats} -- this slate would be lost")
 
 
+def test_no_rebuild_dump_is_ingestable():
+    """A rebuild carries post-first-pitch rows and must never reach the ledger.
+
+    `ingest` would reject them on `lock_status` anyway, but that check is the
+    last line rather than the only one -- and the primary rebuild is a
+    `leans_`-prefixed name one underscore from matching. Asserted for every
+    name the build can write, against grade_leans' real globs.
+    """
+    pats = _grade_leans_dump_globs()
+    names = [f"{bs.REBUILD_PREFIX}_leans_2026-08-10_{bs.DUMP_SUFFIX}.csv",
+             f"{bs.REBUILD_PREFIX}_leans_2026-08-10_pl.csv",
+             f"{bs.REBUILD_PREFIX}_{sm.SHADOW_PREFIX}_2026-08-10_"
+             f"{sm.SHADOW_SUFFIX}.csv"]
+    for name in names:
+        for p in pats:
+            assert not fnmatch.fnmatch(name, p), f"rebuild {name} matches {p}"
+
+
+def test_the_naive_rebuild_suffix_would_have_been_ingested():
+    """Pins WHY the rebuild marker is a prefix, exactly as SHADOW_PREFIX is."""
+    pats = _grade_leans_dump_globs()
+    assert any(fnmatch.fnmatch("leans_2026-08-10_rebuild_xw.csv", p)
+               for p in pats)
+
+
+def test_post_hoc_detection(monkeypatch):
+    """Every game started -> rebuild. Any game not yet started -> live name."""
+    import pandas as pd
+    snap = "2026-08-11T06:50:00+00:00"
+    started = pd.DataFrame({"scheduled_start_utc":
+                            ["2026-08-10T23:07:00+00:00",
+                             "2026-08-10T20:10:00+00:00"]})
+    assert bs.dump_is_post_hoc(started, snap) is True
+    mixed = pd.DataFrame({"scheduled_start_utc":
+                          ["2026-08-10T23:07:00+00:00",
+                           "2026-08-11T23:07:00+00:00"]})
+    assert bs.dump_is_post_hoc(mixed, snap) is False
+
+
+def test_unknowable_provenance_keeps_the_live_name():
+    """Never name a dump `rebuild_` on a guess.
+
+    A wrongly-renamed pregame dump is invisible to every glob that matters --
+    the same slate loss the prefix exists to prevent, arrived at from the other
+    side. Absent, empty and unparseable inputs all fall back to the live name.
+    """
+    import pandas as pd
+    snap = "2026-08-11T06:50:00+00:00"
+    assert bs.dump_is_post_hoc(pd.DataFrame(), snap) is False
+    assert bs.dump_is_post_hoc(pd.DataFrame({"game_pk": [1]}), snap) is False
+    assert bs.dump_is_post_hoc(
+        pd.DataFrame({"scheduled_start_utc": ["not a timestamp"]}), snap) is False
+    assert bs.dump_is_post_hoc(
+        pd.DataFrame({"scheduled_start_utc": ["2026-08-10T23:07:00+00:00"]}),
+        "not a timestamp") is False
+
+
+def test_dump_path_renames_only_the_prefix():
+    assert bs.dump_path("leans", "2026-08-10", "xw", False).endswith(
+        "leans_2026-08-10_xw.csv")
+    assert bs.dump_path("leans", "2026-08-10", "xw", True).endswith(
+        f"{bs.REBUILD_PREFIX}_leans_2026-08-10_xw.csv")
+
+
+def test_both_write_sites_go_through_dump_path():
+    """The helper is only a guard if the writers call it.
+
+    Source-level, deliberately: Savant is unreachable from CI, so neither write
+    site can be exercised here, and a helper that is correct but bypassed looks
+    identical to a working one in every other test in this file. Same shape as
+    test_interaction_probe's check that the probe reads the live calibration.
+    """
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    for mod, call in (("build_site.py", 'dump_path("leans"'),
+                      ("shadow_metric.py", "bs.dump_path(SHADOW_PREFIX")):
+        src = open(os.path.join(root, mod)).read()
+        assert call in src, f"{mod} no longer writes its dump via dump_path"
+        assert f'to_csv(os.path.join(DATA_DIR, f"leans_' not in src, (
+            f"{mod} writes a dump path by hand, bypassing the rebuild rename")
+
+
 def test_the_dump_suffix_names_the_metric_inside_it():
     """A `_woba.csv` full of xwOBA rows would mislead every later reader,
     including shadow_report's filename fallback."""

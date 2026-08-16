@@ -321,38 +321,43 @@ precedent — they are how the fix is known to look.
   and it is now a fact about the metric the model does not run. Display-only,
   so no `MODEL_TAG` implication either way.
 
-- **A past slate's dump is overwritten by a post-hoc rebuild.** `SLATE_DATE`
-  rolls over at 3am ET, and the daily grading cron fires at 04:17 UTC — 00:17
-  ET — so it still names *yesterday's* slate. It re-runs the full build for
-  that date against today's Savant leaderboard and unconditionally rewrites
-  `data/leans_<yesterday>_<DUMP_SUFFIX>.csv` — `_woba.csv` while the wOBA
-  lineage ran, `_xw.csv` again under v11. Measured across
-  every committed dump that carries `snapshot_utc`: **every past slate's dump
-  is a post-first-pitch rebuild.** `leans_2026-08-05_woba.csv` carries
-  `model_tag=woba+plat_consol_v5` and `snapshot_utc=2026-08-06T04:18Z`, while
-  all 15 of that slate's ledger rows are v3/v4 with pregame snapshots and
-  different numbers — game 822866's `starter_xwoba_away` is 0.327266 in the
-  ledger and 0.336786 in the dump. The dump on disk is stamped with a tag whose
-  math produced none of that slate's rows.
+- **Every dump written before 2026-08-16 is a rebuild, and a mid-slate dump is
+  still a mixture.** The overwrite itself is fixed — see the resolved entry
+  below — but the fix is not retroactive and does not cover the intra-day case,
+  so both halves of this stay live.
 
-  **The ledger is not affected and the guard is load-bearing.** `ingest()`
-  re-reads every dump on every run and admits a row only when
-  `lock_status == "pregame"`; the rebuilt 08-05 dump is `late_snapshot` on all
-  30 sides and is rejected wholesale. Verified: 0 of 437 ledger rows have
-  `snapshot >= scheduled_start`, and `lock_status` holds 287 `pregame`, 1
-  `pregame_recovered`, 149 legacy, **0 `late_snapshot`**. Do not weaken that
-  check — it is the only thing standing between the rebuild and the ledger.
+  The history: `SLATE_DATE` rolls over at 3am ET and the daily grading cron
+  fires at 04:17 UTC — 00:17 ET — so it still names *yesterday's* slate,
+  re-runs the full build against today's Savant leaderboard, and used to
+  rewrite that slate's dump in place. Measured across every committed dump
+  carrying `snapshot_utc`, every past slate's dump was a post-first-pitch
+  rebuild. `leans_2026-08-05_woba.csv` carries `model_tag=woba+plat_consol_v5`
+  and `snapshot_utc=2026-08-06T04:18Z`, while all 15 of that slate's ledger
+  rows are v3/v4 with pregame snapshots and different numbers — game 822866's
+  `starter_xwoba_away` is 0.327266 in the ledger and 0.336786 in the dump. The
+  dump on disk is stamped with a tag whose math produced none of that slate's
+  rows. **Nothing recovers those**; the pregame versions were overwritten and
+  no-lookahead forbids reconstructing them. So any measurement that joins
+  ledger rows to "the dump beside them" is still reading post-hoc data for
+  every slate up to 08-16 — including `FINDINGS.md`'s prior-only incidence
+  ("6 of the 403 side-games in the committed dumps"), and `compare_v8_v9.py`,
+  which globs `data/leans_*_xw.csv` and therefore compares against a v8 dump
+  that is itself a rebuild of the 07-26 slate.
 
-  What it costs is provenance, and the cost is already being paid. The dump is
-  the sole per-slate record of what the model actually saw, and for every past
-  slate it has been replaced by what a later model saw with a later
-  leaderboard. So: any measurement that joins ledger rows to "the dump beside
-  them" is reading post-hoc data — including `FINDINGS.md`'s prior-only
-  incidence ("6 of the 403 side-games in the committed dumps"), and
-  `compare_v8_v9.py`, which globs `data/leans_*_xw.csv` and therefore compares
-  against a v8 dump that is itself a rebuild of the 07-26 slate.
+  The residue going forward is narrower and worth stating exactly. A dump is
+  diverted only when **every** game on it has started, because a slate with any
+  pregame game left is not a reconstruction. The 15-90 minute pregame polls and
+  any push to main therefore still rewrite the live dump mid-slate, and a
+  late-window build carries pregame rows for the night games beside post-hoc
+  rows for the afternoon ones. Measured on the committed dumps: 13 of the 43
+  instrumented ones are full rebuilds, and most of the rest are mixtures of
+  exactly this kind — `shadow_2026-08-11_xw.csv` was written at 00:45Z with 12
+  of its games not yet started. Each row is labelled honestly by `lock_status`,
+  the ledger takes only the pregame ones, and shrinking the window further
+  means merging dumps rather than naming them — a different change with a
+  different risk. Do not read "not a rebuild" as "pregame throughout".
 
-  **v11 changes that glob's population and this is recorded, not patched.**
+  **v11 changes `compare_v8_v9`'s glob population and this is recorded, not patched.**
   The primary dump suffix is `_xw` again, so `data/leans_*_xw.csv` now matches
   v11 dumps alongside the pre-wOBA ones. That is not obviously wrong — the
   script recomputes both the v8 and v9 forms from a dump's own phase columns
@@ -366,21 +371,15 @@ precedent — they are how the fix is known to look.
   full extra day of StatsAPI behind it, so the historical rate is measured on
   data the pregame build never had.
 
-  Not fixed here, because the fix is a behaviour change to the daily pass and
-  deserves its own decision rather than a drive-by. The options are to skip the
-  dump write when `SLATE_DATE` is not the current ET date, to write the rebuild
-  under a distinct name, or to accept it and stop citing dumps as pregame
-  evidence. Display/provenance only — no lean, grade or ledger row moves, so no
-  `MODEL_TAG` implication whichever way it goes.
-
-  **The shadow arm inherits this and has no ledger behind it.** `shadow_metric`
-  runs as a step of the same build, so the shadow dump is rewritten by the same
-  post-rollover pass: `shadow_2026-08-10_xw.csv` on disk is stamped
+  **The shadow arm inherited this and had no ledger behind it**, which is why
+  the fix below landed on the arm and the primary together. `shadow_metric`
+  runs as a step of the same build, so the shadow dump was rewritten by the
+  same post-rollover pass: `shadow_2026-08-10_xw.csv` on disk is stamped
   `2026-08-11T06:50Z` against a 23:07Z first pitch, and 08-09's only committed
   version is the 03:06Z rebuild — the arm landed at 02:56Z that morning, so a
   pregame 08-09 dump never existed. For the primary this costs provenance and
   the ledger holds the pregame truth; for the shadow arm the dump *is* the
-  record, and git history is the only place a pregame version survives (08-10
+  record, and git history was the only place a pregame version survived (08-10
   has four, the last at 23:01Z, six minutes before first pitch).
   What this does **not** break is the pairing, and that distinction is the
   whole reason the arm is worth reading: primary and shadow are written 20-40
@@ -392,6 +391,44 @@ precedent — they are how the fix is known to look.
   `--ledger-join` so the bias can be sized rather than argued.
 
 **Resolved — keep as precedent**
+
+- **A rebuild overwriting the record it was rebuilding.** The post-rollover
+  pass rewrote each past slate's dump in place, so the one artifact saying what
+  the model saw before first pitch was replaced by what a later model saw with
+  a later leaderboard. Three options were on the table for a year of this file:
+  skip the write, rename it, or accept it. **Renamed** — a rebuild is a
+  legitimate later view of the same slate and the probes read it happily, so
+  deleting information to protect information was the worst of the three.
+  `dump_is_post_hoc` decides and `dump_path` names; both the primary and the
+  shadow arm call them, so the two arms cannot disagree about what a slate is.
+
+  Three things in it are the reusable part:
+
+  * **The marker is a PREFIX, for the same reason `SHADOW_PREFIX` is.** The
+    grader globs `leans_*_xw.csv`, which matches any leans-prefixed name ending
+    `_xw.csv`, so `leans_<date>_xw_rebuild.csv` would have been ingested as a
+    real pending row — the highest-cost silent failure available here. A test
+    asserts every rebuild name against `grade_leans`' own globs, and a second
+    pins that the naive suffix form *would* have matched, so the first cannot
+    quietly become theatre.
+  * **The rule is read off the rows, not off the clock.** "Is this a rebuild?"
+    could have been `SLATE_DATE != today in ET`, which then has to re-derive
+    the rollover hour, hold across DST, and is simply wrong whenever
+    `SLATE_DATE` is overridden to rebuild an old slate by hand. The rows carry
+    a snapshot and a scheduled start and answer it directly.
+  * **Unknowable falls back to the live name.** No rows, no start column, an
+    unparseable stamp — all keep the name every existing glob already finds. A
+    dump wrongly marked `rebuild_` is invisible to the grader, which is the
+    same slate loss the prefix exists to prevent, reached from the other side.
+
+  Measured at the fix, on the committed dumps: 13 of the 43 instrumented ones
+  are full rebuilds that would have been diverted, including both shadow dumps
+  named in the live entry above. Display/provenance only — no lean, grade or
+  ledger row moves, so no `MODEL_TAG` implication. The ledger's own guard is
+  untouched and stays load-bearing: `ingest()` admits a row only when
+  `lock_status == "pregame"`, which is what kept every one of those rebuilds
+  out of the ledger while this was broken. This change means the grader is
+  never offered them; it does not mean the check can be relaxed.
 
 - **A monitor that measures its own correction.** `sp_ip_calibration()` reads
   `expected_sp_ip_raw` where present precisely so the fit cannot feed on its own

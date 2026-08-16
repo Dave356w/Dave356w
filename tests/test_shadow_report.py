@@ -138,6 +138,47 @@ def test_net_columns_follow_the_metric_across_the_v11_swap(tmp_path, monkeypatch
     assert list(f.net_w.round(6)) == [.05, .05]
 
 
+def test_the_pregame_pair_wins_and_a_rebuild_only_slate_still_counts(
+        tmp_path, monkeypatch):
+    """Two rules, one test, because they trade off against each other.
+
+    A slate holding both a pregame dump and a `rebuild_` reconstruction must be
+    read from the pregame pair -- that pairing is the whole reason the arm is
+    worth reading. But a slate that only ever produced a rebuild (2026-08-09,
+    the morning the arm landed) must still be read, not silently dropped: the
+    provenance block labels it, and shrinking the sample without saying so is
+    the failure this report exists to avoid.
+    """
+    monkeypatch.setattr(sr, "DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(sr, "LEDGER", str(tmp_path / "led.csv"))
+    pd.DataFrame([{"game_pk": 1, "status": "graded", "xw_net": .01,
+                   "model_metric": "xwOBA", "full_home": 4, "full_away": 2}]
+                 ).to_csv(tmp_path / "led.csv", index=False)
+    pre = f"{bs.REBUILD_PREFIX}_"
+    # Both versions present: the rebuild carries a different net so the
+    # assertion below distinguishes which file was read, not merely that one was.
+    _metric_frame("wOBA", .05, 0.0).to_csv(
+        tmp_path / "shadow_2026-08-20_woba.csv", index=False)
+    _metric_frame("wOBA", .09, 0.0).to_csv(
+        tmp_path / f"{pre}shadow_2026-08-20_woba.csv", index=False)
+    _metric_frame("xwOBA", .02, 0.0).to_csv(
+        tmp_path / "leans_2026-08-20_xw.csv", index=False)
+    _metric_frame("xwOBA", .07, 0.0).to_csv(
+        tmp_path / f"{pre}leans_2026-08-20_xw.csv", index=False)
+    # Rebuild only, no pregame dump of either arm.
+    _metric_frame("wOBA", .04, 0.0).to_csv(
+        tmp_path / f"{pre}shadow_2026-08-09_woba.csv", index=False)
+    _metric_frame("xwOBA", .03, 0.0).to_csv(
+        tmp_path / f"{pre}leans_2026-08-09_xw.csv", index=False)
+
+    pairs = sr._slate_dates()
+    assert [d for d, _, _ in pairs] == ["2026-08-09", "2026-08-20"]
+    f, _ = sr.build_frame(pairs)
+    by_date = dict(zip(f.date, zip(f.net_x.round(6), f.net_w.round(6))))
+    assert by_date["2026-08-20"] == (.02, .05)   # pregame pair, not the rebuild
+    assert by_date["2026-08-09"] == (.03, .04)   # rebuild read, not dropped
+
+
 def test_a_slate_whose_dumps_share_one_metric_is_skipped_not_pooled(
         tmp_path, monkeypatch):
     """Two xwOBA dumps are not a comparison. Skip loudly, never silently."""

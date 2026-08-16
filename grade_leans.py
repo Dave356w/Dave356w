@@ -10,6 +10,13 @@
 #     if matchup_platoon_df is not None and not matchup_platoon_df.empty:
 #         matchup_platoon_df.to_csv(f"data/leans_{SLATE_DATE}_pl.csv", index=False)
 #
+# The write site now goes through build_site.dump_path, which diverts a dump
+# whose games have ALL started to `rebuild_leans_...` so a post-rollover
+# rebuild cannot overwrite the pregame record. Nothing here changes: the
+# globs below never matched a `rebuild_`-prefixed name, and such a dump was
+# already rejected row-by-row on lock_status. The grader is simply no longer
+# offered one.
+#
 # This script then, on every CI run:
 #   INGEST : any data/leans_*_xw.csv not yet ledgered -> pending rows.
 #            Re-runs on the same date REFRESH still-pending rows only when
