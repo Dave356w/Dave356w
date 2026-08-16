@@ -262,6 +262,28 @@ class PairingTests(unittest.TestCase):
         self.assertAlmostEqual(a.pred, 5.0)
         self.assertAlmostEqual(a.act, 4.0)
 
+    def test_sp_ip_monitor_reads_the_raw_estimate_where_one_exists(self):
+        """The IP calibration monitor must not measure its own correction.
+
+        Row one is v12-shaped (raw beside a calibrated published value), row
+        two is pre-v12 (published IS raw, no raw column value). Both must
+        contribute the estimator's own output, or the printed slope drifts
+        toward 1.00 as the sample turns over while the estimator sits still.
+        """
+        led = pd.DataFrame([
+            dict(expected_sp_ip_raw_away=7.0, expected_sp_ip_away=6.0,
+                 act_sp_ip_away=6.5),
+            dict(expected_sp_ip_raw_away=np.nan, expected_sp_ip_away=4.0,
+                 act_sp_ip_away=3.5),
+        ])
+        preds = sorted(ab.paired_sp_ip(led)["pred"].tolist())
+        self.assertEqual(preds, [4.0, 7.0])
+
+    def test_sp_ip_monitor_falls_back_when_no_raw_column_exists(self):
+        """Every ledger written before v12 lacks the column entirely."""
+        led = pd.DataFrame([dict(expected_sp_ip_away=5.0, act_sp_ip_away=4.0)])
+        self.assertAlmostEqual(ab.paired_sp_ip(led)["pred"].iloc[0], 5.0)
+
     def test_empty_inputs_give_empty_frames_not_exceptions(self):
         self.assertTrue(ab.paired_rates(pd.DataFrame()).empty)
         self.assertTrue(ab.paired_sp_ip(pd.DataFrame()).empty)

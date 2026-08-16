@@ -580,10 +580,27 @@ def components_summary(df, tags=None):
 
 def paired_sp_ip(df):
     """Long frame of (expected starter IP, actual starter IP). These pair on
-    the same side -- both describe that side's starter -- unlike the rates."""
+    the same side -- both describe that side's starter -- unlike the rates.
+
+    `pred` is the RAW estimate where the row carries one and the published
+    value where it does not, which is the same rule `build_site
+    .sp_ip_calibration` fits on and for the same reason. From v12 the published
+    column is already calibrated, so a monitor reading it measures the residual
+    of a correction rather than the estimator the correction was fitted to --
+    and it would do so on a MIXTURE, since pre-v12 rows are raw under the
+    published name. Measured on the ledger at the time this changed: 30 of 634
+    side-games were calibrated, enough to move the printed slope from +0.756 to
+    +0.762. Harmless at that share, and not harmless as the sample turns over:
+    calibrated preds are compressed by w*b + (1-w) = 0.774, so an all-v12
+    sample would print ~0.98 and retire a standing monitor whose subject had
+    not moved. Nothing is lost by reading raw -- the published value is a
+    deterministic function of it and the fit.
+    """
     rows = []
     for side in ("away", "home"):
-        pred = _num(df, f"expected_sp_ip_{side}")
+        raw = _num(df, f"expected_sp_ip_raw_{side}")
+        pub = _num(df, f"expected_sp_ip_{side}")
+        pred = raw.where(raw.notna(), pub)
         act = _num(df, f"act_sp_ip_{side}")
         m = pred.notna() & act.notna()
         if not m.any():

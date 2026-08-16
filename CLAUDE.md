@@ -207,6 +207,18 @@ the map is the authority on a historical question and deleting the entry would
 lose the answer. What it means in practice is that "the v8/v9/v10 scale pool"
 is the v9/v10 pool, and any provenance note claiming v8 rows is wrong.
 
+**v11 is the second instance and it is not inert.** No `xw+plat_consol_v11`
+row exists in the ledger at all — not graded, not pending, not void. v11 shipped
+and v12 bumped before any of its rows survived a pregame refresh, exactly as v8
+did. So the current scale pool is v9/v10/**v12**, and every sentence in this
+file describing v11's units as "argued, not measured, first graded v11 rows are
+the check" was describing rows that will never exist. The check fell to v12
+instead, and it has now run — see the falsifier entry under "Instrumented and
+waiting", which carries the measurement. What is *not* inert is the reading:
+the revert's scale claim was never tested on the revert, only on the version
+after it. That is fine here because v12's own scale argument is independent and
+measured, but do not write "v11 joined the pool and its rows confirmed it."
+
 Third, **now settled the way it was predicted to settle: wOBA v3's graded rows
 arrived the day after the note that assumed them.** The `_RECORD_FAMILIES`
 comment on `woba+plat_consol_v4` says "The v3 family had its own graded rows
@@ -380,6 +392,30 @@ precedent — they are how the fix is known to look.
   `--ledger-join` so the bias can be sized rather than argued.
 
 **Resolved — keep as precedent**
+
+- **A monitor that measures its own correction.** `sp_ip_calibration()` reads
+  `expected_sp_ip_raw` where present precisely so the fit cannot feed on its own
+  output — and the standing monitor that prints its slope every build,
+  `actuals_backfill.paired_sp_ip`, read the *published* column. From v12 that
+  column is calibrated, so the printed "IP calibration slope" became a mixture:
+  604 raw side-games and 30 corrected ones, with no label saying which. It read
+  `+0.762` while the fit on the same 634 rows read `+0.756`.
+
+  Harmless at 5% contamination and not harmless later, which is why it was
+  fixed at sighting rather than gated. A calibrated pred is compressed by
+  `w·b + (1−w) = 0.774` (measured: sd 1.338 raw → 1.017 published on those 30
+  rows), so an all-v12 sample prints ≈0.98 — a monitor announcing that the
+  defect it exists to watch has resolved, on a slope whose subject never moved.
+  The deferral entry below it only worked because the instrument reported the
+  estimator; an instrument reporting the estimator-plus-its-fix reports nothing.
+
+  Fixed by giving the monitor the fit's own rule (raw where present, published
+  where not) rather than by adding a second line for the published value.
+  Nothing is lost: published is a deterministic function of raw and the fit, so
+  monitoring raw monitors both. **When a correction ships, check what its
+  monitor is now reading** — the column it always read may have changed meaning
+  underneath it. Diagnostic only; no lean, grade or ledger row moves, so no
+  `MODEL_TAG` implication.
 
 - **A statistic with no usable sampling distribution.** `ledger_report.txt`
   printed `implied w = b_sp/b_lineup` from the SP-vs-lineup logit fit, with no
@@ -760,7 +796,14 @@ Do not re-derive these by hand; they have readouts.
 - **The v11/v12 scale-family share** — argued, not measured, because
   no-lookahead forbids rebuilding a past slate. Falsifier named in
   `_SCALE_FAMILIES`: compare median `|xw_net|` on the first graded v11/v12 rows
-  against the v9/v10 pool and split the family if it moved.
+  against the v9/v10 pool and split the family if it moved. **First read, 15
+  graded v12 rows (v11 produced none — see above): median `|xw_net|` 0.01845
+  against the v9/v10 pool's 0.01853, difference −0.00009 with a bootstrap CI of
+  [−0.0081, +0.0183].** No sign of a shift, and read the CI before the point
+  estimate: its half-width is ±0.013 against a median of 0.018, so this can only
+  rule out a shift of roughly 70% or more. It is a check that the family is not
+  grossly wrong, not a confirmation that it is right. Re-read it at ~60 v12 rows
+  before treating the share as settled.
 - **The metric question** — the shadow arm, running wOBA under an xwOBA
   primary. Needs roughly 18 paired slates for 80% power on a 0.09 gap.
 - **`LEAN_STRENGTH_FALLBACK`** — recompute from whatever `SCALE_TAGS` resolves
