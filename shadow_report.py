@@ -82,29 +82,53 @@ def dump_metric(df, path):
     return _SUFFIX_METRIC.get(m.group(1)) if m else None
 
 
+def _pick(*paths):
+    """First path that exists, else None. Callers pass live before rebuild."""
+    return next((p for p in paths if os.path.exists(p)), None)
+
+
 def _slate_dates():
     """Dates that have BOTH a shadow dump and a primary dump beside it.
 
     Globs every shadow suffix, not just `_xw`: the arm wrote xwOBA dumps before
     v11 and wOBA dumps after it, and a report that saw only one generation
     would silently shrink its own sample at the changeover.
+
+    Since the rebuild rename, a slate can hold two dumps per arm: the pregame
+    one under the live name and a post-first-pitch reconstruction under
+    `rebuild_`. The pregame pair is what the arm exists to compare, so it wins
+    where it exists -- but a rebuild-only slate is still READ rather than
+    dropped, because dropping it would shrink the sample silently and the
+    provenance block below already prints which kind each slate is. The arm
+    landed mid-morning on 2026-08-09 and that slate has no pregame dump at all;
+    a report that hid it would be hiding its own history.
     """
     out, seen = [], set()
     for suf in ("xw", "woba"):
-        pat = os.path.join(DATA_DIR, f"{sm.SHADOW_PREFIX}_*_{suf}.csv")
-        for p in sorted(glob.glob(pat)):
+        stem = f"_*_{suf}.csv"
+        pats = (os.path.join(DATA_DIR, f"{sm.SHADOW_PREFIX}{stem}"),
+                os.path.join(DATA_DIR,
+                             f"{bs.REBUILD_PREFIX}_{sm.SHADOW_PREFIX}{stem}"))
+        for p in sorted(q for pat in pats for q in glob.glob(pat)):
             m = re.search(r"_(\d{4}-\d{2}-\d{2})_" + suf + r"\.csv$",
                           os.path.basename(p))
             if not m or m.group(1) in seen:
                 continue
             d = m.group(1)
-            primary = [q for q in
-                       (os.path.join(DATA_DIR, f"leans_{d}_{s}.csv")
-                        for s in ("woba", "xw", "split"))
-                       if os.path.exists(q)]
+            # Prefer the pregame shadow dump for this date even when the glob
+            # reached the rebuild first, so the two arms are picked by the same
+            # rule rather than by iteration order.
+            shadow = _pick(os.path.join(DATA_DIR,
+                                        f"{sm.SHADOW_PREFIX}_{d}_{suf}.csv"), p)
+            # Live before rebuild ACROSS suffixes, not within each: a pregame
+            # `_xw` dump beats a rebuilt `_woba` one, and interleaving the two
+            # orders would silently prefer a reconstruction.
+            primary = _pick(*[os.path.join(DATA_DIR, f"{pre}leans_{d}_{s}.csv")
+                              for pre in ("", f"{bs.REBUILD_PREFIX}_")
+                              for s in ("woba", "xw", "split")])
             if primary:
                 seen.add(d)
-                out.append((d, p, primary[0]))
+                out.append((d, shadow, primary))
     return sorted(out)
 
 

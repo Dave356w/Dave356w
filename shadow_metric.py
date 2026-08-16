@@ -209,7 +209,13 @@ def run(dry_run=False):
     if "game_datetime_utc" in matchup_df.columns:
         matchup_df["scheduled_start_utc"] = matchup_df["game_datetime_utc"]
 
-    path = f"{bs.DATA_DIR}/{SHADOW_PREFIX}_{bs.SLATE_DATE}_{SHADOW_SUFFIX}.csv"
+    # Same rebuild naming as the primary, from the same helper. This arm needs
+    # it MORE than the primary does, not less: a primary rebuild costs
+    # provenance while the ledger keeps the pregame truth, but nothing ledgers
+    # a shadow row, so before this the only surviving pregame copy of a shadow
+    # dump was whatever git history happened to hold.
+    post_hoc = bs.dump_is_post_hoc(matchup_df, snapshot_utc)
+    path = bs.dump_path(SHADOW_PREFIX, bs.SLATE_DATE, SHADOW_SUFFIX, post_hoc)
     matchup_df.to_csv(path, index=False)
     bs.log(f"shadow: wrote {path} ({len(matchup_df)} rows)")
     return 0

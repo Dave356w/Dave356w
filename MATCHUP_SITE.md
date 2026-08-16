@@ -917,7 +917,7 @@ paid silently.
 
 | Path | Purpose |
 |------|---------|
-| `build_site.py` | One-shot generator: fetch → matchup dataframes → writes `public/index.html` and `public/grades.html` (fully self-contained: inline CSS, dark-mode via `prefers-color-scheme`, no external assets). Also dumps the day's leans to `data/leans_<date>_{xw,pl}.csv` for the grading ledger. |
+| `build_site.py` | One-shot generator: fetch → matchup dataframes → writes `public/index.html` and `public/grades.html` (fully self-contained: inline CSS, dark-mode via `prefers-color-scheme`, no external assets). Also dumps the day's leans to `data/leans_<date>_{xw,pl}.csv` for the grading ledger — or to `rebuild_leans_<date>_...` when every game on the slate has already started, so a post-rollover rebuild adds a later view instead of overwriting the pregame one. |
 | `grade_leans.py` | Grading ledger: ingests the lean dumps as pending rows, grades them against StatsAPI linescores (full-game + F5), attaches closing DK moneylines (via `market_backfill`), writes `data/mlb_lean_ledger.csv` + `data/ledger_report.txt`. |
 | `pitch_arsenal.py` | Pitch-mix shadow arm: the opposing lineup re-weighted by the starter's arsenal. Off by default (`PITCH_MIX_SHADOW=1`), inert when on — writes shadow columns for forward testing and never moves a lean. |
 | `pitch_arsenal_probe.py` | Measurement that gates the arm: cell dispersion split into signal and sampling noise, year-over-year reliability, and the noise budget the arm must clear. Prints only; writes nothing to `data/`. |

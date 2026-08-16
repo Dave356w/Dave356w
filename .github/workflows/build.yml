@@ -121,7 +121,11 @@ jobs:
           OUT_DIR: public
         run: python build_site.py
 
-      # Paired xwOBA shadow arm. Writes data/shadow_<date>_xw.csv and nothing
+      # Paired metric shadow arm (wOBA under an xwOBA primary since v11; it
+      # ran the other way round before, so the suffix names the metric inside).
+      # Writes data/shadow_<date>_<metric>.csv -- or rebuild_shadow_... when
+      # every game on the slate has already started, so the 4:17am pass cannot
+      # overwrite a pregame dump nothing else records. Nothing
       # else: no lean, no index.html, no ledger row (grade_leans globs
       # leans_*, this is shadow_*). It exists because the wOBA-vs-xwOBA
       # question cannot be settled by comparing the two eras -- they were

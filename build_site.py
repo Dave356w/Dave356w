@@ -424,6 +424,71 @@ STATCAST_CACHE_NS = "custom_xwoba_v1"
 # globs, reading the suffix from here rather than repeating it.
 DUMP_SUFFIX = "xw"
 
+# Prefix for a dump whose every row was captured AFTER its game started, i.e.
+# a reconstruction of a slate that is already over rather than a record of what
+# the model saw before first pitch.
+#
+# The daily 4:17am ET grading pass runs at 00:17 ET, before the 3am rollover,
+# so SLATE_DATE still names yesterday and the build re-runs that whole slate
+# against today's Savant leaderboard. Written under the live name, that
+# unconditionally replaced the pregame dump: measured across every committed
+# dump carrying `snapshot_utc`, EVERY past slate's dump was a post-first-pitch
+# rebuild. The ledger was never affected -- `grade_leans.ingest` admits a row
+# only when `lock_status == "pregame"` and rejected those rebuilds wholesale --
+# but the dump is the sole per-slate record of what the model actually saw, so
+# every dump-based measurement was reading data the pregame build never had.
+# The shadow arm has no ledger behind it at all: for that arm the dump IS the
+# record, and git history was the only surviving pregame copy.
+#
+# A rebuild is worth keeping -- it is a legitimate later view of the same
+# slate, and `compare_v8_v9` and the probes read it happily -- so it is renamed
+# rather than skipped. The prefix, not a suffix, is what makes it safe: the
+# grader globs `leans_*_xw.csv`, which matches any leans-prefixed name ending
+# `_xw.csv`, so `leans_<date>_xw_rebuild.csv` would have been ingested as a
+# real pending row. Same decision, and the same reason, as SHADOW_PREFIX.
+#
+# What this does NOT fix: a mid-slate build still overwrites the live dump for
+# games that have already started, because a slate with any pregame game left
+# is not a rebuild. Those dumps are a mixture, honestly labelled per row by
+# `lock_status`, and shrinking that window means merging dumps rather than
+# naming them -- a different change with a different risk.
+REBUILD_PREFIX = "rebuild"
+
+
+def dump_is_post_hoc(frame, snapshot_utc):
+    """True when no row in `frame` was captured before its scheduled start.
+
+    Decided from the rows rather than from the clock. A date comparison against
+    the ET calendar would have to re-derive the rollover hour, agree with it
+    across DST, and still be wrong whenever SLATE_DATE is overridden to rebuild
+    an old slate by hand -- while the rows already carry both timestamps and
+    answer the question directly.
+
+    Returns False whenever the answer is not knowable (no rows, no start times,
+    an unparseable stamp), which is the current behaviour: an unknown dump
+    keeps the live name and stays visible to every existing glob. The failure
+    this guards is overwriting a pregame record, and a dump wrongly named
+    `rebuild_` would be a second way to lose one.
+    """
+    if frame is None or getattr(frame, "empty", True):
+        return False
+    if "scheduled_start_utc" not in getattr(frame, "columns", ()):
+        return False
+    snap = pd.to_datetime(snapshot_utc, utc=True, errors="coerce")
+    if pd.isna(snap):
+        return False
+    starts = pd.to_datetime(frame["scheduled_start_utc"], utc=True,
+                            errors="coerce").dropna()
+    return bool(len(starts)) and bool((starts <= snap).all())
+
+
+def dump_path(prefix, date, suffix, post_hoc):
+    """`data/[rebuild_]<prefix>_<date>_<suffix>.csv`."""
+    name = f"{prefix}_{date}_{suffix}.csv"
+    if post_hoc:
+        name = f"{REBUILD_PREFIX}_{name}"
+    return os.path.join(DATA_DIR, name)
+
 # Batted-ball direction/tendency rates with true league-wide anchors.
 BATTED_RATE_COLS_FOR_BASELINE = ["GB%", "FB%", "LD%", "PU%", "Pull%", "Straight%", "Oppo%"]
 
@@ -6332,9 +6397,18 @@ def main():
             for col, series in lu_cols.items():
                 frame[col] = frame["game_pk"].map(series)
     os.makedirs(DATA_DIR, exist_ok=True)
-    matchup_df.to_csv(os.path.join(DATA_DIR, f"leans_{SLATE_DATE}_{DUMP_SUFFIX}.csv"), index=False)
+    # One decision for both dumps, taken from the primary frame: they describe
+    # the same games at the same instant, and naming them from separate reads
+    # would let a slate land half rebuilt and half live.
+    post_hoc = dump_is_post_hoc(matchup_df, snapshot_utc)
+    if post_hoc:
+        log(f"dump: every game on {SLATE_DATE} has already started — writing "
+            f"under {REBUILD_PREFIX}_ so the pregame dump survives")
+    matchup_df.to_csv(dump_path("leans", SLATE_DATE, DUMP_SUFFIX, post_hoc),
+                      index=False)
     if matchup_platoon_df is not None and not matchup_platoon_df.empty:
-        matchup_platoon_df.to_csv(os.path.join(DATA_DIR, f"leans_{SLATE_DATE}_pl.csv"), index=False)
+        matchup_platoon_df.to_csv(dump_path("leans", SLATE_DATE, "pl", post_hoc),
+                                  index=False)
 
     log("Fetching pregame odds (best-effort, display-only) ...")
     try:
