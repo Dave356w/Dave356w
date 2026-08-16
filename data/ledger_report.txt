@@ -11,7 +11,7 @@ home F5 baseline: 0.417  (n=12)
 weight fit: 12 usable F5 decisions (gate 30)
 predicted vs actual (backfilled box scores)
   starter IP   n=634  bias +0.08 IP  MAE 0.97 IP   (drives the phase weight q)
-    IP calibration slope +0.762 +/- 0.046 (1.00 = calibrated; < 1 = over-dispersed)
+    IP calibration slope +0.756 +/- 0.045 (1.00 = calibrated; < 1 = over-dispersed)
   offense wOBA n=30   pred mean 0.3094  actual mean 0.3002  (-0.0092)
     calibration slope +1.36 +/- 0.87 (1.00 = calibrated)
     UNDER-POWERED: se 0.87 cannot separate 1.00 from 0.80; needs ~6400 side-games
@@ -34,7 +34,7 @@ predicted vs actual (backfilled box scores)
   wOBA v4    wOBA n= 22 pred 0.3084 act 0.2639 (-0.0445) slope -2.10±1.76  SP IP n= 22 bias +0.31  net n= 11 slope -4.82±2.53
   wOBA v5    wOBA n=236 pred 0.3077 act 0.3090 (+0.0013) slope +0.65±0.36  SP IP n=238 bias +0.00  net n=117 slope +0.01±0.50
   split v1   wOBA n= 14 pred 0.3221 act 0.3514 (+0.0294) slope -0.78±1.58  SP IP n= 14 bias +0.05  net n=  7 slope -1.18±0.89
-  v12        wOBA n= 30 pred 0.3094 act 0.3002 (-0.0092) slope +1.36±0.87  SP IP n= 30 bias +0.05  net n= 15 slope +0.33±1.50
+  v12        wOBA n= 30 pred 0.3094 act 0.3002 (-0.0092) slope +1.36±0.87  SP IP n= 30 bias +0.13  net n= 15 slope +0.33±1.50
   xw+plat_consol_v1  net n=  1
 component error (each scored against its own realised phase)
   SP      n=30   pred 0.3119 act 0.3483 (+0.0364)  MAE 0.1029  slope +1.39±0.93  corr +0.271
@@ -42,7 +42,7 @@ component error (each scored against its own realised phase)
   lineup  n=30   pred 0.3189 act 0.3002 (-0.0187)  MAE 0.0766  slope -0.38±2.42  corr -0.029
 by slate (most recent 14 of 25; monitoring, not trend)
   scale: per-side rate error sd 0.0894 over 536 paired side-games — read gross outliers, not drift
-  2026-08-15  xwOBA       15g  rate n= 30 pred 0.3094 act 0.3002 (-0.0092) MAE 0.0767  SP IP n= 30 bias +0.05 MAE 0.88
+  2026-08-15  xwOBA       15g  rate n= 30 pred 0.3094 act 0.3002 (-0.0092) MAE 0.0767  SP IP n= 30 bias +0.13 MAE 0.81
   2026-08-14  wOBA        14g  rate n= 28 pred 0.3078 act 0.3059 (-0.0018) MAE 0.0756  SP IP n= 28 bias +0.06 MAE 0.80
   2026-08-13  wOBA         9g  rate n= 18 pred 0.3042 act 0.2733 (-0.0309) MAE 0.0962  SP IP n= 18 bias +0.10 MAE 1.33
   2026-08-12  wOBA        15g  rate n= 29 pred 0.3086 act 0.3260 (+0.0175) MAE 0.0757  SP IP n= 30 bias +0.13 MAE 0.93
