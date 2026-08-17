@@ -212,6 +212,26 @@ _RECORD_FAMILIES = {
     #     is reverted because the operator asked for the K=100 model back, and
     #     that is a legitimate call to make against a fit -- but do not read
     #     the revert as a finding that 100 beat 400. Nothing measured that.
+    #
+    #     What the revert DOES change is whether that fit is about this
+    #     constant at all, and the answer is no. The probe builds its rates
+    #     from StatsAPI box lines (`WOBA_W`, `woba()`), so it fits a
+    #     wOBA-denominated K -- correct when it ran, because the build was on
+    #     wOBA and 400 shipped as wOBA v3. Under v11 the same constant shrinks
+    #     xwOBA, and K = sigma^2/tau^2 is a property of the metric: xwOBA is
+    #     (near enough) wOBA's conditional expectation given batted-ball
+    #     shape, so by the law of total variance its per-BF sigma^2 is strictly
+    #     smaller. tau^2 is NOT pinned, so this is a direction and not a
+    #     magnitude -- but the direction is toward a smaller K, i.e. toward the
+    #     100 now shipped. So the honest status of K=100 under v11 is
+    #     UNMEASURED, not overridden.
+    #
+    #     And it cannot be measured with what this repo has. StatsAPI serves no
+    #     xwOBA, and a per-past-date Savant pull is the lookahead the cache
+    #     rule forbids, so the probe cannot be re-pointed at the live metric.
+    #     Do not re-run it and read the output as an argument about v11: it
+    #     will answer the wOBA question again, accurately, and about a
+    #     constant this build no longer has.
     #   personal shrinkage targets -> population centre, via PLAYER_PRIORS=0,
     #     which restores the v3 target expression exactly (H -> 0) rather than
     #     adding a branch. Note the flag alone will not undo this under v11 --

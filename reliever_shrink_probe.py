@@ -103,6 +103,23 @@ slate, which is the one thing the no-lookahead rule forbids. The flip count has
 to come from a forward comparison on live slates, and it is the gate before any
 MODEL_TAG bump -- not something to infer from the numbers below.
 
+What K should regress an *xwOBA* rate. Every number here is built from StatsAPI
+box lines through `woba()`, so the fit is wOBA-denominated. That matched the
+build when this was written -- wOBA was the live metric and the fitted K=400
+shipped as wOBA v3 -- but v11 reverted the metric, so `XWOBA_SHRINK_K` now
+regresses xwOBA while this probe still measures wOBA. K = sigma^2/tau^2 is a
+property of the metric: xwOBA is near enough wOBA's conditional expectation
+given batted-ball shape, so by the law of total variance its per-BF sigma^2 is
+strictly smaller, and the implied K is smaller too. tau^2 is not pinned here,
+so that is a direction rather than a magnitude.
+
+There is no fix inside this file. StatsAPI serves no xwOBA, and the game-log
+argument that makes this probe walk-forward does not extend to Savant -- a
+leaderboard as of a past date is exactly what `.savant_cache/` being gitignored
+makes unrecoverable. So under an xwOBA build this probe still answers its
+question correctly and answers it about a constant the build no longer has.
+Read its output as history, not as an objection to the shipped K.
+
 Usage:
   python reliever_shrink_probe.py
   python reliever_shrink_probe.py --seasons 2024,2025,2026
