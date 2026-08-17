@@ -212,6 +212,26 @@ _RECORD_FAMILIES = {
     #     is reverted because the operator asked for the K=100 model back, and
     #     that is a legitimate call to make against a fit -- but do not read
     #     the revert as a finding that 100 beat 400. Nothing measured that.
+    #
+    #     What the revert DOES change is whether that fit is about this
+    #     constant at all, and the answer is no. The probe builds its rates
+    #     from StatsAPI box lines (`WOBA_W`, `woba()`), so it fits a
+    #     wOBA-denominated K -- correct when it ran, because the build was on
+    #     wOBA and 400 shipped as wOBA v3. Under v11 the same constant shrinks
+    #     xwOBA, and K = sigma^2/tau^2 is a property of the metric: xwOBA is
+    #     (near enough) wOBA's conditional expectation given batted-ball
+    #     shape, so by the law of total variance its per-BF sigma^2 is strictly
+    #     smaller. tau^2 is NOT pinned, so this is a direction and not a
+    #     magnitude -- but the direction is toward a smaller K, i.e. toward the
+    #     100 now shipped. So the honest status of K=100 under v11 is
+    #     UNMEASURED, not overridden.
+    #
+    #     And it cannot be measured with what this repo has. StatsAPI serves no
+    #     xwOBA, and a per-past-date Savant pull is the lookahead the cache
+    #     rule forbids, so the probe cannot be re-pointed at the live metric.
+    #     Do not re-run it and read the output as an argument about v11: it
+    #     will answer the wOBA question again, accurately, and about a
+    #     constant this build no longer has.
     #   personal shrinkage targets -> population centre, via PLAYER_PRIORS=0,
     #     which restores the v3 target expression exactly (H -> 0) rather than
     #     adding a branch. Note the flag alone will not undo this under v11 --
@@ -5579,16 +5599,50 @@ def _team_metric_cell(parts):
 def _record_grades(led):
     """Graded rows whose tags share the current prediction methodology.
 
-    Kept for the weight-fit / audit regime that must not mix prediction-math
-    changes. The user-facing combined record uses _display_grades instead."""
+    The row set for the weight-fit / audit regime that must not mix
+    prediction-math changes, AND -- since the headline was scoped -- for the
+    two public surfaces that quote a record: the leans strip and the grading
+    ledger's header. `RECORD_TAGS` is the authority on which families are
+    comparable, so those surfaces and data/ledger_report.txt now answer the
+    same question over the same rows.
+
+    NOT the row set for anything that needs volume rather than comparability.
+    The per-club table and the market-verdict context still pool every family
+    through _display_grades, because a current-family slice gives most clubs
+    one or two games. Those surfaces say so on their face; see
+    _record_scope_note."""
     return led[(led["status"] == "graded") & (led["model_tag"].isin(RECORD_TAGS))]
 
 
 def _display_grades(led):
-    """All graded rows, every model version joined. The versions are one
-    incremental lineage, so the displayed record combines them into a single
-    record per market (audit slicing still lives in _record_grades)."""
+    """All graded rows, every model version joined.
+
+    The pooled view. Used where a statistic needs sample size more than it
+    needs methodological comparability -- per-club accuracy, the market
+    verdict's context bucket -- never for a headline record. A record answers
+    "how good is this model", and pooling twelve prediction families into it
+    answers a different question; that is what RECORD_TAGS exists to separate
+    and what _record_grades now serves."""
     return led[led["status"] == "graded"]
+
+
+def _record_scope_note(led, g):
+    """(scope_txt, n_family, n_all) for a record scored on `g`.
+
+    Every surface that narrows to the current family sits above or beside
+    something that does not -- the grades page prints the whole ledger table
+    under its header, and the strip links to a pooled per-team page. Saying
+    "19-11" over a 568-row table without saying which rows is the
+    claims-the-data-can't-support anti-pattern in its purest form, so the
+    scope travels with the number rather than being left to the reader.
+
+    Returns an empty scope string when the family IS every graded row, so the
+    note disappears by itself rather than needing a caller-side branch."""
+    n_all = int((led["status"] == "graded").sum())
+    n_fam = len(g)
+    if n_fam == n_all:
+        return "", n_fam, n_all
+    return (f"{n_fam} of {n_all} graded rows are {MODEL_TAG}", n_fam, n_all)
 
 
 def _baseline_controls(g):
@@ -5823,14 +5877,30 @@ def records_strip_html():
     led = load_ledger_df()
     if led is None:
         return ""
-    g = _display_grades(led)
+    # The current record family, not every graded row. A headline record is a
+    # claim about THIS model, and RECORD_TAGS is the repo's own answer to
+    # which families may share a win-loss line -- the same rule
+    # data/ledger_report.txt scores, so the public number and the internal one
+    # stop being able to disagree.
+    g = _record_grades(led)
+    scope, n_fam, n_all = _record_scope_note(led, g)
     if g.empty:
-        inner = "<span class='muted'>no graded games yet</span>"
+        # Deliberately NOT a fallback to the pooled record. A bump resets this
+        # to zero until the family's first row grades (v11 shipped and was
+        # superseded without ever producing one), and quietly showing an
+        # older family's record under the current model's name is the exact
+        # substitution that published "wOBA full 217-164" over 381 xwOBA
+        # games. Say there is nothing yet, and say where the history went.
+        inner = ("<span class='muted'>no graded games yet under "
+                 f"{_esc(MODEL_TAG)}</span>")
+        if n_all:
+            inner += (f" <span class='muted'>· {n_all} graded under earlier "
+                      "families — <a href='grades.html'>full ledger</a></span>")
     else:
-        # Label the pooled record with the metric those rows were predicted
-        # under, not MODEL_RATE_LABEL. This strip renders every graded family;
-        # on the morning the tag flipped it read "wOBA full 217-164" over 381
-        # games of which zero were wOBA.
+        # Label the record with the metric those rows were predicted under,
+        # not MODEL_RATE_LABEL. Still read off the rows even now the family is
+        # pinned: a tag flips a slate before any row under it grades, so the
+        # constant and the rows can still disagree for a day.
         from market_backfill import metric_label
         label = metric_label(g)
         bits = [f"{label} full {_rec_txt(g['xw_full'])}"]
@@ -5845,6 +5915,8 @@ def records_strip_html():
                 m = None
             if m:
                 bits.append(f"{label} vs mkt z {m['z']:+.2f} ({m['roi_units']:+.2f}u)")
+        if scope:
+            bits.append(f"<span class='muted'>{scope}</span>")
         inner = " <span class='muted'>·</span> ".join(bits)
     return ("<div class='gradestrip'><span class='lab'>Record</span>"
             f"<span>{inner}</span><span class='grade-links'>"
@@ -5984,14 +6056,24 @@ def render_grades_html(built_txt):
                        "</div></div>")
         return html_document(body, built_txt, title="MLB lean grades")
 
-    n_pend = int((led["status"] == "pending").sum())
-    n_void = int((led["status"] == "void").sum())
+    # Scoped to the current record family, like the graded count they sit
+    # beside. Pooling them there would put "30 graded" next to a void count
+    # drawn from twelve families -- three numbers in one tile, two of them
+    # answering a different question.
+    _fam = led["model_tag"].isin(RECORD_TAGS)
+    n_pend = int((_fam & (led["status"] == "pending")).sum())
+    n_void = int((_fam & (led["status"] == "void")).sum())
     head = ("<div class='gr-head'><h1 class='gr-h1'>Grading ledger</h1>"
             "<div class='gr-lead'>Every lean this model has published, graded "
             f"against the final score. Built <span class='stamp'>{built_txt}"
             "</span>.</div></div>")
 
-    g = _display_grades(led)
+    # Header stats score the current record family; the TABLE below still
+    # lists every row the ledger holds. That split is intentional -- the table
+    # is the archive, the header is a claim about this model -- and it is why
+    # _record_scope_note is printed rather than left implicit.
+    g = _record_grades(led)
+    scope, n_fam, n_all = _record_scope_note(led, g)
     stats, notes = [], []
 
     def stat(lab, val, sub=None, tone=""):
@@ -6000,7 +6082,15 @@ def render_grades_html(built_txt):
                      f"<div class='v{(' ' + tone) if tone else ''}'>{val}</div>{s}</div>")
 
     if g.empty:
-        summary = "<div class='gr-note'>No graded games yet.</div>"
+        # Same reasoning as the strip: no silent fall back to the pooled
+        # record. The table below still renders every historical row, so the
+        # history is on the page -- it is just not being called this model's.
+        summary = (f"<div class='gr-note'>No graded games yet under "
+                   f"{_esc(MODEL_TAG)}"
+                   + (f"; {n_all} rows graded under earlier families are "
+                      "listed below and scored per family in "
+                      "data/ledger_report.txt" if n_all else "")
+                   + ".</div>")
     else:
         # Rows on which the model actually published a decision. A graded row
         # is a game that was played; a decided row is one this model called.
@@ -6014,8 +6104,10 @@ def render_grades_html(built_txt):
         if n_abst:
             pend_sub += f" · {n_abst} abstained"
         stat("Graded", str(len(g)), pend_sub)
-        # Metric read off the graded rows, not the running build -- this page
-        # pools every family, so it is "xwOBA" until wOBA rows actually grade.
+        # Metric read off the graded rows, not the running build. Still true
+        # with the family pinned: MODEL_TAG flips a slate before any row under
+        # it grades, so on that morning the constant names a metric no row on
+        # this page was predicted under.
         from market_backfill import metric_label
         label = metric_label(g)
         b, p = _rec_parts(decided["xw_full"]); stat(f"{label} · full", b, p)
@@ -6037,6 +6129,14 @@ def render_grades_html(built_txt):
                      tone="cool" if m["z"] > 0 else "warm")
         notes.append(f"{label} graded full-game vs devigged DK closing ML (ESPN capture); "
                      "z and flat ROI are the primary metrics")
+        # The scope of every tile above, stated once. Without it the header
+        # reads as a summary of the table underneath it, which spans every
+        # family the ledger has ever held.
+        if scope:
+            notes.append(f"every figure above is scored on the current model "
+                         f"family only — {scope}; the table below lists all "
+                         f"{n_all}, and data/ledger_report.txt scores each "
+                         "family separately")
         # Controls. The model's record is unreadable without them: .570 is a
         # result only relative to what always-home and always-chalk got on the
         # same games. Muted so they read as the yardstick, not as headlines.
@@ -6073,9 +6173,10 @@ def render_grades_html(built_txt):
                    + (f"<div class='gr-note'>{'. '.join(notes)}.</div>" if notes else ""))
 
     show_ml = "close_home_ml" in led.columns and led["close_home_ml"].notna().any()
-    # The table includes immutable historical xwOBA rows and current wOBA rows,
-    # so its column headers are metric-neutral. The current-family summary
-    # above remains explicitly labelled wOBA.
+    # The table is the archive: every family, every status, metric-neutral
+    # column headers because the rows behind them were predicted under
+    # different statistics. The summary above is scoped to the current family
+    # and labelled from its own rows, which is why the two counts differ.
     heads = (["Game", "Model lean"]
              + (["ML"] if show_ml else [])
              + ["Final", "Result"])
@@ -6160,14 +6261,21 @@ def render_team_grades_html(built_txt):
            "<a href='grades.html'>← full ledger</a>"
            "<a href='market-calibration.html'>market calibration →</a></div>")
     led = load_ledger_df()
-    # Same rule as the other two public surfaces: this page pools every graded
-    # family, so it is named for the rows it shows, not for tonight's build.
+    # Named for the rows it shows, not for tonight's build -- and this page
+    # deliberately keeps POOLING every graded family where the headline
+    # surfaces no longer do. Thirty clubs into one family's rows is one or two
+    # games each, which is not a per-club accuracy. The lead says so, so a
+    # reader who has just seen a current-family record on the strip is told
+    # why this page's numbers cover more games rather than left to infer it.
     from market_backfill import metric_label
     label = (MODEL_RATE_LABEL if led is None
              else metric_label(_display_grades(led)))
     head = ("<div class='gr-head'><h1 class='gr-h1'>Performance by team</h1>"
             f"<div class='gr-lead'>{label} full-game accuracy for every MLB club, "
             "split by whether the model leaned on that team or against it. "
+            "Pooled over every graded model family — a single family leaves "
+            "most clubs one or two games — so this is not comparable with the "
+            "current-family record on the ledger header. "
             f"Built <span class='stamp'>{built_txt}</span>.</div></div>")
     if led is None:
         empty = ("<div class='legend'><div class='lg-title'>No graded data yet — "

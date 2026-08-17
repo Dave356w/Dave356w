@@ -102,6 +102,29 @@ table, and the code comments state it that way at each site. Do not let a later
 reader convert it into evidence, and do not quote the wOBA lineage's 63-76 as
 the reason: over those same rows always-home ran .604.
 
+**One correction to that paragraph, and it cuts the other way on K.** The
+sentence above is right that no measurement favoured 100, but wrong to leave
+the K fit standing as a live objection to it. `reliever_shrink_probe` builds
+its rates from StatsAPI box lines (`WOBA_W`, `woba()`), so what it fits is a
+**wOBA-denominated K** — correct when it ran, because the build was on wOBA and
+400 shipped as wOBA v3. Under v11 the same constant shrinks xwOBA, and
+`K = σ²/τ²` is a property of the metric: xwOBA is near enough wOBA's
+conditional expectation given batted-ball shape, so by the law of total
+variance its per-BF `σ²` is strictly smaller. `τ²` is not pinned, so that is a
+direction and not a magnitude — but the direction is toward a *smaller* K, i.e.
+toward the 100 now shipped. So K=100's status under v11 is **unmeasured, not
+overridden**, and "every interval excludes 100" is a true statement about a
+statistic this build does not use.
+
+It also cannot be re-measured here: StatsAPI serves no xwOBA and a per-past-date
+Savant pull is the lookahead `.savant_cache/` exists to forbid, so the probe
+cannot be re-pointed at the live metric. Re-running it answers the wOBA
+question again, accurately, about a constant this build no longer has. The same
+metric-denomination caveat applies to `player_prior_probe`'s +7–25%: the frozen
+priors are wOBA and `player_prior_history()` refuses them to an xwOBA build, as
+the priors section below already states. Neither retracts a fit; both narrow
+what the fit is about.
+
 What v11 does *not* revert is the part with evidence independent of those three
 knobs — v2's exposure-centred platoon offsets (a construction fix: the season
 line is already exposure-weighted), v3's relief-pool shrink target (the league
@@ -167,14 +190,22 @@ produce a **graded row with no lean** — and as of 2026-08-09 it has. The
 sentence here used to read "the ledger holds no undecided rows yet"; it fired on
 2026-08-08, DET@SF, where Jackson Jobe carried no measured season line
 (`pitching_basis_away=starter_unmeasured_no_lean`), and that row has since
-graded. It is the only leanless row in 482. v7's zero-delta abstention still has
-never once fired at full precision, so v5 remains the only mechanism that
-actually produces these. `_rec()` drops those rows while `len()` counts them, so
-every count that mixes the two must say which it is — see the controls entry
-below for the one surface that did not, now a live discrepancy rather than an
-armed one. `ledger_report.txt` states the split correctly today
-(`55 graded games (54 with a lean, 1 abstained)`), and the grades page scores
-its controls on the 54.
+graded. **It is no longer the only one**: a second fired on 2026-08-12,
+CHC@WSH, on the home side (`pitching_basis_home=starter_unmeasured_no_lean`),
+and has also graded. This sentence has now been wrong twice in the same way —
+it read "no undecided rows yet", then "the only leanless row in 482" — so it is
+fixed here as a mechanism rather than a count: **v5 abstentions are rare, they
+accrue, and the number is `xw_lean.isna()` on the graded rows, not a figure in
+this file.** v7's zero-delta abstention still has never once fired at full
+precision, so v5 remains the only mechanism that actually produces these.
+`_rec()` drops those rows while `len()` counts them, so every count that mixes
+the two must say which it is — see the controls entry below for the one surface
+that did not, now a live discrepancy rather than an armed one.
+`ledger_report.txt` states the split per family on its history lines (the wOBA
+v5 line carries its own `(n abstained)` marker), and the grades page scores its
+controls on the decided rows. Read both off the artifacts; the quoted
+`55 graded games (54 with a lean, 1 abstained)` that stood here was a
+current-family line from a family that is no longer current.
 
 `split v1` remains an isolated historical namespace because its dump and
 pending ledger rows existed before full wOBA was restored. It is not an active
@@ -576,15 +607,39 @@ precedent — they are how the fix is known to look.
 
   Read those three numbers as of that commit, not as standing facts. **And do
   not read the sentence this paragraph used to open with** — "the page scores
-  `RECORD_TAGS`, so the headline reset when v9 started a new family" — which is
-  wrong about the code and was verified so on 2026-08-06. `build_site`'s
-  `_record_grades()` has *no production caller*; every public surface renders
-  `_display_grades()`, i.e. every graded family pooled, which is exactly why
-  the front page could publish `wOBA full 217-164` over 381 xwOBA games (see
-  the metric-label instance below). A `MODEL_TAG` bump does not reset the
-  public headline. It resets `ledger_report.txt`, which is the artifact that
-  does score `RECORD_TAGS`. The 45-37 (.549) / 42-40 / 49-33 line quoted here
-  for 2026-08-02 was the *report's* current-family line, not the page's.
+  `RECORD_TAGS`, so the headline reset when v9 started a new family" — which
+  was wrong about the code when it was written and was verified so on
+  2026-08-06: `_record_grades()` then had *no production caller*, every public
+  surface rendered `_display_grades()`, and that is exactly why the front page
+  could publish `wOBA full 217-164` over 381 xwOBA games (see the metric-label
+  instance below).
+
+  **As of 2026-08-17 that sentence is true, and it is true because it was
+  made true rather than because it was right.** The record strip and the
+  grading-ledger header now score `RECORD_TAGS`, so a `MODEL_TAG` bump *does*
+  reset the public headline, and the page and `ledger_report.txt` answer the
+  same question over the same rows. Keep the history above: the lesson is not
+  "the page scores the current family" — it is that this file asserted so for
+  weeks while the code did the opposite, and the way that was caught was
+  reading `build_site.py`, not re-reading this paragraph.
+
+  Two consequences to hold onto, both deliberate:
+
+  * **An empty family publishes no record.** The surfaces do not fall back to
+    the pooled line — they say "no graded games yet under `<tag>`" and point
+    at the ledger. A silent fallback would be the `wOBA full 217-164`
+    substitution with the tag rather than the metric label as the lie, and
+    v11 is the proof it would fire: it shipped and was superseded without ever
+    grading a row. `RecordScopeTests` pins this.
+  * **The pooled surfaces stayed pooled, and say so.** Per-club accuracy and
+    the market verdict's context bucket still call `_display_grades()`,
+    because one family leaves most clubs one or two games — comparability is
+    the wrong trade there. The team page's lead states that it pools, so the
+    two surfaces cannot read as contradicting each other.
+
+  The 45-37 (.549) / 42-40 / 49-33 line quoted here for 2026-08-02 was the
+  *report's* current-family line, not the page's — which at that date were
+  different numbers, and now would not be.
 
   Controls, whatever the row set: the model ahead of the coin-flip control and
   behind the closing line, on a sample far too small to separate them — which

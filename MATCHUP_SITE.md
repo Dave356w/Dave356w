@@ -47,7 +47,14 @@ a **population centre**. Both reverts, both against their own evidence, both
 deliberate — `reliever_shrink_probe` fits `K` three ways on n=53,464 and every
 interval excludes 100, and the personal-prior probe reports +7% to +25%
 out-of-sample MSE gains with CIs excluding zero. Neither finding is disputed;
-they were overridden. The one forward reading that points the other way is the
+they were overridden. Both are also **wOBA-denominated**, and the revert put the
+build back on xwOBA: the probe fits `K` from StatsAPI box-line wOBA, and the
+frozen priors are wOBA files an xwOBA build refuses. `K = σ²/τ²` moves with the
+metric — xwOBA is near enough wOBA's conditional expectation, so its per-BF `σ²`
+is strictly smaller and the implied `K` is smaller, i.e. nearer the 100 shipped.
+That makes `K = 100` **unmeasured under v11 rather than overridden**, and it is
+not re-measurable here (no xwOBA in StatsAPI; a per-past-date Savant pull is
+lookahead). See `_RECORD_FAMILIES` under `xw+plat_consol_v11`. The one forward reading that points the other way is the
 lineup component's correlation with its realised phase (+0.124 over the 194
 v9/v10 side-games against −0.004 over v5's 220), and bootstrapped that
 difference is `+0.128, CI [-0.054, +0.301]` — it does not separate either.
@@ -283,7 +290,9 @@ The metric goes back to Savant xwOBA; the paired shadow arm built to settle
 that question reports `d_corr +0.008, CI [-0.108, +0.128]` over 68 games and
 does not separate, so the arm swaps sides and keeps measuring. `K` goes back to
 100 against `reliever_shrink_probe`'s three-way fit (391 [293,519] walk-forward
-on n=53,464; 600/384/577 within-season), every interval of which excludes 100.
+on n=53,464; 600/384/577 within-season), every interval of which excludes 100 —
+a fit denominated in wOBA, and so about the constant this build had rather than
+the one it now has (above, and `_RECORD_FAMILIES`).
 The shrinkage target goes back to the population centre against
 `player_prior_probe`'s +7%–25% out-of-sample gains; the one forward reading
 that points the other way — the lineup component's correlation with its
