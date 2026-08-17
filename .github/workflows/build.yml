@@ -52,7 +52,7 @@ jobs:
     needs: plan
     if: needs.plan.outputs.should_run == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 15        # fail fast if an upstream API hangs
+    timeout-minutes: 25        # includes the bounded pre-build replay append
     # MODEL_TAG / RECORD_TAGS / SCALE_TAGS are deliberately NOT set here. They
     # used to be pinned job-level, which made this file a third copy of the
     # model version alongside build_site.py and grade_leans.py -- and it drifted:
@@ -91,6 +91,18 @@ jobs:
           path: .savant_cache
           key: savant-${{ needs.plan.outputs.slate_date }}
 
+      # Historical replay inputs are immutable for a given date. Carry them
+      # forward between daily runs so walkforward.py normally fetches only the
+      # newly graded slate. The provider hash prevents changed query semantics
+      # from silently reusing an incompatible cache generation.
+      - name: Restore walk-forward source cache
+        uses: actions/cache@v4
+        with:
+          path: .walkforward_cache
+          key: walkforward-source-v1-${{ hashFiles('historical_data.py') }}-${{ needs.plan.outputs.slate_date }}
+          restore-keys: |
+            walkforward-source-v1-${{ hashFiles('historical_data.py') }}-
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -109,6 +121,22 @@ jobs:
       # same run. The ~4:17am ET run is the one that grades yesterday.
       - name: Grade leans (pre-build)
         run: python grade_leans.py
+
+      # Append only newly completed source-ledger dates under the current
+      # replay_config_hash. This must follow grading so yesterday's finals are
+      # visible, and precede build_site.py so every deployed build carries the
+      # newest separate walk-forward ledger/report. A historical-source outage
+      # is intentionally non-fatal: losing today's pregame production snapshot
+      # would be irreversible, while this replay can resume on the next run.
+      - name: Append current-model walk-forward ledger (pre-build)
+        id: walkforward
+        continue-on-error: true
+        timeout-minutes: 8
+        run: python walkforward.py
+
+      - name: Warn when walk-forward append is deferred
+        if: steps.walkforward.outcome == 'failure'
+        run: echo "::warning::Walk-forward append failed or timed out; the site build will continue and the replay will resume next run."
 
       # Build into ./public. On a hard fetch failure the script exits non-zero
       # WITHOUT writing index.html, so the steps below don't run, the artifact

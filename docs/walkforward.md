@@ -60,6 +60,21 @@ This writes:
 Interrupted runs resume by `replay_config_hash`; dated source downloads are
 cached under `.walkforward_cache/`.
 
+## Daily automation
+
+`.github/workflows/build.yml` runs the replay after its pre-build grading pass
+and before `build_site.py`. That ordering exposes newly completed production
+ledger games to the replay while keeping the deployed build synchronized with
+the separate `data/walkforward_current.csv` and `data/walkforward_report.txt`
+outputs. The workflow's existing `git add data/` commit persists both files, so
+later builds resume and append rather than replaying completed dates.
+
+The workflow restores `.walkforward_cache/` across runs with a key scoped to
+the historical-provider implementation. The append has an eight-minute bound
+and is non-fatal: a temporary historical-source failure emits an Actions
+warning and resumes on the next build, but never prevents capture of the
+current slate's irreplaceable pregame production snapshot.
+
 Strict recent-slate parity against an archived production snapshot:
 
 ```bash
