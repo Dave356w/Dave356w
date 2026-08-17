@@ -1,6 +1,7 @@
 import math
 import os
 import sys
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -237,3 +238,22 @@ def test_market_roi_edge_cases():
     assert walkforward.flat_unit_roi("L", 200) == pytest.approx(-1.0)
     assert walkforward.flat_unit_roi("T", 200) == pytest.approx(0.0)
     assert math.isnan(walkforward.flat_unit_roi(None, 200))
+
+
+def test_site_workflow_appends_walkforward_after_grading_before_build():
+    workflow = (
+        Path(__file__).resolve().parents[1]
+        / ".github" / "workflows" / "build.yml"
+    ).read_text()
+    grade = workflow.index("- name: Grade leans (pre-build)")
+    replay = workflow.index(
+        "- name: Append current-model walk-forward ledger (pre-build)"
+    )
+    build = workflow.index("- name: Build static site")
+    assert grade < replay < build
+    replay_block = workflow[replay:build]
+    assert "continue-on-error: true" in replay_block
+    assert "timeout-minutes: 8" in replay_block
+    assert "run: python walkforward.py" in replay_block
+    assert "path: .walkforward_cache" in workflow
+    assert "git add data/" in workflow
