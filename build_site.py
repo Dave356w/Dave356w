@@ -905,8 +905,13 @@ def _innings_to_outs(value):
         return 0
 
 
-def load_recent_start_era(ids, limit=RECENT_STARTS):
-    """Build pre-slate recent-start and recent-role profiles for probables."""
+def load_recent_start_era(ids, limit=RECENT_STARTS, before_date=None):
+    """Build recent-start and recent-role profiles strictly before a date.
+
+    ``before_date`` is injectable for historical replay.  The live build keeps
+    the existing behaviour by defaulting to ``SLATE_DATE``.
+    """
+    cutoff = str(before_date or SLATE_DATE)[:10]
     out = {}
     for pid in sorted({int(i) for i in ids if pd.notna(i)}):
         try:
@@ -925,7 +930,7 @@ def load_recent_start_era(ids, limit=RECENT_STARTS):
                 # Never let the current slate's start leak into a pregame metric.
                 game_date = str(sk.get("date") or
                                 (sk.get("game", {}) or {}).get("gameDate") or "")[:10]
-                if not game_date or game_date >= SLATE_DATE:
+                if not game_date or game_date >= cutoff:
                     continue
                 try:
                     er = float(st.get("earnedRuns") or 0)
@@ -994,14 +999,20 @@ def load_recent_start_era(ids, limit=RECENT_STARTS):
     return out
 
 
-def load_league_era():
-    """Current-season MLB pitching ERA for the recent-start comparison."""
+def load_league_era(start_date=None, end_date=None):
+    """MLB pitching ERA, optionally bounded for point-in-time replay."""
     endpoint = "https://statsapi.mlb.com/api/v1/stats"
-    data = _get_json(endpoint, {
-        "stats": "season", "group": "pitching", "season": SEASON,
+    params = {
+        "stats": "byDateRange" if end_date else "season",
+        "group": "pitching", "season": SEASON,
         "sportIds": SPORT_ID, "gameType": "R", "playerPool": "ALL",
         "limit": 5000,
-    })
+    }
+    if start_date:
+        params["startDate"] = str(start_date)[:10]
+    if end_date:
+        params["endDate"] = str(end_date)[:10]
+    data = _get_json(endpoint, params)
     outs = earned_runs = 0
     for blk in data.get("stats", []):
         for sk in blk.get("splits", []):
@@ -1146,34 +1157,46 @@ BB_COLS = ["GB%", "FB%", "LD%", "PU%", "Pull%", "Straight%", "Oppo%"]
 
 _pitcher_roster_cache = {}
 _team_pitcher_role_cache = {}
+_ROSTER_UNSET = object()
 
 
-def pitcher_roster(team_id):
-    """Active-roster pitcher ids for a team (StatsAPI)."""
+def pitcher_roster(team_id, roster_date=None):
+    """Active-roster pitcher ids, optionally on a historical date."""
     team_id = int(team_id)
-    if team_id in _pitcher_roster_cache:
-        return _pitcher_roster_cache[team_id]
+    # Preserve the original integer cache key for live callers/tests; dated
+    # replay entries live in a separate tuple namespace.
+    key = ((team_id, str(roster_date)[:10]) if roster_date else team_id)
+    if key in _pitcher_roster_cache:
+        return _pitcher_roster_cache[key]
+    params = {"rosterType": "active"}
+    if roster_date:
+        params["date"] = str(roster_date)[:10]
     data = _get_json(f"https://statsapi.mlb.com/api/v1/teams/{team_id}/roster",
-                     {"rosterType": "active"})
+                     params)
     ids = [int(r["person"]["id"]) for r in data.get("roster", [])
            if (r.get("position", {}) or {}).get("abbreviation") == "P"]
-    _pitcher_roster_cache[team_id] = ids
+    _pitcher_roster_cache[key] = ids
     return ids
 
 
-def load_team_pitcher_roles(team_id):
-    """Season-to-date workload roles for one club in a single StatsAPI call.
+def load_team_pitcher_roles(team_id, start_date=None, end_date=None):
+    """Workload roles for one club in a single StatsAPI call.
 
     Returns active/used pitchers keyed by player id with appearances, starts,
-    start share, innings per appearance, and batters faced. These fields are
+    start share, innings per appearance, and batters faced. Optional date
+    bounds make the same parser safe for point-in-time replay. These fields are
     used only to separate the rotation from the relief pool; no specific bulk
     follower is projected.
     """
     team_id = int(team_id)
-    if team_id in _team_pitcher_role_cache:
-        return _team_pitcher_role_cache[team_id]
-    data = _get_json("https://statsapi.mlb.com/api/v1/stats", {
-        "stats": "season",
+    # Preserve the original integer cache key for live callers/tests; dated
+    # replay entries live in a separate tuple namespace.
+    key = ((team_id, str(start_date)[:10] if start_date else None,
+            str(end_date)[:10]) if end_date else team_id)
+    if key in _team_pitcher_role_cache:
+        return _team_pitcher_role_cache[key]
+    params = {
+        "stats": "byDateRange" if end_date else "season",
         "group": "pitching",
         "season": SEASON,
         "sportIds": SPORT_ID,
@@ -1181,7 +1204,12 @@ def load_team_pitcher_roles(team_id):
         "gameType": "R",
         "playerPool": "ALL",
         "limit": 1000,
-    })
+    }
+    if start_date:
+        params["startDate"] = str(start_date)[:10]
+    if end_date:
+        params["endDate"] = str(end_date)[:10]
+    data = _get_json("https://statsapi.mlb.com/api/v1/stats", params)
     out = {}
     for blk in data.get("stats", []):
         for sk in blk.get("splits", []):
@@ -1204,11 +1232,12 @@ def load_team_pitcher_roles(team_id):
                 "avg_ip_per_appearance": outs / 3.0 / apps if apps > 0 else np.nan,
                 "batters_faced": bf,
             }
-    _team_pitcher_role_cache[team_id] = out
+    _team_pitcher_role_cache[key] = out
     return out
 
 
-def relief_pitcher_ids(team_id, role_stats, probable_pid=None):
+def relief_pitcher_ids(team_id, role_stats, probable_pid=None,
+                       roster_ids=_ROSTER_UNSET):
     """Active-roster pitchers whose season workload is primarily relief.
 
     The loose three-inning ceiling intentionally keeps long/bulk relievers in
@@ -1217,7 +1246,11 @@ def relief_pitcher_ids(team_id, role_stats, probable_pid=None):
     """
     probable_pid = int(probable_pid) if probable_pid is not None else None
     out = []
-    for pid in pitcher_roster(team_id):
+    # ``None`` is an explicit unavailable historical roster and must stay
+    # empty; only an omitted argument may fall back to the live roster call.
+    ids = (pitcher_roster(team_id)
+           if roster_ids is _ROSTER_UNSET else (roster_ids or []))
+    for pid in ids:
         if pid == probable_pid:
             continue
         role = (role_stats or {}).get(pid) or {}
@@ -1259,7 +1292,8 @@ def bf_per_ip(role):
     return float(bf) / season_ip
 
 
-def relief_pool_prior(team_ids, pitcher_stat, roles_by_team):
+def relief_pool_prior(team_ids, pitcher_stat, roles_by_team,
+                      rosters_by_team=None):
     """Unweighted centre of tonight's relief pools, or None.
 
     v3 shrinks relievers toward this instead of toward the league PA-weighted
@@ -1302,7 +1336,13 @@ def relief_pool_prior(team_ids, pitcher_stat, roles_by_team):
         if not roles:
             continue
         try:
-            ids = relief_pitcher_ids(tid, roles, probable_pid=None)
+            if rosters_by_team is None:
+                ids = relief_pitcher_ids(tid, roles, probable_pid=None)
+            else:
+                ids = relief_pitcher_ids(
+                    tid, roles, probable_pid=None,
+                    roster_ids=rosters_by_team.get(tid),
+                )
         except Exception:  # noqa: BLE001
             continue
         for pid in ids:
@@ -1318,7 +1358,7 @@ def relief_pool_prior(team_ids, pitcher_stat, roles_by_team):
 
 
 def bullpen_xwoba_aggregate(team_id, probable_pid, pitcher_stat, role_stats,
-                            prior, shrink_k):
+                            prior, shrink_k, roster_ids=_ROSTER_UNSET):
     """Role-filtered bullpen xwOBA with per-pitcher empirical-Bayes shrinkage.
 
     Talent is shrunk by each pitcher's Savant BF before aggregation. Usage
@@ -1326,7 +1366,9 @@ def bullpen_xwoba_aggregate(team_id, probable_pid, pitcher_stat, role_stats,
     a swingman's starter work from receiving full bullpen weight.
     """
     weighted = []
-    for pid in relief_pitcher_ids(team_id, role_stats, probable_pid):
+    for pid in relief_pitcher_ids(
+        team_id, role_stats, probable_pid, roster_ids=roster_ids
+    ):
         stat = pitcher_stat.get(pid) or {}
         bf = _f(stat.get("PA"))
         xw = _f(stat.get("xwOBA"))
@@ -1463,7 +1505,12 @@ def sp_ip_calibration(led=None):
     Returns None when the ledger is missing, unreadable or has fewer than two
     usable pairs, and the caller then publishes the raw estimate unchanged.
     """
-    if "fit" in _sp_ip_cal_state:
+    # The live build calls with ``led=None`` and may reuse one fit during the
+    # process. A walk-forward replay passes an explicit prior-only frame for
+    # every slate; caching that fit would leak the first replay date into every
+    # later one (or, worse, reuse a production-ledger fit).
+    use_process_cache = led is None
+    if use_process_cache and "fit" in _sp_ip_cal_state:
         return _sp_ip_cal_state["fit"]
     fit = None
     led = load_ledger_df() if led is None else led
@@ -1498,7 +1545,8 @@ def sp_ip_calibration(led=None):
                 n = int(p.size)
                 w = n / (n + SP_IP_CALIBRATION_K)
                 fit = (float(intercept), float(slope), n, float(w))
-    _sp_ip_cal_state["fit"] = fit
+    if use_process_cache:
+        _sp_ip_cal_state["fit"] = fit
     return fit
 
 
@@ -1515,14 +1563,15 @@ def calibrate_sp_ip(raw, fit=None):
 
 
 def build_pitching_plans(slate_df, recent_profiles, pitcher_stat,
-                         league_baseline):
+                         league_baseline, provider=None,
+                         calibration_history=None):
     """Expected-IP + role-filtered bullpen plan for every probable-pitcher side."""
     plans = {}
     classifications = opener_classifications(recent_profiles)
     league_prior = _f((league_baseline or {}).get("xwOBA"))
     shrink_k = XWOBA_SHRINK_K
     # Fitted once per build, from completed games only.
-    ip_cal = sp_ip_calibration()
+    ip_cal = sp_ip_calibration(calibration_history)
     if ip_cal:
         _a, _b, _n, _w = ip_cal
         log(f"  expected-IP calibration: act = {_a:+.3f} + {_b:.3f}*pred "
@@ -1530,6 +1579,7 @@ def build_pitching_plans(slate_df, recent_profiles, pitcher_stat,
     else:
         log("  expected-IP calibration: no usable actuals -> raw estimate")
     roles_by_team = {}
+    rosters_by_team = {}
     bullpen_by_pair = {}
 
     # Role lines first, for every club on the slate: the relief centre has to
@@ -1543,11 +1593,26 @@ def build_pitching_plans(slate_df, recent_profiles, pitcher_stat,
             tid = int(tid)
             if tid not in roles_by_team:
                 try:
-                    roles_by_team[tid] = load_team_pitcher_roles(tid)
+                    roles_by_team[tid] = (
+                        provider.load_team_pitcher_roles(tid)
+                        if provider is not None else load_team_pitcher_roles(tid)
+                    )
                 except Exception as e:  # noqa: BLE001
                     log(f"  bullpen roles unavailable for team {tid}: {e!r}")
                     roles_by_team[tid] = None
-    relief_prior = relief_pool_prior(list(roles_by_team), pitcher_stat, roles_by_team)
+            if tid not in rosters_by_team:
+                try:
+                    rosters_by_team[tid] = (
+                        provider.pitcher_roster(tid)
+                        if provider is not None else pitcher_roster(tid)
+                    )
+                except Exception as e:  # noqa: BLE001
+                    log(f"  pitcher roster unavailable for team {tid}: {e!r}")
+                    rosters_by_team[tid] = None
+    relief_prior = relief_pool_prior(
+        list(roles_by_team), pitcher_stat, roles_by_team,
+        rosters_by_team=rosters_by_team,
+    )
     prior = relief_prior if relief_prior is not None else league_prior
     log(f"  relief shrink target: "
         + (f"{relief_prior:.4f} (pool centre, {len(roles_by_team)} clubs)"
@@ -1575,7 +1640,8 @@ def build_pitching_plans(slate_df, recent_profiles, pitcher_stat,
             if pair not in bullpen_by_pair:
                 try:
                     bullpen_by_pair[pair] = bullpen_xwoba_aggregate(
-                        tid, pid, pitcher_stat, roles_by_team.get(tid), prior, shrink_k
+                        tid, pid, pitcher_stat, roles_by_team.get(tid), prior,
+                        shrink_k, roster_ids=rosters_by_team.get(tid),
                     )
                 except Exception as e:  # noqa: BLE001
                     log(f"  bullpen aggregate failed for team {tid}: {e!r}")
@@ -1920,10 +1986,58 @@ def log_prior_population_centres(batter_cust, pitcher_cust, prior, k,
             f"{r_n:>13}")
 
 
-def fetch_all(slate_date):
-    """Run the full cell-1 fetch. Returns a dict of everything downstream needs."""
+class LiveDataProvider:
+    """Default source layer for the production build.
+
+    The wrapper is intentionally thin: it changes no live behaviour, but gives
+    replay code one seam at which to substitute date-bounded inputs while all
+    prediction functions below remain the single source of truth.
+    """
+
+    def __init__(self, slate_date=None):
+        self.slate_date = str(slate_date or SLATE_DATE)[:10]
+
+    def get_slate(self, slate_date, sport_id=SPORT_ID):
+        return get_slate(slate_date, sport_id)
+
+    def load_stat_lookups(self, player_type):
+        return load_stat_lookups(player_type)
+
+    def resolve_lineup(self, game_pk, side, team_id, batter_stat,
+                       return_meta=False, league_xwoba=np.nan):
+        return resolve_lineup(
+            game_pk, side, team_id, batter_stat,
+            return_meta=return_meta, league_xwoba=league_xwoba,
+        )
+
+    def load_recent_start_era(self, ids):
+        return load_recent_start_era(ids, before_date=self.slate_date)
+
+    def load_team_pitcher_roles(self, team_id):
+        return load_team_pitcher_roles(team_id)
+
+    def pitcher_roster(self, team_id):
+        return pitcher_roster(team_id)
+
+    def load_league_era(self):
+        return load_league_era()
+
+    def load_people(self, ids):
+        return load_people(ids)
+
+    def load_splits(self, ids, group):
+        return load_splits(ids, group)
+
+    def load_pitcher_xera(self):
+        return load_pitcher_xera()
+
+
+def fetch_all(slate_date, provider=None, calibration_history=None,
+              include_platoon=True, write_audit=True):
+    """Run the cell-1 fetch through a live or point-in-time provider."""
+    provider = provider or LiveDataProvider(slate_date)
     log(f"Pulling slate for {slate_date} ...")
-    slate_df = get_slate(slate_date, SPORT_ID)
+    slate_df = provider.get_slate(slate_date, SPORT_ID)
     log(f"Games: {len(slate_df)}")
     if slate_df.empty:
         return {"slate_df": slate_df, "empty": True}
@@ -1941,8 +2055,8 @@ def fetch_all(slate_date):
                     f"(game_pk={int(gg['game_pk'])})")
 
     log("Loading Savant leaderboards (cached once/day) ...")
-    batter_stat, batter_bb, batter_cust = load_stat_lookups("batter")
-    pitcher_stat, pitcher_bb, pitcher_cust = load_stat_lookups("pitcher")
+    batter_stat, batter_bb, batter_cust = provider.load_stat_lookups("batter")
+    pitcher_stat, pitcher_bb, pitcher_cust = provider.load_stat_lookups("pitcher")
     log(f"  batters: {len(batter_stat)} | pitchers: {len(pitcher_stat)}")
 
     league_baseline = compute_league_baseline(batter_cust)
@@ -2042,11 +2156,11 @@ def fetch_all(slate_date):
     log("Resolving lineups (gf -> posted/partial-fill/projected) ...")
     lineups, proj_flags, lineup_ids, prob_ids = {}, [], set(), set()
     for _, g in slate_df.iterrows():
-        al, ai = resolve_lineup(
+        al, ai = provider.resolve_lineup(
             g["game_pk"], "away", g["away_team_id"], batter_stat,
             league_xwoba=league_baseline.get("xwOBA"), return_meta=True
         )
-        hl, hi = resolve_lineup(
+        hl, hi = provider.resolve_lineup(
             g["game_pk"], "home", g["home_team_id"], batter_stat,
             league_xwoba=league_baseline.get("xwOBA"), return_meta=True
         )
@@ -2078,17 +2192,21 @@ def fetch_all(slate_date):
                 f"home={g.get('home_probable_pitcher') or 'TBD'}")
         time.sleep(REQUEST_DELAY)
     lineup_projection_df = pd.DataFrame(proj_flags)
-    os.makedirs(DATA_DIR, exist_ok=True)
-    lineup_projection_df.to_csv(os.path.join(DATA_DIR, "lineup_resolution_audit.csv"), index=False)
+    if write_audit:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        lineup_projection_df.to_csv(
+            os.path.join(DATA_DIR, "lineup_resolution_audit.csv"), index=False
+        )
 
     log(f"Loading probable-pitcher ERA over the last {RECENT_STARTS} starts ...")
-    recent_start_era = load_recent_start_era(prob_ids)
+    recent_start_era = provider.load_recent_start_era(prob_ids)
 
     # Pitching plans are applied after the starter's own xwOBA has been shrunk
     # in build_matchup. The starter-handedness lineup composite is used only
     # for his expected innings; the neutral composite faces the bullpen.
     pitching_plans = build_pitching_plans(
-        slate_df, recent_start_era, pitcher_stat, league_baseline
+        slate_df, recent_start_era, pitcher_stat, league_baseline,
+        provider=provider, calibration_history=calibration_history,
     )
 
     # Log-only; runs here because build_pitching_plans has just populated
@@ -2112,7 +2230,7 @@ def fetch_all(slate_date):
             log(f"  shrinkage-target population diagnostic unavailable: {e!r}")
 
     try:
-        league_baseline["ERA"] = load_league_era()
+        league_baseline["ERA"] = provider.load_league_era()
     except Exception as e:  # noqa: BLE001
         log(f"  league ERA unavailable: {e!r}")
         league_baseline["ERA"] = np.nan
@@ -2122,16 +2240,21 @@ def fetch_all(slate_date):
     league_hitter_ids = {int(pid) for pid, st in batter_stat.items()
                          if pd.notna((st or {}).get("PA"))
                          and float((st or {}).get("PA") or 0) >= MIN_LEAGUE_BASELINE_PA}
-    if FULL_LEAGUE_PLATOON_BASELINES:
+    if include_platoon and FULL_LEAGUE_PLATOON_BASELINES:
         log(f"  league hitter split population: {len(league_hitter_ids)}")
-        people_league_hitters = load_people(league_hitter_ids)
-        player_splits_hit_league = load_splits(league_hitter_ids, "hitting")
+        people_league_hitters = provider.load_people(league_hitter_ids)
+        player_splits_hit_league = provider.load_splits(
+            league_hitter_ids, "hitting"
+        )
     else:
         people_league_hitters, player_splits_hit_league = {}, {}
     people = dict(people_league_hitters)
-    people.update(load_people(lineup_ids | prob_ids))
-    player_splits_hit = load_splits(lineup_ids, "hitting")
-    player_splits_pit = load_splits(prob_ids, "pitching")
+    people.update(provider.load_people(lineup_ids | prob_ids))
+    if include_platoon:
+        player_splits_hit = provider.load_splits(lineup_ids, "hitting")
+        player_splits_pit = provider.load_splits(prob_ids, "pitching")
+    else:
+        player_splits_hit, player_splits_pit = {}, {}
 
     log("Assembling tables ...")
     pitchers_df, batted_ball_profile_df = build_tables(
@@ -2152,7 +2275,7 @@ def fetch_all(slate_date):
             axis=1)
         # Statcast xERA (expected ERA) from the expected-statistics leaderboard,
         # shown against season ERA on the card. NaN wherever it's unavailable.
-        xera_map = load_pitcher_xera()
+        xera_map = provider.load_pitcher_xera()
         pitchers_df["xERA"] = pitchers_df.apply(
             lambda r: xera_map.get(int(r["player_id"]), np.nan)
             if r.get("Pos.") == "P" and pd.notna(r.get("player_id")) else np.nan,
