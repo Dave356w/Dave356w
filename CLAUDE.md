@@ -607,15 +607,39 @@ precedent — they are how the fix is known to look.
 
   Read those three numbers as of that commit, not as standing facts. **And do
   not read the sentence this paragraph used to open with** — "the page scores
-  `RECORD_TAGS`, so the headline reset when v9 started a new family" — which is
-  wrong about the code and was verified so on 2026-08-06. `build_site`'s
-  `_record_grades()` has *no production caller*; every public surface renders
-  `_display_grades()`, i.e. every graded family pooled, which is exactly why
-  the front page could publish `wOBA full 217-164` over 381 xwOBA games (see
-  the metric-label instance below). A `MODEL_TAG` bump does not reset the
-  public headline. It resets `ledger_report.txt`, which is the artifact that
-  does score `RECORD_TAGS`. The 45-37 (.549) / 42-40 / 49-33 line quoted here
-  for 2026-08-02 was the *report's* current-family line, not the page's.
+  `RECORD_TAGS`, so the headline reset when v9 started a new family" — which
+  was wrong about the code when it was written and was verified so on
+  2026-08-06: `_record_grades()` then had *no production caller*, every public
+  surface rendered `_display_grades()`, and that is exactly why the front page
+  could publish `wOBA full 217-164` over 381 xwOBA games (see the metric-label
+  instance below).
+
+  **As of 2026-08-17 that sentence is true, and it is true because it was
+  made true rather than because it was right.** The record strip and the
+  grading-ledger header now score `RECORD_TAGS`, so a `MODEL_TAG` bump *does*
+  reset the public headline, and the page and `ledger_report.txt` answer the
+  same question over the same rows. Keep the history above: the lesson is not
+  "the page scores the current family" — it is that this file asserted so for
+  weeks while the code did the opposite, and the way that was caught was
+  reading `build_site.py`, not re-reading this paragraph.
+
+  Two consequences to hold onto, both deliberate:
+
+  * **An empty family publishes no record.** The surfaces do not fall back to
+    the pooled line — they say "no graded games yet under `<tag>`" and point
+    at the ledger. A silent fallback would be the `wOBA full 217-164`
+    substitution with the tag rather than the metric label as the lie, and
+    v11 is the proof it would fire: it shipped and was superseded without ever
+    grading a row. `RecordScopeTests` pins this.
+  * **The pooled surfaces stayed pooled, and say so.** Per-club accuracy and
+    the market verdict's context bucket still call `_display_grades()`,
+    because one family leaves most clubs one or two games — comparability is
+    the wrong trade there. The team page's lead states that it pools, so the
+    two surfaces cannot read as contradicting each other.
+
+  The 45-37 (.549) / 42-40 / 49-33 line quoted here for 2026-08-02 was the
+  *report's* current-family line, not the page's — which at that date were
+  different numbers, and now would not be.
 
   Controls, whatever the row set: the model ahead of the coin-flip control and
   behind the closing line, on a sample far too small to separate them — which

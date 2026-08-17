@@ -1760,15 +1760,19 @@ class BaselineControlTests(unittest.TestCase):
         self.assertEqual([k for k, _, _ in build_site._baseline_controls(g)], ["home"])
 
     def test_page_shows_the_controls_next_to_the_record(self):
+        # Tagged MODEL_TAG, not a frozen historical tag: the header scores
+        # RECORD_TAGS, so a literal here would silently stop exercising the
+        # page at the next bump -- the memorised-constant failure this repo
+        # has already had in a test once.
         ledger = pd.DataFrame([
             dict(game_pk=1, game_date="2026-07-20", away="A", home="B",
                  away_sp="P1", home_sp="P2", status="graded",
-                 model_tag="xw+plat_consol_v10", xw_lean="B", xw_delta=.01,
+                 model_tag=build_site.MODEL_TAG, xw_lean="B", xw_delta=.01,
                  xw_full="W", xw_f5="W", full_away=2, full_home=4,
                  close_p_home=.6, lock_status="pregame"),
             dict(game_pk=2, game_date="2026-07-21", away="C", home="D",
                  away_sp="P3", home_sp="P4", status="graded",
-                 model_tag="xw+plat_consol_v10", xw_lean="C", xw_delta=.02,
+                 model_tag=build_site.MODEL_TAG, xw_lean="C", xw_delta=.02,
                  xw_full="W", xw_f5="W", full_away=5, full_home=3,
                  close_p_home=.6, lock_status="pregame"),
         ])
@@ -1784,10 +1788,15 @@ class BaselineControlTests(unittest.TestCase):
         baseline over more games than the record it sits beside -- and the
         `n=` marker would stay silent, because that control's n matches the
         graded count exactly."""
+        # MODEL_TAG rather than the v5 literal that first shipped the
+        # abstention: the page scores RECORD_TAGS, and what is under test is
+        # the page's arithmetic over a leanless row, not which version can
+        # produce one. v7's zero-delta rule means the current family can carry
+        # one too.
         def row(pk, lean, full, fa, fh):
             return dict(game_pk=pk, game_date="2026-08-07", away="A", home="B",
                         away_sp="P1", home_sp="P2", status="graded",
-                        model_tag="woba+plat_consol_v5", xw_lean=lean,
+                        model_tag=build_site.MODEL_TAG, xw_lean=lean,
                         xw_delta=.01, xw_full=full, xw_f5=full,
                         full_away=fa, full_home=fh, close_p_home=.6,
                         lock_status="pregame")
@@ -1814,6 +1823,106 @@ class BaselineControlTests(unittest.TestCase):
         self.assertNotIn(">2-1<", page)             # never the 3-game baseline
 
 
+class RecordScopeTests(unittest.TestCase):
+    """The two surfaces that publish a record score RECORD_TAGS.
+
+    A record is a claim about THIS model. Pooling twelve prediction families
+    into one win-loss line answers a different question, and the repo already
+    has the authority for which families may share a line -- RECORD_TAGS,
+    the same rule data/ledger_report.txt scores. These pin that the public
+    surfaces and the internal report cannot drift back apart."""
+
+    def _row(self, pk, tag, lean, full, fa, fh):
+        return dict(game_pk=pk, game_date="2026-08-07", away="A", home="B",
+                    away_sp="P1", home_sp="P2", status="graded",
+                    model_tag=tag, model_metric="xwOBA", xw_lean=lean,
+                    xw_delta=.01, xw_full=full, xw_f5=full,
+                    full_away=fa, full_home=fh, close_p_home=.6,
+                    lock_status="pregame")
+
+    def _mixed(self):
+        """One win in the current family; three losses in an older one."""
+        cur = build_site.MODEL_TAG
+        return pd.DataFrame([
+            self._row(1, cur, "B", "W", 2, 4),
+            self._row(2, "xw+plat_consol_v2", "B", "L", 5, 3),
+            self._row(3, "xw+plat_consol_v2", "B", "L", 5, 3),
+            self._row(4, "xw+plat_consol_v2", "B", "L", 5, 3),
+        ])
+
+    # Assertions run against the HEADER, never the whole page: the archive
+    # table below it prints a per-day record for every family, and the base64
+    # font blob matches most short digit strings. Both are correct and
+    # neither is the claim under test.
+    def _pages(self, led):
+        with mock.patch.object(build_site, "load_ledger_df", return_value=led):
+            page = build_site.render_grades_html("test build")
+            return {"strip": build_site.records_strip_html(),
+                    "grades page": page.split("<div class='gr-tablewrap'>")[0]}
+
+    def _marks(self, rec):
+        return {"strip": f"full {rec}", "grades page": f">{rec}<"}
+
+    def test_strip_and_header_score_only_the_current_family(self):
+        pages = self._pages(self._mixed())
+        # 1-0 is the current family. 1-3 is every graded row, which is what
+        # both surfaces used to print.
+        mine, pooled = self._marks("1-0"), self._marks("1-3")
+        for name, html in pages.items():
+            self.assertIn(mine[name], html,
+                          f"{name} lost the current-family record")
+            self.assertNotIn(pooled[name], html,
+                             f"{name} still pools every family")
+
+    def test_the_scope_of_the_number_is_stated_next_to_it(self):
+        """A record over a subset, printed above a table of every row, has to
+        say which rows -- otherwise it reads as a summary of the table."""
+        for name, html in self._pages(self._mixed()).items():
+            self.assertIn("1 of 4 graded rows", html, f"{name} states no scope")
+            self.assertIn(build_site.MODEL_TAG, html, f"{name} names no family")
+
+    def test_no_scope_note_when_the_family_is_every_graded_row(self):
+        """The note has to disappear on its own, or it becomes noise that a
+        reader learns to skip."""
+        cur = build_site.MODEL_TAG
+        led = pd.DataFrame([self._row(1, cur, "B", "W", 2, 4)])
+        strip = self._pages(led)["strip"]
+        self.assertIn("full 1-0", strip)
+        self.assertNotIn("graded rows are", strip)
+
+    def test_an_empty_family_never_falls_back_to_the_pooled_record(self):
+        """The regression this scoping could most easily introduce.
+
+        A MODEL_TAG bump empties the family until its first row grades -- v11
+        shipped and was superseded without ever producing one. Showing the
+        previous family's record under the new model's name would be the
+        `wOBA full 217-164` substitution again, with the tag rather than the
+        metric label as the lie."""
+        led = pd.DataFrame([
+            self._row(2, "xw+plat_consol_v2", "B", "W", 2, 4),
+            self._row(3, "xw+plat_consol_v2", "B", "W", 2, 4),
+        ])
+        foreign = self._marks("2-0")
+        for name, html in self._pages(led).items():
+            self.assertNotIn(foreign[name], html,
+                             f"{name} published a foreign family's record")
+            self.assertIn(f"graded games yet under {build_site.MODEL_TAG}",
+                          html, f"{name} did not say the family is empty")
+            # ...and it still points at where the history went, so an empty
+            # headline never reads as "this model has never been graded".
+            self.assertIn("2 graded", html.replace("; 2 rows graded", "; 2 graded"),
+                          f"{name} hid the historical rows entirely")
+
+    def test_the_team_page_still_pools_and_says_so(self):
+        """Per-club accuracy needs volume, not comparability -- a single
+        family leaves most clubs one or two games. It keeps pooling, and the
+        lead states it so the two pages cannot read as contradicting."""
+        led = self._mixed()
+        with mock.patch.object(build_site, "load_ledger_df", return_value=led):
+            page = build_site.render_team_grades_html("test build")
+        self.assertIn("Pooled over every graded model family", page)
+
+
 class LockProvenanceTests(unittest.TestCase):
     def _led(self, statuses):
         return pd.DataFrame({"lock_status": pd.Series(statuses, dtype="object")})
@@ -1828,10 +1937,13 @@ class LockProvenanceTests(unittest.TestCase):
         self.assertEqual(build_site._lock_provenance(led), (0, 3, 0))
 
     def test_page_states_late_snapshots_separately(self):
+        # MODEL_TAG so the row survives the header's RECORD_TAGS filter; the
+        # lock note itself is whole-ledger, but the page needs a non-empty
+        # family to render the summary block that carries it.
         ledger = pd.DataFrame([
             dict(game_pk=1, game_date="2026-07-20", away="A", home="B",
                  away_sp="P1", home_sp="P2", status="graded",
-                 model_tag="xw+plat_consol_v10", xw_lean="B", xw_delta=.01,
+                 model_tag=build_site.MODEL_TAG, xw_lean="B", xw_delta=.01,
                  xw_full="W", xw_f5="W", full_away=2, full_home=4,
                  lock_status="late_snapshot"),
         ])
@@ -2013,16 +2125,22 @@ class ModelTagProvenanceTests(unittest.TestCase):
         running build is NOT, so the mismatch keeps reproducing through any
         future revert instead of quietly becoming a no-op the day the tag
         happens to agree with the rows.
+
+        The rows carry MODEL_TAG with a conflicting `model_metric`, which is
+        what keeps this an end-to-end guard now the record surfaces score
+        RECORD_TAGS. Tagging them with a foreign tag would leave those two
+        pages empty and quietly reduce this to a team-page test. It is also
+        the faithful form of the invariant: `metric_label` is defined to read
+        `model_metric` off the rows, with the tag prefix only as a legacy
+        fallback, so a current-family row whose metric disagrees with the
+        build constant is exactly the case a constant-reader gets wrong.
         """
-        other_tag, other_label = (
-            ("woba+plat_consol_v2", "wOBA")
-            if build_site.MODEL_RATE_LABEL == "xwOBA"
-            else ("xw+plat_consol_v10", "xwOBA")
-        )
+        other_label = ("wOBA" if build_site.MODEL_RATE_LABEL == "xwOBA"
+                       else "xwOBA")
         ledger = pd.DataFrame([
             dict(game_pk=1, game_date="2026-07-20", away="A", home="B",
                  away_sp="P1", home_sp="P2", status="graded",
-                 model_tag=other_tag, model_metric=other_label,
+                 model_tag=build_site.MODEL_TAG, model_metric=other_label,
                  xw_lean="B", xw_delta=.01,
                  xw_full="W", xw_f5="W", full_away=2, full_home=4,
                  close_p_home=.6, close_home_ml=-140, close_away_ml=120,
@@ -2031,7 +2149,7 @@ class ModelTagProvenanceTests(unittest.TestCase):
                  ops_valid=False, ops_lean=None, lock_status="pregame"),
             dict(game_pk=2, game_date="2026-07-21", away="C", home="D",
                  away_sp="P3", home_sp="P4", status="graded",
-                 model_tag=other_tag, model_metric=other_label,
+                 model_tag=build_site.MODEL_TAG, model_metric=other_label,
                  xw_lean="C", xw_delta=.02,
                  xw_full="L", xw_f5="L", full_away=1, full_home=3,
                  close_p_home=.6, close_home_ml=-140, close_away_ml=120,
