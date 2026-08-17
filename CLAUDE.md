@@ -841,6 +841,32 @@ Do not re-derive these by hand; they have readouts.
   rule out a shift of roughly 70% or more. It is a check that the family is not
   grossly wrong, not a confirmation that it is right. Re-read it at ~60 v12 rows
   before treating the share as settled.
+
+  **Second read, 2026-08-17, 38 v12 rows (30 graded): median `|xw_net|` 0.01334
+  against the v9/v10 pool's 0.01859 over 99, difference −0.00526 with a
+  bootstrap CI of [−0.0117, +0.0002]** (graded-only: 0.01430 against 0.01853,
+  −0.00423, CI [−0.0116, +0.0007] — take the all-rows figure, `|xw_net|` is a
+  pregame quantity and gradedness is not a property of the scale). The point
+  estimate moved from −0.00009 to −0.0053 in one read and the CI now all but
+  excludes zero, which reads as the falsifier firing.
+
+  **Do not split the family on it. The falsifier as written cannot tell a units
+  change from a slate-composition change, and here the mechanism rules out the
+  units change.** v12's only difference from v10 is the IP calibration, measured
+  in `_SCALE_FAMILIES` at mean `|Δ net|` 0.00067 with a max of 0.00542 — the
+  observed gap is 8x the mean effect and larger than the largest single-row move
+  the change can produce. It cannot have caused this. What can: v12 holds 3
+  slates, and per-slate median `|xw_net|` *within* a single family moves about
+  this much on its own — sd 0.0027 across v10's 5 slates, 0.0039 across wOBA
+  v5's 9, range 0.0103–0.0184 across v12's own 3. The gap is roughly one to two
+  slate-sd on a three-slate sample.
+
+  So the ~60-row re-read stands, and it needs a better statistic than the one
+  named above: pool the slate medians rather than the rows, or size the gap
+  against the 0.00067 mechanism bound instead of against zero. A row-pooled
+  median over a handful of slates is measuring which games got played. Same
+  category as the constants entry — a number read off one distribution and
+  quoted against another — one level out into a test rather than a constant.
 - **The metric question** — the shadow arm, running wOBA under an xwOBA
   primary. Needs roughly 18 paired slates for 80% power on a 0.09 gap.
 - **`LEAN_STRENGTH_FALLBACK`** — recompute from whatever `SCALE_TAGS` resolves
