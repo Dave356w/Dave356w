@@ -4,7 +4,7 @@ game_pk,away_lineup_projected,home_lineup_projected,away_lineup_status,home_line
 822934,False,False,posted,posted,9,9,0,0,9,9,0,0
 824074,False,False,posted,posted,9,9,0,0,9,9,0,0
 824589,False,False,posted,posted,9,9,0,0,9,9,0,0
-823747,False,True,posted,projected,9,0,0,9,9,9,0,0
+823747,False,False,posted,posted,9,9,0,0,9,9,0,0
 824802,True,True,projected,projected,0,0,9,9,9,9,0,0
 822861,True,True,projected,projected,0,0,9,9,9,9,0,0
 824153,True,True,projected,projected,0,0,9,9,9,9,0,0
