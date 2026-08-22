@@ -4,6 +4,7 @@ import os
 import re
 import tempfile
 import unittest
+import warnings
 from unittest import mock
 
 import numpy as np
@@ -2283,6 +2284,43 @@ class MarketCalibrationTests(unittest.TestCase):
         self.assertEqual(totals["home"]["n"], 5)
         self.assertEqual(totals["away"]["n"], 5)
 
+    def test_standard_error_never_collapses_on_a_one_sided_rung(self):
+        """sqrt(phat(1-phat)/n) returns exactly 0.0 when a bucket goes all-W.
+
+        Two rungs on the live page did precisely that -- a single-game bucket
+        printing a 27-point miss against implied with +-0.0 beside it. The
+        rate is estimated from the same outcomes the gap is being tested on,
+        so it carries no information about how uncertain that gap is. The
+        Poisson-binomial SE is fixed by the prices instead.
+        """
+        d = self._frame()
+        # force every home side to win, so the pooled home bucket is all-W
+        d["full_home"] = 9
+        d["full_away"] = 1
+        _rows, totals = build_site._market_calibration_rows(d)
+        home = totals["home"]
+        self.assertEqual(home["actual"], 1.0)
+        self.assertGreater(home["se"], 0.0,
+                           "an all-W bucket is the least certain kind there "
+                           "is; it must not report the smallest error bar")
+        probs = [.55, .48, .70, .42, .50, .62]
+        expected = math.sqrt(sum(q * (1 - q) for q in probs)) / len(probs)
+        self.assertAlmostEqual(home["se"], expected, places=12)
+
+    def test_both_surfaces_share_one_standard_error_derivation(self):
+        """The ladder and the value panel ask the same question of the same
+        page, so the error bar beside each has one definition, not two."""
+        probs = [.61, .44, .5]
+        expected = math.sqrt(sum(q * (1 - q) for q in probs)) / len(probs)
+        self.assertAlmostEqual(build_site._excess_se(probs), expected, places=12)
+        self.assertAlmostEqual(build_site._excess_se(pd.Series(probs)),
+                               expected, places=12)
+        # defined at n=1, undefined at n=0, never zero for a live price
+        self.assertAlmostEqual(build_site._excess_se([.5]), .5, places=12)
+        self.assertTrue(np.isnan(build_site._excess_se([])))
+        for q in (.01, .25, .5, .75, .99):
+            self.assertGreater(build_site._excess_se([q] * 4), 0.0)
+
     def test_no_close_column_yields_no_rows_rather_than_raising(self):
         rows, totals = build_site._market_calibration_rows(
             pd.DataFrame({"full_home": [1], "full_away": [2]}))
@@ -2648,6 +2686,34 @@ class LeanMarketValueTests(unittest.TestCase):
         binom_form = math.sqrt(max(0.0 * (1 - 0.0), 0.0) / 4)  # sqrt(phat(1-phat)/n)
         self.assertEqual(binom_form, 0.0)
         self.assertGreater(parts["excess_se"], 10 * sd_form)
+
+    def test_observation_frame_carries_no_unrendered_column(self):
+        """price_dislocation was computed, returned and rendered nowhere.
+
+        Not a style point: the note on the page described it as a diagnostic
+        the reader could see, because nothing tied the prose to what the
+        tables actually emit. Every column here must reach a surface.
+        """
+        obs = build_site._lean_market_observations(self._frame(n=6))
+        self.assertNotIn("price_dislocation", obs.columns)
+        a = build_site._lean_market_value_analysis(self._frame(n=6))
+        self.assertNotIn("price_dislocation", a["obs"].columns)
+
+    def test_degenerate_spread_yields_nan_not_a_numpy_warning(self):
+        """A frame with one distinct price has no correlation to report.
+
+        corrcoef divides by the sd of each axis, so a constant column returns
+        nan from a divide-by-zero rather than raising. The page renders that
+        as an em dash, but the arithmetic must not be attempted at all --
+        which is what the slope beside it already did.
+        """
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            a = build_site._lean_market_value_analysis(self._frame(n=6))
+        self.assertTrue(np.isnan(a["corr"]))
+        self.assertTrue(np.isnan(a["slope"]))
+        html = build_site._render_lean_market_value_panel(self._frame(n=6))
+        self.assertIn("—", html)
 
     def test_standard_error_is_defined_for_a_single_row(self):
         obs = build_site._lean_market_observations(self._frame(n=1))

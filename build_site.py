@@ -5638,6 +5638,32 @@ def _ladder_rung(ml):
     return None
 
 
+def _excess_se(probs):
+    """SE of (realised rate − mean implied) under correctly priced games.
+
+    Both surfaces on market-calibration.html ask the same question -- did this
+    bucket beat its own price -- so the standard error beside them has one
+    derivation rather than two that can drift.
+
+    Each observation is an independent Bernoulli at its own devigged price, so
+    the win count is Poisson-binomial: Var(Σ wins) = Σ p(1−p), and the SE of
+    the mean is sqrt(Σ p(1−p))/n.
+
+    It deliberately does NOT estimate the spread from the outcomes. The
+    obvious sqrt(p̂(1−p̂)/n) does, and therefore returns exactly 0.0 on any
+    bucket that went all-W or all-L -- rendering the least certain buckets on
+    the page as the most certain, which is the direction that makes noise look
+    like signal. The sample sd of the residuals fails the same way for the
+    same reason. Here the p_i are fixed by the market rather than estimated
+    from the outcomes under test, so this is defined at n=1 and cannot
+    degenerate.
+    """
+    p = np.asarray(list(probs), dtype=float)
+    if not p.size:
+        return np.nan
+    return float(math.sqrt(float((p * (1.0 - p)).sum())) / p.size)
+
+
 def _market_calibration_rows(led):
     """Devigged closing implied % against realised win %, by side and price.
 
@@ -5679,7 +5705,7 @@ def _market_calibration_rows(led):
         imp = sum(p for _, _, p, _ in sel) / n
         act = wins / n
         return dict(n=n, w=wins, implied=imp, actual=act,
-                    se=math.sqrt(max(act * (1 - act), 0.0) / n),
+                    se=_excess_se(p for _, _, p, _ in sel),
                     diff=act - imp)
 
     rows = []
@@ -5813,20 +5839,9 @@ def _lean_market_agg(obs, mask):
         return None
     n = int(len(s))
     w = int(s["won"].sum())
-    # SE of the mean excess under the null this panel actually tests -- that
-    # each game is an independent Bernoulli at its own market price. That is a
-    # Poisson-binomial, so Var(sum wins) = sum p(1-p) and the SE of the mean
-    # excess is sqrt(sum p(1-p))/n.
-    #
-    # NOT the sample sd of the residuals, and NOT sqrt(phat(1-phat)/n) as the
-    # market-only ladder above uses. Both of those collapse toward zero when a
-    # bucket goes all-W or all-L: with four losses at an average price of .404
-    # the residual sd prints +-1.6pp against a true +-24.5pp, turning the
-    # thinnest bucket on the page into an apparent 25-sigma result. This form
-    # is defined at n=1 and cannot degenerate, because the p_i are fixed by the
-    # market rather than estimated from the outcomes being tested.
-    p = s["market_p"].to_numpy(dtype=float)
-    resid_se = float(math.sqrt(float((p * (1.0 - p)).sum())) / n)
+    # Shared with the price ladder above -- see _excess_se for why neither
+    # surface may estimate this from the outcomes it is testing.
+    resid_se = _excess_se(s["market_p"])
     return {
         "n": n,
         "w": w,
@@ -5868,18 +5883,26 @@ def _lean_market_value_analysis(led):
     priced = obs["market_conv"] > 0.05
 
     # Relationship of raw model separation to the market's *signed* support
-    # for the leaned team. The fitted residual is the clean per-game
-    # "price dislocation" measure: positive = market richer on the lean than
-    # typical for this delta; negative = market more sceptical / offers price.
+    # for the leaned team. Only the fitted line is used: it is reported as the
+    # "market response" tile and stated in the note.
+    #
+    # The per-game residual from this fit -- the "price dislocation" -- was
+    # computed here and rendered nowhere, so it is gone. It is a real quantity
+    # and a residual-sign cut may be worth adding later, but a column carried
+    # on the returned frame that no surface reads is how a description of an
+    # invisible diagnostic ended up in the note in the first place.
     x = obs["delta"].to_numpy(dtype=float)
     y = obs["market_edge"].to_numpy(dtype=float)
-    corr = float(np.corrcoef(x, y)[0, 1]) if len(obs) > 1 else np.nan
-    if len(obs) > 1 and float(np.std(x)) > 0:
+    # Both statistics need a spread on BOTH axes, not just a second row: a
+    # constant column makes corrcoef divide by its own zero sd and hand back a
+    # silent nan behind a RuntimeWarning. The slope was already guarded this
+    # way; the correlation was not.
+    spread = (len(obs) > 1 and float(np.std(x)) > 0 and float(np.std(y)) > 0)
+    corr = float(np.corrcoef(x, y)[0, 1]) if spread else np.nan
+    if spread:
         slope, intercept = np.polyfit(x, y, 1)
-        obs["price_dislocation"] = y - (intercept + slope * x)
     else:
         slope = intercept = np.nan
-        obs["price_dislocation"] = np.nan
 
     regime_rows = [
         ("Market ≤5 pp · low/mid Δ", _lean_market_agg(obs, near & low_mid)),
