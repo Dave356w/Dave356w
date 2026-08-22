@@ -423,6 +423,53 @@ precedent — they are how the fix is known to look.
 
 **Resolved — keep as precedent**
 
+- **An error bar estimated from the outcomes it is testing.** Both surfaces on
+  `market-calibration.html` print a realised rate against its implied one, and
+  both sized the `±` from the results rather than from the prices. The ladder
+  used `sqrt(p̂(1−p̂)/n)`, which is exactly `0.0` on any bucket that went all-W
+  or all-L; the value panel used the sample sd of the residuals, which
+  collapses the same way because the only variation left is in `market_p`.
+  Both fail in the direction that makes noise look like signal: the *least*
+  certain buckets on the page render as the most certain.
+
+  Not latent. Two rungs were live at the fix — a one-game `≤ -250` bucket
+  publishing `+27.3` against implied with `±0.0` beside it — and the panel's
+  thinnest bucket read `−40.4 ± 1.6` against a true `±24.5`, an apparent
+  25-sigma result on four games.
+
+  Fixed by asking what null the number is testing. Each observation is an
+  independent Bernoulli at its own devigged price, so the win count is
+  Poisson-binomial: `Var(Σ wins) = Σ p(1−p)` and the SE of the mean is
+  `sqrt(Σ p(1−p))/n`. The `p_i` are fixed by the market rather than estimated
+  from the outcomes under test, so it is defined at `n=1` and cannot
+  degenerate. On the large buckets it barely moves (pooled home `.0201` →
+  `.0198`); it only bites where the old form was worthless.
+
+  Three things worth keeping. **One derivation, not two** — `_excess_se()`
+  serves both surfaces, the same move as `metric_label()` in the instance
+  below, because two copies of a statistic on one page will drift and the
+  reader cannot see which they are reading. **A statistic needs a spread on
+  every axis it consumes, not just a second row** — the same commit guarded
+  `np.corrcoef` on the sd of *both* columns, which the slope beside it already
+  did and the correlation did not; a constant column returned a silent `nan`
+  from a divide-by-zero. And **an SE of zero is never a result** — it is the
+  estimator saying it has nothing to say. Treat one as a bug on sight, in the
+  same reflex as the ratio with no sampling distribution below.
+
+  Display-only: no lean, delta, grade or ledger row moves, so no `MODEL_TAG`
+  implication. What changed is the error bars beside published numbers, not
+  the numbers.
+
+- **A column carried to no surface.** The same panel computed a per-game
+  `price_dislocation` residual, returned it on the observation frame, and
+  rendered it nowhere — and the note beside it described the invisible
+  diagnostic to the reader as though a table showed it. The prose was the
+  symptom; the unread column was the cause, because nothing tied what the note
+  claimed to what the tables emit. Deleted rather than surfaced: a residual-sign
+  cut may be worth adding later, and adding it then is cheaper than carrying a
+  column that invites a second description of something nobody can see. A test
+  now asserts the frame carries no unrendered column.
+
 - **A rebuild overwriting the record it was rebuilding.** The post-rollover
   pass rewrote each past slate's dump in place, so the one artifact saying what
   the model saw before first pitch was replaced by what a later model saw with
