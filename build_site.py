@@ -5305,6 +5305,8 @@ table.gr .sp{display:block;margin-top:2px;font:400 12.5px/1.3 var(--sans);color:
    the record, hit rate and sample size together so the percentage is never
    detached from its denominator. */
 table.team-gr .tm-record{font-weight:700;color:var(--ink);margin-right:8px}
+table.team-gr .tm-record.cool{color:rgba(var(--cool-tx),1)}
+table.team-gr .tm-record.warm{color:rgba(var(--warm-tx),1)}
 table.team-gr .tm-accuracy{font-weight:650;color:rgba(var(--lean-tx),1)}
 table.team-gr .tm-n{font:500 12px/1 var(--sans);color:var(--faint);margin-left:6px}
 table.team-gr .team-code{font:700 15px/1.2 var(--mono);color:var(--ink)}
@@ -5707,6 +5709,322 @@ def _calib_cell(parts):
             f"<span class='tm-accuracy'>vs {100 * parts['implied']:.1f}% implied "
             f"({d * 100:+.1f})</span>"
             f"<span class='tm-n'>n={parts['n']} · ±{100 * parts['se']:.1f}</span>")
+
+
+def _american_unit_profit(ml, won):
+    """Flat one-unit P/L for a settled American-moneyline bet.
+
+    The market-value diagnostic is intentionally a price diagnostic rather
+    than another win-rate table. A favourite can win more often than it loses
+    and still be a bad bet, while a plus-money dog can lose more games than it
+    wins and still return a profit. Invalid/non-American prices return NaN and
+    are excluded instead of being coerced into a payout.
+    """
+    if ml is None or pd.isna(ml):
+        return np.nan
+    ml = float(ml)
+    if (-100 < ml < 100) or ml == 0:
+        return np.nan
+    if not won:
+        return -1.0
+    return ml / 100.0 if ml > 0 else 100.0 / abs(ml)
+
+
+def _lean_market_observations(led):
+    """One row per current-family full-game lean with a devigged DK close.
+
+    This is deliberately scoped to `_record_grades`: unlike the market-only
+    calibration ladder, this panel asks whether *this prediction family* adds
+    information relative to price, so pooling old prediction math would answer
+    the wrong question.
+
+    `market_p` is the closing no-vig probability of the LEANED team, not always
+    the home team. `market_edge = market_p - .50` keeps the direction: positive
+    means the market agrees and prices the lean as a favourite; negative means
+    the model is leaning an underdog. `market_conv` drops that sign and measures
+    how far the market is from pick'em.
+
+    The ledger has no per-game SE/SD for xw_delta. Do not manufacture one from
+    lineup dispersion or opponent-rate SD -- those are different quantities.
+    Until a true delta uncertainty is persisted, |xw_delta| is the model-
+    conviction axis and its current-family terciles are printed on the page.
+    """
+    cols = {"close_p_home", "close_home_ml", "close_away_ml",
+            "xw_lean", "xw_full", "home", "away"}
+    if led is None or not cols.issubset(led.columns):
+        return pd.DataFrame()
+    g = _record_grades(led).copy()
+    if g.empty:
+        return pd.DataFrame()
+
+    ph = pd.to_numeric(g["close_p_home"], errors="coerce")
+    hml = pd.to_numeric(g["close_home_ml"], errors="coerce")
+    aml = pd.to_numeric(g["close_away_ml"], errors="coerce")
+    if "xw_delta" in g.columns:
+        delta = pd.to_numeric(g["xw_delta"], errors="coerce").abs()
+    elif "xw_net" in g.columns:
+        delta = pd.to_numeric(g["xw_net"], errors="coerce").abs()
+    else:
+        return pd.DataFrame()
+
+    home_lean = g["xw_lean"].eq(g["home"])
+    away_lean = g["xw_lean"].eq(g["away"])
+    settled = g["xw_full"].isin(["W", "L"])
+    valid = ((home_lean | away_lean) & settled & ph.notna()
+             & hml.notna() & aml.notna() & delta.notna())
+    if not valid.any():
+        return pd.DataFrame()
+
+    gv = g.loc[valid]
+    hv = home_lean.loc[valid].to_numpy()
+    pv = ph.loc[valid].to_numpy(dtype=float)
+    market_p = np.where(hv, pv, 1.0 - pv)
+    close_ml = np.where(hv, hml.loc[valid].to_numpy(dtype=float),
+                        aml.loc[valid].to_numpy(dtype=float))
+    won = gv["xw_full"].eq("W").to_numpy(dtype=bool)
+    dv = delta.loc[valid].to_numpy(dtype=float)
+
+    obs = pd.DataFrame({
+        "delta": dv,
+        "market_p": market_p,
+        "close_ml": close_ml,
+        "won": won.astype(float),
+    })
+    obs = obs[np.isfinite(obs["delta"]) & np.isfinite(obs["market_p"])
+              & np.isfinite(obs["close_ml"])
+              & obs["market_p"].between(0.0, 1.0, inclusive="neither")].copy()
+    if obs.empty:
+        return obs
+    obs["market_edge"] = obs["market_p"] - 0.50
+    obs["market_conv"] = obs["market_edge"].abs()
+    obs["market_resid"] = obs["won"] - obs["market_p"]
+    obs["profit"] = [
+        _american_unit_profit(ml, bool(w))
+        for ml, w in zip(obs["close_ml"], obs["won"])
+    ]
+    obs = obs[np.isfinite(obs["profit"])].copy()
+    return obs
+
+
+def _lean_market_agg(obs, mask):
+    """Compact result/price summary for one exploratory model×market bucket."""
+    s = obs.loc[mask]
+    if s.empty:
+        return None
+    n = int(len(s))
+    w = int(s["won"].sum())
+    # SE of the mean excess under the null this panel actually tests -- that
+    # each game is an independent Bernoulli at its own market price. That is a
+    # Poisson-binomial, so Var(sum wins) = sum p(1-p) and the SE of the mean
+    # excess is sqrt(sum p(1-p))/n.
+    #
+    # NOT the sample sd of the residuals, and NOT sqrt(phat(1-phat)/n) as the
+    # market-only ladder above uses. Both of those collapse toward zero when a
+    # bucket goes all-W or all-L: with four losses at an average price of .404
+    # the residual sd prints +-1.6pp against a true +-24.5pp, turning the
+    # thinnest bucket on the page into an apparent 25-sigma result. This form
+    # is defined at n=1 and cannot degenerate, because the p_i are fixed by the
+    # market rather than estimated from the outcomes being tested.
+    p = s["market_p"].to_numpy(dtype=float)
+    resid_se = float(math.sqrt(float((p * (1.0 - p)).sum())) / n)
+    return {
+        "n": n,
+        "w": w,
+        "l": n - w,
+        "implied": float(s["market_p"].mean()),
+        "actual": float(s["won"].mean()),
+        "excess": float(s["market_resid"].mean()),
+        "excess_se": resid_se,
+        "roi": float(s["profit"].mean()),
+        "units": float(s["profit"].sum()),
+    }
+
+
+def _lean_market_value_analysis(led):
+    """Current-family price/lean relationship used by market calibration page.
+
+    Returns the raw observation frame plus thresholds and two outcome tables:
+
+      regime_rows: a 2×2 model-conviction × market-conviction layout.
+      side_rows:   favourite/underdog probes that make the pricing hypothesis
+                   legible without hiding it inside a pooled average.
+
+    The only fixed market threshold is five percentage points from 50/50. The
+    delta thresholds are predictor-only current-family terciles, so they can
+    move as the family accumulates but never look at W/L or ROI. This is a
+    monitoring diagnostic, not a production betting rule.
+    """
+    obs = _lean_market_observations(led)
+    if obs.empty:
+        return {}
+
+    q1, q2 = np.quantile(obs["delta"].to_numpy(dtype=float), [1 / 3, 2 / 3])
+    obs["delta_bucket"] = np.where(
+        obs["delta"] <= q1, "low",
+        np.where(obs["delta"] <= q2, "mid", "high"))
+    low_mid = obs["delta_bucket"].isin(["low", "mid"])
+    high = obs["delta_bucket"].eq("high")
+    near = obs["market_conv"] <= 0.05
+    priced = obs["market_conv"] > 0.05
+
+    # Relationship of raw model separation to the market's *signed* support
+    # for the leaned team. The fitted residual is the clean per-game
+    # "price dislocation" measure: positive = market richer on the lean than
+    # typical for this delta; negative = market more sceptical / offers price.
+    x = obs["delta"].to_numpy(dtype=float)
+    y = obs["market_edge"].to_numpy(dtype=float)
+    corr = float(np.corrcoef(x, y)[0, 1]) if len(obs) > 1 else np.nan
+    if len(obs) > 1 and float(np.std(x)) > 0:
+        slope, intercept = np.polyfit(x, y, 1)
+        obs["price_dislocation"] = y - (intercept + slope * x)
+    else:
+        slope = intercept = np.nan
+        obs["price_dislocation"] = np.nan
+
+    regime_rows = [
+        ("Market ≤5 pp · low/mid Δ", _lean_market_agg(obs, near & low_mid)),
+        ("Market ≤5 pp · high Δ", _lean_market_agg(obs, near & high)),
+        ("Market >5 pp · low/mid Δ", _lean_market_agg(obs, priced & low_mid)),
+        ("Market >5 pp · high Δ", _lean_market_agg(obs, priced & high)),
+    ]
+    side_rows = [
+        ("Favourite >55% · low/mid Δ",
+         _lean_market_agg(obs, (obs["market_p"] > 0.55) & low_mid)),
+        ("Favourite >55% · high Δ",
+         _lean_market_agg(obs, (obs["market_p"] > 0.55) & high)),
+        ("Small dog 45–50% · low Δ",
+         _lean_market_agg(obs, obs["market_p"].between(0.45, 0.50,
+                                                       inclusive="left")
+                          & obs["delta_bucket"].eq("low"))),
+        ("Bigger dog <45% · low Δ",
+         _lean_market_agg(obs, (obs["market_p"] < 0.45)
+                          & obs["delta_bucket"].eq("low"))),
+    ]
+    return {
+        "obs": obs,
+        "n": int(len(obs)),
+        "q1": float(q1),
+        "q2": float(q2),
+        "corr": corr,
+        "slope": float(slope),
+        "intercept": float(intercept),
+        "regime_rows": regime_rows,
+        "side_rows": side_rows,
+    }
+
+
+def _lean_market_value_cell(parts, kind):
+    """One cell in the exploratory market-value tables."""
+    if not parts:
+        return "<span class='tm-n'>—</span>"
+    if kind == "record":
+        return (f"<span class='tm-record'>{parts['w']}-{parts['l']}</span>"
+                f"<span class='tm-n'>n={parts['n']}</span>")
+    if kind == "market":
+        se = (f" ± {100 * parts['excess_se']:.1f}"
+              if np.isfinite(parts["excess_se"]) else "")
+        tone = "cool" if parts["excess"] > 0 else ("warm" if parts["excess"] < 0 else "")
+        return (f"<span class='tm-record{(' ' + tone) if tone else ''}'>"
+                f"{100 * parts['actual']:.1f}%</span>"
+                f"<span class='tm-accuracy'>vs {100 * parts['implied']:.1f}% "
+                f"({100 * parts['excess']:+.1f}{se})</span>")
+    tone = "cool" if parts["roi"] > 0 else ("warm" if parts["roi"] < 0 else "")
+    return (f"<span class='tm-record{(' ' + tone) if tone else ''}'>"
+            f"{100 * parts['roi']:+.1f}%</span>"
+            f"<span class='tm-accuracy'>{parts['units']:+.2f}u flat</span>")
+
+
+def _lean_market_value_table(rows, first_head="Situation"):
+    """Responsive four-column table shared by both value-diagnostic views."""
+    body = []
+    for label, parts in rows:
+        cells = [
+            ("c-game", first_head, f"<span class='team-code'>{_esc(label)}</span>"),
+            ("c-lean", "Record", _lean_market_value_cell(parts, "record")),
+            ("c-ml", "vs implied", _lean_market_value_cell(parts, "market")),
+            ("c-final", "Flat ROI", _lean_market_value_cell(parts, "roi")),
+        ]
+        tds = "".join(f"<td class='{cls}' data-l='{lab}'>{value}</td>"
+                      for cls, lab, value in cells)
+        body.append(f"<tr class='gr-row'>{tds}</tr>")
+    heads = (first_head, "Record", "Actual vs implied", "Flat close ROI")
+    return ("<div class='gr-tablewrap'><table class='gr team-gr'><thead><tr>"
+            + "".join(f"<th>{h}</th>" for h in heads)
+            + f"</tr></thead><tbody>{''.join(body)}</tbody></table></div>")
+
+
+def _render_lean_market_value_panel(led):
+    """Model × market price-validation panel for market-calibration.html."""
+    a = _lean_market_value_analysis(led)
+    if not a:
+        return ("<div class='gr-head'><h2 class='gr-h1'>Model × market value</h2>"
+                "<div class='gr-lead'>Current-family value diagnostics appear "
+                "once graded leans carry a closing moneyline.</div></div>")
+
+    corr = a["corr"]
+    slope = a["slope"]
+    intercept = a["intercept"]
+    corr_txt = f"{corr:+.3f}" if np.isfinite(corr) else "—"
+    # Slope is probability per one full xwOBA unit. Reporting the response to
+    # +.010 delta keeps it on a scale a reader can compare with the terciles.
+    slope_pp = slope * 0.010 * 100 if np.isfinite(slope) else np.nan
+    slope_txt = f"{slope_pp:+.2f} pp" if np.isfinite(slope_pp) else "—"
+    sign = "+" if slope >= 0 else "−"
+    equation = (f"market edge = {intercept * 100:+.2f} pp {sign} "
+                f"{abs(slope * 0.010 * 100):.2f} pp per .010 Δ"
+                if np.isfinite(slope) else "unavailable")
+
+    summary = (
+        "<div class='gr-head'><h2 class='gr-h1'>Model × market value</h2>"
+        "<div class='gr-lead'>Does closing price get richer as the model's "
+        "lean gets stronger — and what happens when those two conviction "
+        "signals disagree? Current prediction family only.</div></div>"
+        "<div class='gr-summary'>"
+        f"<div class='gr-stat'><div class='l'>Priced decisions</div><div class='v'>{a['n']}</div>"
+        "<div class='s'>settled full-game leans</div></div>"
+        f"<div class='gr-stat'><div class='l'>Δ terciles</div><div class='v'>"
+        f"{a['q1']:.4f} · {a['q2']:.4f}</div>"
+        "<div class='s'>low ≤ first · high &gt; second</div></div>"
+        f"<div class='gr-stat'><div class='l'>Δ vs market edge</div>"
+        f"<div class='v'>{corr_txt}</div><div class='s'>Pearson r</div></div>"
+        f"<div class='gr-stat'><div class='l'>Market response</div>"
+        f"<div class='v'>{slope_txt}</div><div class='s'>leaned-team p per +.010 Δ</div></div>"
+        "</div>"
+    )
+    note = (
+        "<div class='gr-note'><b>Calculation.</b> For the leaned team, "
+        "<b>market p</b> is the devigged DK closing probability; "
+        "<b>market edge</b> = market p − 50%; <b>market conviction</b> = "
+        "|market edge|; <b>market excess</b> = result − market p; and "
+        "<b>flat ROI</b> is one unit risked at the closing ML on every row. "
+        "The <b>market response</b> tile is the slope of <b>"
+        + _esc(equation) + "</b>, fitted across every priced decision: a "
+        "positive slope means the close already charges more as the model's "
+        "separation grows. <b>±</b> is one standard error on the excess, taken "
+        "under the null that every game settles at its own market price. A "
+        "bucket whose excess is smaller than about twice its ± is "
+        "indistinguishable from correctly priced, and at these sample sizes "
+        "most of them are. The ledger does not yet persist "
+        "a true per-game SD for Δ, so this page uses raw |Δ| terciles rather "
+        "than mislabelling lineup or opponent-rate dispersion as lean uncertainty. "
+        "The cut points were chosen by hand and eight buckets are shown, so "
+        "treat these as exploratory monitoring of a hypothesis, not a "
+        "production betting rule.</div>"
+    )
+    regime_head = (
+        "<div class='gr-head'><h2 class='gr-h1'>Conviction matrix</h2>"
+        "<div class='gr-lead'>Five percentage points from 50/50 is the fixed "
+        "market-conviction split; high Δ is the top current-family tercile.</div></div>"
+    )
+    side_head = (
+        "<div class='gr-head' style='margin-top:18px'><h2 class='gr-h1'>"
+        "Favourite / dog probes</h2><div class='gr-lead'>The price-side cuts "
+        "make favourite overpricing and low-Δ dog value visible separately "
+        "instead of averaging them together.</div></div>"
+    )
+    return (summary + note + regime_head
+            + _lean_market_value_table(a["regime_rows"])
+            + side_head + _lean_market_value_table(a["side_rows"]))
 
 
 def _team_metric_cell(parts):
@@ -6315,7 +6633,7 @@ def render_grades_html(built_txt):
 
 
 def render_market_calibration_html(built_txt):
-    """Devigged closing implied % against realised win %, by side and price."""
+    """Market-only calibration plus current-family model×price diagnostics."""
     nav = ("<div class='backlink ledger-nav'>"
            "<a href='grades.html'>← full ledger</a>"
            "<a href='team-grades.html'>performance by team →</a></div>")
@@ -6374,7 +6692,8 @@ def render_market_calibration_html(built_txt):
              + "".join(f"<th>{h}</th>" for h in heads)
              + f"</tr></thead><tbody>{''.join(body)}</tbody></table></div>")
     summary = "<div class='gr-summary'>" + "".join(stats) + "</div>" + note
-    return html_document(nav + head + summary + table, built_txt,
+    value_panel = _render_lean_market_value_panel(led)
+    return html_document(nav + head + summary + table + value_panel, built_txt,
                          title="MLB market calibration")
 
 
