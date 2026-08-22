@@ -4069,9 +4069,63 @@ def _lean_implied_p(odds, fav, away_abbr, home_abbr):
     return ph if fav == home_abbr else 1.0 - ph
 
 
-def _verdict_html(fav, odds, away_abbr, home_abbr, ctx=None):
+def _conviction_tail(ctx, delta, p_lean):
+    """This game's own conviction-matrix cell under the CURRENT model, or None.
+
+    None means "cannot place the game, or its cell is too thin", and the caller
+    falls back to the pooled price band rather than leaving the row bare. The
+    two are never blended and each states its own scope, because they are
+    scored on different row sets: this one on `_record_grades`, the fallback on
+    every graded family.
+    """
+    key = _conviction_cell(delta, p_lean, ctx.get("cell_q2"))
+    parts = ctx.get(("cell", key)) if key else None
+    if not parts:
+        return None
+    # Read every gap against its own error bar, never against zero. The cuts
+    # are hand-drawn and the current family is small, so a cell that clears the
+    # bar has to say how few games it rests on in the same breath -- otherwise
+    # a +28-point cell on 27 games reads as a green light, which is the exact
+    # failure this row exists to prevent.
+    if abs(parts["excess"]) > 2 * parts["excess_se"]:
+        read = (f"wider than twice its own error bar, on {parts['n']} "
+                "current-model games and a hand-drawn cut")
+    else:
+        read = "statistically no different from the price itself"
+    return (f" This game sits in <b>{_CONVICTION_PHRASE[key]}</b>. Under the "
+            f"current model that cell has gone <b>{parts['w']}-{parts['l']}</b>, "
+            f"<b>{100 * parts['excess']:+.1f} pts</b> against the closing price "
+            f"(± {100 * parts['excess_se']:.1f} over {parts['n']} games) — {read}.")
+
+
+def _price_band_tail(ctx, p_lean):
+    """Pooled-across-families price-band record. The fallback, labelled as such."""
+    band = _price_band(p_lean)
+    parts = ctx.get(("band", band)) if band else None
+    if not parts:
+        # No usable devigged price is a different statement from a thin band,
+        # and the row must not make the wrong one.
+        return (" No usable closing price for this game yet." if band is None
+                else " Not enough graded games in this price band to score it yet.")
+    read = ("statistically no different from the price itself"
+            if abs(parts["excess"]) <= 2 * parts["se"]
+            else "a gap wider than twice its own error bar")
+    return (f" Across every model version, this price band has gone "
+            f"<b>{parts['w']}-{parts['l']}</b>, <b>{100 * parts['excess']:+.1f} pts</b> "
+            f"against the closing price (± {100 * parts['se']:.1f} over "
+            f"{parts['n']} graded games) — {read}.")
+
+
+def _verdict_html(fav, odds, away_abbr, home_abbr, ctx=None, delta=None):
     """Per-game price signal: where this lean sits against the market, and how
-    that band has actually scored AGAINST ITS OWN PRICE.
+    that spot has actually scored AGAINST ITS OWN PRICE.
+
+    The primary read is this game's own cell in the conviction matrix under the
+    CURRENT model -- market conviction x model conviction, the same 2x2 the
+    calibration page publishes, placed through the same `_conviction_cell` so
+    card and table cannot disagree. When the game cannot be placed, or its cell
+    is thinner than CONVICTION_CELL_MIN, it falls back to the pooled price-band
+    record, which says on its face that it spans every model version.
 
     This deliberately does NOT tell a reader a game is a value bet, because the
     ledger says none of them are. Measured walk-forward over 552 games: the
@@ -4082,12 +4136,25 @@ def _verdict_html(fav, odds, away_abbr, home_abbr, ctx=None):
     Every arm -- model full-game, platoon full-game, platoon vs the F5 close --
     lands within 1.4 se of its own market and loses units at the close.
 
-    So the honest signal is a price CONTEXT read: which band the lean falls in,
-    and that band's realised gap against price with a standard error. Each of
-    the three bands currently sits inside 0.7 se of its own price, which is the
-    reader's cue that the market has this covered -- and is exactly what the old
-    version hid by printing a raw W-L whose 24-point spread across buckets was
-    entirely base rate. Rendered as its own full-width row under the odds.
+    A current-family cell is thin by construction, and two of the four are
+    currently well clear of their error bars on a hot family. That is why every
+    number here carries its se and its n, and why a cell that clears the bar
+    says so in words that name the sample it rests on. Rendered as its own
+    full-width row under the odds.
+
+    One mismatch is deliberate and worth knowing. The cells were built from
+    CLOSING prices, because that is what the ledger stores; a live card places
+    the game on the PREGAME price it has. A game sitting near the 5-point
+    market boundary can therefore be shown one cell here and graded into the
+    other, and no amount of care at build time fixes that -- the close does not
+    exist yet. It is a display approximation on a monitoring cut, not an input
+    to any lean, and the alternative (showing nothing until the close) would
+    empty the row on every live slate.
+
+    The delta axis has no such gap: the card's |net| and the ledger's
+    `xw_delta` are the same construction on the same inputs
+    (edge_xwOBA away SP - edge_xwOBA home SP, absolute), verified rather than
+    assumed.
     """
     ctx = ctx or {}
     mkt = _market_fav(odds, away_abbr, home_abbr)
@@ -4095,25 +4162,9 @@ def _verdict_html(fav, odds, away_abbr, home_abbr, ctx=None):
         return ("<div class='verdict'><div class='l'>Model vs market</div>"
                 "<div class='vt'>No market yet.</div></div>")
     p_lean = _lean_implied_p(odds, fav, away_abbr, home_abbr)
-    band = _price_band(p_lean)
-    parts = ctx.get(("band", band)) if band else None
-    if parts:
-        # Read the gap against its own error bar, not against zero -- the same
-        # rule the market-calibration note gives. Every band currently lands
-        # inside it, which is the honest headline and the reason this row does
-        # not carry a value call.
-        read = ("statistically no different from the price itself"
-                if abs(parts["excess"]) <= 2 * parts["se"]
-                else "a gap wider than twice its own error bar")
-        tail = (f" In this price band the model has gone <b>{parts['w']}-{parts['l']}</b>, "
-                f"<b>{100 * parts['excess']:+.1f} pts</b> against the closing price "
-                f"(± {100 * parts['se']:.1f} over {parts['n']} graded games) — {read}.")
-    elif band is None:
-        # No usable devigged price, so there is no band to score against --
-        # say that rather than implying a thin band.
-        tail = " No usable closing price for this game yet."
-    else:
-        tail = " Not enough graded games in this price band to score it yet."
+    tail = _conviction_tail(ctx, delta, p_lean)
+    if tail is None:
+        tail = _price_band_tail(ctx, p_lean)
     price = (odds.get("home_ml") if fav == home_abbr else odds.get("away_ml"))
     px = f" ({_fmt_ml(price)})" if price is not None else ""
     if fav == mkt:
@@ -4125,7 +4176,6 @@ def _verdict_html(fav, odds, away_abbr, home_abbr, ctx=None):
     return ("<div class='verdict edge'><div class='l'>Model vs market · disagree</div>"
             f"<div class='vt'>Model leans the underdog <b>{_esc(fav)}{px}</b>, "
             f"which{pct}, against the market's {_esc(mkt)}.{tail}</div></div>")
-
 
 def _hitter_row_html(i, hr):
     """One batting-order row: name + batting hand, Statcast percentile bar, and
@@ -4265,7 +4315,7 @@ def _side_html(sp_abbr, d, league_baseline):
         f"</section>")
 
 
-def _market_html(o, away_abbr, home_abbr, fav=None, ctx=None):
+def _market_html(o, away_abbr, home_abbr, fav=None, ctx=None, delta=None):
     """Odds strip: the four market numbers share one horizontal row at every
     width (`.modds`), with the verdict on its own full-width row beneath. No
     per-card build stamp -- the page header carries the build time once, and
@@ -4287,7 +4337,7 @@ def _market_html(o, away_abbr, home_abbr, fav=None, ctx=None):
         + _esc(home_abbr)
         + f" (devig)</div><div class='v'>{ph}</div></div>"
         + "</div>"
-        + _verdict_html(fav, o, away_abbr, home_abbr, ctx)
+        + _verdict_html(fav, o, away_abbr, home_abbr, ctx, delta)
         + "</div>")
 
 
@@ -4553,7 +4603,7 @@ def cmb_card(g, strength_scale=None, ctx=None):
     # missing there is no defined lean and no read sentence. The strength word
     # ranks |Δxw| against the ledger's lean-magnitude history (display-only)
     # and appears once, in the plain-language read beneath the header.
-    fav = strength_word = read_html = None
+    fav = strength_word = read_html = delta = None
     if a["xw_edge"] is not None and h["xw_edge"] is not None:
         home_off, away_off = a["xw_edge"], h["xw_edge"]
         net = home_off - away_off
@@ -4569,7 +4619,7 @@ def cmb_card(g, strength_scale=None, ctx=None):
         + "<div class='game-detail'>"
         + _detail_context_html(g)
         + (read_html or "")
-        + _market_html(g.get('odds'), away_abbr, home_abbr, fav, ctx)
+        + _market_html(g.get('odds'), away_abbr, home_abbr, fav, ctx, delta)
         + f"<div class='sides'>{_side_html(away_abbr, a, g['league_baseline'])}"
         + f"{_side_html(home_abbr, h, g['league_baseline'])}</div>"
         + "</div></details></article>")
@@ -5912,6 +5962,60 @@ def _lean_market_agg(obs, mask):
     }
 
 
+# Five percentage points from 50/50 is the market-conviction split, and the
+# model-conviction split is the current family's own second delta tercile.
+# Both are hand-drawn: they were chosen to make the pricing hypothesis legible,
+# not fitted to an outcome. That is fine for a monitoring cut and is exactly
+# why every surface that shows a cell also shows its standard error.
+_CONVICTION_MARKET_EDGE = 0.05
+
+_CONVICTION_CELLS = (
+    ("near-lowmid", "Market ≤5 pp · low/mid Δ",
+     "the market within 5 points of a coin flip, and a lower model Δ"),
+    ("near-high", "Market ≤5 pp · high Δ",
+     "the market within 5 points of a coin flip, and a top-tercile model Δ"),
+    ("priced-lowmid", "Market >5 pp · low/mid Δ",
+     "the market more than 5 points off a coin flip, and a lower model Δ"),
+    ("priced-high", "Market >5 pp · high Δ",
+     "the market more than 5 points off a coin flip, and a top-tercile model Δ"),
+)
+
+_CONVICTION_PHRASE = {k: phrase for k, _lab, phrase in _CONVICTION_CELLS}
+
+
+def _conviction_cell(delta, market_p, q2):
+    """Conviction-matrix cell key for ONE game, or None when unplaceable.
+
+    The single derivation behind both surfaces that use the matrix -- the
+    calibration page's table and the per-game verdict on the leans page -- so a
+    card can never disagree with the table about which cell a game is in. That
+    is the metric_label() lesson applied to a bucketing rule: two copies of a
+    cut on one site will drift, and the reader cannot see which they are
+    reading.
+
+    `q2` is the current family's second delta tercile, passed in rather than
+    recomputed because a live pregame game has no graded row of its own and
+    must be placed against the same thresholds the table was built from.
+    """
+    if delta is None or market_p is None or q2 is None:
+        return None
+    try:
+        delta, market_p, q2 = float(delta), float(market_p), float(q2)
+    except (TypeError, ValueError):
+        return None
+    if not (np.isfinite(delta) and np.isfinite(market_p) and np.isfinite(q2)):
+        return None
+    if not (0.0 < market_p < 1.0):
+        return None
+    # Tolerance, not decoration: abs(0.55 - 0.5) is 0.05000000000000004 in
+    # binary float, so a game priced at exactly 55% -- a round number the book
+    # actually posts -- falls out of the band that is defined to include it.
+    # Same failure as the +100 price the odds ladder used to drop.
+    mkt = ("near" if abs(market_p - 0.5) <= _CONVICTION_MARKET_EDGE + 1e-9
+           else "priced")
+    return f"{mkt}-{'high' if delta > q2 else 'lowmid'}"
+
+
 def _lean_market_value_analysis(led):
     """Current-family price/lean relationship used by market calibration page.
 
@@ -5934,10 +6038,8 @@ def _lean_market_value_analysis(led):
     obs["delta_bucket"] = np.where(
         obs["delta"] <= q1, "low",
         np.where(obs["delta"] <= q2, "mid", "high"))
-    low_mid = obs["delta_bucket"].isin(["low", "mid"])
-    high = obs["delta_bucket"].eq("high")
-    near = obs["market_conv"] <= 0.05
-    priced = obs["market_conv"] > 0.05
+    obs["cell"] = [_conviction_cell(d, p, q2)
+                   for d, p in zip(obs["delta"], obs["market_p"])]
 
     # Relationship of raw model separation to the market's *signed* support
     # for the leaned team. Only the fitted line is used: it is reported as the
@@ -5961,12 +6063,10 @@ def _lean_market_value_analysis(led):
     else:
         slope = intercept = np.nan
 
-    regime_rows = [
-        ("Market ≤5 pp · low/mid Δ", _lean_market_agg(obs, near & low_mid)),
-        ("Market ≤5 pp · high Δ", _lean_market_agg(obs, near & high)),
-        ("Market >5 pp · low/mid Δ", _lean_market_agg(obs, priced & low_mid)),
-        ("Market >5 pp · high Δ", _lean_market_agg(obs, priced & high)),
-    ]
+    regime_rows = [(label, _lean_market_agg(obs, obs["cell"].eq(key)))
+                   for key, label, _phrase in _CONVICTION_CELLS]
+    low_mid = obs["delta_bucket"].isin(["low", "mid"])
+    high = obs["delta_bucket"].eq("high")
     side_rows = [
         ("Favourite >55% · low/mid Δ",
          _lean_market_agg(obs, (obs["market_p"] > 0.55) & low_mid)),
@@ -6234,6 +6334,43 @@ def _price_band(p):
         if lo <= p < hi:
             return key
     return None
+
+
+CONVICTION_CELL_MIN = 10
+
+
+def conviction_cell_records():
+    """('cell', key) -> that conviction cell's record for the CURRENT model.
+
+    The same 2x2 the calibration page publishes, keyed so a live pregame game
+    can look up the cell it falls into. Scored on `_record_grades`, because the
+    question is what THIS prediction family has done in this spot -- pooling
+    older math would answer a different one, and is what the pooled price-band
+    record beside it is for.
+
+    Carries ('cell_q2') so the caller places a live game against the very
+    thresholds the table was built from rather than recomputing them.
+
+    A lower floor than VERDICT_CONTEXT_MIN, deliberately. That gate guards a
+    record pooled over every family, which can afford 25; a current-family cell
+    is a quarter of one family and would essentially never publish at that bar.
+    What makes a thin cell honest is the standard error travelling with it --
+    an 8-game cell renders as +10.8 +- 17.7 and reads as the nothing it is --
+    so the floor only has to keep single-game cells off the card.
+    """
+    led = load_ledger_df()
+    if led is None:
+        return {}
+    a = _lean_market_value_analysis(led)
+    if not a:
+        return {}
+    out = {"cell_q2": a["q2"], "cell_n": a["n"]}
+    obs = a["obs"]
+    for key, _label, _phrase in _CONVICTION_CELLS:
+        parts = _lean_market_agg(obs, obs["cell"].eq(key))
+        if parts and parts["n"] >= CONVICTION_CELL_MIN:
+            out[("cell", key)] = parts
+    return out
 
 
 def price_band_records():
@@ -6924,7 +7061,11 @@ def render_combined_html(xw_df, pl_df, pitcher_rows_df, built_txt,
         return html_document(inner, built_txt, extra_js=score_refresh_js())
     strength_scale = lean_strength_scale(_slate_deltas(games))
     logo_assets, logo_css = _logo_assets(games)
-    ctx = {**(price_band_records() or {}), "logo_ids": set(logo_assets)}
+    # Both record sets travel together: the current-family conviction cell
+    # is the primary read and the pooled price band is its fallback, so a
+    # card always has something scored to say. They are never blended.
+    ctx = {**(price_band_records() or {}), **(conviction_cell_records() or {}),
+           "logo_ids": set(logo_assets)}
     body = logo_css + build_combined(games, strength_scale, ctx) + footer
     return html_document(body, built_txt, extra_js=score_refresh_js())
 
