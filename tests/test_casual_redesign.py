@@ -494,27 +494,56 @@ class RenderTests(unittest.TestCase):
 
     def test_verdict_agree_and_disagree(self):
         g_agree, g_dis = self._cards()
-        self.assertIn("agrees with the market", b.cmb_card(g_agree, None))
+        self.assertIn("Model and market agree", b.cmb_card(g_agree, None))
         dis = b.cmb_card(g_dis, None)
         self.assertIn("verdict edge", dis)
         self.assertIn("underdog", dis)
 
-    def test_verdict_shows_context_record_when_available(self):
-        # ctx = market_context_records(): (lean side, agree/disagree) -> 'W-L'.
-        ctx = {("home", "agree"): "30-27", ("away", "disagree"): "27-30"}
-        # Agree: model favors the home side, which is also the market favorite.
+    def test_verdict_shows_price_band_record_when_available(self):
+        """The row reports the band's gap against price, never a raw W-L.
+
+        The raw record it used to print spanned 24 points across buckets whose
+        base rates differed by the same amount, so a reader was shown the
+        market's opinion and invited to read it as the model's skill.
+        """
+        ctx = {("band", "fav"): dict(n=307, w=185, l=122, implied=.606,
+                                     actual=.603, excess=-.0037, se=.0278),
+               ("band", "dog"): dict(n=58, w=27, l=31, implied=.423,
+                                     actual=.466, excess=.0428, se=.0648)}
         agree = b._verdict_html("ARI", dict(p_home=.62), "LAD", "ARI", ctx)
-        self.assertIn("home favorite", agree)
-        self.assertIn("30-27", agree)
-        self.assertNotIn("No edge on the line", agree)
+        self.assertIn("Model and market agree", agree)
+        self.assertIn("185-122", agree)
+        self.assertIn("against the closing price", agree)
+        # the gap is inside its own error bar, and the row has to say so
+        self.assertIn("statistically no different from the price", agree)
         # Disagree: model leans the away underdog against a home market favorite.
         dis = b._verdict_html("LAD", dict(p_home=.62, away_ml=140), "LAD", "ARI", ctx)
-        self.assertIn("away underdog", dis)
-        self.assertIn("27-30", dis)
-        self.assertNotIn("record is built to test", dis)
-        # Missing bucket -> prose fallback (no fabricated record).
+        self.assertIn("underdog", dis)
+        self.assertIn("27-31", dis)
+        self.assertIn("statistically no different from the price", dis)
+        # No band record -> says so rather than inventing one.
         fb = b._verdict_html("ARI", dict(p_home=.62), "LAD", "ARI", {})
-        self.assertIn("No edge on the line", fb)
+        self.assertIn("Not enough graded games", fb)
+        self.assertNotIn("against the closing price", fb)
+
+    def test_verdict_never_claims_a_value_bet(self):
+        """Measured walk-forward, no bucket in this ledger beats the close.
+
+        The lean delta adds nothing on top of price (joint logit coefficient
+        -0.09 +- 0.12) and price+delta scores worse out-of-sample than the raw
+        close, so any wording that reads as a betting recommendation would be
+        a claim the data cannot support.
+        """
+        ctx = {("band", "dog"): dict(n=58, w=27, l=31, implied=.423,
+                                     actual=.466, excess=.0428, se=.0648)}
+        for fav, odds in (("ARI", dict(p_home=.62)),
+                          ("LAD", dict(p_home=.62, away_ml=140)),
+                          ("LAD", dict(p_home=.70, away_ml=200))):
+            html = b._verdict_html(fav, odds, "LAD", "ARI", ctx).lower()
+            for banned in ("value bet", "value play", "best bet", "free money",
+                           "lock", "edge on the line", "bet the"):
+                self.assertNotIn(banned, html,
+                                 f"verdict must not read as a recommendation: {banned!r}")
 
     def test_missing_edge_has_no_lean_read_or_header_pill(self):
         g, _ = self._cards()
@@ -1252,7 +1281,7 @@ class CardCopyTests(unittest.TestCase):
 
     def test_verdict_and_read_use_sentence_punctuation(self):
         html = self._card()
-        self.assertIn("Model agrees with the market:", html)
+        self.assertIn("Model and market agree:", html)
         self.assertIn("That is a <b>", html)
 
     def test_placeholder_em_dash_survives(self):

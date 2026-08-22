@@ -1685,39 +1685,90 @@ class PlatoonXwobaAdjustmentTests(unittest.TestCase):
         self.assertEqual([h["adv"] for h in hitters], [True, False])
 
 
-class MarketContextRecordsTests(unittest.TestCase):
+class PriceBandRecordsTests(unittest.TestCase):
+    """The per-game verdict's record, scored against price rather than raw.
+
+    Structural: no expected record or band boundary is frozen beyond the ones
+    the function itself defines.
+    """
+
     COLS = ["status", "xw_lean", "xw_full", "home", "away", "close_p_home"]
 
     def _led(self, rows):
         return pd.DataFrame(rows, columns=self.COLS)
 
-    def test_buckets_by_lean_side_and_market_agreement(self):
-        rows = [
-            # away lean, away is the market favorite (ph<.5) -> agree: W W L
-            ("graded", "NYY", "W", "TB", "NYY", 0.40),
-            ("graded", "NYY", "W", "TB", "NYY", 0.45),
-            ("graded", "NYY", "L", "TB", "NYY", 0.48),
-            # away lean, home favored (ph>=.5) -> disagree (away underdog): L
-            ("graded", "NYY", "L", "TB", "NYY", 0.60),
-            # home lean, home favored -> agree: W
-            ("graded", "TB", "W", "TB", "NYY", 0.55),
-            # ignored: not graded, and graded-without-market
-            ("pending", "TB", None, "TB", "NYY", 0.55),
-            ("graded", "TB", "W", "TB", "NYY", float("nan")),
-        ]
-        with mock.patch.object(build_site, "load_ledger_df", return_value=self._led(rows)), \
-                mock.patch.object(build_site, "VERDICT_CONTEXT_MIN", 1):
-            ctx = build_site.market_context_records()
-        self.assertEqual(ctx[("away", "agree")], "2-1")
-        self.assertEqual(ctx[("away", "disagree")], "0-1")
-        self.assertEqual(ctx[("home", "agree")], "1-0")
-        self.assertNotIn(("home", "disagree"), ctx)
+    def test_bands_key_off_the_leaned_side_not_the_home_side(self):
+        """A game reads the same whichever team the model picked.
 
-    def test_thin_bucket_is_omitted(self):
-        rows = [("graded", "NYY", "W", "TB", "NYY", 0.40)]  # 1 game < default min
-        with mock.patch.object(build_site, "load_ledger_df", return_value=self._led(rows)):
-            ctx = build_site.market_context_records()
-        self.assertEqual(ctx, {})
+        Two mirror-image rows: the model leans a side priced at .62 in both.
+        They must land in the same band, which the old home-relative split
+        could not express.
+        """
+        rows = [("graded", "NYY", "W", "TB", "NYY", 0.38),   # away lean, away at .62
+                ("graded", "TB", "W", "TB", "NYY", 0.62)]    # home lean, home at .62
+        with mock.patch.object(build_site, "load_ledger_df",
+                               return_value=self._led(rows)), \
+                mock.patch.object(build_site, "VERDICT_CONTEXT_MIN", 1):
+            ctx = build_site.price_band_records()
+        self.assertEqual(list(ctx), [("band", "fav")])
+        self.assertEqual(ctx[("band", "fav")]["n"], 2)
+        self.assertAlmostEqual(ctx[("band", "fav")]["implied"], 0.62, places=9)
+
+    def test_excess_is_measured_against_price_not_against_half(self):
+        rows = [("graded", "TB", "W", "TB", "NYY", 0.60),
+                ("graded", "TB", "L", "TB", "NYY", 0.60)]
+        with mock.patch.object(build_site, "load_ledger_df",
+                               return_value=self._led(rows)), \
+                mock.patch.object(build_site, "VERDICT_CONTEXT_MIN", 1):
+            parts = build_site.price_band_records()[("band", "fav")]
+        # 1-1 at a .60 price is a 10-point shortfall against the price, not a
+        # coin flip that happened to land even.
+        self.assertAlmostEqual(parts["actual"], 0.50, places=9)
+        self.assertAlmostEqual(parts["excess"], -0.10, places=9)
+        self.assertAlmostEqual(parts["se"], build_site._excess_se([.6, .6]),
+                               places=12)
+
+    def test_exact_pickem_is_not_filed_as_a_disagreement(self):
+        """The old split read `close_p_home >= .5` as 'home favored'.
+
+        On a .500 line there is no favorite, so an away lean was recorded as
+        disagreeing with a market that had no opinion. A band on the leaned
+        side's own price cannot make that claim.
+        """
+        rows = [("graded", "NYY", "W", "TB", "NYY", 0.50),
+                ("graded", "TB", "L", "TB", "NYY", 0.50)]
+        with mock.patch.object(build_site, "load_ledger_df",
+                               return_value=self._led(rows)), \
+                mock.patch.object(build_site, "VERDICT_CONTEXT_MIN", 1):
+            ctx = build_site.price_band_records()
+        self.assertEqual(list(ctx), [("band", "even")])
+        self.assertEqual(ctx[("band", "even")]["n"], 2)
+
+    def test_abstained_and_unpriced_rows_never_enter(self):
+        rows = [("graded", None, None, "TB", "NYY", 0.60),      # v5 abstention
+                ("graded", "TB", "W", "TB", "NYY", float("nan")),  # no market
+                ("pending", "TB", "W", "TB", "NYY", 0.60),      # not graded
+                ("graded", "TB", "W", "TB", "NYY", 0.60)]
+        with mock.patch.object(build_site, "load_ledger_df",
+                               return_value=self._led(rows)), \
+                mock.patch.object(build_site, "VERDICT_CONTEXT_MIN", 1):
+            ctx = build_site.price_band_records()
+        self.assertEqual(ctx[("band", "fav")]["n"], 1)
+
+    def test_thin_band_is_omitted_rather_than_published(self):
+        rows = [("graded", "NYY", "W", "TB", "NYY", 0.40)]
+        with mock.patch.object(build_site, "load_ledger_df",
+                               return_value=self._led(rows)):
+            self.assertEqual(build_site.price_band_records(), {})
+
+    def test_bands_partition_every_representable_price(self):
+        """No price may fall through, and none may match two bands."""
+        for i in range(1, 1000):
+            p = i / 1000.0
+            hits = [k for k, lo, hi in build_site._PRICE_BANDS if lo <= p < hi]
+            self.assertEqual(len(hits), 1, f"p={p} matched {hits}")
+        for bad in (0.0, 1.0, None, float("nan")):
+            self.assertIsNone(build_site._price_band(bad))
 
 
 class BaselineControlTests(unittest.TestCase):
