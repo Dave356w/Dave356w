@@ -4038,36 +4038,93 @@ def _market_fav(odds, away_abbr, home_abbr):
     return None
 
 
+def _lean_implied_p(odds, fav, away_abbr, home_abbr):
+    """Devigged closing-style probability for the LEANED side, or None.
+
+    Prefers the devigged `p_home` the market feed already supplies; falls back
+    to devigging the two moneylines itself so a game with prices but no
+    `p_home` still lands in a band rather than silently losing its signal.
+    """
+    if not odds or fav is None:
+        return None
+    ph = odds.get("p_home")
+    if ph is None or pd.isna(ph):
+        hm, am = odds.get("home_ml"), odds.get("away_ml")
+        if hm is None or am is None:
+            return None
+        try:
+            hm, am = float(hm), float(am)
+        except (TypeError, ValueError):
+            return None
+        if (-100 < hm < 100) or (-100 < am < 100):
+            return None
+        ih = 100.0 / (hm + 100.0) if hm > 0 else abs(hm) / (abs(hm) + 100.0)
+        ia = 100.0 / (am + 100.0) if am > 0 else abs(am) / (abs(am) + 100.0)
+        if ih + ia <= 0:
+            return None
+        ph = ih / (ih + ia)
+    ph = float(ph)
+    if not (0.0 < ph < 1.0):
+        return None
+    return ph if fav == home_abbr else 1.0 - ph
+
+
 def _verdict_html(fav, odds, away_abbr, home_abbr, ctx=None):
-    """Model-vs-market verdict row. Highlights the disagreement case (model on
-    the underdog) -- the only bettable signal -- and stays muted on agreement.
-    `ctx` is market_context_records(): where available it tails each verdict
-    with the xwOBA lean's historical record in this exact spot (lean side ×
-    agree/disagree), else falls back to prose. Rendered as its own full-width
-    row under the odds so the prose never squeezes the four market numbers."""
+    """Per-game price signal: where this lean sits against the market, and how
+    that band has actually scored AGAINST ITS OWN PRICE.
+
+    This deliberately does NOT tell a reader a game is a value bet, because the
+    ledger says none of them are. Measured walk-forward over 552 games: the
+    lean delta adds nothing on top of the closing price (joint logit
+    coefficient -0.09 +- 0.12), price+delta scores WORSE out-of-sample than the
+    raw close (log loss 0.6888 vs 0.6768), and flagging the largest
+    model-vs-market gaps selects the losing subset (-33% ROI at the widest cut).
+    Every arm -- model full-game, platoon full-game, platoon vs the F5 close --
+    lands within 1.4 se of its own market and loses units at the close.
+
+    So the honest signal is a price CONTEXT read: which band the lean falls in,
+    and that band's realised gap against price with a standard error. Each of
+    the three bands currently sits inside 0.7 se of its own price, which is the
+    reader's cue that the market has this covered -- and is exactly what the old
+    version hid by printing a raw W-L whose 24-point spread across buckets was
+    entirely base rate. Rendered as its own full-width row under the odds.
+    """
     ctx = ctx or {}
     mkt = _market_fav(odds, away_abbr, home_abbr)
     if fav is None or mkt is None:
         return ("<div class='verdict'><div class='l'>Model vs market</div>"
                 "<div class='vt'>No market yet.</div></div>")
-    side = "home" if fav == home_abbr else "away"
-    if fav == mkt:
-        rec = ctx.get((side, "agree"))
-        tail = (f"When the model leans the {side} favorite: <b>{rec}</b> in the ledger."
-                if rec else "No edge on the line here.")
-        return ("<div class='verdict'><div class='l'>Model vs market</div>"
-                f"<div class='vt'>Model agrees with the market: "
-                f"{_esc(fav)} favored. "
-                f"{tail}</div></div>")
+    p_lean = _lean_implied_p(odds, fav, away_abbr, home_abbr)
+    band = _price_band(p_lean)
+    parts = ctx.get(("band", band)) if band else None
+    if parts:
+        # Read the gap against its own error bar, not against zero -- the same
+        # rule the market-calibration note gives. Every band currently lands
+        # inside it, which is the honest headline and the reason this row does
+        # not carry a value call.
+        read = ("statistically no different from the price itself"
+                if abs(parts["excess"]) <= 2 * parts["se"]
+                else "a gap wider than twice its own error bar")
+        tail = (f" In this price band the model has gone <b>{parts['w']}-{parts['l']}</b>, "
+                f"<b>{100 * parts['excess']:+.1f} pts</b> against the closing price "
+                f"(± {100 * parts['se']:.1f} over {parts['n']} graded games) — {read}.")
+    elif band is None:
+        # No usable devigged price, so there is no band to score against --
+        # say that rather than implying a thin band.
+        tail = " No usable closing price for this game yet."
+    else:
+        tail = " Not enough graded games in this price band to score it yet."
     price = (odds.get("home_ml") if fav == home_abbr else odds.get("away_ml"))
     px = f" ({_fmt_ml(price)})" if price is not None else ""
-    rec = ctx.get((side, "disagree"))
-    tail = (f"When the model leans the {side} underdog: <b>{rec}</b> in the ledger."
-            if rec else "This is the spot the record is built to test.")
+    if fav == mkt:
+        pct = f" at {100 * p_lean:.0f}% devigged" if p_lean is not None else ""
+        return ("<div class='verdict'><div class='l'>Model vs market · agree</div>"
+                f"<div class='vt'>Model and market agree: <b>{_esc(fav)}</b>"
+                f"{px} is favored{pct}.{tail}</div></div>")
+    pct = f" the market prices at {100 * p_lean:.0f}%" if p_lean is not None else ""
     return ("<div class='verdict edge'><div class='l'>Model vs market · disagree</div>"
-            f"<div class='vt'>Model leans the underdog "
-            f"<b>{_esc(fav)}{px}</b> against the "
-            f"market's {_esc(mkt)}. {tail}</div></div>")
+            f"<div class='vt'>Model leans the underdog <b>{_esc(fav)}{px}</b>, "
+            f"which{pct}, against the market's {_esc(mkt)}.{tail}</div></div>")
 
 
 def _hitter_row_html(i, hr):
@@ -6151,18 +6208,56 @@ def _baseline_controls(g):
 
 # Minimum graded games in a (lean side × agree/disagree) bucket before its
 # record is trusted enough to headline the verdict; thinner buckets keep prose.
-VERDICT_CONTEXT_MIN = 10
+VERDICT_CONTEXT_MIN = 25
 
 
-def market_context_records():
-    """(lean_side, relation) -> 'W-L[-T]' for graded xwOBA full-game leans.
+_PRICE_BANDS = (
+    ("fav", 0.55, 1.01),
+    ("even", 0.45, 0.55),
+    ("dog", 0.0, 0.45),
+)
 
-    lean_side is 'home'/'away' (the side the model leaned); relation is
-    'agree'/'disagree' vs the market favorite, read from the devigged closing
-    home probability (`close_p_home` >= .5 -> home favored). Powers the
-    Model-vs-market verdict's context record. Display-only and best-effort: an
-    absent ledger/market column returns {}, and a bucket thinner than
-    VERDICT_CONTEXT_MIN decisions is omitted so the verdict keeps its prose."""
+
+def _price_band(p):
+    """Band key for the leaned side's devigged price, or None if unusable.
+
+    The bands are on the LEANED side's price, not the home side's, so a game
+    reads the same whichever team the model picked. The old split was
+    `close_p_home >= .5` -> "home favored", which filed the 10 graded rows
+    priced at exactly .500 as home-favored -- and the 6 of those where the
+    model leaned away as *disagreeing with the market*, on a game with no
+    favorite to disagree with. A band has no such boundary claim to get wrong.
+    """
+    if p is None or not np.isfinite(p) or not (0.0 < p < 1.0):
+        return None
+    for key, lo, hi in _PRICE_BANDS:
+        if lo <= p < hi:
+            return key
+    return None
+
+
+def price_band_records():
+    """('band', key) -> that band's realised record AGAINST ITS OWN PRICE.
+
+    Replaces the raw W-L this verdict used to print, which was the
+    claims-the-data-cannot-support anti-pattern in its purest form: the four
+    old buckets spanned 24 points of win rate (.603 down to .360) and every
+    one of those points was base rate. Scored against price the same buckets
+    read +1.5, +0.3, +1.1 and -11.4, each inside 1.2 se of zero. A reader was
+    being shown the market's opinion of the matchup and invited to read it as
+    the model's skill.
+
+    `excess` is the realised rate minus the mean devigged price of the leaned
+    side, and `se` comes from _excess_se -- the same Poisson-binomial
+    derivation both calibration surfaces use, so the whole site answers "did
+    this beat its price" one way. Pooled over every graded family for volume
+    (one family leaves a band ~25 games); the verdict text says it is a
+    ledger-wide record.
+
+    Display-only and best-effort: no ledger, no market column, or a band
+    thinner than VERDICT_CONTEXT_MIN decisions returns nothing for that band
+    and the verdict says so rather than inventing one.
+    """
     led = load_ledger_df()
     if led is None:
         return {}
@@ -6170,18 +6265,29 @@ def market_context_records():
     if g.empty or "close_p_home" not in g.columns:
         return {}
     ph = pd.to_numeric(g["close_p_home"], errors="coerce")
-    lean, grade = g["xw_lean"], g["xw_full"]
-    graded = ph.notna() & grade.isin(["W", "L", "T"])
+    ok = (ph.notna() & g["xw_lean"].notna() & g["xw_full"].isin(["W", "L"])
+          & ph.between(0.0, 1.0, inclusive="neither"))
+    if not ok.any():
+        return {}
+    g, ph = g[ok], ph[ok]
+    lean_home = g["xw_lean"].eq(g["home"]).to_numpy()
+    mp = np.where(lean_home, ph.to_numpy(dtype=float),
+                  1.0 - ph.to_numpy(dtype=float))
+    won = g["xw_full"].eq("W").to_numpy()
     out = {}
-    for side in ("home", "away"):
-        side_is_lean = lean.eq(g["home"] if side == "home" else g["away"])
-        mkt_is_lean = (ph >= 0.5) if side == "home" else (ph < 0.5)
-        for rel in ("agree", "disagree"):
-            rel_ok = mkt_is_lean if rel == "agree" else ~mkt_is_lean
-            sub = grade[graded & side_is_lean & rel_ok]
-            w, l, t = int((sub == "W").sum()), int((sub == "L").sum()), int((sub == "T").sum())
-            if w + l + t >= VERDICT_CONTEXT_MIN:
-                out[(side, rel)] = f"{w}-{l}" + (f"-{t}" if t else "")
+    for key, lo, hi in _PRICE_BANDS:
+        m = (mp >= lo) & (mp < hi)
+        n = int(m.sum())
+        if n < VERDICT_CONTEXT_MIN:
+            continue
+        w = int(won[m].sum())
+        out[("band", key)] = {
+            "n": n, "w": w, "l": n - w,
+            "implied": float(mp[m].mean()),
+            "actual": float(won[m].mean()),
+            "excess": float(won[m].mean() - mp[m].mean()),
+            "se": float(_excess_se(mp[m])),
+        }
     return out
 
 
@@ -6818,7 +6924,7 @@ def render_combined_html(xw_df, pl_df, pitcher_rows_df, built_txt,
         return html_document(inner, built_txt, extra_js=score_refresh_js())
     strength_scale = lean_strength_scale(_slate_deltas(games))
     logo_assets, logo_css = _logo_assets(games)
-    ctx = {**(market_context_records() or {}), "logo_ids": set(logo_assets)}
+    ctx = {**(price_band_records() or {}), "logo_ids": set(logo_assets)}
     body = logo_css + build_combined(games, strength_scale, ctx) + footer
     return html_document(body, built_txt, extra_js=score_refresh_js())
 

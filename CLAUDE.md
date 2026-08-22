@@ -423,6 +423,62 @@ precedent — they are how the fix is known to look.
 
 **Resolved — keep as precedent**
 
+- **A raw win-loss quoted where only a price-relative one means anything.** The
+  per-game "Model vs market" row printed the lean's raw record in its bucket —
+  side × agree/disagree with the closing favourite. Those four buckets spanned
+  **24 points** of win rate (.603 home-agree down to .360 home-disagree) and
+  every one of those points was base rate: scored against their own devigged
+  prices the same buckets read +1.5, +0.3, +1.1 and −11.4 pp, each inside
+  1.2 se of zero. A reader was shown the market's opinion of the matchup and
+  invited to read it as the model's skill — the same defect as publishing a
+  record with no control beside it, one surface out.
+
+  Fixed by banding on the **leaned side's** own devigged price and reporting
+  that band's gap against price with `_excess_se`, the derivation both
+  calibration surfaces already share. The old home-relative split also filed
+  the 10 graded rows priced at exactly .500 as "home favoured" — and the 6 of
+  those where the model leaned away as *disagreeing with a market that had no
+  favourite*. A band has no such boundary claim to make. `VERDICT_CONTEXT_MIN`
+  went 10 → 25: a raw rate is unreadable at n=10 and a price-relative one is
+  honest at any n, but a band still needs enough games for its se to mean
+  something.
+
+  Display-only; no lean, delta, grade or ledger row moves.
+
+- **The value-bet signal that does not exist, and the measurement that says so.**
+  Asked for a per-game "this is a value bet" badge, the honest answer turned
+  out to be that no such badge is available in this data, and the naive version
+  is **inverted**. Recorded here because the request is a natural one and will
+  recur.
+
+  Walk-forward over 552 games / 42 slates, fitting only on prior slates:
+
+  * Flagging the largest model-vs-market probability gaps selects the **losing**
+    subset, monotonically: gap > 0.00 → −9.5% ROI, > 0.06 → −20.2%, > 0.10 →
+    −33.0% (n=40). Flagged bets total −18.00u over 89 bets across 31 slates.
+  * It is not "the model's dog picks lose". Controlling for price band, the
+    above-median-gap half loses to the below-median half in **all four** bands
+    (big dog −18.3% vs +10.5%; small dog −14.1% vs −10.0%; small fav −7.6% vs
+    +9.8%; big fav −7.6% vs −1.5%).
+  * Does the delta add anything *on top of* price? Joint logit, n=627:
+    market logit **+1.25 ± 0.35** (consistent with 1.00 — the close needs no
+    correction), `z(xw_net)` **−0.09 ± 0.12, z = −0.78**. Out-of-sample log
+    loss ranks **raw close 0.6768 < market-fitted 0.6823 < price+delta 0.6888 <
+    delta alone 0.6991** — adding the delta to the price makes prediction
+    *worse*, which is what a noise feature does.
+  * Every arm lands within 1.4 se of its own market and loses units at the
+    close: model full-game z +0.29 (−15.28u over 627), platoon full-game
+    z −1.41 (−46.69u over 493), platoon vs the F5 close — the market it
+    actually targets — z +0.50 (−14.59u over 417).
+
+  So the verdict row reports price *context* and never a recommendation, and a
+  test pins that its copy contains no betting language. **Do not re-derive this
+  by hand and do not ship a value call without re-running the walk-forward
+  first**: the failure mode is that a hot current family (v12 ran .646 over 79
+  games while always-chalk ran .633 on the identical rows, in a stretch where
+  favourites beat their pooled rate) makes the badge look justified on the
+  rows in front of you.
+
 - **An error bar estimated from the outcomes it is testing.** Both surfaces on
   `market-calibration.html` print a realised rate against its implied one, and
   both sized the `±` from the results rather than from the prices. The ladder
