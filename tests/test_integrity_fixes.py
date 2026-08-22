@@ -1,3 +1,4 @@
+import math
 import inspect
 import os
 import re
@@ -2582,3 +2583,126 @@ class AbstentionReportingTests(unittest.TestCase):
         })
         html = build_site._grades_row(r)
         self.assertIn("no lean", html)
+
+
+class LeanMarketValueTests(unittest.TestCase):
+    """Invariants of the model x market value panel on market-calibration.html.
+
+    Structural only, in the same spirit as MarketCalibrationTests: a failure
+    here means the panel is built wrong, not that the season went differently.
+    No expected record, ROI or threshold is frozen into this class.
+    """
+
+    @staticmethod
+    def _frame(n=8, tag=None, lean_home=True, won=True, ml=-150, p_home=.60):
+        """Graded current-family rows, all leaning the same way by default."""
+        tag = build_site.MODEL_TAG if tag is None else tag
+        return pd.DataFrame({
+            "status": ["graded"] * n,
+            "model_tag": [tag] * n,
+            "home": ["HOU"] * n,
+            "away": ["SEA"] * n,
+            "xw_lean": (["HOU"] if lean_home else ["SEA"]) * n,
+            "xw_full": (["W"] if won else ["L"]) * n,
+            "xw_delta": np.linspace(.005, .045, n),
+            "close_p_home": [p_home] * n,
+            "close_home_ml": [ml] * n,
+            "close_away_ml": [-ml if ml < 0 else -ml] * n,
+        })
+
+    def test_american_unit_profit_pays_the_right_price(self):
+        """Including both even-money forms and the invalid band between them."""
+        self.assertAlmostEqual(build_site._american_unit_profit(-150, True), 2 / 3)
+        self.assertAlmostEqual(build_site._american_unit_profit(+150, True), 1.5)
+        self.assertEqual(build_site._american_unit_profit(-150, False), -1.0)
+        self.assertEqual(build_site._american_unit_profit(+150, False), -1.0)
+        # +/-100 are both even money and must pay, not fall in the dead band
+        self.assertAlmostEqual(build_site._american_unit_profit(+100, True), 1.0)
+        self.assertAlmostEqual(build_site._american_unit_profit(-100, True), 1.0)
+        for bad in (0, 50, -50, 99, -99, None, np.nan):
+            self.assertTrue(np.isnan(build_site._american_unit_profit(bad, True)),
+                            f"{bad!r} is not an American price and must not pay")
+
+    def test_standard_error_does_not_collapse_on_a_one_sided_bucket(self):
+        """The regression this panel's SE form exists for.
+
+        A bucket that goes all-W or all-L has no outcome variance, so the
+        sample sd of the residuals -- and sqrt(phat(1-phat)/n) -- both go to
+        ~0 and report the least certain bucket on the page as the most
+        certain. The Poisson-binomial SE is fixed by the market prices, so it
+        cannot degenerate.
+        """
+        obs = build_site._lean_market_observations(self._frame(n=4, won=False))
+        self.assertEqual(len(obs), 4)
+        parts = build_site._lean_market_agg(obs, pd.Series(True, index=obs.index))
+        self.assertEqual((parts["w"], parts["l"]), (0, 4))
+        expected = math.sqrt((obs["market_p"] * (1 - obs["market_p"])).sum()) / 4
+        self.assertAlmostEqual(parts["excess_se"], expected, places=12)
+        self.assertGreater(parts["excess_se"], .2,
+                           "a 4-row all-loss bucket at even-ish prices cannot "
+                           "carry a small standard error")
+        # and it must be far larger than either estimator it replaced, both
+        # of which collapse toward zero exactly here
+        resid = obs["won"].to_numpy(float) - obs["market_p"].to_numpy(float)
+        sd_form = float(np.std(resid, ddof=1)) / 2.0        # sd(resid)/sqrt(n)
+        binom_form = math.sqrt(max(0.0 * (1 - 0.0), 0.0) / 4)  # sqrt(phat(1-phat)/n)
+        self.assertEqual(binom_form, 0.0)
+        self.assertGreater(parts["excess_se"], 10 * sd_form)
+
+    def test_standard_error_is_defined_for_a_single_row(self):
+        obs = build_site._lean_market_observations(self._frame(n=1))
+        parts = build_site._lean_market_agg(obs, pd.Series(True, index=obs.index))
+        self.assertTrue(np.isfinite(parts["excess_se"]))
+
+    def test_abstained_rows_never_enter_the_panel(self):
+        """v5 can grade a row with no lean; a price panel must not score it.
+
+        Same rule as _baseline_controls: the model is scored on the decided
+        rows, so anything sitting beside it must be too.
+        """
+        d = self._frame(n=6)
+        d.loc[0, ["xw_lean", "xw_full", "xw_delta"]] = np.nan
+        obs = build_site._lean_market_observations(d)
+        self.assertEqual(len(obs), 5)
+
+    def test_only_the_current_record_family_is_scored(self):
+        """Pooling old prediction math would answer a different question."""
+        d = pd.concat([self._frame(n=4),
+                       self._frame(n=4, tag="xw+plat_consol_v2")],
+                      ignore_index=True)
+        obs = build_site._lean_market_observations(d)
+        self.assertEqual(len(obs), 4)
+
+    def test_market_p_follows_the_lean_not_the_home_side(self):
+        """market_p is the price of the LEANED team, whichever side that is."""
+        home = build_site._lean_market_observations(
+            self._frame(n=3, lean_home=True, p_home=.62))
+        away = build_site._lean_market_observations(
+            self._frame(n=3, lean_home=False, p_home=.62))
+        self.assertTrue(np.allclose(home["market_p"], .62))
+        self.assertTrue(np.allclose(away["market_p"], .38))
+
+    def test_ungraded_and_unpriced_rows_are_skipped_not_imputed(self):
+        d = self._frame(n=6)
+        d.loc[0, "close_p_home"] = np.nan
+        d.loc[1, "status"] = "pending"
+        self.assertEqual(len(build_site._lean_market_observations(d)), 4)
+
+    def test_panel_renders_without_rows_rather_than_raising(self):
+        """A MODEL_TAG bump empties this panel; it must say so, not crash."""
+        for d in (None, pd.DataFrame(),
+                  self._frame(n=4, tag="xw+plat_consol_v0")):
+            self.assertEqual(build_site._lean_market_value_analysis(d), {})
+            html = build_site._render_lean_market_value_panel(d)
+            self.assertIn("Model × market value", html)
+            self.assertIn("once graded leans", html)
+
+    def test_every_value_table_row_emits_four_cells(self):
+        """Including the empty buckets, which render an em dash, not nothing."""
+        rows = [("filled", {"n": 3, "w": 2, "l": 1, "implied": .5, "actual": .667,
+                            "excess": .167, "excess_se": .28, "roi": .1,
+                            "units": .3}),
+                ("empty", None)]
+        html = build_site._lean_market_value_table(rows)
+        self.assertEqual(html.count("<tr class='gr-row'>"), 2)
+        self.assertEqual(html.count("<td "), 8)
