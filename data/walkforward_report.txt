@@ -1,25 +1,25 @@
 CURRENT MODEL WALK-FORWARD
 
 Model       xw+plat_consol_v12
-Games       633
-Decisions   616
-Full        333-283 (0.541)
-F5          282-238-96 (0.542)
-Market exp  336.6 wins on 616 priced decisions
-Market z    -0.30
-Flat ROI    -29.00u / 616 bets (-4.7%)
+Games       634
+Decisions   617
+Full        334-283 (0.541)
+F5          283-238-96 (0.543)
+Market exp  337.2 wins on 617 priced decisions
+Market z    -0.26
+Flat ROI    -28.35u / 617 bets (-4.6%)
 
 INPUT FIDELITY
-historical_lineup      n=632  full 333-283 (0.541)
+historical_lineup      n=633  full 334-283 (0.541)
 insufficient_history   n=  1  full 0-0
 
 BY MONTH
 2026-07                n=351  full 191-151 (0.558)
-2026-08                n=282  full 142-132 (0.518)
+2026-08                n=283  full 143-132 (0.520)
 
 ORIGINAL HISTORICAL MODELS
-Full        348-280 (0.554)
-Changed     70 of 616 comparable decisions
+Full        349-280 (0.555)
+Changed     70 of 617 comparable decisions
 
 Method: current specification replayed sequentially with dated inputs;
 this removes temporal feature leakage but not model-selection leakage.
