@@ -2834,7 +2834,7 @@ class ConvictionCellTests(unittest.TestCase):
     def test_card_and_calibration_table_place_a_game_identically(self):
         """One derivation, or the card and the table will drift apart.
 
-        The calibration page's 2x2 and the per-game row must never disagree
+        The calibration page's 2x3 and the per-game row must never disagree
         about which cell a game is in -- that is the metric_label() lesson
         applied to a bucketing rule.
         """
@@ -2845,25 +2845,26 @@ class ConvictionCellTests(unittest.TestCase):
         obs = a["obs"]
         # every graded row the table bucketed must re-place to the same cell
         for delta, mp, cell in zip(obs["delta"], obs["market_p"], obs["cell"]):
-            self.assertEqual(build_site._conviction_cell(delta, mp, a["q2"]),
-                             cell)
+            self.assertEqual(build_site._conviction_cell(delta, mp), cell)
 
-    def test_cell_boundaries_are_closed_on_the_market_side(self):
-        q2 = 0.02
-        # exactly 5 points off a coin flip counts as NEAR, both directions
-        self.assertTrue(build_site._conviction_cell(.01, .55, q2).startswith("near"))
-        self.assertTrue(build_site._conviction_cell(.01, .45, q2).startswith("near"))
-        self.assertTrue(build_site._conviction_cell(.01, .551, q2).startswith("priced"))
-        self.assertTrue(build_site._conviction_cell(.01, .449, q2).startswith("priced"))
-        # delta at the tercile is low/mid; strictly above it is high
-        self.assertTrue(build_site._conviction_cell(q2, .50, q2).endswith("lowmid"))
-        self.assertTrue(build_site._conviction_cell(q2 + 1e-9, .50, q2).endswith("high"))
+    def test_cell_boundaries_match_the_declared_direction_grid(self):
+        # .012 itself is ACTIVE; only values below it are LOW.
+        self.assertEqual(build_site._conviction_cell(.011999, .50), "low-agree")
+        self.assertEqual(build_site._conviction_cell(.012, .50), "active-agree")
+        # .45 enters slight opposition; .50 enters agreement.
+        self.assertEqual(build_site._conviction_cell(.012, .449999),
+                         "active-deep-oppose")
+        self.assertEqual(build_site._conviction_cell(.012, .45),
+                         "active-slight-oppose")
+        self.assertEqual(build_site._conviction_cell(.012, .499999),
+                         "active-slight-oppose")
+        self.assertEqual(build_site._conviction_cell(.012, .50), "active-agree")
 
     def test_unplaceable_games_return_none_rather_than_a_default_cell(self):
-        for delta, mp, q2 in ((None, .5, .02), (.01, None, .02), (.01, .5, None),
-                              (float("nan"), .5, .02), (.01, float("nan"), .02),
-                              (.01, 0.0, .02), (.01, 1.0, .02), ("x", .5, .02)):
-            self.assertIsNone(build_site._conviction_cell(delta, mp, q2))
+        for delta, mp in ((None, .5), (.01, None), (float("nan"), .5),
+                          (.01, float("nan")), (.01, 0.0), (.01, 1.0),
+                          ("x", .5)):
+            self.assertIsNone(build_site._conviction_cell(delta, mp))
 
     def test_every_cell_key_has_a_reader_facing_phrase(self):
         for key, _label, phrase in build_site._CONVICTION_CELLS:
@@ -2871,42 +2872,41 @@ class ConvictionCellTests(unittest.TestCase):
             self.assertTrue(phrase and not phrase[0].isupper(),
                             "phrase is spliced mid-sentence, so it stays lowercase")
 
-    def test_thin_cell_falls_back_to_the_pooled_band_and_says_so(self):
-        """The two records are never blended, and each states its own scope."""
-        ctx = {"cell_q2": 0.02,
-               ("cell", "priced-high"): dict(n=23, w=18, l=5, implied=.55,
-                                             actual=.78, excess=.17,
-                                             excess_se=.10, roi=.28, units=6.4),
-               ("band", "fav"): dict(n=307, w=185, l=122, implied=.606,
-                                     actual=.603, excess=-.0037, se=.0278)}
-        # placeable into a published cell -> current-model wording
-        hit = build_site._verdict_html("ARI", dict(p_home=.62), "LAD", "ARI",
-                                       ctx, 0.05)
-        self.assertIn("Under the current model", hit)
-        self.assertIn("18-5", hit)
-        self.assertNotIn("Across every model version", hit)
-        # cell not published (near-high absent) -> pooled band, labelled
-        miss = build_site._verdict_html("ARI", dict(p_home=.62), "LAD", "ARI",
-                                        ctx, 0.001)
-        self.assertIn("Across every model version", miss)
-        self.assertIn("185-122", miss)
-        self.assertNotIn("Under the current model", miss)
-        # no delta at all (a v5 abstention has none) -> pooled band
-        none = build_site._verdict_html("ARI", dict(p_home=.62), "LAD", "ARI",
-                                        ctx, None)
-        self.assertIn("Across every model version", none)
+    def test_thin_directional_cell_is_shown_and_never_pooled(self):
+        """Discovery cells keep their direction even when n is small."""
+        ctx = {
+            ("cell", "active-slight-oppose"): dict(
+                n=6, w=4, l=2, implied=.482, actual=.667, excess=.184,
+                excess_se=.204, roi=.352, units=2.11,
+            ),
+            ("band", "even"): dict(n=300, w=160, l=140, implied=.50,
+                                    actual=.533, excess=.033, se=.029),
+        }
+        html = build_site._verdict_html(
+            "PIT", dict(p_home=.529, away_ml=103), "PIT", "SD", ctx, .0187,
+        )
+        self.assertIn("Historical discovery cell", html)
+        self.assertIn("4–2", html)
+        self.assertIn("n=6", html)
+        self.assertIn("ROI <b>+35.2%</b>", html)
+        self.assertNotIn("Across every model version", html)
 
-    def test_a_cell_clearing_its_error_bar_names_the_sample_it_rests_on(self):
-        """A +28-point cell on 27 games must not read as a green light."""
-        ctx = {"cell_q2": 0.02,
-               ("cell", "near-lowmid"): dict(n=27, w=21, l=6, implied=.50,
-                                             actual=.78, excess=.28,
-                                             excess_se=.096, roi=.53, units=14.3)}
-        html = build_site._verdict_html("ARI", dict(p_home=.52), "LAD", "ARI",
-                                        ctx, 0.001)
-        self.assertIn("wider than twice its own error bar", html)
-        self.assertIn("27 current-model games", html)
-        self.assertIn("hand-drawn cut", html)
+    def test_pit_acceptance_panel_has_the_requested_four_reads(self):
+        ctx = {("cell", "active-slight-oppose"): dict(
+            n=6, w=4, l=2, implied=.482, actual=.667, excess=.184,
+            excess_se=.204, roi=.352, units=2.11,
+        )}
+        html = build_site._verdict_html(
+            "PIT", dict(p_home=.529, away_ml=103), "PIT", "SD", ctx, .0187,
+        )
+        for expected in (
+            "V12 Δ:</span> <span>.0187 · ACTIVE",
+            "Market:</span> <span>PIT +103 · 47.1% no-vig",
+            "Direction:</span> <span>SLIGHT MARKET OPPOSE",
+            "Historical discovery cell:",
+            "4–2</b> · n=6 · ROI <b>+35.2%",
+        ):
+            self.assertIn(expected, html)
         for banned in ("value bet", "best bet", "free money", "lock"):
             self.assertNotIn(banned, html.lower())
 
@@ -2915,4 +2915,4 @@ class ConvictionCellTests(unittest.TestCase):
         with mock.patch.object(build_site, "CONVICTION_CELL_MIN", 10**6):
             out = build_site.conviction_cell_records()
         self.assertEqual([k for k in out if isinstance(k, tuple)], [])
-        self.assertIn("cell_q2", out)
+        self.assertIn("cell_delta_active", out)

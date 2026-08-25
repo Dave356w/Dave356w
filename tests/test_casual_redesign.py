@@ -494,37 +494,41 @@ class RenderTests(unittest.TestCase):
 
     def test_verdict_agree_and_disagree(self):
         g_agree, g_dis = self._cards()
-        self.assertIn("Model and market agree", b.cmb_card(g_agree, None))
+        self.assertIn("MARKET AGREE", b.cmb_card(g_agree, None))
         dis = b.cmb_card(g_dis, None)
         self.assertIn("verdict edge", dis)
-        self.assertIn("underdog", dis)
+        self.assertIn("DEEP MARKET OPPOSE", dis)
 
-    def test_verdict_shows_price_band_record_when_available(self):
-        """The row reports the band's gap against price, never a raw W-L.
-
-        The raw record it used to print spanned 24 points across buckets whose
-        base rates differed by the same amount, so a reader was shown the
-        market's opinion and invited to read it as the model's skill.
-        """
-        ctx = {("band", "fav"): dict(n=307, w=185, l=122, implied=.606,
-                                     actual=.603, excess=-.0037, se=.0278),
-               ("band", "dog"): dict(n=58, w=27, l=31, implied=.423,
-                                     actual=.466, excess=.0428, se=.0648)}
-        agree = b._verdict_html("ARI", dict(p_home=.62), "LAD", "ARI", ctx)
-        self.assertIn("Model and market agree", agree)
-        self.assertIn("185-122", agree)
-        self.assertIn("against the closing price", agree)
-        # the gap is inside its own error bar, and the row has to say so
-        self.assertIn("statistically no different from the price", agree)
-        # Disagree: model leans the away underdog against a home market favorite.
-        dis = b._verdict_html("LAD", dict(p_home=.62, away_ml=140), "LAD", "ARI", ctx)
-        self.assertIn("underdog", dis)
-        self.assertIn("27-31", dis)
-        self.assertIn("statistically no different from the price", dis)
-        # No band record -> says so rather than inventing one.
-        fb = b._verdict_html("ARI", dict(p_home=.62), "LAD", "ARI", {})
-        self.assertIn("Not enough graded games", fb)
-        self.assertNotIn("against the closing price", fb)
+    def test_verdict_shows_the_exact_directional_discovery_cell(self):
+        """Favourite and dog directions can never inherit one pooled record."""
+        ctx = {
+            ("cell", "active-agree"): dict(
+                n=78, w=57, l=21, implied=.591, actual=.731, excess=.140,
+                excess_se=.055, roi=.211, units=16.43,
+            ),
+            ("cell", "low-deep-oppose"): dict(
+                n=7, w=0, l=7, implied=.413, actual=0, excess=-.413,
+                excess_se=.186, roi=-1.0, units=-7.0,
+            ),
+        }
+        agree = b._verdict_html(
+            "ARI", dict(p_home=.62, home_ml=-160), "LAD", "ARI", ctx, .02,
+        )
+        self.assertIn("MARKET AGREE", agree)
+        self.assertIn("57–21", agree)
+        self.assertIn("ROI <b>+21.1%</b>", agree)
+        dis = b._verdict_html(
+            "LAD", dict(p_home=.62, away_ml=140), "LAD", "ARI", ctx, .005,
+        )
+        self.assertIn("DEEP MARKET OPPOSE", dis)
+        self.assertIn("0–7", dis)
+        self.assertIn("ROI <b>-100.0%</b>", dis)
+        # A missing V12 cell says so; it never substitutes a pooled family.
+        fb = b._verdict_html(
+            "ARI", dict(p_home=.62, home_ml=-160), "LAD", "ARI", {}, .02,
+        )
+        self.assertIn("No completed V12 games in this cell yet", fb)
+        self.assertNotIn("Across every model version", fb)
 
     def test_verdict_never_claims_a_value_bet(self):
         """Measured walk-forward, no bucket in this ledger beats the close.
@@ -1279,9 +1283,11 @@ class CardCopyTests(unittest.TestCase):
         # Guard the guard: the stripper must not be hiding prose em-dashes.
         self.assertIn("—", self._visible(self._card()))   # placeholder present
 
-    def test_verdict_and_read_use_sentence_punctuation(self):
+    def test_verdict_uses_structured_labels_and_read_uses_sentence_punctuation(self):
         html = self._card()
-        self.assertIn("Model and market agree:", html)
+        for label in ("V12 Δ:", "Market:", "Direction:",
+                      "Historical discovery cell:"):
+            self.assertIn(label, html)
         self.assertIn("That is a <b>", html)
 
     def test_placeholder_em_dash_survives(self):
