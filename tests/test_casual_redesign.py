@@ -494,19 +494,21 @@ class RenderTests(unittest.TestCase):
 
     def test_verdict_agree_and_disagree(self):
         g_agree, g_dis = self._cards()
-        self.assertIn("MARKET AGREE", b.cmb_card(g_agree, None))
+        agree = b.cmb_card(g_agree, None)
+        self.assertIn(".0920 · HIGH", agree)
+        self.assertIn("60.5% no-vig", agree)
         dis = b.cmb_card(g_dis, None)
         self.assertIn("verdict edge", dis)
-        self.assertIn("DEEP MARKET OPPOSE", dis)
+        self.assertIn("V12 profile:", dis)
 
-    def test_verdict_shows_the_exact_directional_discovery_cell(self):
-        """Favourite and dog directions can never inherit one pooled record."""
+    def test_verdict_shows_the_exact_delta_by_market_profile(self):
+        """Distinct 3x5 profiles can never inherit one pooled record."""
         ctx = {
-            ("cell", "active-agree"): dict(
-                n=78, w=57, l=21, implied=.591, actual=.731, excess=.140,
-                excess_se=.055, roi=.211, units=16.43,
+            ("profile", ("medium", "60–65%")): dict(
+                n=14, w=10, l=4, implied=.624, actual=.714, excess=.090,
+                excess_se=.126, roi=.121, units=1.69,
             ),
-            ("cell", "low-deep-oppose"): dict(
+            ("profile", ("low", "<45%")): dict(
                 n=7, w=0, l=7, implied=.413, actual=0, excess=-.413,
                 excess_se=.186, roi=-1.0, units=-7.0,
             ),
@@ -514,20 +516,22 @@ class RenderTests(unittest.TestCase):
         agree = b._verdict_html(
             "ARI", dict(p_home=.62, home_ml=-160), "LAD", "ARI", ctx, .02,
         )
-        self.assertIn("MARKET AGREE", agree)
-        self.assertIn("57–21", agree)
-        self.assertIn("ROI <b>+21.1%</b>", agree)
+        self.assertIn("MEDIUM Δ · 60–65% MARKET", agree)
+        self.assertIn("Historical actual</span><span>71.4%", agree)
+        self.assertIn("Performance vs market</span><span><b>+9.0 pp", agree)
+        self.assertIn("n=14 · DEVELOPING", agree)
         dis = b._verdict_html(
             "LAD", dict(p_home=.62, away_ml=140), "LAD", "ARI", ctx, .005,
         )
-        self.assertIn("DEEP MARKET OPPOSE", dis)
-        self.assertIn("0–7", dis)
-        self.assertIn("ROI <b>-100.0%</b>", dis)
+        self.assertIn("LOW Δ · &lt;45% MARKET", dis)
+        self.assertIn("Historical actual</span><span>0.0%", dis)
+        self.assertIn("Performance vs market</span><span><b>-41.3 pp", dis)
+        self.assertIn("n=7 · THIN", dis)
         # A missing V12 cell says so; it never substitutes a pooled family.
         fb = b._verdict_html(
             "ARI", dict(p_home=.62, home_ml=-160), "LAD", "ARI", {}, .02,
         )
-        self.assertIn("No completed V12 games in this cell yet", fb)
+        self.assertIn("No completed V12 games in this profile yet", fb)
         self.assertNotIn("Across every model version", fb)
 
     def test_verdict_never_claims_a_value_bet(self):
@@ -1285,8 +1289,7 @@ class CardCopyTests(unittest.TestCase):
 
     def test_verdict_uses_structured_labels_and_read_uses_sentence_punctuation(self):
         html = self._card()
-        for label in ("V12 Δ:", "Market:", "Direction:",
-                      "Historical discovery cell:"):
+        for label in ("V12 Δ:", "Market:", "V12 profile:"):
             self.assertIn(label, html)
         self.assertIn("That is a <b>", html)
 

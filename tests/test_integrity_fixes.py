@@ -2971,8 +2971,8 @@ class ConvictionCellTests(unittest.TestCase):
         # and the card must not print agreement anywhere on such a game
         html = build_site._verdict_html(
             "H", {"home_ml": -110, "away_ml": -110}, "A", "H", {}, .02)
-        self.assertIn("NO MARKET BACKING", html)
         self.assertNotIn("MARKET AGREE", html)
+        self.assertEqual(build_site._profile_market_label(pk), "45–50%")
         self.assertIn("50.0% no-vig", html)
 
     def test_the_warm_accent_never_claims_opposition_on_a_pickem(self):
@@ -3011,37 +3011,40 @@ class ConvictionCellTests(unittest.TestCase):
         for _key, label in build_site._CONVICTION_CELLS:
             self.assertRegex(label, r"^(LOW|ACTIVE) Δ · ")
 
-    def test_thin_directional_cell_is_shown_and_never_pooled(self):
-        """Discovery cells keep their direction even when n is small."""
+    def test_developing_profile_is_shown_with_market_adjusted_detail(self):
         ctx = {
-            ("cell", "active-no-backing"): dict(
-                n=6, w=4, l=2, implied=.482, actual=.667, excess=.184,
-                excess_se=.204, roi=.352, units=2.11,
+            ("profile", ("medium", "45–50%")): dict(
+                n=14, w=10, l=4, implied=.481, actual=.714, excess=.233,
+                excess_se=.121, roi=.352, units=4.93,
             ),
         }
         html = build_site._verdict_html(
             "PIT", dict(p_home=.529, away_ml=103), "PIT", "SD", ctx, .0187,
         )
-        self.assertIn("Historical discovery cell", html)
-        self.assertIn("4–2", html)
-        self.assertIn("n=6", html)
-        self.assertIn("ROI <b>+35.2%</b>", html)
-        self.assertNotIn("Across every model version", html)
+        self.assertIn("V12 PROFILE", html)
+        self.assertIn("MEDIUM Δ · 45–50% MARKET", html)
+        self.assertIn("Historical actual</span><span>71.4%", html)
+        self.assertIn("Market implied</span><span>48.1%", html)
+        self.assertIn("Performance vs market</span><span><b>+23.3 pp", html)
+        self.assertIn("n=14 · DEVELOPING", html)
 
     def test_pit_acceptance_panel_has_the_requested_four_reads(self):
-        ctx = {("cell", "active-no-backing"): dict(
-            n=6, w=4, l=2, implied=.482, actual=.667, excess=.184,
-            excess_se=.204, roi=.352, units=2.11,
+        ctx = {("profile", ("medium", "45–50%")): dict(
+            n=14, w=10, l=4, implied=.481, actual=.714, excess=.233,
+            excess_se=.121, roi=.352, units=4.93,
         )}
         html = build_site._verdict_html(
             "PIT", dict(p_home=.529, away_ml=103), "PIT", "SD", ctx, .0187,
         )
         for expected in (
-            "V12 Δ:</span> <span>.0187 · ACTIVE",
+            "V12 Δ:</span> <span>.0187 · MEDIUM",
             "Market:</span> <span>PIT +103 · 47.1% no-vig",
-            "Direction:</span> <span>NO MARKET BACKING",
-            "Historical discovery cell:",
-            "4–2</b> · n=6 · ROI <b>+35.2%",
+            "V12 PROFILE",
+            "MEDIUM Δ · 45–50% MARKET",
+            "Historical actual</span><span>71.4%",
+            "Market implied</span><span>48.1%",
+            "Performance vs market</span><span><b>+23.3 pp",
+            "n=14 · DEVELOPING",
         ):
             self.assertIn(expected, html)
         for banned in ("value bet", "best bet", "free money", "lock"):

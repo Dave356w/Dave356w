@@ -4066,47 +4066,42 @@ def _model_version_short():
 
 
 def _conviction_tail(ctx, delta, p_lean):
-    """Compact current-family discovery record for this game's exact cell.
-
-    Thin cells are intentionally retained: the visible `n` and the word
-    "discovery" are the warning. Pooling a six-game slight-opposition cell into
-    a large favourite/underdog band would erase the direction the panel was
-    added to expose. The calibration page carries the fuller actual-vs-implied
-    error bar and flat units; the card carries record, n and ROI.
-    """
+    """Market-adjusted history for this game's exact 3x5 V12 profile."""
     version = _model_version_short()
-    key = _conviction_cell(delta, p_lean)
-    parts = ctx.get(("cell", key)) if key else None
+    key = _profile_cell(delta, p_lean)
+    parts = ctx.get(("profile", key)) if key else None
     if not parts:
-        msg = (f"No completed {version} games in this cell yet."
+        msg = (f"No completed {version} games in this profile yet."
                if key else "Unavailable until both Δ and a no-vig price resolve.")
-        return ("<div class='vline hist'><span class='vk'>"
-                f"Historical discovery cell:</span><span>{msg}</span></div>")
+        return ("<div class='vline hist'><span class='vk'>V12 profile:</span>"
+                f"<span>{msg}</span></div>")
 
-    roi = _f(parts.get("roi"))
-    roi_txt = f"{100 * roi:+.1f}%" if roi is not None else "—"
-    excess = _f(parts.get("excess"))
-    se = _f(parts.get("excess_se"))
-    title = "Current-model closing-price discovery cell"
-    if excess is not None and se is not None:
-        title += (f": actual minus implied {100 * excess:+.1f} points, "
-                  f"one standard error {100 * se:.1f} points")
-    return (f"<div class='vline hist' title='{_esc(title)}'>"
-            "<span class='vk'>Historical discovery cell:</span>"
-            f"<span><b>{parts['w']}–{parts['l']}</b> · n={parts['n']} · "
-            f"ROI <b>{roi_txt}</b></span></div>")
+    d_label, m_label = _profile_delta_label(delta), _profile_market_label(p_lean)
+    n = parts["n"]
+    sample = "LARGER SAMPLE" if n >= 20 else ("DEVELOPING" if n >= 10 else "THIN")
+    return (
+        "<div class='vprofile'>"
+        f"<div class='vprofile-title'>{version} PROFILE</div>"
+        f"<div class='vprofile-band'>{d_label} Δ · {_esc(m_label)} MARKET</div>"
+        f"<div class='vline'><span class='vk'>Historical actual</span>"
+        f"<span>{100 * parts['actual']:.1f}%</span></div>"
+        f"<div class='vline'><span class='vk'>Market implied</span>"
+        f"<span>{100 * parts['implied']:.1f}%</span></div>"
+        f"<div class='vline'><span class='vk'>Performance vs market</span>"
+        f"<span><b>{100 * parts['excess']:+.1f} pp</b></span></div>"
+        f"<div class='vline'><span class='vk'>Sample</span>"
+        f"<span>n={n} · {sample}</span></div>"
+        "</div>"
+    )
 
 
 def _verdict_html(fav, odds, away_abbr, home_abbr, ctx=None, delta=None):
-    """Four-line V12 delta × market-direction discovery panel.
+    """Per-game V12 delta, market price, and matched 3x5 profile panel.
 
-    The historical row is the exact current-family 2×3 cell shown on the
-    calibration page. It is deliberately labelled discovery and includes its
-    sample size: the .012 delta boundary was selected on this V12 history and
-    has not been validated prospectively. ROI is one unit risked at each
-    closing moneyline. A live card uses the current pregame price to choose its
-    direction, while the historical rows were bucketed on closes; a price can
-    cross .45 or .50 before first pitch.
+    Historical actual, implied probability and excess come from the exact
+    current-family 3x5 profile. A live card uses the current pregame price to
+    choose its market band, while history is bucketed on closes; the profile
+    can therefore change before first pitch.
     """
     ctx = ctx or {}
     if fav is None:
@@ -4115,7 +4110,7 @@ def _verdict_html(fav, odds, away_abbr, home_abbr, ctx=None, delta=None):
 
     p_lean = _lean_implied_p(odds, fav, away_abbr, home_abbr)
     key = _conviction_cell(delta, p_lean)
-    strength = _conviction_delta_label(delta) or "UNAVAILABLE"
+    strength = _profile_delta_label(delta) or "UNAVAILABLE"
     direction = _conviction_direction_label(p_lean) or "UNAVAILABLE"
     d = _f(delta)
     delta_txt = f"{abs(d):.4f}".lstrip("0") if d is not None else "—"
@@ -4139,8 +4134,6 @@ def _verdict_html(fav, odds, away_abbr, home_abbr, ctx=None, delta=None):
         f"<span>{delta_txt} · {strength}</span></div>"
         f"<div class='vline'><span class='vk'>Market:</span> "
         f"<span>{_esc(fav)} {price_txt} · {p_txt}</span></div>"
-        f"<div class='vline'><span class='vk'>Direction:</span> "
-        f"<span>{direction}</span></div>"
         f"{history}</div></div>"
     )
 
@@ -5211,6 +5204,11 @@ td.bar{width:86px;padding:4px 8px 4px 2px}
 .verdict .hist{display:block;margin-top:7px;padding-top:6px;border-top:1px solid var(--line-2)}
 .verdict .hist .vk,.verdict .hist>span:last-child{display:block}
 .verdict .hist>span:last-child{margin-top:1px;color:var(--ink)}
+.verdict .vprofile{margin-top:7px;padding-top:7px;border-top:1px solid var(--line-2)}
+.verdict .vprofile-title{font:700 11px/1.3 var(--sans);letter-spacing:.13em;color:var(--muted)}
+.verdict .vprofile-band{margin:2px 0 6px;color:var(--ink);font-weight:750}
+.verdict .vprofile .vline{justify-content:space-between;gap:14px;font-weight:600}
+.verdict .vprofile .vline>span:last-child{text-align:right;color:var(--ink)}
 
 /* hitter row: percentile column + name cell. The column is the 88px bar plus
    the cell's own gutters -- it carried a printed percentile until that was
@@ -5969,6 +5967,11 @@ _CONVICTION_DELTA_ACTIVE = 0.012
 _CONVICTION_DEEP_OPPOSE = 0.45
 _CONVICTION_AGREE = 0.50
 
+# Reader-facing per-game profile cuts. The calibration page retains its 2x3
+# discovery grid; live cards match both delta and a five-band market range.
+_PROFILE_DELTA_MEDIUM = 0.012
+_PROFILE_DELTA_HIGH = 0.025
+
 # (cell key, row label). Each entry carried a third "reader-facing phrase"
 # that only ever reached _CONVICTION_PHRASE, which no surface read -- the same
 # unrendered-prose defect deleted from this module alongside the price bands.
@@ -6041,6 +6044,53 @@ def _conviction_cell(delta, market_p, _legacy_q2=None):
         "MARKET AGREE": "agree",
     }[direction]
     return f"{strength.lower()}-{direction_key}"
+
+
+def _profile_delta_label(delta):
+    """LOW/MEDIUM/HIGH display band for a usable absolute V12 delta."""
+    if delta is None:
+        return None
+    try:
+        delta = abs(float(delta))
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(delta):
+        return None
+    if delta < _PROFILE_DELTA_MEDIUM:
+        return "LOW"
+    if delta < _PROFILE_DELTA_HIGH:
+        return "MEDIUM"
+    return "HIGH"
+
+
+def _profile_market_label(market_p):
+    """Five-band leaned-side no-vig market label, or None when unusable."""
+    if market_p is None:
+        return None
+    try:
+        market_p = float(market_p)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(market_p) or not (0.0 < market_p < 1.0):
+        return None
+    if market_p < 0.45:
+        return "<45%"
+    if market_p <= 0.50:
+        return "45–50%"
+    if market_p <= 0.60:
+        return "50–60%"
+    if market_p <= 0.65:
+        return "60–65%"
+    return ">65%"
+
+
+def _profile_cell(delta, market_p):
+    """Stable key for the per-game 3x5 V12 profile grid."""
+    d_label = _profile_delta_label(delta)
+    m_label = _profile_market_label(market_p)
+    if d_label is None or m_label is None:
+        return None
+    return d_label.lower(), m_label
 
 
 def _lean_market_value_analysis(led):
@@ -6333,12 +6383,12 @@ CONVICTION_CELL_MIN = 1
 
 
 def conviction_cell_records():
-    """('cell', key) -> that conviction cell's record for the CURRENT model.
+    """Current-model records for calibration cells and per-game profiles.
 
-    The same 2x3 the calibration page publishes, keyed so a live pregame game
-    can look up the cell it falls into. Scored on `_record_grades`, because the
-    question is what THIS prediction family has done in this spot -- pooling
-    older math would answer a different one.
+    The calibration surface consumes the 2x3 ``('cell', key)`` entries; live
+    cards consume the 3x5 ``('profile', (delta_band, market_band))`` entries.
+    Both are scored on `_record_grades`, because pooling older model math would
+    answer a different question.
 
     Thin cells are part of the requested discovery surface, so the default
     floor is one completed game. The card prints `n` and calls the result a
@@ -6358,6 +6408,22 @@ def conviction_cell_records():
         parts = _lean_market_agg(obs, obs["cell"].eq(key))
         if parts and parts["n"] >= CONVICTION_CELL_MIN:
             out[("cell", key)] = parts
+    for d_key, d_lo, d_hi in (
+        ("low", 0.0, _PROFILE_DELTA_MEDIUM),
+        ("medium", _PROFILE_DELTA_MEDIUM, _PROFILE_DELTA_HIGH),
+        ("high", _PROFILE_DELTA_HIGH, np.inf),
+    ):
+        d_mask = (obs["delta"] >= d_lo) & (obs["delta"] < d_hi)
+        for m_label, m_mask in (
+            ("<45%", obs["market_p"] < 0.45),
+            ("45–50%", (obs["market_p"] >= 0.45) & (obs["market_p"] <= 0.50)),
+            ("50–60%", (obs["market_p"] > 0.50) & (obs["market_p"] <= 0.60)),
+            ("60–65%", (obs["market_p"] > 0.60) & (obs["market_p"] <= 0.65)),
+            (">65%", obs["market_p"] > 0.65),
+        ):
+            parts = _lean_market_agg(obs, d_mask & m_mask)
+            if parts and parts["n"] >= CONVICTION_CELL_MIN:
+                out[("profile", (d_key, m_label))] = parts
     return out
 
 
