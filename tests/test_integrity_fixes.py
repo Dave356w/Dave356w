@@ -2233,13 +2233,21 @@ class WorkflowStepTimeoutTests(unittest.TestCase):
 
     `timeout-minutes` kills the step's shell and moves on; a python child
     survives as an orphan the runner only reaps in post-job cleanup. Run
-    33073467257: walkforward.py timed out at 12:55:07, kept running, and
-    rewrote data/walkforward_ledger.csv between the commit step's
-    `git add data/` and its `git pull --rebase` -- which refused with "cannot
-    rebase: You have unstaged changes", so that slate's pregame rows were
-    committed locally and never pushed. Any step that expects to be timed out
-    must bound its own process, so nothing can write to data/ after the step
-    returns.
+    33073467257 is the instance: a step timed out at 12:55:07, kept running,
+    and rewrote a file under data/ between the commit step's `git add data/`
+    and its `git pull --rebase` -- which refused with "cannot rebase: You have
+    unstaged changes", so that slate's pregame rows were committed locally and
+    never pushed. Any step that expects to be timed out must bound its own
+    process, so nothing can write to data/ after the step returns.
+
+    THE STEP THIS WAS WRITTEN FOR NO LONGER EXISTS. The walk-forward replay
+    was removed, and with it the only step-level `timeout-minutes` in the
+    repository, so this currently guards nothing live. It is kept because the
+    hazard belongs to the PATTERN and not to that step: any future step that
+    expects to be timed out beside a step that writes data/ reintroduces it,
+    and the incident above is why. The count floor is deliberately gone -- an
+    assertion that some bounded step exists would now fail for the good reason
+    that none does.
     """
 
     WORKFLOW_DIR = os.path.join(
@@ -2294,20 +2302,9 @@ class WorkflowStepTimeoutTests(unittest.TestCase):
                     "dies but its process does not, and it can still write to "
                     "data/ after the commit step has staged it",
                 )
-        self.assertGreater(found, 0, "no step-level timeout-minutes found")
-
-    def test_walkforward_is_bounded_wherever_it_lives(self):
-        """Follows the replay across workflows rather than naming build.yml."""
-        runs = []
-        for path in self._workflows():
-            runs += [
-                (path, ln.strip()) for ln in
-                open(path, encoding="utf-8").read().splitlines()
-                if "walkforward.py" in ln and ln.strip().startswith("run:")
-            ]
-        self.assertEqual(len(runs), 1,
-                         f"expected exactly one walkforward run line, got {runs}")
-        self.assertRegex(runs[0][1], r"timeout\b.*\bpython walkforward\.py")
+        # No floor on `found`: see the class docstring. The repository
+        # currently has no step-level timeout at all, and requiring one would
+        # fail for the good reason that none exists rather than for a defect.
 
 
 class MarketCalibrationTests(unittest.TestCase):

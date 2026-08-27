@@ -61,7 +61,7 @@ jobs:
     needs: plan
     if: needs.plan.outputs.should_run == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 25        # includes the bounded pre-build replay append
+    timeout-minutes: 25
     # MODEL_TAG / RECORD_TAGS / SCALE_TAGS are deliberately NOT set here. They
     # used to be pinned job-level, which made this file a third copy of the
     # model version alongside build_site.py and grade_leans.py -- and it drifted:
@@ -118,12 +118,6 @@ jobs:
       # same run. The ~4:17am ET run is the one that grades yesterday.
       - name: Grade leans (pre-build)
         run: python grade_leans.py
-
-      # The walk-forward replay used to run here, between grading and the
-      # build. It now has its own workflow (walkforward.yml): it could not
-      # finish inside a 450-second bound, and that bound existed because
-      # this job must not spend pregame time on a diagnostic. Nothing in
-      # the build reads its output, so the split costs the build nothing.
 
       # Build into ./public. On a hard fetch failure the script exits non-zero
       # WITHOUT writing index.html, so the steps below don't run, the artifact
