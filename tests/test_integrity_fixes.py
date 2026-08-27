@@ -2883,3 +2883,84 @@ class ConvictionCellTests(unittest.TestCase):
             out = build_site.conviction_cell_records()
         self.assertEqual([k for k in out if isinstance(k, tuple)], [])
         self.assertIn("cell_delta_active", out)
+
+
+class DevigDerivationTests(unittest.TestCase):
+    """`_imp_ml` is the one American-odds conversion in this module.
+
+    `_lean_implied_p`'s moneyline fallback used to restate it inline, spelling
+    the negative branch `abs(hm)/(abs(hm)+100)` against `_imp_ml`'s
+    `-ml/(-ml+100)`. The two agreed, which is exactly why they were merged --
+    two copies of one statistic drift, and the reader cannot see which they
+    are reading. The same lesson as `_excess_se` serving both calibration
+    surfaces, and as `metric_label` being the single metric derivation.
+    """
+
+    def test_fallback_calls_imp_ml_rather_than_restating_it(self):
+        """Proves the call, not just agreement.
+
+        Agreement is what a second copy looks like right up until it drifts,
+        so this perturbs `_imp_ml` and requires the fallback to move with it.
+        A reintroduced inline copy passes an equality check and fails here.
+        """
+        odds = {"home_ml": -150, "away_ml": 130}
+        real = build_site._lean_implied_p(odds, "H", "A", "H")
+        self.assertIsNotNone(real)
+        with mock.patch.object(build_site, "_imp_ml",
+                               lambda ml: 0.25 if ml > 0 else 0.75):
+            patched = build_site._lean_implied_p(odds, "H", "A", "H")
+        self.assertAlmostEqual(patched, 0.75)
+        self.assertNotAlmostEqual(patched, real)
+
+    def test_fallback_matches_imp_ml_across_the_american_range(self):
+        """The fold must not have moved a single admissible price."""
+        for hm in list(range(-3000, -100, 17)) + list(range(100, 3000, 17)):
+            for am in (-3000, -450, -150, -110, 100, 110, 250, 2900):
+                ih, ia = build_site._imp_ml(hm), build_site._imp_ml(am)
+                expect = ih / (ih + ia)
+                got = build_site._lean_implied_p(
+                    {"home_ml": hm, "away_ml": am}, "H", "A", "H")
+                self.assertAlmostEqual(got, expect, places=12,
+                                       msg=f"home_ml={hm} away_ml={am}")
+
+    def test_prices_inside_the_american_gap_are_refused(self):
+        """No real moneyline lies strictly between -100 and +100.
+
+        The guard sits ahead of `_imp_ml`, which has no opinion on whether its
+        argument is a price. It is also what keeps 0 out -- the one input
+        where the old inline spelling and `_imp_ml` would have differed.
+        """
+        for hm, am in ((0, 0), (50, -150), (-150, 50), (-99, 120), (99, -120)):
+            self.assertIsNone(
+                build_site._lean_implied_p(
+                    {"home_ml": hm, "away_ml": am}, "H", "A", "H"),
+                msg=f"home_ml={hm} away_ml={am}")
+
+    def test_devigged_price_is_normalised_and_side_aware(self):
+        """The vig is removed, and the answer follows the leaned side."""
+        odds = {"home_ml": -150, "away_ml": 130}
+        home = build_site._lean_implied_p(odds, "H", "A", "H")
+        away = build_site._lean_implied_p(odds, "A", "A", "H")
+        self.assertAlmostEqual(home + away, 1.0, places=12)
+        self.assertGreater(home, away)
+        # the raw book prices overround; the devigged pair must not
+        raw = build_site._imp_ml(-150) + build_site._imp_ml(130)
+        self.assertGreater(raw, 1.0)
+
+    def test_supplied_p_home_wins_over_the_moneylines(self):
+        """A feed-supplied devigged probability is preferred, not recomputed."""
+        odds = {"p_home": 0.42, "home_ml": -150, "away_ml": 130}
+        self.assertAlmostEqual(
+            build_site._lean_implied_p(odds, "H", "A", "H"), 0.42, places=12)
+        self.assertAlmostEqual(
+            build_site._lean_implied_p(odds, "A", "A", "H"), 0.58, places=12)
+
+    def test_unusable_inputs_return_none_rather_than_a_default(self):
+        for odds in (None, {}, {"home_ml": None, "away_ml": 130},
+                     {"home_ml": -150}, {"home_ml": "x", "away_ml": 130},
+                     {"p_home": 0.0, "home_ml": -150, "away_ml": 130},
+                     {"p_home": 1.0, "home_ml": -150, "away_ml": 130}):
+            self.assertIsNone(
+                build_site._lean_implied_p(odds, "H", "A", "H"), msg=str(odds))
+        self.assertIsNone(
+            build_site._lean_implied_p({"p_home": 0.5}, None, "A", "H"))

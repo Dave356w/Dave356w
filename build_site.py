@@ -4022,6 +4022,16 @@ def _lean_implied_p(odds, fav, away_abbr, home_abbr):
     to devigging the two moneylines itself so a game with prices but no
     `p_home` still places into a conviction cell rather than silently losing
     its signal.
+
+    That fallback calls `_imp_ml` rather than restating it. It used to carry
+    its own copy of the American-odds conversion -- written as
+    `abs(hm)/(abs(hm)+100)` where `_imp_ml` writes `-ml/(-ml+100)`, identical
+    for every price the guard below admits. Two copies of one statistic in a
+    single module will drift, and the reader cannot see which they are
+    reading; the moment to merge them is while they still agree, which was
+    verified exhaustively over the full American range before this fold.
+    `_imp_ml` is the one derivation, shared with `fetch_pregame_odds` and
+    mirrored by `market_backfill._imp` for the closing line.
     """
     if not odds or fav is None:
         return None
@@ -4034,10 +4044,13 @@ def _lean_implied_p(odds, fav, away_abbr, home_abbr):
             hm, am = float(hm), float(am)
         except (TypeError, ValueError):
             return None
+        # American odds never fall strictly between -100 and +100. The guard
+        # stays ahead of `_imp_ml`, which has no opinion on whether its
+        # argument is a real price -- and it is what keeps 0 out, where the
+        # two spellings of the negative branch would have differed.
         if (-100 < hm < 100) or (-100 < am < 100):
             return None
-        ih = 100.0 / (hm + 100.0) if hm > 0 else abs(hm) / (abs(hm) + 100.0)
-        ia = 100.0 / (am + 100.0) if am > 0 else abs(am) / (abs(am) + 100.0)
+        ih, ia = _imp_ml(hm), _imp_ml(am)
         if ih + ia <= 0:
             return None
         ph = ih / (ih + ia)
