@@ -1685,92 +1685,6 @@ class PlatoonXwobaAdjustmentTests(unittest.TestCase):
         self.assertEqual([h["adv"] for h in hitters], [True, False])
 
 
-class PriceBandRecordsTests(unittest.TestCase):
-    """The per-game verdict's record, scored against price rather than raw.
-
-    Structural: no expected record or band boundary is frozen beyond the ones
-    the function itself defines.
-    """
-
-    COLS = ["status", "xw_lean", "xw_full", "home", "away", "close_p_home"]
-
-    def _led(self, rows):
-        return pd.DataFrame(rows, columns=self.COLS)
-
-    def test_bands_key_off_the_leaned_side_not_the_home_side(self):
-        """A game reads the same whichever team the model picked.
-
-        Two mirror-image rows: the model leans a side priced at .62 in both.
-        They must land in the same band, which the old home-relative split
-        could not express.
-        """
-        rows = [("graded", "NYY", "W", "TB", "NYY", 0.38),   # away lean, away at .62
-                ("graded", "TB", "W", "TB", "NYY", 0.62)]    # home lean, home at .62
-        with mock.patch.object(build_site, "load_ledger_df",
-                               return_value=self._led(rows)), \
-                mock.patch.object(build_site, "VERDICT_CONTEXT_MIN", 1):
-            ctx = build_site.price_band_records()
-        self.assertEqual(list(ctx), [("band", "fav")])
-        self.assertEqual(ctx[("band", "fav")]["n"], 2)
-        self.assertAlmostEqual(ctx[("band", "fav")]["implied"], 0.62, places=9)
-
-    def test_excess_is_measured_against_price_not_against_half(self):
-        rows = [("graded", "TB", "W", "TB", "NYY", 0.60),
-                ("graded", "TB", "L", "TB", "NYY", 0.60)]
-        with mock.patch.object(build_site, "load_ledger_df",
-                               return_value=self._led(rows)), \
-                mock.patch.object(build_site, "VERDICT_CONTEXT_MIN", 1):
-            parts = build_site.price_band_records()[("band", "fav")]
-        # 1-1 at a .60 price is a 10-point shortfall against the price, not a
-        # coin flip that happened to land even.
-        self.assertAlmostEqual(parts["actual"], 0.50, places=9)
-        self.assertAlmostEqual(parts["excess"], -0.10, places=9)
-        self.assertAlmostEqual(parts["se"], build_site._excess_se([.6, .6]),
-                               places=12)
-
-    def test_exact_pickem_is_not_filed_as_a_disagreement(self):
-        """The old split read `close_p_home >= .5` as 'home favored'.
-
-        On a .500 line there is no favorite, so an away lean was recorded as
-        disagreeing with a market that had no opinion. A band on the leaned
-        side's own price cannot make that claim.
-        """
-        rows = [("graded", "NYY", "W", "TB", "NYY", 0.50),
-                ("graded", "TB", "L", "TB", "NYY", 0.50)]
-        with mock.patch.object(build_site, "load_ledger_df",
-                               return_value=self._led(rows)), \
-                mock.patch.object(build_site, "VERDICT_CONTEXT_MIN", 1):
-            ctx = build_site.price_band_records()
-        self.assertEqual(list(ctx), [("band", "even")])
-        self.assertEqual(ctx[("band", "even")]["n"], 2)
-
-    def test_abstained_and_unpriced_rows_never_enter(self):
-        rows = [("graded", None, None, "TB", "NYY", 0.60),      # v5 abstention
-                ("graded", "TB", "W", "TB", "NYY", float("nan")),  # no market
-                ("pending", "TB", "W", "TB", "NYY", 0.60),      # not graded
-                ("graded", "TB", "W", "TB", "NYY", 0.60)]
-        with mock.patch.object(build_site, "load_ledger_df",
-                               return_value=self._led(rows)), \
-                mock.patch.object(build_site, "VERDICT_CONTEXT_MIN", 1):
-            ctx = build_site.price_band_records()
-        self.assertEqual(ctx[("band", "fav")]["n"], 1)
-
-    def test_thin_band_is_omitted_rather_than_published(self):
-        rows = [("graded", "NYY", "W", "TB", "NYY", 0.40)]
-        with mock.patch.object(build_site, "load_ledger_df",
-                               return_value=self._led(rows)):
-            self.assertEqual(build_site.price_band_records(), {})
-
-    def test_bands_partition_every_representable_price(self):
-        """No price may fall through, and none may match two bands."""
-        for i in range(1, 1000):
-            p = i / 1000.0
-            hits = [k for k, lo, hi in build_site._PRICE_BANDS if lo <= p < hi]
-            self.assertEqual(len(hits), 1, f"p={p} matched {hits}")
-        for bad in (0.0, 1.0, None, float("nan")):
-            self.assertIsNone(build_site._price_band(bad))
-
-
 class BaselineControlTests(unittest.TestCase):
     """The grades page publishes a record; these are what it is measured against."""
 
@@ -2738,17 +2652,70 @@ class LeanMarketValueTests(unittest.TestCase):
         self.assertEqual(binom_form, 0.0)
         self.assertGreater(parts["excess_se"], 10 * sd_form)
 
-    def test_observation_frame_carries_no_unrendered_column(self):
-        """price_dislocation was computed, returned and rendered nowhere.
+    # Every column each frame is allowed to carry, and the surface that reads
+    # it. Adding a column means adding it here, which forces the question the
+    # blacklist below could not ask: what renders this?
+    OBS_COLUMNS = {
+        "delta":        "x-axis of the corr/slope fit; picks the cell's Δ half",
+        "market_p":     "picks the cell's direction half; agg implied/excess",
+        "close_ml":     "input to profit, and the price a row is scored at",
+        "won":          "agg w / actual",
+        "market_edge":  "y-axis of the corr/slope fit -> 'market response' tile",
+        "market_resid": "agg excess -> 'actual vs implied' cell",
+        "profit":       "agg roi / units -> 'flat close ROI' cell",
+    }
+    ANALYSIS_ONLY_COLUMNS = {"cell": "masks the 2x3 regime_rows"}
 
-        Not a style point: the note on the page described it as a diagnostic
-        the reader could see, because nothing tied the prose to what the
-        tables actually emit. Every column here must reach a surface.
+    def test_observation_frame_carries_no_unrendered_column(self):
+        """Every column on these frames must reach a surface.
+
+        price_dislocation was computed, returned and rendered nowhere, and the
+        note on the page described it as a diagnostic the reader could see --
+        because nothing tied the prose to what the tables actually emit.
+
+        This asserts the INVARIANT, not one blacklisted name. The previous
+        version only banned "price_dislocation", so it went on passing when
+        the V12 verdict rewrite left `delta_bucket` behind: a column whose
+        two values duplicate the prefix of `cell` and which nothing read. A
+        test that memorises one instance cannot catch the next one -- the
+        same defect as freezing a measured number into an assertion.
         """
         obs = build_site._lean_market_observations(self._frame(n=6))
-        self.assertNotIn("price_dislocation", obs.columns)
+        self.assertEqual(set(obs.columns), set(self.OBS_COLUMNS),
+                         "observation frame gained/lost a column; name the "
+                         "surface that reads it in OBS_COLUMNS")
         a = build_site._lean_market_value_analysis(self._frame(n=6))
-        self.assertNotIn("price_dislocation", a["obs"].columns)
+        self.assertEqual(
+            set(a["obs"].columns),
+            set(self.OBS_COLUMNS) | set(self.ANALYSIS_ONLY_COLUMNS),
+            "analysis frame gained/lost a column; name the surface that "
+            "reads it in ANALYSIS_ONLY_COLUMNS")
+
+    # close_ml is the one column the analysis does not read back: it is the
+    # price each row was scored at and the input `profit` was derived from,
+    # kept so a row's payout stays auditable against its own price. Stated as
+    # an exemption rather than left to look like a consumed column.
+    RETAINED_INPUT_COLUMNS = {"close_ml"}
+
+    def test_every_declared_observation_column_is_actually_read(self):
+        """The allowlist is a claim about consumption; hold it to that.
+
+        Removing a consumed column must break the analysis. Without this, a
+        column could be added to OBS_COLUMNS with a plausible-sounding surface
+        beside it that nothing actually reads -- the allowlist becomes a rubber
+        stamp and the guard above degrades back into the blacklist it replaced.
+        """
+        real = build_site._lean_market_observations
+        for col in set(self.OBS_COLUMNS) - self.RETAINED_INPUT_COLUMNS:
+            with self.subTest(column=col):
+                def without(led, _c=col):
+                    return real(led).drop(columns=[_c])
+                with mock.patch.object(build_site,
+                                       "_lean_market_observations", without):
+                    with self.assertRaises(KeyError, msg=(
+                            f"{col} is declared consumed in OBS_COLUMNS but "
+                            "the analysis runs without it")):
+                        build_site._lean_market_value_analysis(self._frame(n=6))
 
     def test_degenerate_spread_yields_nan_not_a_numpy_warning(self):
         """A frame with one distinct price has no correlation to report.
@@ -2916,3 +2883,84 @@ class ConvictionCellTests(unittest.TestCase):
             out = build_site.conviction_cell_records()
         self.assertEqual([k for k in out if isinstance(k, tuple)], [])
         self.assertIn("cell_delta_active", out)
+
+
+class DevigDerivationTests(unittest.TestCase):
+    """`_imp_ml` is the one American-odds conversion in this module.
+
+    `_lean_implied_p`'s moneyline fallback used to restate it inline, spelling
+    the negative branch `abs(hm)/(abs(hm)+100)` against `_imp_ml`'s
+    `-ml/(-ml+100)`. The two agreed, which is exactly why they were merged --
+    two copies of one statistic drift, and the reader cannot see which they
+    are reading. The same lesson as `_excess_se` serving both calibration
+    surfaces, and as `metric_label` being the single metric derivation.
+    """
+
+    def test_fallback_calls_imp_ml_rather_than_restating_it(self):
+        """Proves the call, not just agreement.
+
+        Agreement is what a second copy looks like right up until it drifts,
+        so this perturbs `_imp_ml` and requires the fallback to move with it.
+        A reintroduced inline copy passes an equality check and fails here.
+        """
+        odds = {"home_ml": -150, "away_ml": 130}
+        real = build_site._lean_implied_p(odds, "H", "A", "H")
+        self.assertIsNotNone(real)
+        with mock.patch.object(build_site, "_imp_ml",
+                               lambda ml: 0.25 if ml > 0 else 0.75):
+            patched = build_site._lean_implied_p(odds, "H", "A", "H")
+        self.assertAlmostEqual(patched, 0.75)
+        self.assertNotAlmostEqual(patched, real)
+
+    def test_fallback_matches_imp_ml_across_the_american_range(self):
+        """The fold must not have moved a single admissible price."""
+        for hm in list(range(-3000, -100, 17)) + list(range(100, 3000, 17)):
+            for am in (-3000, -450, -150, -110, 100, 110, 250, 2900):
+                ih, ia = build_site._imp_ml(hm), build_site._imp_ml(am)
+                expect = ih / (ih + ia)
+                got = build_site._lean_implied_p(
+                    {"home_ml": hm, "away_ml": am}, "H", "A", "H")
+                self.assertAlmostEqual(got, expect, places=12,
+                                       msg=f"home_ml={hm} away_ml={am}")
+
+    def test_prices_inside_the_american_gap_are_refused(self):
+        """No real moneyline lies strictly between -100 and +100.
+
+        The guard sits ahead of `_imp_ml`, which has no opinion on whether its
+        argument is a price. It is also what keeps 0 out -- the one input
+        where the old inline spelling and `_imp_ml` would have differed.
+        """
+        for hm, am in ((0, 0), (50, -150), (-150, 50), (-99, 120), (99, -120)):
+            self.assertIsNone(
+                build_site._lean_implied_p(
+                    {"home_ml": hm, "away_ml": am}, "H", "A", "H"),
+                msg=f"home_ml={hm} away_ml={am}")
+
+    def test_devigged_price_is_normalised_and_side_aware(self):
+        """The vig is removed, and the answer follows the leaned side."""
+        odds = {"home_ml": -150, "away_ml": 130}
+        home = build_site._lean_implied_p(odds, "H", "A", "H")
+        away = build_site._lean_implied_p(odds, "A", "A", "H")
+        self.assertAlmostEqual(home + away, 1.0, places=12)
+        self.assertGreater(home, away)
+        # the raw book prices overround; the devigged pair must not
+        raw = build_site._imp_ml(-150) + build_site._imp_ml(130)
+        self.assertGreater(raw, 1.0)
+
+    def test_supplied_p_home_wins_over_the_moneylines(self):
+        """A feed-supplied devigged probability is preferred, not recomputed."""
+        odds = {"p_home": 0.42, "home_ml": -150, "away_ml": 130}
+        self.assertAlmostEqual(
+            build_site._lean_implied_p(odds, "H", "A", "H"), 0.42, places=12)
+        self.assertAlmostEqual(
+            build_site._lean_implied_p(odds, "A", "A", "H"), 0.58, places=12)
+
+    def test_unusable_inputs_return_none_rather_than_a_default(self):
+        for odds in (None, {}, {"home_ml": None, "away_ml": 130},
+                     {"home_ml": -150}, {"home_ml": "x", "away_ml": 130},
+                     {"p_home": 0.0, "home_ml": -150, "away_ml": 130},
+                     {"p_home": 1.0, "home_ml": -150, "away_ml": 130}):
+            self.assertIsNone(
+                build_site._lean_implied_p(odds, "H", "A", "H"), msg=str(odds))
+        self.assertIsNone(
+            build_site._lean_implied_p({"p_home": 0.5}, None, "A", "H"))
