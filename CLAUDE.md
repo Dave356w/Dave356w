@@ -423,6 +423,39 @@ precedent — they are how the fix is known to look.
 
 **Resolved — keep as precedent**
 
+- **A timeout that kills the step but not the process.** The walk-forward
+  append is `continue-on-error` with `timeout-minutes: 8` precisely so a slow
+  replay can never cost a slate. It cost one anyway. A step timeout kills the
+  step's shell and moves on; the `python walkforward.py` child survives as an
+  orphan the runner only reaps in post-job cleanup, and it rewrites
+  `data/walkforward_ledger.csv` after every date it finishes. Run
+  33073467257: the step timed out at 12:55:07, the commit step ran
+  `git add data/` and committed at 12:55:50, the orphan rewrote the ledger a
+  fraction of a second later, and `git pull --rebase origin main` refused with
+  `cannot rebase: You have unstaged changes`. The build was otherwise clean —
+  7 games, 13 sides, both dumps written, 6 new ledger rows ingested — and none
+  of it was pushed. Pregame rows, so no-lookahead means the next run cannot
+  re-derive them.
+
+  Fixed by bounding the **process**, not the step:
+  `timeout --signal=INT --kill-after=60 450 python walkforward.py`. `timeout`
+  blocks until the child is dead, so no step after this one can find `data/`
+  moving underneath it; `timeout-minutes: 8` becomes a backstop that should
+  never fire. SIGINT rather than SIGTERM because `_atomic_csv`'s `finally`
+  removes its temp file on a `KeyboardInterrupt` and not on a default-handled
+  SIGTERM — verified, `finally ran` — with SIGKILL 60s behind it. `*.tmp` is
+  now gitignored for the case where it does not: `git add data/` runs *after*
+  `validate_data_files.py`, so a temp file appearing in that gap would stage a
+  partial CSV past the one check written to catch exactly that.
+
+  **The general lesson: `continue-on-error` and `timeout-minutes` bound the
+  step's effect on the job, not the process's effect on the working tree.** Any
+  step that writes to `data/` and expects to be cut off has to bound its own
+  process. Pinned by `WorkflowStepTimeoutTests`, which asserts it of *every*
+  step-level `timeout-minutes` in `build.yml` rather than of this one step, so
+  the next such step inherits the rule. No lean, delta, grade or ledger row
+  moves; no `MODEL_TAG` implication.
+
 - **A raw win-loss quoted where only a price-relative one means anything.** The
   per-game "Model vs market" row printed the lean's raw record in its bucket —
   side × agree/disagree with the closing favourite. Those four buckets spanned

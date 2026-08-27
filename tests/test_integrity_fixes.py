@@ -2189,6 +2189,70 @@ class ModelTagProvenanceTests(unittest.TestCase):
                 "and silently drifts from them on the next version bump",
             )
 
+class WorkflowStepTimeoutTests(unittest.TestCase):
+    """A step timeout must kill the process, not just the step.
+
+    `timeout-minutes` kills the step's shell and moves on; a python child
+    survives as an orphan the runner only reaps in post-job cleanup. Run
+    33073467257: walkforward.py timed out at 12:55:07, kept running, and
+    rewrote data/walkforward_ledger.csv between the commit step's
+    `git add data/` and its `git pull --rebase` -- which refused with "cannot
+    rebase: You have unstaged changes", so that slate's pregame rows were
+    committed locally and never pushed. Any step that expects to be timed out
+    must bound its own process, so nothing can write to data/ after the step
+    returns.
+    """
+
+    WORKFLOW = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        ".github", "workflows", "build.yml",
+    )
+
+    def _steps(self):
+        """Yield (name, body-lines) for each step of every job in build.yml."""
+        steps, current = [], None
+        for line in open(self.WORKFLOW, encoding="utf-8"):
+            stripped = line.strip()
+            if stripped.startswith("- ") and line.startswith(" " * 6):
+                if current is not None:
+                    steps.append(current)
+                current = (stripped, [stripped[2:]])
+            elif current is not None:
+                if stripped and not line.startswith(" " * 8):
+                    steps.append(current)
+                    current = None
+                elif stripped and not stripped.startswith("#"):
+                    current[1].append(stripped)
+        if current is not None:
+            steps.append(current)
+        return steps
+
+    def test_every_step_level_timeout_bounds_its_own_process(self):
+        found = 0
+        for name, body in self._steps():
+            if not any(ln.startswith("timeout-minutes:") for ln in body):
+                continue
+            found += 1
+            run = [ln for ln in body if ln.startswith("run:")]
+            self.assertTrue(run, f"{name} has timeout-minutes but no run:")
+            self.assertIn(
+                "timeout ", run[0],
+                f"{name} relies on timeout-minutes alone; the step dies but its "
+                "process does not, and it can still write to data/ after the "
+                "commit step has staged it",
+            )
+        self.assertGreater(found, 0, "no step-level timeout-minutes found")
+
+    def test_walkforward_is_bounded_whatever_the_step_is_called(self):
+        text = open(self.WORKFLOW, encoding="utf-8").read()
+        runs = [
+            ln.strip() for ln in text.splitlines()
+            if "walkforward.py" in ln and ln.strip().startswith("run:")
+        ]
+        self.assertEqual(len(runs), 1, "expected exactly one walkforward run line")
+        self.assertRegex(runs[0], r"timeout\b.*\bpython walkforward\.py")
+
+
 class MarketCalibrationTests(unittest.TestCase):
     """Invariants of the market-calibration page.
 

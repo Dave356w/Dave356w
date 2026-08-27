@@ -1,4 +1,5 @@
 import math
+import re
 import os
 import sys
 from pathlib import Path
@@ -254,6 +255,9 @@ def test_site_workflow_appends_walkforward_after_grading_before_build():
     replay_block = workflow[replay:build]
     assert "continue-on-error: true" in replay_block
     assert "timeout-minutes: 8" in replay_block
-    assert "run: python walkforward.py" in replay_block
+    # Bounded on the process, not only on the step: a step timeout kills the
+    # shell and leaves the python child writing to data/ (see
+    # WorkflowStepTimeoutTests in tests/test_integrity_fixes.py).
+    assert re.search(r"run: timeout\b.*\bpython walkforward\.py", replay_block)
     assert "path: .walkforward_cache" in workflow
     assert "git add data/" in workflow
