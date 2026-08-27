@@ -1,6 +1,7 @@
 import math
 import inspect
 import os
+import pathlib
 import re
 import tempfile
 import unittest
@@ -572,6 +573,12 @@ class RecentStarterEraTests(unittest.TestCase):
         )
 
 
+# Any schedule that is not the grading cron takes the pregame path. Named
+# rather than pasted so changing the real cron is not mistaken for a test
+# change -- test_window_outlasts_the_poll_interval reads build.yml for that.
+PREGAME_POLL = "* * * * *"
+
+
 class ScheduleGateTests(unittest.TestCase):
     NOW = pd.Timestamp("2026-07-17T16:00:00Z").to_pydatetime()
 
@@ -586,7 +593,7 @@ class ScheduleGateTests(unittest.TestCase):
 
     def test_scheduled_poll_runs_near_first_pitch(self):
         run, day, reason = schedule_gate.decision(
-            "schedule", "7,22,37,52 10-23 * * *", self.NOW,
+            "schedule", PREGAME_POLL, self.NOW,
             games=[self.game(101, 30)],
         )
         self.assertTrue(run)
@@ -596,23 +603,55 @@ class ScheduleGateTests(unittest.TestCase):
     def test_scheduled_poll_skips_outside_window_and_final_games(self):
         games = [self.game(101, 10), self.game(102, 30, state="Final")]
         run, _, reason = schedule_gate.decision(
-            "schedule", "7,22,37,52 10-23 * * *", self.NOW, games=games,
+            "schedule", PREGAME_POLL, self.NOW, games=games,
         )
         self.assertFalse(run)
         self.assertIn("no game", reason)
 
-    def test_pregame_window_spans_15_to_90_minutes(self):
-        # The window is wide enough that Actions cron jitter (runs delayed
-        # 5-20+ min) can't skip a slate entirely: T-60 triggers, while games
-        # inside the late cutoff (T-10) or beyond the window (T-95) do not.
-        for minutes, expected in ((60, True), (10, False), (95, False)):
+    def test_pregame_window_covers_the_slate_and_excludes_the_edges(self):
+        """T-60 and T-300 build; T-10 (too late) and T-400 (too early) do not."""
+        for minutes, expected in ((60, True), (300, True),
+                                  (10, False), (400, False)):
             run, _, _ = schedule_gate.decision(
-                "schedule", "7,22,37,52 10-23 * * *", self.NOW,
+                "schedule", PREGAME_POLL, self.NOW,
                 games=[self.game(101, minutes)],
             )
             self.assertEqual(run, expected, f"T-{minutes}")
-        self.assertEqual(schedule_gate.MIN_MINUTES_BEFORE, 15)
-        self.assertEqual(schedule_gate.MAX_MINUTES_BEFORE, 90)
+
+    def test_window_outlasts_the_poll_interval(self):
+        """The window must outlast the gap between polls, read from build.yml.
+
+        These two numbers are one decision in two files. If the cron fires
+        every N minutes, a game whose whole pregame window falls between two
+        consecutive polls is never sampled and its rows are lost -- and
+        no-lookahead means they cannot be rebuilt. So the window is pinned
+        against the real cron rather than against a literal here.
+
+        The margin is deliberately large. GitHub does not merely delay
+        scheduled runs, it drops them: 56 requested polls on 2026-08-27
+        returned 2, with a 3h53m gap between deliveries. Covering the nominal
+        interval is the floor; the window is sized for the observed gaps.
+        """
+        workflow = pathlib.Path(".github/workflows/build.yml").read_text()
+        crons = re.findall(r"cron:\s*'([^']+)'", workflow)
+        pregame = [c for c in crons if c != schedule_gate.DAILY_GRADE_CRON]
+        self.assertEqual(len(pregame), 1, f"expected one pregame cron, got {pregame}")
+        minute_field = pregame[0].split()[0]
+        if minute_field.startswith("*/"):
+            fires_per_hour = 60 // int(minute_field[2:])
+        else:
+            fires_per_hour = len(minute_field.split(","))
+        interval = 60 / fires_per_hour
+        width = schedule_gate.MAX_MINUTES_BEFORE - schedule_gate.MIN_MINUTES_BEFORE
+        self.assertGreaterEqual(
+            width, interval,
+            f"cron fires every {interval:.0f}min but the window is only "
+            f"{width:.0f}min wide; a game can pass through unsampled")
+        # and the margin for dropped polls, not just the nominal interval
+        self.assertGreaterEqual(
+            width, 4 * interval,
+            "window should carry several polls' worth of margin, because "
+            "GitHub drops scheduled runs rather than merely delaying them")
 
     def test_grade_push_and_manual_events_always_run(self):
         grade = schedule_gate.decision("schedule", schedule_gate.DAILY_GRADE_CRON,
@@ -2880,16 +2919,58 @@ class ConvictionCellTests(unittest.TestCase):
 
     def test_cell_boundaries_match_the_declared_direction_grid(self):
         # .012 itself is ACTIVE; only values below it are LOW.
-        self.assertEqual(build_site._conviction_cell(.011999, .50), "low-agree")
-        self.assertEqual(build_site._conviction_cell(.012, .50), "active-agree")
-        # .45 enters slight opposition; .50 enters agreement.
+        self.assertEqual(build_site._conviction_cell(.011999, .60), "low-agree")
+        self.assertEqual(build_site._conviction_cell(.012, .60), "active-agree")
+        # .45 enters the no-backing band; agreement starts strictly above .50.
         self.assertEqual(build_site._conviction_cell(.012, .449999),
                          "active-deep-oppose")
         self.assertEqual(build_site._conviction_cell(.012, .45),
-                         "active-slight-oppose")
+                         "active-no-backing")
         self.assertEqual(build_site._conviction_cell(.012, .499999),
-                         "active-slight-oppose")
-        self.assertEqual(build_site._conviction_cell(.012, .50), "active-agree")
+                         "active-no-backing")
+        self.assertEqual(build_site._conviction_cell(.012, .50),
+                         "active-no-backing")
+        self.assertEqual(build_site._conviction_cell(.012, .500001),
+                         "active-agree")
+
+    def test_an_exact_pickem_is_never_called_agreement(self):
+        """A devigged .500 market has no favourite, so it backs no lean.
+
+        This is the boundary claim the price-band rewrite already retired
+        once -- the old home-relative split filed the same mirrored-price
+        rows as "home favoured" -- and the direction axis reintroduced it by
+        closing MARKET AGREE over [.50, 1]. A three-way split has to file a
+        no-favourite market somewhere; it must be the band whose label is
+        still true there, which is the one that denies backing rather than
+        asserts it.
+        """
+        # -110/-110 is the canonical pick'em and devigs to exactly .5
+        pk = build_site._lean_implied_p(
+            {"home_ml": -110, "away_ml": -110}, "H", "A", "H")
+        self.assertEqual(pk, 0.5)
+        self.assertEqual(build_site._conviction_direction_label(pk),
+                         "NO MARKET BACKING")
+        self.assertNotIn("AGREE", build_site._conviction_direction_label(pk))
+        self.assertEqual(build_site._conviction_cell(.02, pk),
+                         "active-no-backing")
+        # and the card must not print agreement anywhere on such a game
+        html = build_site._verdict_html(
+            "H", {"home_ml": -110, "away_ml": -110}, "A", "H", {}, .02)
+        self.assertIn("NO MARKET BACKING", html)
+        self.assertNotIn("MARKET AGREE", html)
+        self.assertIn("50.0% no-vig", html)
+
+    def test_the_warm_accent_never_claims_opposition_on_a_pickem(self):
+        """The accent means 'not backed', which a pick'em satisfies.
+
+        It shares the band with a slight underdog, so the rule fires -- but
+        the rendered text must not upgrade that into an opposition claim.
+        """
+        html = build_site._verdict_html(
+            "H", {"home_ml": -110, "away_ml": -110}, "A", "H", {}, .02)
+        self.assertIn("verdict edge", html)
+        for banned in ("OPPOSE", "opposes", "against"):
+            self.assertNotIn(banned, html)
 
     def test_unplaceable_games_return_none_rather_than_a_default_cell(self):
         for delta, mp in ((None, .5), (.01, None), (float("nan"), .5),
@@ -2897,21 +2978,31 @@ class ConvictionCellTests(unittest.TestCase):
                           ("x", .5)):
             self.assertIsNone(build_site._conviction_cell(delta, mp))
 
-    def test_every_cell_key_has_a_reader_facing_phrase(self):
-        for key, _label, phrase in build_site._CONVICTION_CELLS:
-            self.assertIn(key, build_site._CONVICTION_PHRASE)
-            self.assertTrue(phrase and not phrase[0].isupper(),
-                            "phrase is spliced mid-sentence, so it stays lowercase")
+    def test_every_cell_key_is_reachable_from_the_declared_cuts(self):
+        """Every declared cell must be produced by some (Δ, price) pair.
+
+        Replaces a check on a third "reader-facing phrase" column that only
+        ever reached _CONVICTION_PHRASE, which no surface rendered. A cell
+        nothing can land in is the same defect one level out, so the grid is
+        now pinned against the cuts rather than against unrendered copy.
+        """
+        reachable = {
+            build_site._conviction_cell(d, p)
+            for d in (0.001, 0.05)
+            for p in (0.10, 0.30, 0.449999, 0.45, 0.4999, 0.50, 0.5001, 0.90)
+        }
+        declared = {key for key, _label in build_site._CONVICTION_CELLS}
+        self.assertEqual(declared, reachable - {None})
+        for _key, label in build_site._CONVICTION_CELLS:
+            self.assertRegex(label, r"^(LOW|ACTIVE) Δ · ")
 
     def test_thin_directional_cell_is_shown_and_never_pooled(self):
         """Discovery cells keep their direction even when n is small."""
         ctx = {
-            ("cell", "active-slight-oppose"): dict(
+            ("cell", "active-no-backing"): dict(
                 n=6, w=4, l=2, implied=.482, actual=.667, excess=.184,
                 excess_se=.204, roi=.352, units=2.11,
             ),
-            ("band", "even"): dict(n=300, w=160, l=140, implied=.50,
-                                    actual=.533, excess=.033, se=.029),
         }
         html = build_site._verdict_html(
             "PIT", dict(p_home=.529, away_ml=103), "PIT", "SD", ctx, .0187,
@@ -2923,7 +3014,7 @@ class ConvictionCellTests(unittest.TestCase):
         self.assertNotIn("Across every model version", html)
 
     def test_pit_acceptance_panel_has_the_requested_four_reads(self):
-        ctx = {("cell", "active-slight-oppose"): dict(
+        ctx = {("cell", "active-no-backing"): dict(
             n=6, w=4, l=2, implied=.482, actual=.667, excess=.184,
             excess_se=.204, roi=.352, units=2.11,
         )}
@@ -2933,7 +3024,7 @@ class ConvictionCellTests(unittest.TestCase):
         for expected in (
             "V12 Δ:</span> <span>.0187 · ACTIVE",
             "Market:</span> <span>PIT +103 · 47.1% no-vig",
-            "Direction:</span> <span>SLIGHT MARKET OPPOSE",
+            "Direction:</span> <span>NO MARKET BACKING",
             "Historical discovery cell:",
             "4–2</b> · n=6 · ROI <b>+35.2%",
         ):
