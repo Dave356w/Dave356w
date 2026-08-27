@@ -1685,92 +1685,6 @@ class PlatoonXwobaAdjustmentTests(unittest.TestCase):
         self.assertEqual([h["adv"] for h in hitters], [True, False])
 
 
-class PriceBandRecordsTests(unittest.TestCase):
-    """The per-game verdict's record, scored against price rather than raw.
-
-    Structural: no expected record or band boundary is frozen beyond the ones
-    the function itself defines.
-    """
-
-    COLS = ["status", "xw_lean", "xw_full", "home", "away", "close_p_home"]
-
-    def _led(self, rows):
-        return pd.DataFrame(rows, columns=self.COLS)
-
-    def test_bands_key_off_the_leaned_side_not_the_home_side(self):
-        """A game reads the same whichever team the model picked.
-
-        Two mirror-image rows: the model leans a side priced at .62 in both.
-        They must land in the same band, which the old home-relative split
-        could not express.
-        """
-        rows = [("graded", "NYY", "W", "TB", "NYY", 0.38),   # away lean, away at .62
-                ("graded", "TB", "W", "TB", "NYY", 0.62)]    # home lean, home at .62
-        with mock.patch.object(build_site, "load_ledger_df",
-                               return_value=self._led(rows)), \
-                mock.patch.object(build_site, "VERDICT_CONTEXT_MIN", 1):
-            ctx = build_site.price_band_records()
-        self.assertEqual(list(ctx), [("band", "fav")])
-        self.assertEqual(ctx[("band", "fav")]["n"], 2)
-        self.assertAlmostEqual(ctx[("band", "fav")]["implied"], 0.62, places=9)
-
-    def test_excess_is_measured_against_price_not_against_half(self):
-        rows = [("graded", "TB", "W", "TB", "NYY", 0.60),
-                ("graded", "TB", "L", "TB", "NYY", 0.60)]
-        with mock.patch.object(build_site, "load_ledger_df",
-                               return_value=self._led(rows)), \
-                mock.patch.object(build_site, "VERDICT_CONTEXT_MIN", 1):
-            parts = build_site.price_band_records()[("band", "fav")]
-        # 1-1 at a .60 price is a 10-point shortfall against the price, not a
-        # coin flip that happened to land even.
-        self.assertAlmostEqual(parts["actual"], 0.50, places=9)
-        self.assertAlmostEqual(parts["excess"], -0.10, places=9)
-        self.assertAlmostEqual(parts["se"], build_site._excess_se([.6, .6]),
-                               places=12)
-
-    def test_exact_pickem_is_not_filed_as_a_disagreement(self):
-        """The old split read `close_p_home >= .5` as 'home favored'.
-
-        On a .500 line there is no favorite, so an away lean was recorded as
-        disagreeing with a market that had no opinion. A band on the leaned
-        side's own price cannot make that claim.
-        """
-        rows = [("graded", "NYY", "W", "TB", "NYY", 0.50),
-                ("graded", "TB", "L", "TB", "NYY", 0.50)]
-        with mock.patch.object(build_site, "load_ledger_df",
-                               return_value=self._led(rows)), \
-                mock.patch.object(build_site, "VERDICT_CONTEXT_MIN", 1):
-            ctx = build_site.price_band_records()
-        self.assertEqual(list(ctx), [("band", "even")])
-        self.assertEqual(ctx[("band", "even")]["n"], 2)
-
-    def test_abstained_and_unpriced_rows_never_enter(self):
-        rows = [("graded", None, None, "TB", "NYY", 0.60),      # v5 abstention
-                ("graded", "TB", "W", "TB", "NYY", float("nan")),  # no market
-                ("pending", "TB", "W", "TB", "NYY", 0.60),      # not graded
-                ("graded", "TB", "W", "TB", "NYY", 0.60)]
-        with mock.patch.object(build_site, "load_ledger_df",
-                               return_value=self._led(rows)), \
-                mock.patch.object(build_site, "VERDICT_CONTEXT_MIN", 1):
-            ctx = build_site.price_band_records()
-        self.assertEqual(ctx[("band", "fav")]["n"], 1)
-
-    def test_thin_band_is_omitted_rather_than_published(self):
-        rows = [("graded", "NYY", "W", "TB", "NYY", 0.40)]
-        with mock.patch.object(build_site, "load_ledger_df",
-                               return_value=self._led(rows)):
-            self.assertEqual(build_site.price_band_records(), {})
-
-    def test_bands_partition_every_representable_price(self):
-        """No price may fall through, and none may match two bands."""
-        for i in range(1, 1000):
-            p = i / 1000.0
-            hits = [k for k, lo, hi in build_site._PRICE_BANDS if lo <= p < hi]
-            self.assertEqual(len(hits), 1, f"p={p} matched {hits}")
-        for bad in (0.0, 1.0, None, float("nan")):
-            self.assertIsNone(build_site._price_band(bad))
-
-
 class BaselineControlTests(unittest.TestCase):
     """The grades page publishes a record; these are what it is measured against."""
 
@@ -2738,17 +2652,70 @@ class LeanMarketValueTests(unittest.TestCase):
         self.assertEqual(binom_form, 0.0)
         self.assertGreater(parts["excess_se"], 10 * sd_form)
 
-    def test_observation_frame_carries_no_unrendered_column(self):
-        """price_dislocation was computed, returned and rendered nowhere.
+    # Every column each frame is allowed to carry, and the surface that reads
+    # it. Adding a column means adding it here, which forces the question the
+    # blacklist below could not ask: what renders this?
+    OBS_COLUMNS = {
+        "delta":        "x-axis of the corr/slope fit; picks the cell's Δ half",
+        "market_p":     "picks the cell's direction half; agg implied/excess",
+        "close_ml":     "input to profit, and the price a row is scored at",
+        "won":          "agg w / actual",
+        "market_edge":  "y-axis of the corr/slope fit -> 'market response' tile",
+        "market_resid": "agg excess -> 'actual vs implied' cell",
+        "profit":       "agg roi / units -> 'flat close ROI' cell",
+    }
+    ANALYSIS_ONLY_COLUMNS = {"cell": "masks the 2x3 regime_rows"}
 
-        Not a style point: the note on the page described it as a diagnostic
-        the reader could see, because nothing tied the prose to what the
-        tables actually emit. Every column here must reach a surface.
+    def test_observation_frame_carries_no_unrendered_column(self):
+        """Every column on these frames must reach a surface.
+
+        price_dislocation was computed, returned and rendered nowhere, and the
+        note on the page described it as a diagnostic the reader could see --
+        because nothing tied the prose to what the tables actually emit.
+
+        This asserts the INVARIANT, not one blacklisted name. The previous
+        version only banned "price_dislocation", so it went on passing when
+        the V12 verdict rewrite left `delta_bucket` behind: a column whose
+        two values duplicate the prefix of `cell` and which nothing read. A
+        test that memorises one instance cannot catch the next one -- the
+        same defect as freezing a measured number into an assertion.
         """
         obs = build_site._lean_market_observations(self._frame(n=6))
-        self.assertNotIn("price_dislocation", obs.columns)
+        self.assertEqual(set(obs.columns), set(self.OBS_COLUMNS),
+                         "observation frame gained/lost a column; name the "
+                         "surface that reads it in OBS_COLUMNS")
         a = build_site._lean_market_value_analysis(self._frame(n=6))
-        self.assertNotIn("price_dislocation", a["obs"].columns)
+        self.assertEqual(
+            set(a["obs"].columns),
+            set(self.OBS_COLUMNS) | set(self.ANALYSIS_ONLY_COLUMNS),
+            "analysis frame gained/lost a column; name the surface that "
+            "reads it in ANALYSIS_ONLY_COLUMNS")
+
+    # close_ml is the one column the analysis does not read back: it is the
+    # price each row was scored at and the input `profit` was derived from,
+    # kept so a row's payout stays auditable against its own price. Stated as
+    # an exemption rather than left to look like a consumed column.
+    RETAINED_INPUT_COLUMNS = {"close_ml"}
+
+    def test_every_declared_observation_column_is_actually_read(self):
+        """The allowlist is a claim about consumption; hold it to that.
+
+        Removing a consumed column must break the analysis. Without this, a
+        column could be added to OBS_COLUMNS with a plausible-sounding surface
+        beside it that nothing actually reads -- the allowlist becomes a rubber
+        stamp and the guard above degrades back into the blacklist it replaced.
+        """
+        real = build_site._lean_market_observations
+        for col in set(self.OBS_COLUMNS) - self.RETAINED_INPUT_COLUMNS:
+            with self.subTest(column=col):
+                def without(led, _c=col):
+                    return real(led).drop(columns=[_c])
+                with mock.patch.object(build_site,
+                                       "_lean_market_observations", without):
+                    with self.assertRaises(KeyError, msg=(
+                            f"{col} is declared consumed in OBS_COLUMNS but "
+                            "the analysis runs without it")):
+                        build_site._lean_market_value_analysis(self._frame(n=6))
 
     def test_degenerate_spread_yields_nan_not_a_numpy_warning(self):
         """A frame with one distinct price has no correlation to report.

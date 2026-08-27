@@ -3779,12 +3779,6 @@ def clamp(x, a, b):
     return a if x < a else b if x > b else x
 
 
-def edge_color(edge, ksign=1):
-    if edge is None:
-        return "var(--faint)"
-    return "rgba(var(--warm-tx),1)" if edge * ksign >= 0 else "rgba(var(--cool-tx),1)"
-
-
 def f3(v):
     return "—" if v is None else f"{v:.3f}".lstrip("0") if 0 < abs(v) < 1 else f"{v:.3f}"
 
@@ -3805,10 +3799,6 @@ def f2(v):
 
 def f1(v):
     return "—" if v is None else f"{v:.1f}"
-
-
-def sgn3(v):
-    return "—" if v is None else f"{'+' if v >= 0 else '−'}{abs(v):.3f}"
 
 
 def _abbr(name):
@@ -4025,25 +4015,13 @@ def _read_sentence(away_abbr, home_abbr, a, h, fav, strength_word):
             f"lean to <b>{_esc(fav)}</b>.</p>")
 
 
-def _market_fav(odds, away_abbr, home_abbr):
-    """Market favorite abbr from devigged home prob, else raw MLs. None if unknown."""
-    if not odds:
-        return None
-    ph = odds.get("p_home")
-    if ph is not None and pd.notna(ph):
-        return home_abbr if ph >= 0.5 else away_abbr
-    hm, am = odds.get("home_ml"), odds.get("away_ml")
-    if hm is not None and am is not None:
-        return home_abbr if float(hm) < float(am) else away_abbr
-    return None
-
-
 def _lean_implied_p(odds, fav, away_abbr, home_abbr):
     """Devigged closing-style probability for the LEANED side, or None.
 
     Prefers the devigged `p_home` the market feed already supplies; falls back
     to devigging the two moneylines itself so a game with prices but no
-    `p_home` still lands in a band rather than silently losing its signal.
+    `p_home` still places into a conviction cell rather than silently losing
+    its signal.
     """
     if not odds or fav is None:
         return None
@@ -4105,24 +4083,6 @@ def _conviction_tail(ctx, delta, p_lean):
             "<span class='vk'>Historical discovery cell:</span>"
             f"<span><b>{parts['w']}–{parts['l']}</b> · n={parts['n']} · "
             f"ROI <b>{roi_txt}</b></span></div>")
-
-
-def _price_band_tail(ctx, p_lean):
-    """Pooled-across-families price-band record. The fallback, labelled as such."""
-    band = _price_band(p_lean)
-    parts = ctx.get(("band", band)) if band else None
-    if not parts:
-        # No usable devigged price is a different statement from a thin band,
-        # and the row must not make the wrong one.
-        return (" No usable closing price for this game yet." if band is None
-                else " Not enough graded games in this price band to score it yet.")
-    read = ("statistically no different from the price itself"
-            if abs(parts["excess"]) <= 2 * parts["se"]
-            else "a gap wider than twice its own error bar")
-    return (f" Across every model version, this price band has gone "
-            f"<b>{parts['w']}-{parts['l']}</b>, <b>{100 * parts['excess']:+.1f} pts</b> "
-            f"against the closing price (± {100 * parts['se']:.1f} over "
-            f"{parts['n']} graded games) — {read}.")
 
 
 def _verdict_html(fav, odds, away_abbr, home_abbr, ctx=None, delta=None):
@@ -6068,8 +6028,6 @@ def _lean_market_value_analysis(led):
     if obs.empty:
         return {}
 
-    obs["delta_bucket"] = np.where(
-        obs["delta"] >= _CONVICTION_DELTA_ACTIVE, "active", "low")
     obs["cell"] = [_conviction_cell(d, p)
                    for d, p in zip(obs["delta"], obs["market_p"])]
 
@@ -6337,36 +6295,6 @@ def _baseline_controls(g):
     return out
 
 
-# Minimum graded games in a (lean side × agree/disagree) bucket before its
-# record is trusted enough to headline the verdict; thinner buckets keep prose.
-VERDICT_CONTEXT_MIN = 25
-
-
-_PRICE_BANDS = (
-    ("fav", 0.55, 1.01),
-    ("even", 0.45, 0.55),
-    ("dog", 0.0, 0.45),
-)
-
-
-def _price_band(p):
-    """Band key for the leaned side's devigged price, or None if unusable.
-
-    The bands are on the LEANED side's price, not the home side's, so a game
-    reads the same whichever team the model picked. The old split was
-    `close_p_home >= .5` -> "home favored", which filed the 10 graded rows
-    priced at exactly .500 as home-favored -- and the 6 of those where the
-    model leaned away as *disagreeing with the market*, on a game with no
-    favorite to disagree with. A band has no such boundary claim to get wrong.
-    """
-    if p is None or not np.isfinite(p) or not (0.0 < p < 1.0):
-        return None
-    for key, lo, hi in _PRICE_BANDS:
-        if lo <= p < hi:
-            return key
-    return None
-
-
 CONVICTION_CELL_MIN = 1
 
 
@@ -6396,61 +6324,6 @@ def conviction_cell_records():
         parts = _lean_market_agg(obs, obs["cell"].eq(key))
         if parts and parts["n"] >= CONVICTION_CELL_MIN:
             out[("cell", key)] = parts
-    return out
-
-
-def price_band_records():
-    """('band', key) -> that band's realised record AGAINST ITS OWN PRICE.
-
-    Replaces the raw W-L this verdict used to print, which was the
-    claims-the-data-cannot-support anti-pattern in its purest form: the four
-    old buckets spanned 24 points of win rate (.603 down to .360) and every
-    one of those points was base rate. Scored against price the same buckets
-    read +1.5, +0.3, +1.1 and -11.4, each inside 1.2 se of zero. A reader was
-    being shown the market's opinion of the matchup and invited to read it as
-    the model's skill.
-
-    `excess` is the realised rate minus the mean devigged price of the leaned
-    side, and `se` comes from _excess_se -- the same Poisson-binomial
-    derivation both calibration surfaces use, so the whole site answers "did
-    this beat its price" one way. Pooled over every graded family for volume
-    (one family leaves a band ~25 games); the verdict text says it is a
-    ledger-wide record.
-
-    Display-only and best-effort: no ledger, no market column, or a band
-    thinner than VERDICT_CONTEXT_MIN decisions returns nothing for that band
-    and the verdict says so rather than inventing one.
-    """
-    led = load_ledger_df()
-    if led is None:
-        return {}
-    g = _display_grades(led)
-    if g.empty or "close_p_home" not in g.columns:
-        return {}
-    ph = pd.to_numeric(g["close_p_home"], errors="coerce")
-    ok = (ph.notna() & g["xw_lean"].notna() & g["xw_full"].isin(["W", "L"])
-          & ph.between(0.0, 1.0, inclusive="neither"))
-    if not ok.any():
-        return {}
-    g, ph = g[ok], ph[ok]
-    lean_home = g["xw_lean"].eq(g["home"]).to_numpy()
-    mp = np.where(lean_home, ph.to_numpy(dtype=float),
-                  1.0 - ph.to_numpy(dtype=float))
-    won = g["xw_full"].eq("W").to_numpy()
-    out = {}
-    for key, lo, hi in _PRICE_BANDS:
-        m = (mp >= lo) & (mp < hi)
-        n = int(m.sum())
-        if n < VERDICT_CONTEXT_MIN:
-            continue
-        w = int(won[m].sum())
-        out[("band", key)] = {
-            "n": n, "w": w, "l": n - w,
-            "implied": float(mp[m].mean()),
-            "actual": float(won[m].mean()),
-            "excess": float(won[m].mean() - mp[m].mean()),
-            "se": float(_excess_se(mp[m])),
-        }
     return out
 
 
@@ -7087,10 +6960,11 @@ def render_combined_html(xw_df, pl_df, pitcher_rows_df, built_txt,
         return html_document(inner, built_txt, extra_js=score_refresh_js())
     strength_scale = lean_strength_scale(_slate_deltas(games))
     logo_assets, logo_css = _logo_assets(games)
-    # Per-game history is current-family and direction-specific. Do not attach
-    # the old pooled price-band fallback: it could make a favourite and an
-    # underdog inherit one historical result, which is the ambiguity this
-    # panel removes.
+    # Per-game history is current-family and direction-specific. The pooled
+    # price-band fallback that used to sit beside it is gone, not merely
+    # unwired: it could make a favourite and an underdog inherit one
+    # historical result, which is the ambiguity this panel removes. Do not
+    # reintroduce a fallback that pools across directions.
     ctx = {**(conviction_cell_records() or {}),
            "logo_ids": set(logo_assets)}
     body = logo_css + build_combined(games, strength_scale, ctx) + footer

@@ -443,6 +443,19 @@ precedent — they are how the fix is known to look.
   honest at any n, but a band still needs enough games for its se to mean
   something.
 
+  **The band is gone; the finding is not.** The V12 rewrite replaced it with
+  the direction-specific conviction cell (`_conviction_tail`), because a band
+  pools a favourite and an underdog into one historical result and erases the
+  direction the panel exists to show. That rewrite removed the three call
+  sites and left the callees behind, so `price_band_records`,
+  `_price_band_tail`, `_price_band`, `_PRICE_BANDS` and `VERDICT_CONTEXT_MIN`
+  sat for two days as a fully-tested surface no page rendered — six tests
+  pinning a function with no production caller, the same shape as the
+  `_record_grades()` note in the controls entry below. All of it is now
+  deleted. The numbers above are the reason the raw record went, and they
+  stay here because this file is where that measurement lives; do not read
+  them as describing code that still exists.
+
   Display-only; no lean, delta, grade or ledger row moves.
 
 - **The value-bet signal that does not exist, and the measurement that says so.**
