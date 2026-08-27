@@ -2880,16 +2880,58 @@ class ConvictionCellTests(unittest.TestCase):
 
     def test_cell_boundaries_match_the_declared_direction_grid(self):
         # .012 itself is ACTIVE; only values below it are LOW.
-        self.assertEqual(build_site._conviction_cell(.011999, .50), "low-agree")
-        self.assertEqual(build_site._conviction_cell(.012, .50), "active-agree")
-        # .45 enters slight opposition; .50 enters agreement.
+        self.assertEqual(build_site._conviction_cell(.011999, .60), "low-agree")
+        self.assertEqual(build_site._conviction_cell(.012, .60), "active-agree")
+        # .45 enters the no-backing band; agreement starts strictly above .50.
         self.assertEqual(build_site._conviction_cell(.012, .449999),
                          "active-deep-oppose")
         self.assertEqual(build_site._conviction_cell(.012, .45),
-                         "active-slight-oppose")
+                         "active-no-backing")
         self.assertEqual(build_site._conviction_cell(.012, .499999),
-                         "active-slight-oppose")
-        self.assertEqual(build_site._conviction_cell(.012, .50), "active-agree")
+                         "active-no-backing")
+        self.assertEqual(build_site._conviction_cell(.012, .50),
+                         "active-no-backing")
+        self.assertEqual(build_site._conviction_cell(.012, .500001),
+                         "active-agree")
+
+    def test_an_exact_pickem_is_never_called_agreement(self):
+        """A devigged .500 market has no favourite, so it backs no lean.
+
+        This is the boundary claim the price-band rewrite already retired
+        once -- the old home-relative split filed the same mirrored-price
+        rows as "home favoured" -- and the direction axis reintroduced it by
+        closing MARKET AGREE over [.50, 1]. A three-way split has to file a
+        no-favourite market somewhere; it must be the band whose label is
+        still true there, which is the one that denies backing rather than
+        asserts it.
+        """
+        # -110/-110 is the canonical pick'em and devigs to exactly .5
+        pk = build_site._lean_implied_p(
+            {"home_ml": -110, "away_ml": -110}, "H", "A", "H")
+        self.assertEqual(pk, 0.5)
+        self.assertEqual(build_site._conviction_direction_label(pk),
+                         "NO MARKET BACKING")
+        self.assertNotIn("AGREE", build_site._conviction_direction_label(pk))
+        self.assertEqual(build_site._conviction_cell(.02, pk),
+                         "active-no-backing")
+        # and the card must not print agreement anywhere on such a game
+        html = build_site._verdict_html(
+            "H", {"home_ml": -110, "away_ml": -110}, "A", "H", {}, .02)
+        self.assertIn("NO MARKET BACKING", html)
+        self.assertNotIn("MARKET AGREE", html)
+        self.assertIn("50.0% no-vig", html)
+
+    def test_the_warm_accent_never_claims_opposition_on_a_pickem(self):
+        """The accent means 'not backed', which a pick'em satisfies.
+
+        It shares the band with a slight underdog, so the rule fires -- but
+        the rendered text must not upgrade that into an opposition claim.
+        """
+        html = build_site._verdict_html(
+            "H", {"home_ml": -110, "away_ml": -110}, "A", "H", {}, .02)
+        self.assertIn("verdict edge", html)
+        for banned in ("OPPOSE", "opposes", "against"):
+            self.assertNotIn(banned, html)
 
     def test_unplaceable_games_return_none_rather_than_a_default_cell(self):
         for delta, mp in ((None, .5), (.01, None), (float("nan"), .5),
@@ -2897,21 +2939,31 @@ class ConvictionCellTests(unittest.TestCase):
                           ("x", .5)):
             self.assertIsNone(build_site._conviction_cell(delta, mp))
 
-    def test_every_cell_key_has_a_reader_facing_phrase(self):
-        for key, _label, phrase in build_site._CONVICTION_CELLS:
-            self.assertIn(key, build_site._CONVICTION_PHRASE)
-            self.assertTrue(phrase and not phrase[0].isupper(),
-                            "phrase is spliced mid-sentence, so it stays lowercase")
+    def test_every_cell_key_is_reachable_from_the_declared_cuts(self):
+        """Every declared cell must be produced by some (Δ, price) pair.
+
+        Replaces a check on a third "reader-facing phrase" column that only
+        ever reached _CONVICTION_PHRASE, which no surface rendered. A cell
+        nothing can land in is the same defect one level out, so the grid is
+        now pinned against the cuts rather than against unrendered copy.
+        """
+        reachable = {
+            build_site._conviction_cell(d, p)
+            for d in (0.001, 0.05)
+            for p in (0.10, 0.30, 0.449999, 0.45, 0.4999, 0.50, 0.5001, 0.90)
+        }
+        declared = {key for key, _label in build_site._CONVICTION_CELLS}
+        self.assertEqual(declared, reachable - {None})
+        for _key, label in build_site._CONVICTION_CELLS:
+            self.assertRegex(label, r"^(LOW|ACTIVE) Δ · ")
 
     def test_thin_directional_cell_is_shown_and_never_pooled(self):
         """Discovery cells keep their direction even when n is small."""
         ctx = {
-            ("cell", "active-slight-oppose"): dict(
+            ("cell", "active-no-backing"): dict(
                 n=6, w=4, l=2, implied=.482, actual=.667, excess=.184,
                 excess_se=.204, roi=.352, units=2.11,
             ),
-            ("band", "even"): dict(n=300, w=160, l=140, implied=.50,
-                                    actual=.533, excess=.033, se=.029),
         }
         html = build_site._verdict_html(
             "PIT", dict(p_home=.529, away_ml=103), "PIT", "SD", ctx, .0187,
@@ -2923,7 +2975,7 @@ class ConvictionCellTests(unittest.TestCase):
         self.assertNotIn("Across every model version", html)
 
     def test_pit_acceptance_panel_has_the_requested_four_reads(self):
-        ctx = {("cell", "active-slight-oppose"): dict(
+        ctx = {("cell", "active-no-backing"): dict(
             n=6, w=4, l=2, implied=.482, actual=.667, excess=.184,
             excess_se=.204, roi=.352, units=2.11,
         )}
@@ -2933,7 +2985,7 @@ class ConvictionCellTests(unittest.TestCase):
         for expected in (
             "V12 Δ:</span> <span>.0187 · ACTIVE",
             "Market:</span> <span>PIT +103 · 47.1% no-vig",
-            "Direction:</span> <span>SLIGHT MARKET OPPOSE",
+            "Direction:</span> <span>NO MARKET BACKING",
             "Historical discovery cell:",
             "4–2</b> · n=6 · ROI <b>+35.2%",
         ):

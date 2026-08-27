@@ -4126,7 +4126,11 @@ def _verdict_html(fav, odds, away_abbr, home_abbr, ctx=None, delta=None):
     price_txt = _fmt_ml(price) if price is not None else "—"
     p_txt = f"{100 * p_lean:.1f}% no-vig" if p_lean is not None else "no no-vig price yet"
     history = _conviction_tail(ctx, delta, p_lean)
-    # The warm left rule means only "market opposes", not "bet this side".
+    # The warm left rule means only that the market is NOT backing this lean
+    # -- it opposes it, or (at an exact pick'em) simply has no favourite. It
+    # has never meant "bet this side". The condition is unchanged by the
+    # pick'em fix, but the claim it makes had to narrow with the band: a
+    # rule reading "market opposes" would be false on a -110/-110 game.
     cls = " edge" if key and direction != "MARKET AGREE" else ""
     version = _model_version_short()
     return (
@@ -5937,9 +5941,26 @@ def _lean_market_agg(obs, mask):
 # from a coin flip. Direction is the information the card is trying to show,
 # so the market axis is now the LEANED team's no-vig probability:
 #
-#   p < .45       DEEP MARKET OPPOSE
-#   .45 <= p < .50  SLIGHT MARKET OPPOSE
-#   p >= .50      MARKET AGREE
+#   p < .45           DEEP MARKET OPPOSE
+#   .45 <= p <= .50   NO MARKET BACKING
+#   p > .50           MARKET AGREE
+#
+# THE MIDDLE BAND IS CLOSED AT .50 ON PURPOSE, and its name is the reason.
+# A devigged .500 is a market with no favourite -- it arises exactly when the
+# two prices mirror (-110/-110), and on this ledger those are the same 10 rows.
+# The band used to be half-open, so a pick'em fell into MARKET AGREE and the
+# card told the reader the market sided with the lean on a game where the
+# market had no side. That is the boundary claim this repo already retired
+# once: the old home-relative split filed the same 10 rows as "home favoured",
+# and the price-band rewrite was justified by "a band has no such boundary
+# claim to make". A three-way split cannot avoid filing a no-favourite market
+# somewhere, so the question is which claim survives the boundary. "Agree"
+# ASSERTS the market backs the lean and is false at .500; "no backing" DENIES
+# it and is true across the whole closed band -- a slight underdog price and
+# an exact pick'em are both markets that decline to back the lean. So the
+# pick'em moves to the band whose label stays true, rather than earning a
+# fourth column that would be empty in every family (0 of 147 v12 rows sit at
+# .500, and pick'ems run ~1.5%% of games ledger-wide).
 #
 # The delta axis is fixed at .012 rather than re-cut into terciles every build:
 # that makes a live game's label stable as the ledger grows. The .012 boundary
@@ -5950,22 +5971,19 @@ _CONVICTION_DELTA_ACTIVE = 0.012
 _CONVICTION_DEEP_OPPOSE = 0.45
 _CONVICTION_AGREE = 0.50
 
+# (cell key, row label). Each entry carried a third "reader-facing phrase"
+# that only ever reached _CONVICTION_PHRASE, which no surface read -- the same
+# unrendered-prose defect deleted from this module alongside the price bands.
+# Dropped rather than reworded for the rename: writing fresh copy into a
+# structure nothing renders is how the last one survived as long as it did.
 _CONVICTION_CELLS = (
-    ("low-deep-oppose", "LOW Δ · DEEP MARKET OPPOSE",
-     "a low V12 Δ with deep market opposition"),
-    ("low-slight-oppose", "LOW Δ · SLIGHT MARKET OPPOSE",
-     "a low V12 Δ with slight market opposition"),
-    ("low-agree", "LOW Δ · MARKET AGREE",
-     "a low V12 Δ with market agreement"),
-    ("active-deep-oppose", "ACTIVE Δ · DEEP MARKET OPPOSE",
-     "an active V12 Δ with deep market opposition"),
-    ("active-slight-oppose", "ACTIVE Δ · SLIGHT MARKET OPPOSE",
-     "an active V12 Δ with slight market opposition"),
-    ("active-agree", "ACTIVE Δ · MARKET AGREE",
-     "an active V12 Δ with market agreement"),
+    ("low-deep-oppose", "LOW Δ · DEEP MARKET OPPOSE"),
+    ("low-no-backing", "LOW Δ · NO MARKET BACKING"),
+    ("low-agree", "LOW Δ · MARKET AGREE"),
+    ("active-deep-oppose", "ACTIVE Δ · DEEP MARKET OPPOSE"),
+    ("active-no-backing", "ACTIVE Δ · NO MARKET BACKING"),
+    ("active-agree", "ACTIVE Δ · MARKET AGREE"),
 )
-
-_CONVICTION_PHRASE = {k: phrase for k, _lab, phrase in _CONVICTION_CELLS}
 
 
 def _conviction_delta_label(delta):
@@ -5993,8 +6011,11 @@ def _conviction_direction_label(market_p):
         return None
     if market_p < _CONVICTION_DEEP_OPPOSE:
         return "DEEP MARKET OPPOSE"
-    if market_p < _CONVICTION_AGREE:
-        return "SLIGHT MARKET OPPOSE"
+    # Closed at .50: an exact pick'em has no favourite, so the label that
+    # survives the boundary is the one that denies backing, not the one that
+    # asserts it. See the grid comment above.
+    if market_p <= _CONVICTION_AGREE:
+        return "NO MARKET BACKING"
     return "MARKET AGREE"
 
 
@@ -6018,7 +6039,7 @@ def _conviction_cell(delta, market_p, _legacy_q2=None):
         return None
     direction_key = {
         "DEEP MARKET OPPOSE": "deep-oppose",
-        "SLIGHT MARKET OPPOSE": "slight-oppose",
+        "NO MARKET BACKING": "no-backing",
         "MARKET AGREE": "agree",
     }[direction]
     return f"{strength.lower()}-{direction_key}"
@@ -6067,18 +6088,18 @@ def _lean_market_value_analysis(led):
         slope = intercept = np.nan
 
     regime_rows = [(label, _lean_market_agg(obs, obs["cell"].eq(key)))
-                   for key, label, _phrase in _CONVICTION_CELLS]
+                   for key, label in _CONVICTION_CELLS]
     direction_rows = [
         ("DEEP MARKET OPPOSE · p <45%",
          _lean_market_agg(obs, obs["market_p"] < _CONVICTION_DEEP_OPPOSE)),
-        ("SLIGHT MARKET OPPOSE · 45–<50%",
+        ("NO MARKET BACKING · 45–50%",
          _lean_market_agg(
              obs,
              (obs["market_p"] >= _CONVICTION_DEEP_OPPOSE)
-             & (obs["market_p"] < _CONVICTION_AGREE),
+             & (obs["market_p"] <= _CONVICTION_AGREE),
          )),
-        ("MARKET AGREE · p ≥50%",
-         _lean_market_agg(obs, obs["market_p"] >= _CONVICTION_AGREE)),
+        ("MARKET AGREE · p >50%",
+         _lean_market_agg(obs, obs["market_p"] > _CONVICTION_AGREE)),
     ]
     return {
         "obs": obs,
@@ -6166,7 +6187,7 @@ def _render_lean_market_value_panel(led):
         "<div class='s'>low &lt; cut · active ≥ cut</div></div>"
         "<div class='gr-stat'><div class='l'>Direction cuts</div>"
         "<div class='v'>45% · 50%</div>"
-        "<div class='s'>deep oppose · slight oppose · agree</div></div>"
+        "<div class='s'>deep oppose · no backing · agree</div></div>"
         f"<div class='gr-stat'><div class='l'>Δ vs market edge</div>"
         f"<div class='v'>{corr_txt}</div><div class='s'>Pearson r</div></div>"
         f"<div class='gr-stat'><div class='l'>Market response</div>"
@@ -6188,8 +6209,10 @@ def _render_lean_market_value_panel(led):
         "indistinguishable from correctly priced, and at these sample sizes "
         "most of them are. The six cells use a fixed V12 |Δ| split at .012 "
         "and the leaned side's market direction: below 45% is deep opposition, "
-        "45% through just under 50% is slight opposition, and 50% or above is "
-        "agreement. The .012 boundary was selected after inspecting this V12 "
+        "45% through 50% inclusive is no backing, and above 50% is agreement. "
+        "A devigged 50% is a market with no favourite, so it sits in the band "
+        "that declines to back the lean rather than the one that agrees with "
+        "it. The .012 boundary was selected after inspecting this V12 "
         "history, so every record and ROI here is a historical discovery result, "
         "not an out-of-sample betting rule.</div>"
     )
@@ -6333,7 +6356,7 @@ def conviction_cell_records():
         return {}
     out = {"cell_delta_active": a["delta_active"], "cell_n": a["n"]}
     obs = a["obs"]
-    for key, _label, _phrase in _CONVICTION_CELLS:
+    for key, _label in _CONVICTION_CELLS:
         parts = _lean_market_agg(obs, obs["cell"].eq(key))
         if parts and parts["n"] >= CONVICTION_CELL_MIN:
             out[("cell", key)] = parts
