@@ -5,7 +5,6 @@ restriction holds. An estimator that returns confident coefficients for the
 wrong weights produces a report indistinguishable from a correct one, so the
 weights are planted and recovered before any of it is believed.
 """
-import math
 
 import numpy as np
 import pandas as pd

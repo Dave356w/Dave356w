@@ -38,7 +38,6 @@ import os
 import re
 import sys
 import time
-import unicodedata
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -5137,7 +5136,6 @@ body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.45 var(--sans);
   border-radius:var(--r-s);padding:1px 6px;white-space:nowrap}
 .flag{color:var(--muted);border:1px solid var(--line)}
 .flag.warn{color:rgba(var(--warm-tx),1);border-color:rgba(var(--warm),.45)}
-.flag.mute{color:var(--faint)}
 
 /* ---------- lineup: order rail + shared-axis edge bars ---------- */
 details.lineup{margin-top:11px;border-top:1px solid var(--line-2)}

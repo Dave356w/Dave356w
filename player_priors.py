@@ -190,36 +190,3 @@ def prior_for(pid, hist, centres, season, mu, c=PRIOR_HISTORY_C,
     th, h = centred_history((hist or {}).get(pid), centres, season, mu,
                             weights=weights, role=role)
     return personal_prior(th, h, mu, c)
-
-
-def prior_map(ids, hist, centres, season, mu, c=PRIOR_HISTORY_C,
-              weights=RECENCY, role=None):
-    """{pid: pi} for an iterable of ids. Ids that resolve to `mu` are included,
-    so a caller can tell "no history" from "not asked about"."""
-    out = {}
-    for pid in ids or ():
-        try:
-            key = int(pid)
-        except (TypeError, ValueError):
-            continue
-        if key in out:
-            continue
-        out[key] = prior_for(key, hist, centres, season, mu, c, weights, role)
-    return out
-
-
-def coverage(ids, hist, season, weights=RECENCY):
-    """(with history, total) over ids -- what the build logs so the share of a
-    slate a personal prior actually touched is on the record, not assumed."""
-    total = seen = 0
-    lookback = len(weights)
-    for pid in ids or ():
-        try:
-            key = int(pid)
-        except (TypeError, ValueError):
-            continue
-        total += 1
-        seasons = (hist or {}).get(key) or {}
-        if any((season - lag) in seasons for lag in range(1, lookback + 1)):
-            seen += 1
-    return seen, total
