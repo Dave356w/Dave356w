@@ -1,6 +1,7 @@
 import math
 import inspect
 import os
+import pathlib
 import re
 import tempfile
 import unittest
@@ -572,6 +573,12 @@ class RecentStarterEraTests(unittest.TestCase):
         )
 
 
+# Any schedule that is not the grading cron takes the pregame path. Named
+# rather than pasted so changing the real cron is not mistaken for a test
+# change -- test_window_outlasts_the_poll_interval reads build.yml for that.
+PREGAME_POLL = "* * * * *"
+
+
 class ScheduleGateTests(unittest.TestCase):
     NOW = pd.Timestamp("2026-07-17T16:00:00Z").to_pydatetime()
 
@@ -586,7 +593,7 @@ class ScheduleGateTests(unittest.TestCase):
 
     def test_scheduled_poll_runs_near_first_pitch(self):
         run, day, reason = schedule_gate.decision(
-            "schedule", "7,22,37,52 10-23 * * *", self.NOW,
+            "schedule", PREGAME_POLL, self.NOW,
             games=[self.game(101, 30)],
         )
         self.assertTrue(run)
@@ -596,23 +603,55 @@ class ScheduleGateTests(unittest.TestCase):
     def test_scheduled_poll_skips_outside_window_and_final_games(self):
         games = [self.game(101, 10), self.game(102, 30, state="Final")]
         run, _, reason = schedule_gate.decision(
-            "schedule", "7,22,37,52 10-23 * * *", self.NOW, games=games,
+            "schedule", PREGAME_POLL, self.NOW, games=games,
         )
         self.assertFalse(run)
         self.assertIn("no game", reason)
 
-    def test_pregame_window_spans_15_to_90_minutes(self):
-        # The window is wide enough that Actions cron jitter (runs delayed
-        # 5-20+ min) can't skip a slate entirely: T-60 triggers, while games
-        # inside the late cutoff (T-10) or beyond the window (T-95) do not.
-        for minutes, expected in ((60, True), (10, False), (95, False)):
+    def test_pregame_window_covers_the_slate_and_excludes_the_edges(self):
+        """T-60 and T-300 build; T-10 (too late) and T-400 (too early) do not."""
+        for minutes, expected in ((60, True), (300, True),
+                                  (10, False), (400, False)):
             run, _, _ = schedule_gate.decision(
-                "schedule", "7,22,37,52 10-23 * * *", self.NOW,
+                "schedule", PREGAME_POLL, self.NOW,
                 games=[self.game(101, minutes)],
             )
             self.assertEqual(run, expected, f"T-{minutes}")
-        self.assertEqual(schedule_gate.MIN_MINUTES_BEFORE, 15)
-        self.assertEqual(schedule_gate.MAX_MINUTES_BEFORE, 90)
+
+    def test_window_outlasts_the_poll_interval(self):
+        """The window must outlast the gap between polls, read from build.yml.
+
+        These two numbers are one decision in two files. If the cron fires
+        every N minutes, a game whose whole pregame window falls between two
+        consecutive polls is never sampled and its rows are lost -- and
+        no-lookahead means they cannot be rebuilt. So the window is pinned
+        against the real cron rather than against a literal here.
+
+        The margin is deliberately large. GitHub does not merely delay
+        scheduled runs, it drops them: 56 requested polls on 2026-08-27
+        returned 2, with a 3h53m gap between deliveries. Covering the nominal
+        interval is the floor; the window is sized for the observed gaps.
+        """
+        workflow = pathlib.Path(".github/workflows/build.yml").read_text()
+        crons = re.findall(r"cron:\s*'([^']+)'", workflow)
+        pregame = [c for c in crons if c != schedule_gate.DAILY_GRADE_CRON]
+        self.assertEqual(len(pregame), 1, f"expected one pregame cron, got {pregame}")
+        minute_field = pregame[0].split()[0]
+        if minute_field.startswith("*/"):
+            fires_per_hour = 60 // int(minute_field[2:])
+        else:
+            fires_per_hour = len(minute_field.split(","))
+        interval = 60 / fires_per_hour
+        width = schedule_gate.MAX_MINUTES_BEFORE - schedule_gate.MIN_MINUTES_BEFORE
+        self.assertGreaterEqual(
+            width, interval,
+            f"cron fires every {interval:.0f}min but the window is only "
+            f"{width:.0f}min wide; a game can pass through unsampled")
+        # and the margin for dropped polls, not just the nominal interval
+        self.assertGreaterEqual(
+            width, 4 * interval,
+            "window should carry several polls' worth of margin, because "
+            "GitHub drops scheduled runs rather than merely delaying them")
 
     def test_grade_push_and_manual_events_always_run(self):
         grade = schedule_gate.decision("schedule", schedule_gate.DAILY_GRADE_CRON,

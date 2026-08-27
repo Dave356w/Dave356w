@@ -4,12 +4,29 @@ GitHub cron is static, so the workflow polls every 15 minutes and this script
 gates expensive work against the live MLB slate. Push/manual events always run;
 the daily early-morning schedule always runs to grade completed games.
 
-The pregame window is 15-90 minutes before first pitch. Actions frequently
-delays scheduled runs by 5-20+ minutes, so a narrow window can fall entirely
-between two delayed polls and no pregame refresh ever fires; a 75-minute-wide
-window survives ~30 minutes of jitter. Later builds inside the window refresh
-still-pending rows, so the lock is still the LAST accepted pregame snapshot
-(grade_leans.py keeps rejecting anything captured at/after scheduled start).
+The pregame window is 15-360 minutes before first pitch. Later builds inside
+the window refresh still-pending rows, so the lock is still the LAST accepted
+pregame snapshot (grade_leans.py keeps rejecting anything captured at/after
+scheduled start) -- widening only adds earlier attempts, it never makes the
+accepted snapshot worse.
+
+THE WINDOW IS SIZED TO THE POLL GAP, NOT TO CRON JITTER, and that is a
+correction. It read 15-90 on the theory that Actions delays scheduled runs by
+"5-20+ minutes", so 75 minutes of width survived the jitter. The real failure
+is not delay, it is DROP: on 2026-08-27 the workflow requested 56 polls
+(`7,22,37,52` over 14 hours) and GitHub delivered 2, having delivered 10 the
+day before and 18 the day before that. Measured gaps between consecutive
+delivered polls ran 3h53m and 11h. A 75-minute window cannot survive a
+four-hour gap, and on 2026-08-27 it did not: first pitch was 17:05Z, the
+window was 15:35-16:50Z, nothing ran, and that slate's only capture came from
+an unrelated push at 13:46Z -- 3h20m early, 7 games, projected lineups.
+
+So the two knobs move together and neither is meaningful alone: the cron drops
+to hourly (fewer requested runs are likelier to be honoured; a 56/day ask is
+plausibly why they were dropped) and the window widens to 6 hours, which is
+wider than any gap observed so far. test_window_outlasts_the_poll_interval
+pins the relationship against build.yml rather than against these literals, so
+changing one without the other fails.
 """
 
 import json
@@ -22,7 +39,9 @@ ET = ZoneInfo("America/New_York")
 ROLLOVER_HOUR = 3
 DAILY_GRADE_CRON = "17 4 * * *"
 MIN_MINUTES_BEFORE = 15
-MAX_MINUTES_BEFORE = 90
+# 6 hours. Not a guess at jitter -- see the module docstring: it must exceed
+# the gap between DELIVERED polls, which has been measured in hours.
+MAX_MINUTES_BEFORE = 360
 
 
 def slate_date(now):

@@ -7,17 +7,26 @@ on:
     branches: [main]
   # Manual trigger (lets you rebuild on demand from the Actions tab).
   workflow_dispatch:
-  # GitHub cron cannot be rewritten from the day's MLB slate. Instead, a cheap
-  # poll runs off the top of the hour and schedule_gate.py starts the full build
-  # only when a game is 15-90 minutes from first pitch. The wide window rides
-  # out Actions queue delay (runs regularly start 5-20+ min late); pending-row
-  # refresh means the lock is the last pregame snapshot regardless. A separate
-  # early-morning pass grades the prior slate. Timezone-aware entries avoid DST
-  # drift; push/manual events always build immediately.
+  # GitHub cron cannot be rewritten from the day's MLB slate. Instead a cheap
+  # poll runs hourly and schedule_gate.py starts the full build only when a
+  # game is 15-360 minutes from first pitch. A separate early-morning pass
+  # grades the prior slate. Timezone-aware entries avoid DST drift;
+  # push/manual events always build immediately.
+  #
+  # HOURLY, NOT EVERY 15 MINUTES, and the gate window widened to match. This
+  # asked for `7,22,37,52` -- 56 polls a day -- and GitHub delivered 18, then
+  # 10, then 2 on 2026-08-27, with gaps of 3h53m and 11h between the polls it
+  # did deliver. High-frequency schedules are the ones Actions deprioritises,
+  # so asking for four times as many runs was plausibly buying fewer. 14
+  # requested runs a day is a smaller ask; the 6-hour window in
+  # schedule_gate.py is what makes a single delivered poll still catch a
+  # slate. Change one and you must change the other --
+  # test_window_outlasts_the_poll_interval reads this cron and fails if the
+  # window no longer covers the interval.
   schedule:
     - cron: '17 4 * * *'
       timezone: America/New_York
-    - cron: '7,22,37,52 10-23 * * *'
+    - cron: '7 10-23 * * *'
       timezone: America/New_York
 
 # Serialize whole workflow runs: exactly one build/deploy at a time, queued
