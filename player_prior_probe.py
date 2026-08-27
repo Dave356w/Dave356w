@@ -137,7 +137,15 @@ from collections import defaultdict
 import numpy as np
 
 import build_site
-from player_priors import centred_history, load_priors, personal_prior
+# `personal_prior` is re-exported, not used here: tests reach it as
+# `player_prior_probe.personal_prior` so the probe and the build are
+# checked against the same scalar form. An unused-import sweep will call
+# it dead -- it is not, and this comment plus the noqa is what says so.
+from player_priors import (  # noqa: F401
+    centred_history,
+    load_priors,
+    personal_prior,
+)
 from reliever_shrink_probe import (
     _add,
     _centre,

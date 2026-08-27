@@ -421,11 +421,50 @@ precedent — they are how the fix is known to look.
   slate's provenance instead of assuming it, and will run the ledger join under
   `--ledger-join` so the bias can be sized rather than argued.
 
+**Removed — recorded so the reasoning is not relitigated**
+
+- **The walk-forward backtest, deleted 2026-08-27 on the operator's call.**
+  `walkforward.py`, `historical_data.py`, `tests/test_walkforward.py`,
+  `docs/walkforward.md`, `walkforward.yml`, `export-savant-cache.yml` (which
+  existed only to feed the replay's `exact_pregame` fidelity) and both
+  `data/walkforward_*` artifacts. Recoverable from git history; nothing else
+  imported them, and `reliever_shrink_probe`'s own walk-forward K fit is
+  unrelated and untouched.
+
+  **What was and was not established, because the removal followed a review
+  and should not be read as that review's conclusion.** Three defects were
+  found and fixed first: the replay cache was keyed on raw file bytes so any
+  edit (comments included) discarded it and restarted from the first slate;
+  the report printed `Games 690` beside a 500-row frame with no marker; and a
+  450-second bound inside `build.yml` meant it never finished. Those were
+  plumbing. The prediction math was NOT found wrong — the replay imported
+  `build_site` and ran the same code, with inputs correctly bounded to
+  `slate_date - 1` and no lookahead.
+
+  What stayed open was narrower: the replay reconstructed rates from Savant's
+  `statcast_search` while the live build reads the leaderboard, and 0 of 500
+  rows used the archived-cache `exact_pregame` path. That is an **unmeasured
+  fidelity gap, not a demonstrated error**, and it was never closed.
+
+  **What the repository loses.** The backtest was the only out-of-sample
+  control on the model, and it disagreed with the live panel: over 490
+  replayed decisions it scored -1.6pp against price (z -0.74, -7.0% flat ROI)
+  where the live v12 window over 160 rows scored +7.9pp (z +2.03, +11.8%).
+  Against always-chalk the same two windows are +1.8pp and -3.7pp, so most of
+  the raw 63.1%-vs-52.9% gap was base rate. With the replay gone, nothing
+  contradicts the live figure, and `Deleting controls as clutter` below is the
+  entry this trades against. Anyone reinstating a backtest should start from
+  the fidelity gap above rather than rebuilding the same reconstruction.
+
 **Resolved — keep as precedent**
 
 - **A timeout that kills the step but not the process.** The walk-forward
-  append is `continue-on-error` with `timeout-minutes: 8` precisely so a slow
-  replay can never cost a slate. It cost one anyway. A step timeout kills the
+  append was `continue-on-error` with `timeout-minutes: 8` precisely so a slow
+  replay could never cost a slate. It cost one anyway. (The replay itself has
+  since been removed — see the entry below — so this reads as history. The
+  RULE survives it, which is the point of keeping it: the hazard belongs to
+  the pattern, not to that step. `WorkflowStepTimeoutTests` still enforces it
+  against any future step, and now guards zero live instances by design.) A step timeout kills the
   step's shell and moves on; the `python walkforward.py` child survives as an
   orphan the runner only reaps in post-job cleanup, and it rewrites
   `data/walkforward_ledger.csv` after every date it finishes. Run
