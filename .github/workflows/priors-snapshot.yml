@@ -99,16 +99,13 @@ jobs:
       # every PR that touches this file try to commit to data/.
       - name: Commit
         if: ${{ github.event_name == 'workflow_dispatch' && !inputs.dry_run }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
           python validate_data_files.py
-          git add data/
-          git diff --cached --quiet || git commit -m "freeze wOBA priors $(date -u +%FT%H:%MZ)"
           # `github.ref_name`, not a hardcoded `main`. build.yml can hardcode
           # it because it only ever runs on main; this one is dispatched
-          # against whichever branch is being reviewed, and rebasing a feature
-          # branch onto main here would push the wrong history.
-          git pull --rebase origin "${{ github.ref_name }}"
-          python validate_data_files.py
-          git push origin HEAD:"${{ github.ref_name }}"
+          # against whichever branch is being reviewed, and committing to main
+          # from here would write the wrong history.
+          python commit_data.py --branch "${{ github.ref_name }}" \
+            --message "freeze wOBA priors $(date -u +%FT%H:%MZ)"

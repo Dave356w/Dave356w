@@ -260,4 +260,7 @@ def test_site_workflow_appends_walkforward_after_grading_before_build():
     # WorkflowStepTimeoutTests in tests/test_integrity_fixes.py).
     assert re.search(r"run: timeout\b.*\bpython walkforward\.py", replay_block)
     assert "path: .walkforward_cache" in workflow
-    assert "git add data/" in workflow
+    # The replay output persists by being committed with the rest of data/.
+    # Matched on the command, not on the phrase "git add data/", which now
+    # survives only inside a comment (see tests/test_commit_data.py).
+    assert "python commit_data.py" in workflow

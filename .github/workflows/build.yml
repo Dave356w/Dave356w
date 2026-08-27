@@ -198,21 +198,25 @@ jobs:
       - name: Refresh grades page from final ledger
         run: python build_site.py --grades-only
 
-      # The ledger persists by being committed. Pushes made with the default
-      # GITHUB_TOKEN don't retrigger this workflow, so no recursion. Commit
-      # generated data before rebasing onto any main commit that landed during
-      # the run. If the rebase conflicts, Git stops before push; no autostash
-      # can leave conflict-marker text behind to be blindly staged.
+      # The ledger persists by being committed. commit_data.py sends the
+      # pending data/ changes through the GraphQL createCommitOnBranch
+      # mutation, so GitHub signs the commit and it lands Verified -- a
+      # `git push` from a runner cannot be, there being no key to sign with.
+      # Commits made with the default GITHUB_TOKEN don't retrigger this
+      # workflow whether pushed or created through the API, so still no
+      # recursion. expectedHeadOid stands in for the old `git pull --rebase`:
+      # it pins the tip the commit is built on, and the script refuses rather
+      # than overwrite if an intervening commit wrote one of our files. A
+      # failure of the API path falls back to that old push sequence, because
+      # an unverified commit costs provenance and a lost slate costs pregame
+      # rows nothing can re-derive.
       - name: Commit ledger
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
           python validate_data_files.py
-          git add data/
-          git diff --cached --quiet || git commit -m "ledger $(date -u +%FT%H:%MZ)"
-          git pull --rebase origin main
-          python validate_data_files.py
-          git push
+          python commit_data.py --branch main \
+            --message "ledger $(date -u +%FT%H:%MZ)"
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3

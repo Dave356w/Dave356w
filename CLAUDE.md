@@ -446,7 +446,9 @@ precedent — they are how the fix is known to look.
   SIGTERM — verified, `finally ran` — with SIGKILL 60s behind it. `*.tmp` is
   now gitignored for the case where it does not: `git add data/` runs *after*
   `validate_data_files.py`, so a temp file appearing in that gap would stage a
-  partial CSV past the one check written to catch exactly that.
+  partial CSV past the one check written to catch exactly that. The ignore
+  still carries that weight under `commit_data.py`, which enumerates
+  `git status --porcelain` and therefore never sees an ignored file either.
 
   **The general lesson: `continue-on-error` and `timeout-minutes` bound the
   step's effect on the job, not the process's effect on the working tree.** Any
@@ -1120,3 +1122,15 @@ Do not commit `data/` by hand — the Actions bot owns it. Do not commit
 - `timeout-minutes` on both jobs — an upstream API hang otherwise burns minutes.
 - Score verification in `attach_market` — it correctly rejected the All-Star
   Game join. Do not loosen to raise the match rate.
+- `commit_data.py`'s fallback to `git push`. `data/` lands through the GraphQL
+  `createCommitOnBranch` mutation so GitHub signs the commit and it shows
+  Verified — a runner holds no key, so a pushed commit never can. The API path
+  is the newer one, and a pregame slate that fails to land cannot be
+  re-derived without lookahead, so any failure falls back to the old
+  commit/rebase/push sequence with a workflow warning: an unverified commit
+  costs provenance, a dropped slate costs rows. Keep the fallback, and keep
+  `expectedHeadOid` refusing rather than overwriting when an intervening
+  commit wrote one of the files being sent — that refusal is the old
+  `git pull --rebase` conflict stop, which the API path would otherwise lose.
+  Commits made with `GITHUB_TOKEN` do not retrigger workflows whether pushed
+  or created through the API, so the no-recursion property is unchanged.
