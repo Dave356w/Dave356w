@@ -3,6 +3,7 @@ import re
 import os
 import sys
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 import pandas as pd
@@ -241,26 +242,138 @@ def test_market_roi_edge_cases():
     assert math.isnan(walkforward.flat_unit_roi(None, 200))
 
 
-def test_site_workflow_appends_walkforward_after_grading_before_build():
-    workflow = (
-        Path(__file__).resolve().parents[1]
-        / ".github" / "workflows" / "build.yml"
-    ).read_text()
-    grade = workflow.index("- name: Grade leans (pre-build)")
-    replay = workflow.index(
-        "- name: Append current-model walk-forward ledger (pre-build)"
-    )
-    build = workflow.index("- name: Build static site")
-    assert grade < replay < build
-    replay_block = workflow[replay:build]
-    assert "continue-on-error: true" in replay_block
-    assert "timeout-minutes: 8" in replay_block
+def test_replay_has_its_own_workflow_off_the_pregame_path():
+    """The replay must not sit inside the build.
+
+    It did, bounded at 450s so it could never delay the capture of pregame
+    rows -- which cannot be re-derived later without lookahead. That bound is
+    also why it never finished: on 2026-08-27 the committed replay ended at
+    2026-08-11 against a ledger running to 08-27. Its own workflow is what
+    lets it reach the present, so a regression that moves it back into
+    build.yml has to fail here.
+    """
+    root = Path(__file__).resolve().parents[1] / ".github" / "workflows"
+    build = (root / "build.yml").read_text()
+    replay = (root / "walkforward.yml").read_text()
+
+    assert "walkforward.py" not in build.replace(
+        "walkforward.yml", ""), "the replay is back on the pregame build path"
+    assert "python walkforward.py" in replay
+    assert "path: .walkforward_cache" in replay
+
     # Bounded on the process, not only on the step: a step timeout kills the
-    # shell and leaves the python child writing to data/ (see
-    # WorkflowStepTimeoutTests in tests/test_integrity_fixes.py).
-    assert re.search(r"run: timeout\b.*\bpython walkforward\.py", replay_block)
-    assert "path: .walkforward_cache" in workflow
-    # The replay output persists by being committed with the rest of data/.
-    # Matched on the command, not on the phrase "git add data/", which now
-    # survives only inside a comment (see tests/test_commit_data.py).
-    assert "python commit_data.py" in workflow
+    # shell and leaves the python child writing to data/ while the commit step
+    # reads it (see WorkflowStepTimeoutTests in tests/test_integrity_fixes.py).
+    assert re.search(r"run: timeout\b.*\bpython walkforward\.py", replay)
+    assert "continue-on-error: true" in replay
+
+    # It writes data/, so it commits through the signed path like every other
+    # writer, and validates before doing so.
+    assert "python validate_data_files.py" in replay
+    assert "python commit_data.py" in replay
+
+    # Deliberately NOT in the site-build group: that group is serialized with
+    # cancel-in-progress:false, so joining it would queue a long replay ahead
+    # of a pregame build.
+    assert "group: walkforward" in replay
+    assert "group: site-build" not in replay
+
+
+def test_replay_cache_key_is_code_not_bytes(tmp_path):
+    """The cache key is the model's CODE, not the file's bytes.
+
+    Keyed on bytes, every edit discarded the whole replay and restarted it
+    from the first slate -- three merged display-only commits did exactly that
+    on 2026-08-27, one of them almost entirely deletions of dead code. Paired
+    with a bounded run, a cache that resets on comments never finishes.
+
+    Both directions are asserted. Relaxing the key is only safe while a real
+    code change still invalidates it: a stale row silently mixed into a new
+    replay is a much worse failure than a spurious reset.
+
+    Operates on temp files rather than mutating the repo's own build_site.py:
+    a test that rewrites a production module leaves it corrupted if the run is
+    interrupted between the write and the restore.
+    """
+    base = "X = 1\n\n\ndef f(a):\n    return a + X\n"
+    src = tmp_path / "m.py"
+
+    src.write_text(base)
+    before = walkforward._code_only(src)
+
+    src.write_text(base + "\n# a comment that changes nothing\n")
+    assert walkforward._code_only(src) == before, "a comment changed the key"
+
+    src.write_text("# leading comment\n" + base)
+    assert walkforward._code_only(src) == before, "a line shift changed the key"
+
+    src.write_text('"""A module docstring."""\n' + base)
+    assert walkforward._code_only(src) == before, "a docstring changed the key"
+
+    src.write_text(base.replace("return a + X", '"""Doc."""\n    return a + X'))
+    assert walkforward._code_only(src) == before, "a function docstring changed the key"
+
+    # ...but any real change must still invalidate it
+    for changed, why in (
+        ("X = 2\n\n\ndef f(a):\n    return a + X\n", "a constant's value"),
+        ("X = 1\n\n\ndef f(a):\n    return a - X\n", "an operator"),
+        ("X = 1\n\n\ndef f(a=0):\n    return a + X\n", "an argument default"),
+        ("X = 1\n\n\ndef g(a):\n    return a + X\n", "a function name"),
+    ):
+        src.write_text(changed)
+        assert walkforward._code_only(src) != before, f"{why} did NOT invalidate the key"
+
+
+def test_replay_config_hash_is_stable_and_covers_the_model(tmp_path):
+    """The real key is deterministic and keyed to the model tag."""
+    first = walkforward.replay_config_hash()
+    assert first == walkforward.replay_config_hash()
+    assert len(first) == 16
+    with mock.patch.object(walkforward.model, "MODEL_TAG", "xw+plat_consol_v999"):
+        assert walkforward.replay_config_hash() != first
+
+
+def test_report_declares_a_partial_replay(tmp_path):
+    """A truncated replay must not read as a complete backtest.
+
+    Dates replay in order, so what a bounded run drops is always the MOST
+    RECENT window -- the one a reader most wants. The report on disk on
+    2026-08-27 said "Games 690" beside a frame of 500 rows ending 08-11.
+    """
+    frame = pd.DataFrame({
+        "game_date": ["2026-07-01", "2026-07-02"],
+        "wf_lean": ["NYY", "TB"],
+        "wf_full_grade": ["W", "L"],
+        "wf_f5_grade": ["W", "L"],
+        "wf_market_pick_prob": [0.55, 0.45],
+        "wf_roi": [0.9, -1.0],
+        "input_fidelity": ["historical_lineup"] * 2,
+        "original_full_grade": ["W", "L"],
+        "changed_from_original": [False, False],
+    })
+    source = pd.DataFrame({"game_date": ["2026-07-01", "2026-07-02",
+                                         "2026-07-03", "2026-07-04"]})
+
+    partial = walkforward.render_report(frame, source)
+    assert "PARTIAL REPLAY" in partial
+    assert "MOST RECENT" in partial
+    assert "2026-07-03" in partial and "2026-07-04" in partial
+    assert "NOT REPLAYED 2 games over 2 dates" in partial
+
+    complete = walkforward.render_report(frame, source.iloc[:2])
+    assert "PARTIAL REPLAY" not in complete
+    assert "Complete" in complete
+
+    # and with no source at all it must not silently claim completeness
+    assert "Complete" not in walkforward.render_report(frame)
+
+
+def test_coverage_counts_dates_and_games_it_did_not_reach():
+    frame = pd.DataFrame({"game_date": ["2026-07-01"] * 3})
+    source = pd.DataFrame({"game_date": ["2026-07-01"] * 3 + ["2026-07-02"] * 5})
+    cov = walkforward.coverage(frame, source)
+    assert cov["games"] == 3 and cov["dates"] == 1
+    assert cov["missing_dates"] == ["2026-07-02"]
+    assert cov["missing_games"] == 5
+    assert cov["partial"] is True
+    assert walkforward.coverage(frame, frame)["partial"] is False

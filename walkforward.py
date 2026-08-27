@@ -10,6 +10,7 @@ ledger-row extraction/grading semantics from ``grade_leans.py``.
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import math
 import os
@@ -48,12 +49,54 @@ def _text(value):
     return str(value)
 
 
+REPLAY_SOURCES = ("build_site.py", "grade_leans.py", "historical_data.py",
+                  "walkforward.py")
+
+
+def _code_only(path):
+    """A module's CODE, with comments and docstrings removed.
+
+    The replay cache is keyed on this. It used to be keyed on the raw file
+    BYTES, which meant any edit at all discarded every cached row and restarted
+    the replay from the first slate -- including edits that cannot move a
+    prediction. Measured on 2026-08-27: three merged display-only commits
+    (a1efe74, 5ea0758, 3fdc201), one of them almost entirely DELETIONS of dead
+    code, each reset the backtest. Appending a bare comment to build_site.py
+    changed the hash. Because the replay is also bounded (it gets one slice of
+    a run before its timeout), a cache that resets on comments never finishes:
+    the committed replay stopped at 2026-08-11 while the ledger ran to 08-27,
+    and it had never once covered the v12 window it exists to validate.
+
+    Comments are not in the AST at all, so they are excluded by construction.
+    Docstrings ARE nodes, so they are stripped explicitly. `ast.dump` omits
+    line numbers by default, so shifting code down a file changes nothing
+    either.
+
+    THIS DELIBERATELY STAYS STRICT ABOUT CODE. Any change to an expression, a
+    constant's value, an argument default or the order of statements produces a
+    different dump and still invalidates the cache -- which is the direction
+    that matters, because a stale row silently mixed into a new replay is a
+    far worse failure than a spurious reset. The relaxation is confined to
+    text that the interpreter throws away.
+    """
+    tree = ast.parse((SOURCE_ROOT / path).read_bytes())
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Module, ast.FunctionDef,
+                                 ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        body = node.body
+        if (body and isinstance(body[0], ast.Expr)
+                and isinstance(body[0].value, ast.Constant)
+                and isinstance(body[0].value.value, str)):
+            node.body = body[1:] or [ast.Pass()]
+    return ast.dump(tree)
+
+
 def replay_config_hash():
     digest = hashlib.sha256()
     digest.update(model.MODEL_TAG.encode())
-    for name in ("build_site.py", "grade_leans.py", "historical_data.py",
-                 "walkforward.py"):
-        digest.update((SOURCE_ROOT / name).read_bytes())
+    for name in REPLAY_SOURCES:
+        digest.update(_code_only(name).encode())
     return digest.hexdigest()[:16]
 
 
@@ -317,7 +360,7 @@ def run_walkforward(ledger_path=DEFAULT_LEDGER, output_path=DEFAULT_OUTPUT,
         ["game_date", "game_pk"]
     ).reset_index(drop=True)
     _atomic_csv(frame, output_path)
-    report = render_report(frame)
+    report = render_report(frame, source)
     report_path = Path(report_path)
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(report)
@@ -332,7 +375,37 @@ def _record(series):
     return f"{w}-{l}" + (f"-{t}" if t else "") + tail
 
 
-def render_report(frame):
+def coverage(frame, source=None):
+    """What the replay actually covers, against what it was asked to cover.
+
+    A truncated replay is NOT a random subsample of the ledger. Dates are
+    replayed in order, so a run that stops early always keeps the EARLIEST
+    slates and drops the most recent ones -- exactly the window a reader cares
+    about most. On 2026-08-27 the report on disk read "Games 690" while the
+    frame beside it held 500 rows ending 2026-08-11, with the ledger running to
+    08-27: sixteen dates and 209 games missing, none of them announced, and the
+    BY MONTH block simply had no August-second-half line to omit visibly.
+
+    So the report states its own coverage rather than leaving the reader to
+    infer completeness from a confident-looking record.
+    """
+    replayed = sorted(set(frame["game_date"].astype(str)))
+    out = {"games": len(frame), "dates": len(replayed),
+           "first": replayed[0] if replayed else None,
+           "last": replayed[-1] if replayed else None,
+           "missing_dates": [], "missing_games": 0, "partial": False}
+    if source is not None and len(source):
+        asked = sorted(set(source["game_date"].astype(str)))
+        missing = [d for d in asked if d not in set(replayed)]
+        out["missing_dates"] = missing
+        out["missing_games"] = int(source["game_date"].astype(str).isin(missing).sum())
+        out["asked_games"] = len(source)
+        out["asked_dates"] = len(asked)
+        out["partial"] = bool(missing)
+    return out
+
+
+def render_report(frame, source=None):
     decided = frame[frame["wf_lean"].notna()].copy()
     wins = (decided["wf_full_grade"] == "W").astype(float)
     probs = pd.to_numeric(decided.get("wf_market_pick_prob"), errors="coerce")
@@ -345,9 +418,20 @@ def render_report(frame):
     roi_total = float(roi.sum(skipna=True))
     roi_n = int(roi.notna().sum())
 
+    cov = coverage(frame, source)
     lines = [
         "CURRENT MODEL WALK-FORWARD",
         "",
+    ]
+    if cov["partial"]:
+        lines += [
+            "*** PARTIAL REPLAY -- every figure below covers only the dates "
+            "listed under COVERAGE. ***",
+            "*** Dates replay in order, so what is missing is the MOST RECENT "
+            "window, not a random sample. ***",
+            "",
+        ]
+    lines += [
         f"Model       {model.MODEL_TAG}",
         f"Games       {len(frame)}",
         f"Decisions   {len(decided)}",
@@ -357,6 +441,24 @@ def render_report(frame):
         f"Market z    {z_score:+.2f}" if pd.notna(z_score) else "Market z    —",
         (f"Flat ROI    {roi_total:+.2f}u / {roi_n} bets "
          f"({100 * roi_total / roi_n:+.1f}%)" if roi_n else "Flat ROI    —"),
+        "",
+        "COVERAGE",
+        f"Replayed    {cov['games']} games over {cov['dates']} dates"
+        + (f", {cov['first']} .. {cov['last']}" if cov["first"] else ""),
+    ]
+    if source is not None and len(source):
+        lines.append(
+            f"Ledger      {cov['asked_games']} games over {cov['asked_dates']} dates")
+        if cov["partial"]:
+            shown = ", ".join(cov["missing_dates"][:6])
+            more = ("" if len(cov["missing_dates"]) <= 6
+                    else f" (+{len(cov['missing_dates']) - 6} more)")
+            lines.append(
+                f"NOT REPLAYED {cov['missing_games']} games over "
+                f"{len(cov['missing_dates'])} dates: {shown}{more}")
+        else:
+            lines.append("Complete    every ledger date in range was replayed")
+    lines += [
         "",
         "INPUT FIDELITY",
     ]
