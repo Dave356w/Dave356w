@@ -128,11 +128,26 @@ jobs:
       # newest separate walk-forward ledger/report. A historical-source outage
       # is intentionally non-fatal: losing today's pregame production snapshot
       # would be irreversible, while this replay can resume on the next run.
+      #
+      # The budget is enforced on the PROCESS, not only on the step. A step
+      # timeout kills the step's shell and moves on; the python child survives
+      # as an orphan the runner reaps in post-job cleanup, and walkforward
+      # rewrites data/walkforward_ledger.csv after every date it finishes. Run
+      # 33073467257 is the instance: the step timed out at 12:55:07, the commit
+      # step ran `git add data/` and committed at 12:55:50, the orphan rewrote
+      # the ledger a fraction of a second later, and `git pull --rebase` refused
+      # with "cannot rebase: You have unstaged changes" -- so a slate's pregame
+      # rows were built, committed locally and never pushed. `timeout` blocks
+      # until the child is actually dead, so no step after this one can find
+      # data/ moving underneath it. SIGINT rather than SIGTERM so _atomic_csv's
+      # `finally` gets to remove its temp file; SIGKILL 60s later if the process
+      # ignores it. 450s sits under the 8-minute step timeout, which becomes a
+      # backstop that should never fire.
       - name: Append current-model walk-forward ledger (pre-build)
         id: walkforward
         continue-on-error: true
         timeout-minutes: 8
-        run: python walkforward.py
+        run: timeout --signal=INT --kill-after=60 450 python walkforward.py
 
       - name: Warn when walk-forward append is deferred
         if: steps.walkforward.outcome == 'failure'

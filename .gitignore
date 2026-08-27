@@ -14,3 +14,9 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+
+# atomic-write temp files (_atomic_csv writes data/.<name>.<rand>.tmp then
+# os.replace()s it into place). A process killed mid-write leaves one behind,
+# and the ledger commit's `git add data/` would stage a partial CSV -- past the
+# validate_data_files.py run that precedes it.
+*.tmp
