@@ -1,29 +1,29 @@
-LEAN LEDGER — 166 graded games (161 with a lean, 5 abstained)  [xw+plat_consol_v12]
-xwOBA lean   full: 101-60  (0.627)   F5: 73-63-25  (0.537)
-platoon lean full: 76-53  (0.589)   F5: 63-43-23  (0.594)   (reliable-only, n=129)
-xwOBA on same subset  full: 81-48  (0.628)   F5: 59-47-23  (0.557)
+LEAN LEDGER — 171 graded games (166 with a lean, 5 abstained)  [xw+plat_consol_v12]
+xwOBA lean   full: 104-62  (0.627)   F5: 76-65-25  (0.539)
+platoon lean full: 78-55  (0.586)   F5: 65-45-23  (0.591)   (reliable-only, n=133)
+xwOBA on same subset  full: 83-50  (0.624)   F5: 61-49-23  (0.555)
 xwOBA F5 by |Δ| tercile:
-  low  24-24-6  (0.500)   (Δ 0.000–0.012, n=54)
-  mid  21-20-12  (0.512)   (Δ 0.012–0.022, n=53)
-  hi   28-19-7  (0.596)   (Δ 0.023–0.101, n=54)
+  low  26-24-6  (0.520)   (Δ 0.000–0.011, n=56)
+  mid  21-22-12  (0.488)   (Δ 0.012–0.022, n=55)
+  hi   29-19-7  (0.604)   (Δ 0.023–0.101, n=55)
 DIVERGE h2h (F5): xwOBA 11 — platoon 15  (n=33)
-home F5 baseline: 0.511  (n=141)
-weight fit: 141 usable F5 decisions (gate 30)
-  b_lineup=+0.301±0.181  b_sp=+0.166±0.176  HFA=+0.041  (per sd)
-  symmetry test  b_lineup - b_sp*(sd_lu/sd_sp) = +0.250 ± 0.196  z=+1.27  (no departure from equal weight)
+home F5 baseline: 0.507  (n=146)
+weight fit: 146 usable F5 decisions (gate 30)
+  b_lineup=+0.262±0.177  b_sp=+0.221±0.174  HFA=+0.025  (per sd)
+  symmetry test  b_lineup - b_sp*(sd_lu/sd_sp) = +0.197 ± 0.191  z=+1.03  (no departure from equal weight)
   (equal first-order weight is what the symmetric multiplicative matchup implies; z is the evidence against it. Diagnostic only -- nothing here feeds back into a lean, a delta or a grade.)
 predicted vs actual (backfilled box scores)
-  starter IP   n=936  bias +0.03 IP  MAE 0.95 IP   (drives the phase weight q)
-    IP calibration slope +0.749 +/- 0.038 (1.00 = calibrated; < 1 = over-dispersed)
-  offense wOBA n=327  pred mean 0.3098  actual mean 0.3102  (+0.0004)
-    calibration slope +0.62 +/- 0.30 (1.00 = calibrated)
-    UNDER-POWERED: se 0.30 cannot separate 1.00 from 0.80; needs ~6400 side-games
-    skill vs league-rate baseline +0.0113 (ceiling ~0.04; per-game noise dominates)
-  lineup dispersion n=327  residual slope -0.50 +/- 0.70 (> 0 = concentrated lineups beat their mean)
+  starter IP   n=946  bias +0.03 IP  MAE 0.95 IP   (drives the phase weight q)
+    IP calibration slope +0.752 +/- 0.038 (1.00 = calibrated; < 1 = over-dispersed)
+  offense wOBA n=337  pred mean 0.3095  actual mean 0.3094  (-0.0001)
+    calibration slope +0.74 +/- 0.29 (1.00 = calibrated)
+    UNDER-POWERED: se 0.29 cannot separate 1.00 from 0.80; needs ~6400 side-games
+    skill vs league-rate baseline +0.0202 (ceiling ~0.04; per-game noise dominates)
+  lineup dispersion n=337  residual slope -0.35 +/- 0.68 (> 0 = concentrated lineups beat their mean)
     UNDER-POWERED: needs ~347 side-games to separate a 0.15 correlation; see dispersion_probe.py
-  lean delta   n=161  calibration slope +0.66 +/- 0.43 (1.00 = calibrated; < 1 = over-dispersed)
-    corr +0.122  sign agreement 0.578  (the lean's own hit rate against its target)
-    UNDER-POWERED: se 0.43 cannot separate 1.00 from 0.50
+  lean delta   n=166  calibration slope +0.77 +/- 0.42 (1.00 = calibrated; < 1 = over-dispersed)
+    corr +0.142  sign agreement 0.578  (the lean's own hit rate against its target)
+    UNDER-POWERED: se 0.42 cannot separate 1.00 from 0.50
   by prediction family (never pooled — different inputs, different scale against an observed-wOBA actual):
   v2/v3      net n=188 slope +0.51±0.17
   v4         net n= 14 slope -0.36±0.81
@@ -37,15 +37,15 @@ predicted vs actual (backfilled box scores)
   wOBA v4    wOBA n= 22 pred 0.3084 act 0.2639 (-0.0445) slope -2.10±1.76  SP IP n= 22 bias +0.31  net n= 11 slope -4.82±2.53
   wOBA v5    wOBA n=236 pred 0.3077 act 0.3090 (+0.0013) slope +0.65±0.36  SP IP n=238 bias +0.00  net n=117 slope +0.01±0.50
   split v1   wOBA n= 14 pred 0.3221 act 0.3514 (+0.0294) slope -0.78±1.58  SP IP n= 14 bias +0.05  net n=  7 slope -1.18±0.89
-  v12        wOBA n=327 pred 0.3098 act 0.3102 (+0.0004) slope +0.62±0.30  SP IP n=332 bias -0.06  net n=161 slope +0.66±0.43
+  v12        wOBA n=337 pred 0.3095 act 0.3094 (-0.0001) slope +0.74±0.29  SP IP n=342 bias -0.06  net n=166 slope +0.77±0.42
   xw+plat_consol_v1  net n=  1
 component error (each scored against its own realised phase)
-  SP      n=332  pred 0.3133 act 0.3299 (+0.0166)  MAE 0.0949  slope +0.39±0.30  corr +0.072
-  BP      n=331  pred 0.2966 act 0.2823 (-0.0142)  MAE 0.1113  slope +0.85±0.60  corr +0.078
-  lineup  n=332  pred 0.3179 act 0.3096 (-0.0083)  MAE 0.0739  slope -0.69±0.68  corr -0.056
+  SP      n=342  pred 0.3129 act 0.3284 (+0.0155)  MAE 0.0935  slope +0.50±0.29  corr +0.094
+  BP      n=340  pred 0.2965 act 0.2819 (-0.0146)  MAE 0.1119  slope +0.82±0.59  corr +0.075
+  lineup  n=342  pred 0.3179 act 0.3088 (-0.0092)  MAE 0.0744  slope -0.89±0.67  corr -0.072
 by slate (most recent 14 of 37; monitoring, not trend)
-  scale: per-side rate error sd 0.0902 over 833 paired side-games — read gross outliers, not drift
-  2026-08-27  xwOBA        6g  rate n=  2 pred 0.3139 act 0.3625 (+0.0486) MAE 0.0961  SP IP n=  2 bias -0.23 MAE 0.46
+  scale: per-side rate error sd 0.0902 over 843 paired side-games — read gross outliers, not drift
+  2026-08-27  xwOBA        6g  rate n= 12 pred 0.3027 act 0.2957 (-0.0070) MAE 0.0800  SP IP n= 12 bias +0.03 MAE 0.51
   2026-08-26  xwOBA       15g  rate n= 30 pred 0.3099 act 0.3189 (+0.0091) MAE 0.0936  SP IP n= 30 bias -0.06 MAE 1.05
   2026-08-25  xwOBA       15g  rate n= 29 pred 0.3090 act 0.3050 (-0.0041) MAE 0.0631  SP IP n= 30 bias -0.01 MAE 1.00
   2026-08-24  xwOBA       10g  rate n= 20 pred 0.3095 act 0.3136 (+0.0041) MAE 0.0877  SP IP n= 20 bias -0.06 MAE 0.76
@@ -72,5 +72,5 @@ model-family history (never pooled into the current-family fit):
   wOBA v4 n= 11  wOBA full 5-6  (0.455)  F5 4-4-3  (0.500)
   wOBA v5 n=119  (2 abstained)  wOBA full 52-65  (0.444)  F5 46-50-21  (0.479)
   split v1 n=  7  wOBA/xwOBA full 4-3  (0.571)  F5 3-4  (0.429)
-  v12     n=166  (5 abstained)  xwOBA full 101-60  (0.627)  F5 73-63-25  (0.537)
+  v12     n=171  (5 abstained)  xwOBA full 104-62  (0.627)  F5 76-65-25  (0.539)
   xw+plat_consol_v1 n=  1  xwOBA full 0-1  (0.000)  F5 0-0-1
