@@ -1,14 +1,18 @@
 name: Pregame watch (long poll)
 
-# One delivered cron buys a whole shift of polling instead of a single poll.
+# One delivered cron buys a whole shift of coverage instead of a single poll.
 #
-# build.yml asks GitHub for ~15 scheduled runs a day and has been getting 2-7
+# build.yml asks GitHub for ~15 scheduled runs a day and has been getting 1-7
 # of them; on 2026-08-27 it got none at all between 19:07Z and 00:39Z, and
 # every pregame lock on that slate came from a push or a hand-run dispatch.
-# watch_slate.py's docstring carries the counts and what they cost. Rather
-# than ask for more runs -- already tried on 2026-08-27, and the delivered
-# count went DOWN -- this asks for three, and each one polls the same gate
-# internally for five hours.
+# THIS WORKFLOW'S OWN FIRST SHIFT WAS DROPPED TOO -- run 1 came from a hand
+# dispatch at 15:02Z on 08-28 -- so the cron risk below is measured, not
+# hypothetical. watch_slate.py's docstring carries the counts and what they
+# cost. Asking for MORE runs was tried on 08-27 and the delivered count fell,
+# but so did the ask (56/day to 14), so that tells us nothing about the rate;
+# the reason to stop tuning the cron is that a schedule this repo does not
+# control is the wrong place for a deadline it cannot miss. So: ask for three,
+# and have each one wake at the day's own pregame targets for five hours.
 #
 # THIS ADDS A PATH, IT DOES NOT REPLACE ONE. build.yml keeps its own schedule
 # untouched: a watch shift is started by a cron GitHub can drop just as
@@ -63,7 +67,9 @@ jobs:
 
       # No pip install: watch_slate.py and schedule_gate.py are both stdlib
       # only. Keeping it that way is the point -- this job must be cheap
-      # enough that running it for five hours is uninteresting.
+      # enough that running it for five hours is uninteresting. It spends
+      # almost all of that asleep between targets, waking at most every
+      # RECHECK_SECONDS to re-read a slate whose start times move.
       #
       # The process is bounded by `timeout`, not by timeout-minutes alone.
       # That is the rule WorkflowStepTimeoutTests exists to hold: a step
@@ -75,7 +81,7 @@ jobs:
       # 19500 > SHIFT_SECONDS (19200) so the loop's own deadline wins in the
       # normal case and this only fires if it hangs; the relationship is
       # pinned by test_process_bound_outlasts_the_shift.
-      - name: Poll the pregame gate and dispatch builds
+      - name: Wake at each pregame target and dispatch builds
         timeout-minutes: 330
         env:
           GITHUB_REPOSITORY: ${{ github.repository }}
