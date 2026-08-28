@@ -11,11 +11,22 @@ import pathlib
 import re
 import sys
 import unittest
+from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import schedule_gate
 import watch_slate
+
+BASE = datetime(2026, 8, 28, 16, 0, tzinfo=timezone.utc)
+
+
+def _game(pk, start, state="Preview"):
+    return {
+        "gamePk": pk,
+        "gameDate": start.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "status": {"abstractGameState": state},
+    }
 
 
 class NoHandRolledDedupeTests(unittest.TestCase):
@@ -27,6 +38,10 @@ class NoHandRolledDedupeTests(unittest.TestCase):
     build waits -- while the hand-rolled check adds a way to lose a whole
     shift: one run stuck in `queued` (run 33081633410 sat there ten hours)
     suppresses every dispatch after it, and does it silently.
+
+    The `fired` set inside watch() is not that check and does not reinstate
+    it: it is local knowledge of targets this shift has already spent, it asks
+    GitHub nothing, and no external run's state can wedge it.
     """
 
     def test_module_exposes_no_active_run_probe(self):
@@ -86,8 +101,78 @@ class DispatchRequestTests(unittest.TestCase):
         self.assertEqual(seen["headers"]["authorization"], "Bearer tok")
 
 
+class TargetTests(unittest.TestCase):
+    """What the shift wakes up for."""
+
+    def test_one_cluster_yields_one_target_per_offset(self):
+        games = [_game(1, BASE + timedelta(hours=3))]
+        targets = watch_slate.dispatch_targets(games, BASE)
+        self.assertEqual(
+            [(t - BASE).total_seconds() / 60 for t, _pks, _o in targets],
+            [140.0, 160.0],
+        )
+        self.assertEqual([o for _t, _p, o in targets], [40, 20])
+
+    def test_games_starting_close_together_share_a_dispatch(self):
+        """A build renders the whole slate, so three 7:05-7:15 games are one
+        capture, not three."""
+        games = [
+            _game(1, BASE + timedelta(hours=3)),
+            _game(2, BASE + timedelta(hours=3, minutes=5)),
+            _game(3, BASE + timedelta(hours=3, minutes=10)),
+        ]
+        targets = watch_slate.dispatch_targets(games, BASE)
+        self.assertEqual(len(targets), len(watch_slate.TARGET_MINUTES))
+        self.assertEqual(targets[0][1], (1, 2, 3))
+
+    def test_targets_are_measured_from_the_earliest_start_in_a_cluster(self):
+        """Measuring from any later game would dispatch after the first one
+        has already started."""
+        games = [
+            _game(1, BASE + timedelta(hours=3)),
+            _game(2, BASE + timedelta(hours=3, minutes=15)),
+        ]
+        first = min(t for t, _p, _o in watch_slate.dispatch_targets(games, BASE))
+        self.assertEqual(first, BASE + timedelta(hours=3) - timedelta(minutes=40))
+
+    def test_a_separate_slate_block_gets_its_own_targets(self):
+        games = [
+            _game(1, BASE + timedelta(hours=1)),
+            _game(2, BASE + timedelta(hours=6)),
+        ]
+        targets = watch_slate.dispatch_targets(games, BASE)
+        self.assertEqual(len(targets), 2 * len(watch_slate.TARGET_MINUTES))
+        self.assertEqual({pks for _t, pks, _o in targets}, {(1,), (2,)})
+
+    def test_a_game_inside_the_gate_floor_is_dropped(self):
+        """schedule_gate would refuse it and the snapshot could not be locked
+        pregame anyway."""
+        close = BASE + timedelta(minutes=schedule_gate.MIN_MINUTES_BEFORE - 1)
+        self.assertEqual(watch_slate.dispatch_targets([_game(1, close)], BASE), [])
+
+    def test_a_started_game_is_dropped(self):
+        games = [_game(1, BASE + timedelta(hours=3), state="Live")]
+        self.assertEqual(watch_slate.dispatch_targets(games, BASE), [])
+
+    def test_a_past_target_survives_so_a_late_shift_captures_now(self):
+        """A shift that starts mid-window must dispatch immediately rather
+        than skip the cluster it landed inside."""
+        games = [_game(1, BASE + timedelta(minutes=25))]
+        targets = watch_slate.dispatch_targets(games, BASE)
+        self.assertTrue(any(t <= BASE for t, _p, _o in targets))
+
+    def test_targets_clear_the_gate_floor(self):
+        """Read against schedule_gate, not a copy of its numbers. The tight
+        target must still leave room for a build (~12 min on 2026-08-27) to
+        finish before first pitch."""
+        self.assertGreater(min(watch_slate.TARGET_MINUTES),
+                           schedule_gate.MIN_MINUTES_BEFORE)
+        self.assertLessEqual(max(watch_slate.TARGET_MINUTES),
+                             schedule_gate.MAX_MINUTES_BEFORE)
+
+
 class _Clock:
-    """A fake clock that only advances when the loop sleeps."""
+    """A fake clock driving both the loop's timer and its wall clock."""
 
     def __init__(self):
         self.t = 0.0
@@ -98,11 +183,14 @@ class _Clock:
     def sleep(self, seconds):
         self.t += max(seconds, 1.0)
 
+    def now(self):
+        return BASE + timedelta(seconds=self.t)
+
 
 class WatchLoopTests(unittest.TestCase):
     """The loop is driven through injected seams so no API or wall clock runs."""
 
-    def _run(self, gate, deadline=3600.0, dispatch_raises=None):
+    def _run(self, fetch, deadline=4 * 3600.0, dispatch_raises=None):
         clock = _Clock()
         calls = []
 
@@ -111,80 +199,89 @@ class WatchLoopTests(unittest.TestCase):
             if dispatch_raises is not None:
                 raise dispatch_raises
 
-        original = (watch_slate.gate, watch_slate.dispatch_build)
-        watch_slate.gate = gate
+        original = watch_slate.dispatch_build
         watch_slate.dispatch_build = fake_dispatch
         try:
             count = watch_slate.watch(
                 "o/r", "tok", deadline=deadline, clock=clock,
-                sleep=clock.sleep, log=lambda *a: None,
+                sleep=clock.sleep, now_utc=clock.now, log=lambda *a: None,
+                fetch=fetch,
             )
         finally:
-            (watch_slate.gate, watch_slate.dispatch_build) = original
+            watch_slate.dispatch_build = original
         return count, calls, clock
 
-    def test_dispatches_while_the_gate_fires(self):
-        count, calls, _ = self._run(
-            gate=lambda now: (True, "pregame window: 1"),
-        )
-        # One hour of deadline at a 20 minute interval.
-        self.assertEqual(count, 3)
-        self.assertEqual(len(calls), 3)
+    def test_dispatches_once_per_target_not_once_per_poll(self):
+        """The whole point of the rewrite. The fixed 20-minute poll fired
+        about twelve times over this window; two targets means two builds."""
+        games = [_game(1, BASE + timedelta(hours=3))]
+        count, calls, _ = self._run(fetch=lambda day: games)
+        self.assertEqual(count, 2)
+        self.assertEqual(len(calls), 2)
 
-    def test_holds_when_no_game_is_near(self):
-        count, calls, _ = self._run(
-            gate=lambda now: (False, "no game 15-360 minutes from first pitch"),
-        )
+    def test_it_wakes_at_the_target_not_before_it(self):
+        games = [_game(1, BASE + timedelta(hours=3))]
+        _count, calls, _ = self._run(fetch=lambda day: games)
+        self.assertEqual(calls, [140 * 60.0, 160 * 60.0])
+
+    def test_holds_when_the_slate_is_empty(self):
+        count, calls, _ = self._run(fetch=lambda day: [])
         self.assertEqual(count, 0)
         self.assertEqual(calls, [])
 
     def test_stops_at_its_own_deadline(self):
-        _count, _calls, clock = self._run(
-            gate=lambda now: (True, "pregame window: 1"),
-            deadline=100.0,
-        )
+        _count, _calls, clock = self._run(fetch=lambda day: [], deadline=100.0)
         self.assertGreaterEqual(clock(), 100.0)
-        self.assertLess(clock(), 100.0 + watch_slate.POLL_SECONDS)
+        self.assertLess(clock(), 100.0 + watch_slate.RECHECK_SECONDS)
 
-    def test_a_raising_gate_fails_open(self):
+    def test_a_raising_fetch_fails_open(self):
         """A missed pregame row cannot be re-derived; a redundant build can be
         thrown away. schedule_gate makes the same call on a StatsAPI error."""
-        def boom(now):
+        def boom(day):
             raise RuntimeError("statsapi down")
 
-        count, _calls, _ = self._run(gate=boom)
-        self.assertEqual(count, 3)
+        count, _calls, _ = self._run(fetch=boom, deadline=3600.0)
+        # Backed off to RECHECK_SECONDS rather than spinning.
+        self.assertEqual(count, 3600 // watch_slate.RECHECK_SECONDS)
 
-    def test_a_failing_dispatch_does_not_end_the_shift(self):
+    def test_a_failing_dispatch_retries_and_does_not_end_the_shift(self):
+        games = [_game(1, BASE + timedelta(hours=3))]
         count, calls, clock = self._run(
-            gate=lambda now: (True, "pregame window: 1"),
+            fetch=lambda day: games,
             dispatch_raises=OSError("connection reset"),
         )
-        self.assertEqual(count, 0)          # nothing counted as dispatched
-        self.assertEqual(len(calls), 3)     # but it kept trying to the deadline
-        self.assertGreaterEqual(clock(), 3600.0)
+        self.assertEqual(count, 0)               # nothing counted as dispatched
+        self.assertGreater(len(calls), 2)        # but it kept retrying
+        self.assertGreaterEqual(clock(), 4 * 3600.0)
+        retries = [b - a for a, b in zip(calls, calls[1:])]
+        self.assertTrue(all(gap <= watch_slate.RETRY_SECONDS for gap in retries))
 
+    def test_a_moved_start_does_not_refire_a_spent_target(self):
+        """Keyed on (gamePks, offset), not on the target time -- otherwise a
+        rain delay re-fires every target the shift has already spent."""
+        start = BASE + timedelta(hours=2)
+        moved = BASE + timedelta(hours=3)
+        clock = _Clock()
+        calls = []
 
-class GateWiringTests(unittest.TestCase):
-    def test_watch_takes_the_pregame_path_not_the_always_run_path(self):
-        """decision() returns True for every non-schedule event, so passing
-        "workflow_dispatch" here would defeat the gate entirely."""
-        seen = {}
+        def fetch(day):
+            # Slips an hour once the T-40 target has been dispatched.
+            return [_game(1, start if clock.t <= 80 * 60 else moved)]
 
-        def spy(event_name, event_schedule, now):
-            seen["event"] = event_name
-            seen["schedule"] = event_schedule
-            return False, "2026-08-27", "no game"
-
-        original = schedule_gate.decision
-        watch_slate.schedule_gate.decision = spy
+        original = watch_slate.dispatch_build
+        watch_slate.dispatch_build = lambda repo, token: calls.append(clock())
         try:
-            should_run, _reason = watch_slate.gate(now=None)
+            count = watch_slate.watch(
+                "o/r", "tok", deadline=4 * 3600.0, clock=clock,
+                sleep=clock.sleep, now_utc=clock.now, log=lambda *a: None,
+                fetch=fetch,
+            )
         finally:
-            watch_slate.schedule_gate.decision = original
-        self.assertEqual(seen["event"], "schedule")
-        self.assertNotEqual(seen["schedule"], schedule_gate.DAILY_GRADE_CRON)
-        self.assertFalse(should_run)
+            watch_slate.dispatch_build = original
+        # T-40 spent against the original 18:00Z start; the slip re-plans only
+        # T-20, which has not fired -- it does not resurrect T-40.
+        self.assertEqual(count, 2)
+        self.assertEqual(calls, [80 * 60.0, 160 * 60.0])
 
 
 class WatchWorkflowTests(unittest.TestCase):
@@ -232,7 +329,8 @@ class WatchWorkflowTests(unittest.TestCase):
 
     def test_build_keeps_its_own_schedule(self):
         """This adds a path; it does not replace one. A dropped watch cron must
-        still leave build.yml's own polling behind it."""
+        still leave build.yml's own polling behind it -- and it is also the
+        only retry behind a target that dispatches into a failing build."""
         self.assertIn("schedule:", self.BUILD.read_text(encoding="utf-8"))
 
 
