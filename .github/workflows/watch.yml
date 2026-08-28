@@ -1,0 +1,83 @@
+name: Pregame watch (long poll)
+
+# One delivered cron buys a whole shift of polling instead of a single poll.
+#
+# build.yml asks GitHub for ~15 scheduled runs a day and has been getting 2-7
+# of them; on 2026-08-27 it got none at all between 19:07Z and 00:39Z, and
+# every pregame lock on that slate came from a push or a hand-run dispatch.
+# watch_slate.py's docstring carries the counts and what they cost. Rather
+# than ask for more runs -- already tried on 2026-08-27, and the delivered
+# count went DOWN -- this asks for three, and each one polls the same gate
+# internally for five hours.
+#
+# THIS ADDS A PATH, IT DOES NOT REPLACE ONE. build.yml keeps its own schedule
+# untouched: a watch shift is started by a cron GitHub can drop just as
+# happily, so the two paths are independent and the day is covered if either
+# is delivered. Do not "tidy up" by thinning build.yml's cron to pay for this.
+on:
+  # Three shifts of 5h20m tile 09:50 -> 02:10 ET with ~10 minute seams, which
+  # is the whole span in which schedule_gate can fire: its window opens 360
+  # minutes before first pitch, and the earliest MLB starts are around midday
+  # ET. The seams are covered by build.yml's own hourly cron when delivered.
+  # Spacing is deliberately wider than SHIFT_SECONDS so two shifts cannot
+  # overlap -- a pending shift in the concurrency group below would be
+  # cancelled by the next one anyway.
+  schedule:
+    - cron: '50 9 * * *'
+      timezone: America/New_York
+    - cron: '20 15 * * *'
+      timezone: America/New_York
+    - cron: '50 20 * * *'
+      timezone: America/New_York
+  workflow_dispatch:
+
+# NOT `site-build`. That group serialises ledger commits and is load-bearing,
+# but it is held for the duration of a run -- a five-hour watcher sitting in
+# it would park every push and every manual build behind itself for the rest
+# of the slate. The watcher writes nothing, so it needs no serialisation
+# against builds; it only needs to not stack against itself.
+concurrency:
+  group: site-watch
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  # Dispatching build.yml needs this. GITHUB_TOKEN is enough and no PAT is
+  # required: workflow_dispatch and repository_dispatch are the two documented
+  # exceptions to "events triggered by GITHUB_TOKEN do not create a workflow
+  # run". Every other event type would silently do nothing here.
+  actions: write
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    # Backstop only. GitHub caps a job at 6h; the loop stops itself well
+    # before this on its own clock.
+    timeout-minutes: 340
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # No pip install: watch_slate.py and schedule_gate.py are both stdlib
+      # only. Keeping it that way is the point -- this job must be cheap
+      # enough that running it for five hours is uninteresting.
+      #
+      # The process is bounded by `timeout`, not by timeout-minutes alone.
+      # That is the rule WorkflowStepTimeoutTests exists to hold: a step
+      # timeout kills the shell and moves on while the python child survives
+      # as an orphan, which is how run 33073467257 lost a slate's rows. This
+      # child touches nothing under data/, but an orphan that keeps
+      # dispatching builds after its job has ended is the same surprise.
+      # SIGINT first so the loop unwinds normally, SIGKILL 60s behind it.
+      # 19500 > SHIFT_SECONDS (19200) so the loop's own deadline wins in the
+      # normal case and this only fires if it hangs; the relationship is
+      # pinned by test_process_bound_outlasts_the_shift.
+      - name: Poll the pregame gate and dispatch builds
+        timeout-minutes: 330
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: timeout --signal=INT --kill-after=60 19500 python watch_slate.py
