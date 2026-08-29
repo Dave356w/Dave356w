@@ -140,7 +140,10 @@ abstention left v4/v5 quantiles identical; a uniform re-centring cancels in a
 difference). Unlike v3, v4 and v10, that half is **argued, not measured** — no
 lookahead means a past slate cannot be rebuilt to check it. The falsifier is
 named in `_SCALE_FAMILIES`: compare median |xw_net| on the first graded v11
-rows against the v9/v10 pool, and split the family if it moved.
+rows against the v9/v10 pool, and split the family if it moved. **It has since
+been run to its limit and closed — the share stands.** v11 graded no rows so
+the check fell to v12; see the "Instrumented and waiting" entry for the three
+reads and for why the test cannot be sharpened by waiting.
 
 The frozen `data/woba_priors_*.csv` are wOBA-denominated and stay that way.
 `priors_snapshot.RATE_COL` is pinned to `woba` rather than following the build,
@@ -1073,10 +1076,19 @@ Do not re-derive these by hand; they have readouts.
   (roughly 12 slates from 2026-08-15); `dispersion_probe.py` is the full read
   and controls for the backfill count, the zero-backfill subset and the
   game-level margin. A test pins the two together so they cannot drift into
-  disagreeing. Zero rows today: the column ships on new rows only, and no row
-  graded before it existed can ever be backfilled.
-- **The v11/v12 scale-family share** — argued, not measured, because
-  no-lookahead forbids rebuilding a past slate. Falsifier named in
+  disagreeing. The column ships on new rows only, and no row graded before it
+  existed can ever be backfilled — so the entry once read "zero rows today".
+
+  **The gate has since been crossed and the marker has dropped on its own,
+  which is the instrument working.** As of 2026-08-29 the report prints the
+  slope unmarked at n=367 side-games, and the first powered read is null:
+  `residual slope -0.29 +/- 0.65`, nowhere near separating from zero. Read the
+  current pair off `ledger_report.txt` rather than from here — the count moves
+  every build, and this is the one entry whose own threshold text has already
+  gone stale once.
+- **The v11/v12 scale-family share** — **settled 2026-08-29: the share
+  stands and the falsifier is closed.** Argued rather than measured at the
+  bump, because no-lookahead forbids rebuilding a past slate. Falsifier named in
   `_SCALE_FAMILIES`: compare median `|xw_net|` on the first graded v11/v12 rows
   against the v9/v10 pool and split the family if it moved. **First read, 15
   graded v12 rows (v11 produced none — see above): median `|xw_net|` 0.01845
@@ -1112,6 +1124,36 @@ Do not re-derive these by hand; they have readouts.
   median over a handful of slates is measuring which games got played. Same
   category as the constants entry — a number read off one distribution and
   quoted against another — one level out into a test rather than a constant.
+
+  **Third read, 2026-08-29, at the gate: 196 v12 rows over 15 slates. The
+  falsifier does not fire, and the second read was slate composition exactly as
+  called above.** Row-pooled — the form the first two reads used, kept for
+  comparability — median `|xw_net|` 0.01774 against the v9/v10 pool's 0.01859
+  over 99, difference **−0.00085, CI [−0.0062, +0.0023]**. The point estimate
+  regressed from −0.0053 to −0.0009 on 5x the sample. The slate-pooled form
+  asked for above agrees: median of per-slate medians, 15 slates against 7, gap
+  **−0.00309 at 1.48 se, CI [−0.0063, +0.0021]**. Neither excludes zero and
+  neither excludes the 0.00067 mechanism bound.
+
+  **Do not re-read it again — it is not merely underpowered today, it is
+  underpowered by construction.** Between-slate sd of the per-slate median is
+  0.00457, **7x** the mean `|Δ net|` of 0.00067 the IP calibration can actually
+  produce, so telling the mechanism apart from slate noise needs ~730 slates per
+  arm — about 68 seasons. What the test does have power for is a gross units
+  shift: ~11 slates per arm at 0.00542, the largest single-row move the change
+  can make, and both arms clear that. It has now said the only thing it was ever
+  capable of saying, which is what closes it rather than what leaves it open.
+
+  **The reusable half is the shape of the mistake.** A two-family comparison
+  routes the question through the games that happened to get played, and the
+  noise that introduces swamped the effect by 7x — so the instrument could
+  produce a scary-looking read (the second one) without ever being able to
+  produce a decisive one. The direct paired measurement already in the v12
+  `_SCALE_FAMILIES` entry — rebuild the same 254 rows both ways, mean `|Δ net|`
+  0.00067 — answers it with no ledger accumulation and no slate-composition
+  term at all. **Prefer measuring a change against itself over measuring two
+  families against each other.** Where a falsifier needs an ever-growing sample
+  to say anything, check its power against the mechanism before banking on it.
 - **The metric question** — the shadow arm, running wOBA under an xwOBA
   primary. Needs roughly 18 paired slates for 80% power on a 0.09 gap.
 - **`LEAN_STRENGTH_FALLBACK`** — recompute from whatever `SCALE_TAGS` resolves
