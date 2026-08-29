@@ -44,7 +44,7 @@ component error (each scored against its own realised phase)
   lineup  n=376  pred 0.3180 act 0.3072 (-0.0108)  MAE 0.0750  slope -0.87±0.64  corr -0.070
 by slate (most recent 14 of 39; monitoring, not trend)
   scale: per-side rate error sd 0.0900 over 877 paired side-games — read gross outliers, not drift
-  2026-08-29  xwOBA       15g  rate n=  4 pred 0.3002 act 0.2384 (-0.0618) MAE 0.0679  SP IP n=  4 bias -0.09 MAE 0.22
+  2026-08-29  xwOBA       16g  rate n=  4 pred 0.3002 act 0.2384 (-0.0618) MAE 0.0679  SP IP n=  4 bias -0.09 MAE 0.22
   2026-08-28  xwOBA       15g  rate n= 30 pred 0.3084 act 0.2986 (-0.0098) MAE 0.0752  SP IP n= 30 bias +0.16 MAE 0.76
   2026-08-27  xwOBA        6g  rate n= 12 pred 0.3027 act 0.2957 (-0.0070) MAE 0.0800  SP IP n= 12 bias +0.03 MAE 0.51
   2026-08-26  xwOBA       15g  rate n= 30 pred 0.3099 act 0.3189 (+0.0091) MAE 0.0936  SP IP n= 30 bias -0.06 MAE 1.05
@@ -73,3 +73,7 @@ model-family history (never pooled into the current-family fit):
   split v1 n=  7  wOBA/xwOBA full 4-3  (0.571)  F5 3-4  (0.429)
   v12     n=188  (5 abstained)  xwOBA full 114-69  (0.623)  F5 84-74-25  (0.532)
   xw+plat_consol_v1 n=  1  xwOBA full 0-1  (0.000)  F5 0-0-1
+
+pre-registered forward test  (registered 2026-08-29; fade the lean when gap > 0.06)
+    eligible rows since registration: 0 over 0 slates
+    nothing to score yet. Discovery-sample prior is NEGATIVE (-4.2% at the primary threshold) -- this tracks a hypothesis already argued dead.
