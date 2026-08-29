@@ -599,6 +599,30 @@ precedent — they are how the fix is known to look.
   v12 +1.98), which is noise, not edge. Do not quote any of these figures from
   here — run the probe.
 
+  **Banding the delta does not rescue it, and section 5 of the probe is there
+  because that is the natural next idea.** A 3-band |Δ| × 5-band price grid was
+  measured on the same 716 rows, both markets. The grid looks alive — full-game
+  cells run from −28.7% to +21.5% — and it is entirely noise: no cell reaches
+  even 2 sd (largest deviation −1.63), because at 21–82 rows a cell's null sd is
+  8–21 **percentage points** of ROI.
+
+  The decisive comparison is against a **maximum**, not against zero, since a
+  15-cell search returns the best of 15 draws. Simulating outcomes at the
+  devigged prices under "market correct, no edge", the best of the 14 eligible
+  cells averages **+20.4%** full-game and **+16.0%** on F5 — against observed
+  bests of +21.5% and +14.6%. So the full-game winner is exactly what chance
+  produces (p = 0.38) and the F5 winner is *worse* than chance (p = 0.53).
+  Selecting the best cell on prior slates and betting it on the next loses in
+  both markets: −13.8% over 15 bets full-game, −3.0% over 50 bets on F5. Neither
+  margin ordering is monotone in either direction, which is the tell — a real
+  effect would show structure, not scatter.
+
+  **The general rule this earns: on this data, any grid search will hand back a
+  cell near +20% ROI whether or not anything is there.** Judge a cell against
+  the null max and a forward test, never against zero. Do not add bands to a
+  signal that scored z = −0.13 undiscretised — cutting noise into bins makes
+  more maxima to be fooled by, not more signal.
+
 - **An error bar estimated from the outcomes it is testing.** Both surfaces on
   `market-calibration.html` print a realised rate against its implied one, and
   both sized the `±` from the results rather than from the prices. The ladder
@@ -1057,7 +1081,7 @@ writing a new probe.
 
 | probe | question |
 |---|---|
-| `value_probe.py` | is there a tradable relationship between `xw_net` and price? |
+| `value_probe.py` | is there a tradable relationship between `xw_net` and price? (incl. band grids) |
 | `interaction_probe.py` | do single signals or other combiners beat `B·P/L`? |
 | `dispersion_probe.py` | does a concentrated lineup beat the mean it is averaged into? |
 | `bp_ablation.py` | does removing the bullpen term change any decision? |

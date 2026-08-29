@@ -37,6 +37,12 @@ Three further things it cannot do:
     the control, never a single family's z.
   * It says nothing about rows with no market join (DK close via ESPN), which
     are excluded rather than imputed.
+  * The band grid (section 5) cannot tell you a cell is good. It is built to
+    tell you the opposite -- that a cell you already like sits inside the range
+    noise produces -- because with 15 cells the best one is a maximum over 15
+    draws, not an estimate. It compares against that maximum and then tests the
+    selection forward; a cell surviving both is a hypothesis to test on new
+    slates, never a green light.
 
 Reads committed artifacts only. No Savant pull, no StatsAPI, no lookahead, so
 it runs anywhere.
@@ -170,6 +176,106 @@ def oos_log_loss(g, use_market, use_net):
     return float(np.concatenate(losses).mean())
 
 
+# Cell floor for the band grid. Not a significance gate -- below this a cell's
+# ROI has a null sd above ~20pp, so it is a coin flip rendered as a percentage.
+CELL_MIN = 25
+DELTA_BANDS, PRICE_QUANTILES = 3, 5
+
+
+def market_view(g, market):
+    """Add p_lean / ml / profit for `market` in ("full", "f5"). F5 ties push."""
+    f = g.copy()
+    if market == "full":
+        f["p_lean"] = np.where(f["lean_home"], f["close_p_home"], 1 - f["close_p_home"])
+        f["ml"] = np.where(f["lean_home"], f["close_home_ml"], f["close_away_ml"])
+        f["push"] = False
+        f["hit"] = f["won"].astype(float)
+    else:
+        f["p_lean"] = np.where(f["lean_home"], f["f5_close_p_home"], 1 - f["f5_close_p_home"])
+        f["ml"] = np.where(f["lean_home"], f["f5_close_home_ml"], f["f5_close_away_ml"])
+        f["push"] = f["xw_f5"] == "T"
+        f["hit"] = (f["xw_f5"] == "W").astype(float)
+    f["profit"] = np.where(f["push"], 0.0,
+                           np.where(f["hit"] > 0, payout(f["ml"]), -1.0))
+    return f.sort_values("game_date")
+
+
+def band_grid(g, market, rng):
+    """3 delta bands x 5 price quintiles, against the null and then forward.
+
+    The grid is printed because it is what gets explored; the two lines under it
+    are what decide it. A 15-cell search returns a MAXIMUM, so the only honest
+    reference is the distribution of that maximum when nothing is there -- and
+    the only honest confirmation is picking a cell on past slates and betting it
+    on the next.
+    """
+    f = market_view(g, market)
+    f = f[f["p_lean"].notna() & f["ml"].notna()]
+    if len(f) < 150:
+        return
+    f["dband"] = pd.qcut(f["xw_net"].abs(), DELTA_BANDS, labels=["low", "mid", "hi"])
+    f["pband"] = pd.qcut(f["p_lean"], PRICE_QUANTILES,
+                         labels=[f"p{i + 1}" for i in range(PRICE_QUANTILES)])
+    pbs = [f"p{i + 1}" for i in range(PRICE_QUANTILES)]
+
+    def roi(c):
+        return c["profit"].sum() / len(c) * 100 if len(c) else float("nan")
+
+    print(f"\n   {market.upper()} market, n={len(f)}")
+    print(f"   {'':6s}" + "".join(f"{p:>13s}" for p in pbs) + f"{'row':>13s}")
+    for db in ["low", "mid", "hi"]:
+        cells = []
+        for pb in pbs:
+            c = f[(f["dband"] == db) & (f["pband"] == pb)]
+            cells.append(f"{roi(c):+7.1f}%({len(c):3d})" if len(c) else "     --      ")
+        r = f[f["dband"] == db]
+        print(f"   {db:6s}" + "".join(cells) + f"{roi(r):+7.1f}%({len(r):3d})")
+    print(f"   {'col':6s}" + "".join(
+        f"{roi(f[f['pband'] == pb]):+7.1f}%({int((f['pband'] == pb).sum()):3d})"
+        for pb in pbs) + f"{roi(f):+7.1f}%({len(f):3d})")
+
+    groups = [f[(f["dband"] == db) & (f["pband"] == pb)]
+              for db in ["low", "mid", "hi"] for pb in pbs]
+    elig = [c for c in groups if len(c) >= CELL_MIN]
+    if not elig:
+        return
+    best = max(roi(c) for c in elig)
+    sims = []
+    for _ in range(3000):
+        mx = -1e9
+        for c in elig:
+            w = rng.random(len(c)) < c["p_lean"].values
+            pr = np.where(c["push"].values, 0.0,
+                          np.where(w, payout(c["ml"].values), -1.0))
+            mx = max(mx, pr.sum() / len(c) * 100)
+        sims.append(mx)
+    sims = np.array(sims)
+    print(f"\n   best cell (n>={CELL_MIN}): {best:+.1f}%")
+    print(f"   under the null -- market correct, NO edge -- the best of "
+          f"{len(elig)} cells averages {sims.mean():+.1f}% "
+          f"[p5 {np.percentile(sims, 5):+.1f}, p95 {np.percentile(sims, 95):+.1f}]")
+    print(f"   P(null best >= observed best) = {(sims >= best).mean():.3f}")
+
+    bets = []
+    for s in sorted(f["game_date"].unique()):
+        tr, te = f[f["game_date"] < s], f[f["game_date"] == s]
+        if len(tr) < 150:
+            continue
+        tb = tr.groupby(["dband", "pband"], observed=True)["profit"].agg(["sum", "count"])
+        tb = tb[tb["count"] >= CELL_MIN]
+        if tb.empty:
+            continue
+        pick = (tb["sum"] / tb["count"]).idxmax()
+        sel = te[(te["dband"] == pick[0]) & (te["pband"] == pick[1])]
+        if len(sel):
+            bets.append(sel)
+    if bets:
+        b = pd.concat(bets)
+        print(f"   FORWARD: best cell picked on prior slates only, bet on the next -- "
+              f"{len(b)} bets / {b['game_date'].nunique()} slates, "
+              f"{b['profit'].sum():+.2f}u, ROI {b['profit'].sum() / len(b) * 100:+.1f}%")
+
+
 def report():
     g = load()
     print("=" * 92)
@@ -251,6 +357,14 @@ def report():
               f"{rate - f['chalk_won'].mean():>+8.3f}{rate - imp:>+11.4f}"
               f"{(rate - imp) / excess_se(f['p_lean']):>+7.2f}"
               f"{u / len(f) * 100:>+8.1f}%")
+
+
+    print("\n5. BAND GRID -- discretising the same signal does not create one.")
+    print("   Read the null line, not the grid: the best of 15 cells is a maximum")
+    print("   over 15 draws, so it is large even when nothing is there.")
+    rng = np.random.default_rng(7)
+    for market in ("full", "f5"):
+        band_grid(g, market, rng)
 
 
 if __name__ == "__main__":
