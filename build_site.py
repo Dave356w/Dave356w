@@ -339,6 +339,33 @@ RECORD_TAGS = tuple(
 # v11 into its own scale family -- do not leave the pooling in place because
 # it was convenient. Sharing is what gives the strength cutoffs a real pool on
 # day one instead of restarting them for the ninth time.
+#
+# RUN, AND NOW CLOSED -- it does not fire, and it cannot be run any finer.
+# v11 produced no rows at all (see the v8 precedent), so the check fell to
+# v12. Three reads of the row-pooled form, against the v9/v10 pool's 0.01859
+# over 99 rows:
+#     15 v12 rows   gap -0.00009  CI [-0.0081, +0.0183]
+#     38 v12 rows   gap -0.00526  CI [-0.0117, +0.0002]   <- looked like firing
+#    196 v12 rows   gap -0.00085  CI [-0.0062, +0.0023]
+# The middle read was slate composition, exactly as it was called at the time:
+# at 5x the sample the point estimate regressed from -0.0053 back to -0.0009.
+# The slate-pooled form asked for in CLAUDE.md agrees and does not fire either
+# -- median of per-slate medians, 15 v12 slates against 7, gap -0.00309 at
+# 1.48 se, CI [-0.0063, +0.0021].
+#
+# Do NOT re-read this at larger n. The statistic is underpowered BY
+# CONSTRUCTION, not merely today: between-slate sd of the per-slate median is
+# 0.00457, 7x the mean |d net| of 0.00067 that the IP calibration can actually
+# produce, so separating the mechanism from slate noise needs ~730 slates per
+# arm (~68 seasons). What it does have power for is a GROSS units shift --
+# ~11 slates per arm at 0.00542, the largest single-row move the change can
+# make, and both arms clear that -- so it has said the only thing it was ever
+# able to say. The quantity that actually bounds the units change is the
+# direct paired measurement in the v12 entry below (mean |d net| 0.00067 over
+# 254 rows), which needs no ledger accumulation at all. Prefer that form for
+# any future shared-scale argument: measure the change against itself, not
+# two families against each other through the games that happened to be
+# played.
 _SCALE_FAMILIES = {
     "xw+plat_consol_v5": ("xw+plat_consol_v5", "xw+plat_consol_v6"),
     "xw+plat_consol_v6": ("xw+plat_consol_v5", "xw+plat_consol_v6"),

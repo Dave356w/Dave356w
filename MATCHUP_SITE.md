@@ -88,7 +88,8 @@ moves every lean a little — while joining the v8/v9/v10 **scale** family, sinc
 its three differences from v10 are each scale-preserving on a precedent already
 set. That scale half is argued rather than measured (no-lookahead means a past
 slate cannot be rebuilt to check it); the falsifier is named in
-`_SCALE_FAMILIES`. Legacy dump/ledger columns such as `xw_net` remain a
+`_SCALE_FAMILIES`, and has since been run and closed without firing — the
+share stands. Legacy dump/ledger columns such as `xw_net` remain a
 compatibility schema and every new row carries `model_metric` explicitly —
 under v11 the schema and the statistic agree again, which makes it *easier* to
 mistake a key name for provenance, not harder.
@@ -320,6 +321,13 @@ be rebuilt to check it — so the falsifier is written into `_SCALE_FAMILIES`:
 compare median |xw_net| on the first graded v11 rows against the v9/v10 pool
 and split the family if it moved. Sharing gives the strength cutoffs a 99-row
 pool on day one instead of a ninth restart.
+
+That falsifier has now been run and **closed without firing**: v11 graded no
+rows, so it fell to v12, where it does not separate and — more to the point —
+cannot, because between-slate noise in the statistic is 7x the largest effect
+the change can produce. The reads and the power argument live in
+`_SCALE_FAMILIES` and in CLAUDE.md's "Instrumented and waiting"; do not
+re-derive them here.
 
 **Two collateral pins.** The frozen `data/woba_priors_*.csv` are wOBA and stay
 wOBA: `priors_snapshot.RATE_COL` is pinned rather than following the build, and
