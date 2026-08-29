@@ -1,27 +1,27 @@
-LEAN LEDGER — 188 graded games (183 with a lean, 5 abstained)  [xw+plat_consol_v12]
-xwOBA lean   full: 114-69  (0.623)   F5: 84-74-25  (0.532)
-platoon lean full: 87-58  (0.600)   F5: 74-48-23  (0.607)   (reliable-only, n=145)
-xwOBA on same subset  full: 92-53  (0.634)   F5: 68-54-23  (0.557)
+LEAN LEDGER — 189 graded games (184 with a lean, 5 abstained)  [xw+plat_consol_v12]
+xwOBA lean   full: 115-69  (0.625)   F5: 84-74-26  (0.532)
+platoon lean full: 87-59  (0.596)   F5: 74-48-24  (0.607)   (reliable-only, n=146)
+xwOBA on same subset  full: 93-53  (0.637)   F5: 68-54-24  (0.557)
 xwOBA F5 by |Δ| tercile:
-  low  28-27-6  (0.509)   (Δ 0.000–0.011, n=61)
-  mid  24-25-12  (0.490)   (Δ 0.011–0.022, n=61)
+  low  29-27-6  (0.518)   (Δ 0.000–0.011, n=62)
+  mid  23-25-13  (0.479)   (Δ 0.012–0.022, n=61)
   hi   32-22-7  (0.593)   (Δ 0.023–0.101, n=61)
-DIVERGE h2h (F5): xwOBA 12 — platoon 18  (n=37)
+DIVERGE h2h (F5): xwOBA 12 — platoon 18  (n=38)
 home F5 baseline: 0.528  (n=163)
 weight fit: 163 usable F5 decisions (gate 30)
   b_lineup=+0.195±0.163  b_sp=+0.231±0.163  HFA=+0.112  (per sd)
   symmetry test  b_lineup - b_sp*(sd_lu/sd_sp) = +0.126 ± 0.174  z=+0.73  (no departure from equal weight)
   (equal first-order weight is what the symmetric multiplicative matchup implies; z is the evidence against it. Diagnostic only -- nothing here feeds back into a lean, a delta or a grade.)
 predicted vs actual (backfilled box scores)
-  starter IP   n=980  bias +0.03 IP  MAE 0.94 IP   (drives the phase weight q)
+  starter IP   n=982  bias +0.03 IP  MAE 0.94 IP   (drives the phase weight q)
     IP calibration slope +0.751 +/- 0.037 (1.00 = calibrated; < 1 = over-dispersed)
-  offense wOBA n=371  pred mean 0.3093  actual mean 0.3077  (-0.0016)
-    calibration slope +0.87 +/- 0.28 (1.00 = calibrated)
+  offense wOBA n=373  pred mean 0.3094  actual mean 0.3072  (-0.0022)
+    calibration slope +0.85 +/- 0.28 (1.00 = calibrated)
     UNDER-POWERED: se 0.28 cannot separate 1.00 from 0.80; needs ~6400 side-games
-    skill vs league-rate baseline +0.0315 (ceiling ~0.04; per-game noise dominates)
-  lineup dispersion n=371  residual slope -0.32 +/- 0.65 (> 0 = concentrated lineups beat their mean)
-  lean delta   n=183  calibration slope +0.80 +/- 0.40 (1.00 = calibrated; < 1 = over-dispersed)
-    corr +0.148  sign agreement 0.563  (the lean's own hit rate against its target)
+    skill vs league-rate baseline +0.0306 (ceiling ~0.04; per-game noise dominates)
+  lineup dispersion n=373  residual slope -0.29 +/- 0.65 (> 0 = concentrated lineups beat their mean)
+  lean delta   n=184  calibration slope +0.80 +/- 0.40 (1.00 = calibrated; < 1 = over-dispersed)
+    corr +0.149  sign agreement 0.565  (the lean's own hit rate against its target)
     UNDER-POWERED: se 0.40 cannot separate 1.00 from 0.50
   by prediction family (never pooled — different inputs, different scale against an observed-wOBA actual):
   v2/v3      net n=188 slope +0.51±0.17
@@ -36,15 +36,15 @@ predicted vs actual (backfilled box scores)
   wOBA v4    wOBA n= 22 pred 0.3084 act 0.2639 (-0.0445) slope -2.10±1.76  SP IP n= 22 bias +0.31  net n= 11 slope -4.82±2.53
   wOBA v5    wOBA n=236 pred 0.3077 act 0.3090 (+0.0013) slope +0.65±0.36  SP IP n=238 bias +0.00  net n=117 slope +0.01±0.50
   split v1   wOBA n= 14 pred 0.3221 act 0.3514 (+0.0294) slope -0.78±1.58  SP IP n= 14 bias +0.05  net n=  7 slope -1.18±0.89
-  v12        wOBA n=371 pred 0.3093 act 0.3077 (-0.0016) slope +0.87±0.28  SP IP n=376 bias -0.04  net n=183 slope +0.80±0.40
+  v12        wOBA n=373 pred 0.3094 act 0.3072 (-0.0022) slope +0.85±0.28  SP IP n=378 bias -0.04  net n=184 slope +0.80±0.40
   xw+plat_consol_v1  net n=  1
 component error (each scored against its own realised phase)
-  SP      n=376  pred 0.3127 act 0.3266 (+0.0139)  MAE 0.0925  slope +0.68±0.27  corr +0.130
-  BP      n=374  pred 0.2963 act 0.2810 (-0.0153)  MAE 0.1118  slope +1.07±0.56  corr +0.098
-  lineup  n=376  pred 0.3180 act 0.3072 (-0.0108)  MAE 0.0750  slope -0.87±0.64  corr -0.070
+  SP      n=378  pred 0.3128 act 0.3260 (+0.0132)  MAE 0.0927  slope +0.66±0.27  corr +0.126
+  BP      n=376  pred 0.2962 act 0.2806 (-0.0157)  MAE 0.1117  slope +1.09±0.56  corr +0.100
+  lineup  n=378  pred 0.3180 act 0.3067 (-0.0113)  MAE 0.0752  slope -0.89±0.64  corr -0.071
 by slate (most recent 14 of 39; monitoring, not trend)
-  scale: per-side rate error sd 0.0900 over 877 paired side-games — read gross outliers, not drift
-  2026-08-29  xwOBA       16g  rate n=  4 pred 0.3002 act 0.2384 (-0.0618) MAE 0.0679  SP IP n=  4 bias -0.09 MAE 0.22
+  scale: per-side rate error sd 0.0901 over 879 paired side-games — read gross outliers, not drift
+  2026-08-29  xwOBA       16g  rate n=  6 pred 0.3071 act 0.2291 (-0.0780) MAE 0.0821  SP IP n=  6 bias -0.08 MAE 0.27
   2026-08-28  xwOBA       15g  rate n= 30 pred 0.3084 act 0.2986 (-0.0098) MAE 0.0752  SP IP n= 30 bias +0.16 MAE 0.76
   2026-08-27  xwOBA        6g  rate n= 12 pred 0.3027 act 0.2957 (-0.0070) MAE 0.0800  SP IP n= 12 bias +0.03 MAE 0.51
   2026-08-26  xwOBA       15g  rate n= 30 pred 0.3099 act 0.3189 (+0.0091) MAE 0.0936  SP IP n= 30 bias -0.06 MAE 1.05
@@ -71,9 +71,9 @@ model-family history (never pooled into the current-family fit):
   wOBA v4 n= 11  wOBA full 5-6  (0.455)  F5 4-4-3  (0.500)
   wOBA v5 n=119  (2 abstained)  wOBA full 52-65  (0.444)  F5 46-50-21  (0.479)
   split v1 n=  7  wOBA/xwOBA full 4-3  (0.571)  F5 3-4  (0.429)
-  v12     n=188  (5 abstained)  xwOBA full 114-69  (0.623)  F5 84-74-25  (0.532)
+  v12     n=189  (5 abstained)  xwOBA full 115-69  (0.625)  F5 84-74-26  (0.532)
   xw+plat_consol_v1 n=  1  xwOBA full 0-1  (0.000)  F5 0-0-1
 
 pre-registered forward test  (registered 2026-08-29; fade the lean when gap > 0.06)
     eligible rows since registration: 0 over 0 slates
-    nothing to score yet. Discovery-sample prior is NEGATIVE (-4.2% at the primary threshold) -- this tracks a hypothesis already argued dead.
+    nothing to score yet. Arm 1's prior is NEGATIVE (-4.2% at the primary threshold) -- it tracks a hypothesis already argued dead. Arm 2 (plus-money dogs) is registered alongside it with a NULL prior.
