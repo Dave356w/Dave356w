@@ -569,6 +569,36 @@ precedent — they are how the fix is known to look.
   favourites beat their pooled rate) makes the badge look justified on the
   rows in front of you.
 
+  **That rule named an instrument that had been deleted, and `value_probe.py`
+  is what makes it satisfiable again.** The walk-forward went on 2026-08-27,
+  so between then and now "re-run the walk-forward first" could not be
+  complied with — the one guardrail on the most-likely-to-recur request in this
+  repo was a dangling pointer. The probe is a walk-forward over *ledger rows*
+  rather than a replay: every row is a decision actually published pregame,
+  joined to its own close, fitted only on prior slates. That is strictly less
+  than the replay could do — it cannot score a version that never shipped, and
+  its header says so — but it is enough for this question and it never
+  reconstructs a prediction, so the fidelity gap that removed the replay does
+  not apply to it.
+
+  **Re-measured 2026-08-29 on 716 graded rows (the entry's own numbers were
+  n=552/627), and every leg reproduces.** The naive bet is still inverted and
+  still monotone: all bets −3.1%, gap > 0.00 −9.7%, > 0.02 −11.4%, > 0.04
+  −13.3%, > 0.06 −17.7%, > 0.10 −28.8% (n=32). Within-band median-gap splits
+  still lose in all three bands thick enough to split. The joint logit still
+  says nothing: market logit +1.137 ± 0.294, `z(xw_net)` **−0.013 ± 0.095,
+  z = −0.13**, and out-of-sample log loss still ranks raw close 0.6751 <
+  market-fitted 0.6799 < price+delta 0.6841 < delta alone 0.6946.
+
+  **And the trap fired exactly as predicted, which is the part to keep.** Read
+  alone, v12 looks like a system: .624, +0.0725 against price, z = +1.98,
+  +10.7% ROI over 181 rows. Two things dissolve it, and both are printed beside
+  it by design — always-chalk ran **.613 on those identical games**, leaving a
+  +1.1pp edge rather than a .624 one; and the same statistic per family flips
+  sign with the era (v5 +1.09, v7 −0.68, v9 −0.50, v10 +0.73, wOBA v5 −2.74,
+  v12 +1.98), which is noise, not edge. Do not quote any of these figures from
+  here — run the probe.
+
 - **An error bar estimated from the outcomes it is testing.** Both surfaces on
   `market-calibration.html` print a realised rate against its implied one, and
   both sized the `±` from the results rather than from the prices. The ladder
@@ -1023,10 +1053,11 @@ slope, the SP-vs-lineup coefficients and their symmetry contrast. The grades
 page carries the baseline controls and the lock provenance. Read these before
 writing a new probe.
 
-**Probes run on demand.** Five read committed artifacts and run anywhere:
+**Probes run on demand.** Six read committed artifacts and run anywhere:
 
 | probe | question |
 |---|---|
+| `value_probe.py` | is there a tradable relationship between `xw_net` and price? |
 | `interaction_probe.py` | do single signals or other combiners beat `B·P/L`? |
 | `dispersion_probe.py` | does a concentrated lineup beat the mean it is averaged into? |
 | `bp_ablation.py` | does removing the bullpen term change any decision? |
