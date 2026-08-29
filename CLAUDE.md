@@ -654,6 +654,34 @@ precedent — they are how the fix is known to look.
   needs its p-value computed against the search actually performed, not against
   zero — the nominal CI excluding zero was true and meaningless.
 
+  **The plus-money underdog cut is a separate question and it was tested
+  properly, because it is the one hypothesis here that was NOT found by
+  searching.** Favourite-longshot bias is a documented market phenomenon, so
+  this had a real prior. Measured over the 605 graded games holding a
+  plus-money dog: backing **every** dog runs 41.8% against 42.0% implied,
+  z = −0.09, ROI −3.8% — **no favourite-longshot bias in this book to harvest;
+  the dogs are priced right.** Restricting to dogs the model leans (n=128) gives
+  46.1% against 44.7% implied, z = +0.32, ROI −0.4%: better than backing them
+  all, and the selection value is +3.3pp with CI [−13.2, +20.4].
+
+  Cut by price the model's dogs at +100..+130 run **+7.5% ROI over 90 rows**,
+  and this one has properties none of the earlier candidates had — it survives
+  dropping its best three results (+7.5% → +3.5%, so it is not a cluster), and
+  walk-forward it stays positive (67 bets, +3.8%). It is still not a finding:
+  excess +4.9 ± 5.3 (z = +0.93), selection value within the band +5.7pp with
+  CI [−12.4, +23.8], and against the null the best of the cells searched
+  averages +12.3% — **P(chance ≥ observed) = 0.64**, i.e. the winner is *worse*
+  than chance across that search.
+
+  It is registered as `forward_test.py`'s **arm 2, deliberately UNBANDED**, with
+  a NULL rather than negative prior. The band is the flattering number and a
+  reader will want it registered — but it was chosen after seeing it, so
+  freezing it would smuggle the search back into a pre-registration. The
+  a-priori hypothesis is "the model leans a plus-money dog"; that is what is
+  frozen, and the bands print as context carrying no claim. A test pins the
+  distinction by asserting the headline counts every plus-money lean rather
+  than the band's subset.
+
   `forward_test.py` is what came out of it: the rule frozen at registration
   (2026-08-29), scoring only slates strictly after that date, printed every
   build, with its registered prior stated as **negative** so a future hot streak

@@ -32,6 +32,40 @@ class RegistrationFrozenTests(unittest.TestCase):
         self.assertEqual(ft.SECONDARY_THRESHOLDS, (0.00, 0.02, 0.04, 0.06, 0.10))
         self.assertEqual(ft.GATE_BETS, 1300)
 
+    def test_dog_arm_constants_are_exactly_as_registered(self):
+        self.assertAlmostEqual(ft.DOG_ARM_STAKE, 1.0, places=10)
+        self.assertEqual(ft.DOG_ARM_GATE_BETS, 1200)
+        self.assertEqual(ft.DOG_ARM_SECONDARY_BANDS, (
+            ("+100..+130", 0.435, 0.500),
+            ("+130..+175", 0.363, 0.435),
+            ("+175 or longer", 0.000, 0.363),
+        ))
+
+    def test_dog_arm_is_registered_unbanded(self):
+        """The bands were chosen after seeing them; the rule must not use one.
+
+        Registering `+100..+130` -- the band that ran +7.5% in discovery --
+        would smuggle the search back into a pre-registration. The a-priori
+        hypothesis is "the model leans a plus-money dog", so the headline is
+        computed over every plus-money lean and the bands are context.
+        """
+        import numpy as np
+        import pandas as pd
+        n = 60
+        rng = np.random.default_rng(5)
+        p = rng.uniform(.30, .48, n)          # every row a plus-money dog
+        led = pd.DataFrame({
+            "status": "graded", "game_date": "2026-09-05",
+            "close_p_home": p, "xw_lean": "H", "home": "H",
+            "xw_net": rng.normal(0, .02, n),
+            "full_home": 1, "full_away": 0,
+            "close_home_ml": np.round(100 * (1 - p) / p).astype(int),
+            "close_away_ml": -np.round(100 * p / (1 - p)).astype(int),
+        })
+        line = [l for l in ft.report_lines(led) if "REGISTERED" in l][0]
+        # All 60 rows qualify, not just those inside the flattering band.
+        self.assertIn("n=60", line)
+
     def test_primary_threshold_is_among_the_reported_secondaries(self):
         # Otherwise the headline is a cell the surrounding table never shows,
         # which is how a quietly-retuned threshold would hide.
