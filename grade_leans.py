@@ -905,6 +905,26 @@ def report_text(led):
                 + (f"({_abs} abstained)  " if _abs else "")
                 + f"{metric} full {_rec(fam['xw_full'])}  F5 {_rec(fam['xw_f5'])}"
             )
+
+    # Standing monitor for the pre-registered forward test. Printed every build
+    # rather than left to be run on demand, because a pre-registration nobody
+    # looks at decays into a file: the whole point is that the number arrives
+    # without anyone remembering it exists (the expected-IP deferral landed at
+    # its gate for exactly this reason).
+    #
+    # Guarded, and the guard is load-bearing. This function feeds `report()`,
+    # which runs inside the same job that ingests pregame rows -- and a pregame
+    # row that fails to land cannot be re-derived afterwards without lookahead.
+    # A cosmetic monitor must never be able to cost a slate, so any failure
+    # degrades to one line and grading continues. Same reasoning as keeping the
+    # test suite out of build.yml.
+    try:
+        import forward_test
+        say("")
+        for _fl in forward_test.report_lines(led):
+            say(_fl)
+    except Exception as _exc:                      # noqa: BLE001 - see above
+        say(f"pre-registered forward test unavailable ({type(_exc).__name__})")
     return "\n".join(lines)
 
 

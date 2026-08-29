@@ -519,20 +519,115 @@ class RenderTests(unittest.TestCase):
         self.assertIn("MEDIUM Δ · 60–65% MARKET", agree)
         self.assertIn("Historical actual</span><span>71.4%", agree)
         self.assertIn("Performance vs market</span><span><b>+9.0 pp", agree)
-        self.assertIn("n=14 · DEVELOPING", agree)
+        self.assertIn("within noise · n=14", agree)
         dis = b._verdict_html(
             "LAD", dict(p_home=.62, away_ml=140), "LAD", "ARI", ctx, .005,
         )
         self.assertIn("LOW Δ · &lt;45% MARKET", dis)
         self.assertIn("Historical actual</span><span>0.0%", dis)
         self.assertIn("Performance vs market</span><span><b>-41.3 pp", dis)
-        self.assertIn("n=7 · THIN", dis)
+        self.assertIn("within noise · n=7", dis)
         # A missing V12 cell says so; it never substitutes a pooled family.
         fb = b._verdict_html(
             "ARI", dict(p_home=.62, home_ml=-160), "LAD", "ARI", {}, .02,
         )
         self.assertIn("No completed V12 games in this profile yet", fb)
         self.assertNotIn("Across every model version", fb)
+
+    def test_profile_panel_prints_its_own_error_bar(self):
+        """A published excess must carry its sampling distribution.
+
+        This panel used to print the excess bare, justified in
+        `conviction_cell_records` by "the calibration table carries the error
+        bar". It does not: that table renders the 2x3 `cell` buckets and this
+        panel renders the 3x5 `profile` buckets, so a profile cell has no
+        counterpart there. With CONVICTION_CELL_MIN = 1 that let one game
+        publish a headline with no spread beside it.
+        """
+        ctx = {
+            ("profile", ("low", ">65%")): dict(
+                n=1, w=1, l=0, implied=.662, actual=1.0, excess=.338,
+                excess_se=.473, roi=.51, units=.51,
+            ),
+        }
+        h = b._verdict_html(
+            "ARI", dict(p_home=.662, home_ml=-196), "LAD", "ARI", ctx, .005,
+        )
+        # The excess and its SE travel together; the n=1 cell is the case that
+        # matters, because _excess_se is defined there and p-hat-based forms
+        # would read 0.0.
+        self.assertIn("+33.8 pp</b> \u00b1 47.3", h)
+        self.assertIn("within noise \u00b7 n=1", h)
+
+    def test_profile_panel_leaves_no_computed_key_unrendered(self):
+        """Every key _lean_market_agg returns must reach a surface.
+
+        `excess_se` was computed, returned and rendered nowhere for two days --
+        the "column carried to no surface" instance, one dict out. Keys the
+        card deliberately delegates elsewhere are named here so that adding a
+        NEW one fails until it is either rendered or listed.
+        """
+        parts = dict(n=14, w=10, l=4, implied=.624, actual=.714, excess=.090,
+                     excess_se=.126, roi=.121, units=1.69)
+        ctx = {("profile", ("medium", "60–65%")): parts}
+        h = b._verdict_html(
+            "ARI", dict(p_home=.62, home_ml=-160), "LAD", "ARI", ctx, .02,
+        )
+        rendered = {"n", "implied", "actual", "excess", "excess_se"}
+        # w/l/roi/units are the value-table's columns, not the card's: the card
+        # reports calibration, never a betting result (see the test below).
+        delegated = {"w", "l", "roi", "units"}
+        self.assertEqual(set(parts) - rendered - delegated, set())
+        for key in ("roi", "units"):
+            self.assertNotIn(f"{100 * parts[key]:+.1f}%", h)
+
+    def test_profile_read_has_no_threshold_cliff(self):
+        """One completed game must not relabel a cell's credibility.
+
+        The old label was THIN / DEVELOPING / LARGER SAMPLE at n >= 10 and
+        n >= 20, so n=19 and n=20 read differently with no change in what the
+        cell knew -- the threshold-cliff anti-pattern, third instance in this
+        repo. The read is now driven by the standard error, which moves
+        continuously, so holding excess and se fixed while n crosses an old
+        boundary must change nothing.
+        """
+        base = dict(w=0, l=0, implied=.50, actual=.60, excess=.06,
+                    excess_se=.11, roi=.0, units=.0)
+        reads = {b._profile_read(dict(base, n=n)) for n in (9, 10, 19, 20, 21)}
+        # Only the printed n differs; the verdict itself is identical.
+        verdicts = {r.split("·")[0].strip() for r in reads}
+        self.assertEqual(len(verdicts), 1, reads)
+
+    def test_profile_read_turns_on_the_familywise_bar_not_two_sd(self):
+        """A cell's excess is the largest of up to 15 draws.
+
+        At |z| = 2 roughly one cell in the grid clears the bar every build by
+        chance, so the sentence must not promote a 2-sigma cell.
+        """
+        se = .10
+        just_over_two = dict(n=30, w=0, l=0, implied=.5, actual=.6,
+                             excess=2.1 * se, excess_se=se, roi=0, units=0)
+        clears_family = dict(just_over_two, excess=3.0 * se)
+        self.assertIn("within noise", b._profile_read(just_over_two))
+        self.assertIn("outside noise", b._profile_read(clears_family))
+
+    def test_profile_panel_shows_the_pooled_reference(self):
+        """The cell is unpowered; the reader gets the powered number beside it."""
+        ctx = {
+            ("profile", ("medium", "60–65%")): dict(
+                n=14, w=10, l=4, implied=.624, actual=.714, excess=.090,
+                excess_se=.126, roi=.121, units=1.69),
+            "pooled": dict(n=183, w=114, l=69, implied=.552, actual=.623,
+                           excess=.071, excess_se=.036, roi=.05, units=9.2),
+        }
+        h = b._verdict_html(
+            "ARI", dict(p_home=.62, home_ml=-160), "LAD", "ARI", ctx, .02)
+        self.assertIn("All V12 games", h)
+        self.assertIn("+7.1 pp ± 3.6 · n=183", h)
+        # Absent pooled entry must not break the panel.
+        ctx.pop("pooled")
+        self.assertNotIn("All V12 games", b._verdict_html(
+            "ARI", dict(p_home=.62, home_ml=-160), "LAD", "ARI", ctx, .02))
 
     def test_verdict_never_claims_a_value_bet(self):
         """Measured walk-forward, no bucket in this ledger beats the close.
