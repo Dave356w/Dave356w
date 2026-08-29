@@ -962,6 +962,32 @@ precedent — they are how the fix is known to look.
   file; recompute it. Since 2026-08-06 they are scored on the **decided** rows,
   not every graded one — see the abstention instance below.
 
+- **Threshold cliffs, third instance — a credibility label keyed on a row
+  count.** The per-game profile panel graded its own sample
+  `THIN / DEVELOPING / LARGER SAMPLE` at `n >= 10` and `n >= 20`. One completed
+  game moved a cell from DEVELOPING to LARGER SAMPLE with no change in what the
+  cell knew, and "LARGER SAMPLE" described an n=20 cell still carrying ±11pp —
+  the label was least accurate exactly where it sounded most confident.
+
+  Fixed the way the two below were: delete the tiers, and let the read move
+  with a continuous quantity — here the cell's own standard error. The bar is
+  the **family-wise** one (|z| ≥ 2.7 across the 15-cell grid), not 2 sd,
+  because a cell's excess is the largest of up to 15 draws and at 2 sd roughly
+  one cell clears it every build by chance. Measured on the live grid: 3 of 14
+  cells cleared 2.0, **none** cleared 2.7, and `value_probe`'s permutation put
+  the best cell at p = 0.20. A test pins that n crossing an old boundary with
+  the excess and se held fixed changes nothing.
+
+  The same commit gave the panel the **pooled current-family line** as its
+  reference. The cell's median SE is ~15pp; pooled over the same rows it is
+  ~3.6pp, so the reader's anchor had been the least measurable number on the
+  card with no way to see it was a slice of something better estimated. The
+  pooled figure is context and never an edge — `value_probe` measures that
+  same statistic flipping sign family to family (v7 −0.68, wOBA v5 −2.74,
+  v12 +1.98), which is why it prints its own spread too.
+
+  Display-only: no lean, delta, grade or ledger row moves.
+
 - **Threshold cliffs.** Two instances, same shape. The old
   `use = fam if len(fam) >= 60 else pooled` scale selector switched
   discontinuously and mixed incompatible units; `SCALE_TAGS` removed that

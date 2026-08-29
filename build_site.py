@@ -4092,6 +4092,60 @@ def _model_version_short():
     return f"V{m.group(1)}" if m else MODEL_TAG
 
 
+# Family-wise bar for the 3x5 profile grid. A cell's excess is the largest of
+# up to 15 draws, so 2 sd is the wrong reference: at |z| = 2 roughly one cell in
+# the grid clears it every build by chance alone. 2.7 is the ~0.05 family-wise
+# threshold across 15, and it is a REFERENCE rather than a gate -- the number
+# and its spread always print, only the sentence beside them changes. Measured
+# on the live grid at the time of writing: 3 of 14 cells cleared 2.0, none
+# cleared 2.7, and value_probe's permutation put the best cell at p = 0.20.
+_PROFILE_FAMILYWISE_Z = 2.7
+
+
+def _profile_read(parts):
+    """One honest sentence about what a profile cell's excess can support.
+
+    Replaces a THIN / DEVELOPING / LARGER SAMPLE label keyed on n >= 10 and
+    n >= 20. That was a threshold cliff of the kind this repo has twice fixed
+    elsewhere: n=19 read DEVELOPING and n=20 LARGER SAMPLE, so one completed
+    game relabelled a cell's credibility with no change in what it knew, and
+    "LARGER SAMPLE" described an n=20 cell still carrying +/-11pp. The read
+    below moves continuously with the standard error instead, so nothing
+    switches on a row count.
+    """
+    se, excess, n = parts.get("excess_se"), parts.get("excess"), parts.get("n")
+    try:
+        ok = se is not None and np.isfinite(se) and se > 0
+    except TypeError:
+        ok = False
+    if not ok:
+        return f"n={n}"
+    z = abs(float(excess) / float(se))
+    if z < _PROFILE_FAMILYWISE_Z:
+        return f"within noise · n={n}"
+    return f"outside noise across all 15 cells · n={n}"
+
+
+def _profile_pooled_line(ctx):
+    """The current family's overall excess, as the cell's own reference.
+
+    A cell carries a median SE of ~15pp; the pooled line carries ~3.6pp on the
+    same rows. Showing only the cell made the reader's anchor the least
+    measurable number on the card, and left them no way to see that the cell is
+    a slice of something better estimated. It is deliberately NOT a
+    recommendation and carries its own spread for the same reason the cell
+    does: the pooled figure is the CURRENT family's, and value_probe measures
+    that same statistic flipping sign family to family (v7 -0.68, wOBA v5
+    -2.74, v12 +1.98), so it is context, never an edge.
+    """
+    parts = (ctx or {}).get("pooled")
+    if not parts:
+        return ""
+    return (f"<div class='vline'><span class='vk'>All {_model_version_short()} "
+            f"games</span><span>{100 * parts['excess']:+.1f} pp"
+            f"{_profile_excess_se(parts)} · n={parts['n']}</span></div>")
+
+
 def _profile_excess_se(parts):
     """` ± X.X pp` for a profile cell's excess, or "" when it cannot be formed.
 
@@ -4130,7 +4184,6 @@ def _conviction_tail(ctx, delta, p_lean):
 
     d_label, m_label = _profile_delta_label(delta), _profile_market_label(p_lean)
     n = parts["n"]
-    sample = "LARGER SAMPLE" if n >= 20 else ("DEVELOPING" if n >= 10 else "THIN")
     return (
         "<div class='vprofile'>"
         f"<div class='vprofile-title'>{version} PROFILE</div>"
@@ -4142,8 +4195,9 @@ def _conviction_tail(ctx, delta, p_lean):
         f"<div class='vline'><span class='vk'>Performance vs market</span>"
         f"<span><b>{100 * parts['excess']:+.1f} pp</b>{_profile_excess_se(parts)}"
         "</span></div>"
-        f"<div class='vline'><span class='vk'>Sample</span>"
-        f"<span>n={n} · {sample}</span></div>"
+        f"<div class='vline'><span class='vk'>Read</span>"
+        f"<span>{_esc(_profile_read(parts))}</span></div>"
+        f"{_profile_pooled_line(ctx)}"
         "</div>"
     )
 
@@ -6466,6 +6520,11 @@ def conviction_cell_records():
         return {}
     out = {"cell_delta_active": a["delta_active"], "cell_n": a["n"]}
     obs = a["obs"]
+    # The pooled reference the per-game panel prints beside its cell. Same rows,
+    # same aggregate, ~4x the precision (SE ~3.6pp against a cell median ~15pp).
+    pooled = _lean_market_agg(obs, obs["won"].notna())
+    if pooled:
+        out["pooled"] = pooled
     for key, _label in _CONVICTION_CELLS:
         parts = _lean_market_agg(obs, obs["cell"].eq(key))
         if parts and parts["n"] >= CONVICTION_CELL_MIN:

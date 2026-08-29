@@ -3026,7 +3026,7 @@ class ConvictionCellTests(unittest.TestCase):
         self.assertIn("Historical actual</span><span>71.4%", html)
         self.assertIn("Market implied</span><span>48.1%", html)
         self.assertIn("Performance vs market</span><span><b>+23.3 pp", html)
-        self.assertIn("n=14 · DEVELOPING", html)
+        self.assertIn("within noise · n=14", html)
 
     def test_pit_acceptance_panel_has_the_requested_four_reads(self):
         ctx = {("profile", ("medium", "45–50%")): dict(
@@ -3044,7 +3044,7 @@ class ConvictionCellTests(unittest.TestCase):
             "Historical actual</span><span>71.4%",
             "Market implied</span><span>48.1%",
             "Performance vs market</span><span><b>+23.3 pp",
-            "n=14 · DEVELOPING",
+            "within noise · n=14",
         ):
             self.assertIn(expected, html)
         for banned in ("value bet", "best bet", "free money", "lock"):
