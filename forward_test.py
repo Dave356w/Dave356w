@@ -74,6 +74,40 @@ SECONDARY_THRESHOLDS = (0.00, 0.02, 0.04, 0.06, 0.10)
 # per-bet sd of ~0.91. Stated so a hot 40-bet stretch cannot read as a verdict.
 GATE_BETS = 1300
 
+# --- ARM 2, registered the same day: the plus-money underdog cut. ----------
+# A SEPARATE hypothesis from the fade above, and a better-posed one. It is
+# structural and was proposed before looking (favourite-longshot bias is a
+# documented market phenomenon), rather than found by searching this ledger --
+# which is the defect that killed arm 1.
+#
+# Registered UNBANDED, deliberately. Cutting by price, the model's dogs at
+# +100..+130 ran +7.5% ROI over 90 rows, which is the number a reader would
+# want registered. That band was chosen by ME after seeing it, so registering
+# it would smuggle the search back in. The a-priori hypothesis is "the model
+# leans a plus-money dog", so that is what is frozen; the bands print as
+# secondary context and carry no claim.
+#
+# DISCOVERY-SAMPLE PRIOR, measured at registration over 605 games holding a
+# plus-money dog:
+#   bet every dog                 n=605  41.8% vs 42.0% implied  z=-0.09  -3.8%
+#   only when the model leans it  n=128  46.1% vs 44.7% implied  z=+0.32  -0.4%
+# So there is NO favourite-longshot bias here to harvest -- dogs are priced
+# right -- and the model's selection is directionally better but statistically
+# nothing: selection value +3.3pp, CI [-13.2, +20.4]. Unlike arm 1 the prior is
+# not negative, merely null, and it is robust rather than cluster-driven
+# (dropping the best three results left the banded cell at +3.5%).
+DOG_ARM_STAKE = 1.0
+# Same |z| = 2 arithmetic as GATE_BETS, at the dog arm's own per-bet sd (~1.15
+# -- higher, because plus-money payouts are more variable) against the +2.9pp
+# walk-forward excess it showed in discovery.
+DOG_ARM_GATE_BETS = 1200
+# Reported beneath the headline, never as the registered rule.
+DOG_ARM_SECONDARY_BANDS = (
+    ("+100..+130", 0.435, 0.500),
+    ("+130..+175", 0.363, 0.435),
+    ("+175 or longer", 0.000, 0.363),
+)
+
 LEDGER = os.path.join("data", "mlb_lean_ledger.csv")
 
 
@@ -111,6 +145,13 @@ def scored_rows(led=None):
     model_p = np.where(g["lean_home"], ph, 1 - ph)
     g["gap"] = model_p - g["p_lean"]
     g["profit"] = np.where(g["bet_won"], STAKE * _payout(g["ml_bet"]), -STAKE)
+    # Arm 2. The lean itself is the bet here (not its opposite), restricted to
+    # leans priced as plus-money dogs.
+    g["lean_ml"] = np.where(g["lean_home"], g["close_home_ml"], g["close_away_ml"])
+    g["is_dog"] = g["lean_ml"] > 0
+    g["dog_profit"] = np.where(
+        g["lean_won"].astype(bool), DOG_ARM_STAKE * _payout(g["lean_ml"]),
+        -DOG_ARM_STAKE)
     return g
 
 
@@ -127,6 +168,36 @@ def _line(f, label):
             f"ROI {u / n * 100:+6.1f}%   vs price z={z:+.2f}")
 
 
+def _dog_line(f, label):
+    n = len(f)
+    if not n:
+        return f"    {label:<18}    no qualifying bets yet"
+    w = int(f["lean_won"].astype(bool).sum())
+    u = float(f["dog_profit"].sum())
+    se = float(np.sqrt(np.sum(f["p_lean"] * (1 - f["p_lean"]))) / n)
+    z = ((f["lean_won"].astype(bool).mean() - f["p_lean"].mean()) / se
+         if se > 0 else float("nan"))
+    return (f"    {label:<18}  n={n:<4d} {w}-{n - w}  {u:+7.2f}u  "
+            f"ROI {u / n * 100:+6.1f}%   vs price z={z:+.2f}")
+
+
+def _dog_arm_lines(g):
+    """Arm 2's block: the model's lean, restricted to plus-money dogs."""
+    out = ["", "  arm 2 — model leans a plus-money dog (registered "
+           f"{REGISTERED_ON}, unbanded)"]
+    dogs = g[g["is_dog"]]
+    out.append(_dog_line(dogs, "REGISTERED"))
+    for label, lo, hi in DOG_ARM_SECONDARY_BANDS:
+        out.append(_dog_line(
+            dogs[(dogs["p_lean"] >= lo) & (dogs["p_lean"] < hi)], label))
+    out.append(f"    GATE: {len(dogs)} of ~{DOG_ARM_GATE_BETS} bets. Prior is "
+               "NULL, not negative — directionally the best cut measured, and "
+               "still indistinguishable from zero.")
+    out.append("    Bands are context only; the registered rule is unbanded, "
+               "because the band was chosen after seeing it.")
+    return out
+
+
 def report_lines(led=None):
     """Report body as a list of lines. Pure -- no printing, no file writes."""
     out = ["pre-registered forward test  (registered "
@@ -138,9 +209,10 @@ def report_lines(led=None):
     slates = g["game_date"].nunique() if len(g) else 0
     out.append(f"    eligible rows since registration: {len(g)} over {slates} slates")
     if not len(g):
-        out.append("    nothing to score yet. Discovery-sample prior is NEGATIVE "
-                   f"({-4.2:+.1f}% at the primary threshold) -- this tracks a "
-                   "hypothesis already argued dead.")
+        out.append("    nothing to score yet. Arm 1's prior is NEGATIVE "
+                   f"({-4.2:+.1f}% at the primary threshold) -- it tracks a "
+                   "hypothesis already argued dead. Arm 2 (plus-money dogs) is "
+                   "registered alongside it with a NULL prior.")
         return out
     out.append(_line(g[g["gap"] > GAP_THRESHOLD], "PRIMARY"))
     for thr in SECONDARY_THRESHOLDS:
@@ -152,6 +224,7 @@ def report_lines(led=None):
                f"+5% ROI from zero. Read nothing before then.")
     out.append("    Prior is NEGATIVE by construction (see forward_test.py); a "
                "positive run here is a hypothesis, not a result.")
+    out.extend(_dog_arm_lines(g))
     return out
 
 
