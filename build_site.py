@@ -4092,6 +4092,31 @@ def _model_version_short():
     return f"V{m.group(1)}" if m else MODEL_TAG
 
 
+def _profile_excess_se(parts):
+    """` ± X.X pp` for a profile cell's excess, or "" when it cannot be formed.
+
+    The card used to print the excess bare, on the stated grounds that "the
+    calibration table carries the error bar". It does not: that table renders
+    the 2x3 (`cell`) buckets -- LOW/ACTIVE x oppose/no-backing/agree -- while
+    this panel renders the 3x5 (`profile`) buckets. Different cuts, different
+    n, so a 3x5 cell has no counterpart there and its `excess_se` reached no
+    surface at all. That is two recorded anti-patterns at once: a column
+    carried to no surface, and a published excess with no sampling
+    distribution beside it.
+
+    Sized by `_excess_se`, so it is the Poisson-binomial SE at the market's own
+    prices and is defined at n=1 -- which matters here more than anywhere,
+    because CONVICTION_CELL_MIN is 1 and a one-game cell publishes a headline.
+    """
+    se = parts.get("excess_se")
+    try:
+        if se is None or not np.isfinite(se):
+            return ""
+    except TypeError:
+        return ""
+    return f" ± {100 * float(se):.1f}"
+
+
 def _conviction_tail(ctx, delta, p_lean):
     """Market-adjusted history for this game's exact 3x5 V12 profile."""
     version = _model_version_short()
@@ -4115,7 +4140,8 @@ def _conviction_tail(ctx, delta, p_lean):
         f"<div class='vline'><span class='vk'>Market implied</span>"
         f"<span>{100 * parts['implied']:.1f}%</span></div>"
         f"<div class='vline'><span class='vk'>Performance vs market</span>"
-        f"<span><b>{100 * parts['excess']:+.1f} pp</b></span></div>"
+        f"<span><b>{100 * parts['excess']:+.1f} pp</b>{_profile_excess_se(parts)}"
+        "</span></div>"
         f"<div class='vline'><span class='vk'>Sample</span>"
         f"<span>n={n} · {sample}</span></div>"
         "</div>"
@@ -6418,8 +6444,17 @@ def conviction_cell_records():
     answer a different question.
 
     Thin cells are part of the requested discovery surface, so the default
-    floor is one completed game. The card prints `n` and calls the result a
-    historical discovery cell; the calibration table carries the error bar.
+    floor is one completed game. The card prints `n`, calls the result a
+    historical discovery cell, AND carries its own error bar.
+
+    That last clause is a correction. This said "the calibration table carries
+    the error bar", which was false: that table renders the 2x3 (`cell`)
+    buckets and this panel renders the 3x5 (`profile`) buckets, so a profile
+    cell has no counterpart there and its `excess_se` was computed and shown
+    nowhere. At CONVICTION_CELL_MIN = 1 that let a single game publish a
+    headline excess with no spread beside it -- live at the fix, `low x >65%`
+    read +33.8 pp off n=1, against an SE of +/-47.3.
+
     Keeping `CONVICTION_CELL_MIN` as a constant preserves a simple emergency
     kill switch without silently substituting a pooled record.
     """

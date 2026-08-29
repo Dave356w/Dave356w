@@ -534,6 +534,53 @@ class RenderTests(unittest.TestCase):
         self.assertIn("No completed V12 games in this profile yet", fb)
         self.assertNotIn("Across every model version", fb)
 
+    def test_profile_panel_prints_its_own_error_bar(self):
+        """A published excess must carry its sampling distribution.
+
+        This panel used to print the excess bare, justified in
+        `conviction_cell_records` by "the calibration table carries the error
+        bar". It does not: that table renders the 2x3 `cell` buckets and this
+        panel renders the 3x5 `profile` buckets, so a profile cell has no
+        counterpart there. With CONVICTION_CELL_MIN = 1 that let one game
+        publish a headline with no spread beside it.
+        """
+        ctx = {
+            ("profile", ("low", ">65%")): dict(
+                n=1, w=1, l=0, implied=.662, actual=1.0, excess=.338,
+                excess_se=.473, roi=.51, units=.51,
+            ),
+        }
+        h = b._verdict_html(
+            "ARI", dict(p_home=.662, home_ml=-196), "LAD", "ARI", ctx, .005,
+        )
+        # The excess and its SE travel together; the n=1 cell is the case that
+        # matters, because _excess_se is defined there and p-hat-based forms
+        # would read 0.0.
+        self.assertIn("+33.8 pp</b> \u00b1 47.3", h)
+        self.assertIn("n=1 \u00b7 THIN", h)
+
+    def test_profile_panel_leaves_no_computed_key_unrendered(self):
+        """Every key _lean_market_agg returns must reach a surface.
+
+        `excess_se` was computed, returned and rendered nowhere for two days --
+        the "column carried to no surface" instance, one dict out. Keys the
+        card deliberately delegates elsewhere are named here so that adding a
+        NEW one fails until it is either rendered or listed.
+        """
+        parts = dict(n=14, w=10, l=4, implied=.624, actual=.714, excess=.090,
+                     excess_se=.126, roi=.121, units=1.69)
+        ctx = {("profile", ("medium", "60–65%")): parts}
+        h = b._verdict_html(
+            "ARI", dict(p_home=.62, home_ml=-160), "LAD", "ARI", ctx, .02,
+        )
+        rendered = {"n", "implied", "actual", "excess", "excess_se"}
+        # w/l/roi/units are the value-table's columns, not the card's: the card
+        # reports calibration, never a betting result (see the test below).
+        delegated = {"w", "l", "roi", "units"}
+        self.assertEqual(set(parts) - rendered - delegated, set())
+        for key in ("roi", "units"):
+            self.assertNotIn(f"{100 * parts[key]:+.1f}%", h)
+
     def test_verdict_never_claims_a_value_bet(self):
         """Measured walk-forward, no bucket in this ledger beats the close.
 

@@ -700,6 +700,34 @@ precedent — they are how the fix is known to look.
   implication. What changed is the error bars beside published numbers, not
   the numbers.
 
+- **A column carried to no surface, second instance — and the note that made
+  it invisible.** `_lean_market_agg` computes `excess_se` for every model×market
+  bucket. The 2×3 calibration table renders it; the per-game 3×5 profile panel
+  did not, printing `Performance vs market +33.8 pp` with nothing beside it.
+
+  What kept it hidden was a docstring: `conviction_cell_records` said "the card
+  prints `n` … the calibration table carries the error bar", and that is false.
+  The table renders the **2×3 `cell`** buckets (LOW/ACTIVE × oppose/no-backing/
+  agree); the card renders the **3×5 `profile`** buckets (low/medium/high ×
+  five price bands). Different cuts, different n — a profile cell has no
+  counterpart there, so its SE reached no surface at all. Same shape as the
+  instance below: a note describing a diagnostic the reader cannot see.
+
+  Not latent, and worst exactly where it matters. `CONVICTION_CELL_MIN = 1`, so
+  a single completed game publishes a headline: live at the fix, `low × >65%`
+  read **+33.8 pp off n=1**, against an SE of **±47.3**. Three of the 14
+  published cells sat under n=5. The fix renders the SE the aggregate already
+  returned, and a test pins the n=1 case specifically — `_excess_se` is defined
+  there, where the p̂-based forms this repo already banned would print ±0.0.
+
+  Two things deliberately NOT changed, because they are the operator's call on
+  a surface requested as exploratory: the `CONVICTION_CELL_MIN = 1` floor, and
+  the `n ≥ 20 → "LARGER SAMPLE"` label (n=20 still carries ±11pp). The error bar
+  is what makes both readable rather than misleading, which is why it was the
+  half worth fixing unasked.
+
+  Display-only: no lean, delta, grade or ledger row moves.
+
 - **A column carried to no surface.** The same panel computed a per-game
   `price_dislocation` residual, returned it on the observation frame, and
   rendered it nowhere — and the note beside it described the invisible
