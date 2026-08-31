@@ -37,10 +37,14 @@ def load(tags=None, metric=None):
     def n(c):
         """Numeric column, all-NaN when absent.
 
-        Absent is the normal case for a column introduced by the current
-        MODEL_TAG: `expected_sp_ip_raw_*` landed with v12 and no v12 row has
-        graded yet, so a strict `d[c]` would make this probe unrunnable on the
-        very history it exists to read.
+        Absent is the normal case for a column introduced by a MODEL_TAG
+        younger than the rows being read: `expected_sp_ip_raw_*` landed with
+        v12, so every pre-v12 family carries none of it and a strict `d[c]`
+        would make this probe unrunnable on the very history it exists to
+        read. Stated as a rule rather than as a count on purpose -- this
+        docstring read "no v12 row has graded yet" for as long as it took 217
+        of them to grade, which is the version-note-asserts-rows failure in
+        CLAUDE.md with the sign reversed.
         """
         if c not in d.columns:
             return pd.Series(np.nan, index=d.index, dtype="float64")
@@ -343,10 +347,43 @@ def run_fitted(label, f):
 
 
 
+def blocks():
+    """(label, load-kwargs) for every family this probe scores.
+
+    The current family is DERIVED from `build_site.RECORD_TAGS`, never named
+    here. This file used to list two hardcoded blocks -- v9/v10, and
+    `metric="wOBA"` labelled "(live)" -- and both went stale at v11/v12: the
+    primary metric reverted to xwOBA, so the block calling itself live scored
+    a lineage the build had stopped running, while v12 became the largest
+    family in the ledger without ever being scored at all. That is the
+    probe-hardcodes-a-model-constant anti-pattern reached through the ROW
+    SELECTOR rather than through a numeric literal, and the fix is the same
+    one `calibrated_q` already applies to the slope: read it off the module.
+
+    Historical blocks stay pinned to their tags on purpose -- they are answers
+    about versions that no longer run, and a frozen question needs a frozen
+    row set. They are labelled as history so no reader takes one for the
+    shipping model. A historical block that IS the current family is dropped
+    rather than printed twice under two contradicting labels, which an
+    env-var `MODEL_TAG` override makes reachable.
+    """
+    cur = tuple(build_site.RECORD_TAGS)
+    vers = "/".join(t.rsplit("_", 1)[-1] for t in cur)
+    out = [(f"{build_site.MODEL_RATE_LABEL} {vers}  (CURRENT family)",
+            dict(tags=cur))]
+    for label, kw in [
+            ("xwOBA v9/v10  (historical)",
+             dict(tags=("xw+plat_consol_v9", "xw+plat_consol_v10"))),
+            ("wOBA lineage  (historical -- the primary metric reverted to "
+             "xwOBA at v11)", dict(metric="wOBA"))]:
+        if kw.get("tags") == cur:
+            continue
+        out.append((label, kw))
+    return out
+
+
 if __name__ == "__main__":
-    for label, kw in [("xwOBA v9/v10", dict(tags=("xw+plat_consol_v9",
-                                                 "xw+plat_consol_v10"))),
-                      ("wOBA lineage (live)", dict(metric="wOBA"))]:
+    for label, kw in blocks():
         f = load(**kw)
         run(label, f)
         run_fitted(label, f)
