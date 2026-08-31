@@ -111,3 +111,65 @@ def test_no_calibration_slope_is_frozen_into_this_file():
     assert not frozen, f"a slope-shaped literal is back in the code: {frozen}"
     assert "build_site.sp_ip_calibration()" in open(
         ip.__file__, encoding="utf-8").read()
+
+
+# --------------------------------------------------------- which rows it scores
+#
+# The calibrated-q guards above pin what the probe COMPUTES. These pin what it
+# computes it ON, which is the other way this file can quietly stop meaning
+# what its labels say. The probe shipped for two model versions scoring only
+# v9/v10 and the wOBA lineage -- the latter labelled "(live)" after the primary
+# metric had reverted to xwOBA -- while v12 grew into the largest family in the
+# ledger without ever appearing. Nothing crashed and nothing was wrong on its
+# face; the probe just answered a question about a model that had stopped
+# running. Same anti-pattern as the frozen slope, reached through the row
+# selector instead of a numeric literal.
+
+
+def test_the_current_record_family_is_always_scored():
+    """THE REGRESSION THIS BLOCK EXISTS FOR.
+
+    Derived from `build_site.RECORD_TAGS`, so a MODEL_TAG bump carries the
+    probe forward with no edit here. Asserted as the rule rather than against
+    a tag literal: pinning `xw+plat_consol_v12` would reproduce the defect one
+    file out, going stale at the next bump exactly as the probe did.
+    """
+    scored = [kw.get("tags") for _, kw in ip.blocks()]
+    assert tuple(bs.RECORD_TAGS) in scored, (
+        f"the current family {bs.RECORD_TAGS} is not scored; blocks={scored}")
+
+
+def test_only_the_current_family_is_labelled_current():
+    """A historical block must not read as the shipping model. The wOBA block
+    said "(live)" for two versions after the metric reverted."""
+    cur = [lab for lab, kw in ip.blocks() if kw.get("tags") == tuple(bs.RECORD_TAGS)]
+    assert len(cur) == 1
+    assert "CURRENT" in cur[0]
+    for lab, kw in ip.blocks():
+        if kw.get("tags") == tuple(bs.RECORD_TAGS):
+            continue
+        assert "CURRENT" not in lab and "live" not in lab.lower(), lab
+        assert "historical" in lab.lower(), lab
+
+
+def test_a_historical_block_that_is_now_the_current_family_prints_once(monkeypatch):
+    """`MODEL_TAG` is an env override, so the current family CAN land on a tag
+    tuple the historical list also names. Printing those rows twice, once as
+    CURRENT and once as history, is worse than not printing them at all."""
+    v9v10 = ("xw+plat_consol_v9", "xw+plat_consol_v10")
+    monkeypatch.setattr(bs, "RECORD_TAGS", v9v10)
+    blocks = ip.blocks()
+    assert [kw.get("tags") for _, kw in blocks].count(v9v10) == 1
+    assert sum("CURRENT" in lab for lab, _ in blocks) == 1
+
+
+def test_the_probe_names_no_family_tag_outside_the_historical_list():
+    """The current family reaches the probe by derivation. Any tag literal in
+    this file therefore belongs to a frozen historical block, and a new one
+    appearing is the hardcode creeping back."""
+    import ast
+    tree = ast.parse(open(ip.__file__, encoding="utf-8").read())
+    tags = {n.value for n in ast.walk(tree)
+            if isinstance(n, ast.Constant) and isinstance(n.value, str)
+            and "plat_consol_v" in n.value}
+    assert tags == {"xw+plat_consol_v9", "xw+plat_consol_v10"}, tags

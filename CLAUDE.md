@@ -1241,6 +1241,44 @@ them cannot be smoke-tested locally; run the workflow.
   the model against an old copy of itself.** `interaction_probe` froze the IP
   calibration slope at `0.756` and, once v12 shipped a per-build fit, would have
   double-applied it. Read live values off the module.
+
+  **Second instance in the same file, through the row selector rather than a
+  number.** Its `__main__` listed two hardcoded blocks — `tags=(v9, v10)`, and
+  `metric="wOBA"` labelled **"(live)"**. The revert made both wrong at once:
+  the "live" block scored a lineage the build had stopped running at v11, and
+  v12 grew to 217 graded rows — the largest family in the ledger, and the one
+  actually shipping — without the probe ever scoring it. Nothing crashed and no
+  line was false on its face; the probe simply answered about a model that no
+  longer ran, which is why it survived two bumps. **A constant is not only a
+  number: the set of rows a probe reads is one too.** The current block now
+  derives from `build_site.RECORD_TAGS`, so a bump carries the probe forward
+  with no edit; the historical blocks stay pinned, because a frozen question
+  needs a frozen row set, and are labelled as history. Pinned by four tests
+  that assert the *rule* — the current family appears, only it is labelled
+  CURRENT, a historical block equal to it prints once, and no family tag
+  outside the historical list appears in the file — because pinning
+  `xw+plat_consol_v12` would reproduce the defect one file out.
+
+  The same commit fixed a `load()` docstring reading "no v12 row has graded
+  yet", which stayed there through 217 of them: the version-note-asserts-rows
+  failure recorded three times above, with the sign reversed. It now states
+  the rule (a column is absent on families older than the tag that introduced
+  it) rather than a count.
+
+  What the block was hiding is worth reading, not just the fix. On v12 the
+  shipped rule scores corr +0.167 against the realised wOBA differential, and
+  `signal: lineup only` scores **+0.017** with a paired d_corr CI of
+  [-0.287, -0.022]; the in-sample lineup weight is **-0.500 ± 0.975** beside
+  starter +0.562 and bullpen +1.104. That agrees with the component-error
+  monitor, where the lineup phase has run a negative slope against its own
+  realised rate for weeks (-0.86 → -0.78 → -0.63 as n grew to 434, corr
+  -0.050). Read it as "not measurably contributing", not as "inverted" — every
+  one of those intervals contains zero. It is un-acted-on and instrumented,
+  not a defect: `bp_ablation` covers the bullpen term and nothing covers this
+  one. The `q from calibrated IP` candidate also now reads d_corr
+  [-0.001, +0.000] on v12 rows, confirming on real rows what
+  `test_the_calibration_is_not_applied_twice_to_a_v12_row` pins on constructed
+  ones — after the bump that candidate IS the baseline.
 - **Say what a probe cannot answer.** `player_prior_probe` cannot count lean
   flips; `shadow_report` cannot settle the metric from unpaired eras; the
   dump-versus-ledger join is contaminated by the post-rollover rebuild. Each
