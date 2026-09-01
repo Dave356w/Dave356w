@@ -691,6 +691,74 @@ precedent — they are how the fix is known to look.
   must be deliberate. Its gate is ~1,300 bets at ~1.6 a slate; read nothing
   before then.
 
+  **The hybrid market-direction rule is the third registration, and it is the
+  clearest instance yet of the trap this whole entry exists for.** Proposed as
+  a market guardrail on top of the v12 lean — follow the lean when the market
+  gives the selected side at least 45%, back the other side below that — it
+  reproduces exactly on the ledger: 223 eligible v12 rows, hybrid 146-77 for
+  +31.50u (+14.1% ROI, z = +2.72 against price) where the plain lean ran 139-84
+  for +22.63u (+10.1%). Every figure in the proposal verified, including its
+  own bootstrap intervals. It is registered rather than shipped, and the two
+  measurements that decided that were not in the proposal:
+
+  * **The headline is mostly the model, not the rule.** The switch fires on 15
+    of 223 selections; the other 208 are v12 unaltered, which is where the
+    z = +2.72 comes from (the follow branch alone is z = +2.50). What the rule
+    *adds* is the paired switch delta: +0.592u per switched game, se 0.486,
+    **z = +1.22**, paired ROI CI [−2.6, +10.4] pp with P(≤ 0) = 0.11. So the
+    registered headline is the switch delta, never the hybrid's ROI — a
+    combined line can only restate what the model already does.
+  * **The fade branch is always-chalk, exactly and by construction.** Fading a
+    lean priced under .45 backs a side priced over .55, which is always the
+    favourite — verified 15 of 15. Its 11-4 and +23.8% *is* the always-chalk
+    record on those rows, to the unit, in a window where chalk beat its price
+    by +4.0pp over all 223 (137-86, +4.5%). A rule whose only active branch is
+    favourite-backing, measured over 15 games in a favourite-friendly stretch,
+    is this entry's own failure mode with a new formula on it.
+
+  **One thing genuinely cuts the other way, and it is recorded because the
+  honest answer is not "no".** Judged by the search test this repo demands — a
+  threshold found by looking is scored against the null maximum, never against
+  zero — 0.45 survives: sweeping 0.30..0.56 in 0.01 steps it is the argmax of
+  27 candidates at +14.1%, and under "market correct, no edge" simulated at the
+  devigged closes the best of those 27 averages +4.7%, giving
+  **P(null best ≥ observed) = 0.019**. That is a far better showing than the
+  band grid's p = 0.38. It still is not a result: the sweep is flat near +10%
+  below 0.44 because the fade branch is empty there, so the entire spike is
+  those same 15 games, and no permutation can manufacture the independent
+  sample the gate needs.
+
+  `hybrid_test.py` is what came out of it, alongside
+  `tests/test_hybrid_test.py`. Registered 2026-09-01, scoring only slates
+  strictly after, prior stated as **null**. It is a separate module rather than
+  a third arm of `forward_test.py` so neither registration's frozen block can
+  be edited while reaching for the other's. Its tests pin the constants and, in
+  addition, the two structural properties the reading turns on: that a followed
+  game has *identically* zero switch delta (so the headline cannot absorb the
+  model's own performance), and that the fade branch backs the favourite on
+  every row (so a good forward run is read against the always-chalk control the
+  module prints beside it). Two gates, because they answer different questions:
+  ~41 switches asks only whether the effect is anywhere near as large as it
+  looked, and ~1,420 is what a plausible +0.10u-per-switch edge needs — at the
+  observed 0.88 switches a slate, roughly ten seasons. **Read nothing before
+  the first, and do not read the second as reachable.**
+
+  **What it cannot do, and the one thing the protocol asks for that this repo
+  cannot yet supply:** the rule is specified against the no-vig probability
+  available *at decision time*, and the ledger carries only the close, because
+  the no-lookahead invariant keeps every market column off a pending row. So
+  the module scores the closing basis — the same basis `forward_test.py` uses
+  and the same one the discovery numbers were measured on, so it is consistent,
+  but it is a CLV reading rather than an obtainable-price one. Closing that gap
+  means persisting a decision-time price pregame: `fetch_pregame_odds` already
+  computes exactly that `p_home` and renders it on the card, but it is called
+  *after* the dump is written and is never stored. Deliberately not done here —
+  it moves the critical path that commits irreplaceable pregame rows — and the
+  shape it should take if it is: leave the dump write where it is, then enrich
+  it in a second best-effort pass, so a failed fetch costs the decision price
+  and never the slate. Until then an operator paper-tracking this rule records
+  their own obtainable price separately, and the module's header says so.
+
 - **An error bar estimated from the outcomes it is testing.** Both surfaces on
   `market-calibration.html` print a realised rate against its implied one, and
   both sized the `±` from the results rather than from the prices. The ladder
@@ -1195,8 +1263,8 @@ that line would still be waiting.
 `data/ledger_report.txt` carries the current-family record and F5, the |Δ|
 terciles, the per-family and per-slate predicted-vs-actual, the component error
 (SP / BP / lineup each against its own realised phase), the IP calibration
-slope, the SP-vs-lineup coefficients and their symmetry contrast, and the
-pre-registered forward test (`forward_test.py`). The grades
+slope, the SP-vs-lineup coefficients and their symmetry contrast, and the two
+pre-registered forward tests (`forward_test.py`, `hybrid_test.py`). The grades
 page carries the baseline controls and the lock provenance. Read these before
 writing a new probe.
 
@@ -1206,6 +1274,7 @@ writing a new probe.
 |---|---|
 | `value_probe.py` | is there a tradable relationship between `xw_net` and price? (incl. band grids) |
 | `forward_test.py` | pre-registered fade rule, frozen 2026-08-29 (also prints every build) |
+| `hybrid_test.py` | pre-registered hybrid market-direction rule, frozen 2026-09-01 (also prints every build) |
 | `interaction_probe.py` | do single signals or other combiners beat `B·P/L`? |
 | `dispersion_probe.py` | does a concentrated lineup beat the mean it is averaged into? |
 | `bp_ablation.py` | does removing the bullpen term change any decision? |
