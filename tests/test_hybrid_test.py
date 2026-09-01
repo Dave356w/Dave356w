@@ -34,6 +34,16 @@ def _led(p_home, lean_home, home_won, date="2026-09-05"):
     n = len(p_home)
     lean_home = np.broadcast_to(np.asarray(lean_home, dtype=bool), (n,))
     home_won = np.broadcast_to(np.asarray(home_won, dtype=bool), (n,))
+    home_ml = np.where(
+        p_home >= .5, -np.round(100 * p_home / (1 - p_home)),
+        np.round(100 * (1 - p_home) / p_home))
+    away_ml = np.where(
+        p_home >= .5, np.round(100 * p_home / (1 - p_home)),
+        -np.round(100 * (1 - p_home) / p_home))
+    model_p = np.where(lean_home, p_home, 1 - p_home)
+    follow = model_p >= ht.THRESHOLD
+    bet_home = np.where(follow, lean_home, ~lean_home)
+    bet_won = np.where(bet_home, home_won, ~home_won)
     return pd.DataFrame({
         "status": "graded", "game_date": date, "home": "H", "away": "A",
         "close_p_home": p_home,
@@ -42,10 +52,15 @@ def _led(p_home, lean_home, home_won, date="2026-09-05"):
         "full_away": np.where(home_won, 0, 1),
         # Fair prices from the devigged probabilities: the payout arithmetic is
         # not under test here, only the direction the rule takes.
-        "close_home_ml": np.where(p_home >= .5, -np.round(100 * p_home / (1 - p_home)),
-                                  np.round(100 * (1 - p_home) / p_home)),
-        "close_away_ml": np.where(p_home >= .5, np.round(100 * p_home / (1 - p_home)),
-                                  -np.round(100 * (1 - p_home) / p_home)),
+        "close_home_ml": home_ml, "close_away_ml": away_ml,
+        "selection_rule_tag": ht.RULE_TAG,
+        "pregame_p_home": p_home,
+        "pregame_home_ml": home_ml, "pregame_away_ml": away_ml,
+        "hybrid_action": np.where(follow, "FOLLOW", "FADE"),
+        "hybrid_selection": np.where(bet_home, "H", "A"),
+        "hybrid_p": np.where(bet_home, p_home, 1 - p_home),
+        "hybrid_ml": np.where(bet_home, home_ml, away_ml),
+        "hybrid_full": np.where(bet_won, "W", "L"),
     })
 
 
@@ -54,6 +69,7 @@ class RegistrationFrozenTests(unittest.TestCase):
         self.assertEqual(ht.REGISTERED_ON, "2026-09-01")
         self.assertAlmostEqual(ht.THRESHOLD, 0.45, places=10)
         self.assertAlmostEqual(ht.STAKE, 1.0, places=10)
+        self.assertEqual(ht.RULE_TAG, "xwoba_market_hybrid_v1")
         self.assertEqual(ht.PRIOR, "null")
 
     def test_discovery_constants_are_exactly_as_measured(self):
@@ -105,6 +121,24 @@ class SwitchRuleTests(unittest.TestCase):
         self.assertFalse(bool(g["follow"].iloc[0]))
         self.assertTrue(bool(g["bet_home"].iloc[0]))
         self.assertTrue(bool(g["bet_won"].iloc[0]))
+
+    def test_forward_scoring_uses_the_locked_market_not_the_close(self):
+        """A later close cannot rewrite the side or price that was published."""
+        led = _led([.46], lean_home=True, home_won=True)
+        led["close_p_home"] = .20
+        led["close_home_ml"] = 300
+        led["close_away_ml"] = -400
+        g = ht.scored_rows(led)
+        self.assertTrue(bool(g["follow"].iloc[0]))
+        self.assertTrue(bool(g["bet_home"].iloc[0]))
+        self.assertAlmostEqual(float(g["p_bet"].iloc[0]), .46)
+        self.assertEqual(float(g["ml_bet"].iloc[0]), 117)
+
+        # Closing-market attachment is optional for forward scoring; a market
+        # outage must not erase a settled locked selection.
+        no_close = led.drop(columns=[
+            "close_p_home", "close_home_ml", "close_away_ml"])
+        self.assertEqual(len(ht.scored_rows(no_close)), 1)
 
     def test_the_fade_branch_is_always_chalk_by_construction(self):
         """Fading a sub-.45 lean always backs the favourite. Never a finding.

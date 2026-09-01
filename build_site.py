@@ -73,6 +73,8 @@ BATTING_ORDER_COL = "batting_order"
 # bullpen, league-prior, percentile, and pitch-mix inputs.
 MODEL_RATE_SOURCE_COL = "xwoba"
 MODEL_RATE_LABEL = "xwOBA"
+PUBLIC_MODEL_NAME = "XWOBA Market Hybrid"
+HYBRID_RULE_TAG = hybrid_test.RULE_TAG
 MODEL_RATE_INTERNAL_COL = "xwOBA"  # stable dump/ledger schema, both metrics
 # True only for a posted hitter absent from the season Savant leaderboard, who
 # therefore carries the active team's PA-weighted rate. Purely an in-process
@@ -3562,7 +3564,7 @@ def build_platoon_matchup(pitcher_rows_df, opp_hitters_df, people,
 
 
 # ============================================================
-# PREGAME MARKET (display-only) -- best-effort DK odds via ESPN
+# PREGAME MARKET -- best-effort DK odds via ESPN
 # Same endpoints/join as market_backfill.py (scoreboard -> core
 # /odds, provider 100), but *pregame*: current + open moneylines
 # and the total, devigged home implied %. Strictly best-effort:
@@ -4641,17 +4643,17 @@ def _summary_team_label(g, side):
     return str(g.get(f"{side}_abbr") or "")
 
 
-def _summary_market_line(g):
-    """Favorite and current moneyline for the compact row."""
+def _summary_market_line(g, lean=None):
+    """Locked/current Hybrid selection for the compact row."""
     odds = g.get("odds") or {}
-    p_home = _f(odds.get("p_home"))
-    if p_home is None:
-        return "Odds pending"
-    side = "home" if p_home >= .5 else "away"
-    ml = odds.get(f"{side}_ml")
-    if ml is None:
-        return "Odds pending"
-    return f"{g.get(f'{side}_abbr') or ''} {_fmt_ml(ml)}".strip()
+    away, home = g.get("away_abbr"), g.get("home_abbr")
+    p_lean = _lean_implied_p(odds, lean, away, home)
+    action = hybrid_action(p_lean)
+    pick = hybrid_selection(lean, away, home, p_lean)
+    if action is None or pick is None:
+        return "Selection pending"
+    ml = odds.get("home_ml") if pick == home else odds.get("away_ml")
+    return f"{pick} {_fmt_ml(ml)} · {action}".strip()
 
 
 def _summary_team_html(g, side, ctx):
@@ -4668,13 +4670,13 @@ def _summary_team_html(g, side, ctx):
     )
 
 
-def _scoreboard_summary(g, ctx=None):
+def _scoreboard_summary(g, ctx=None, lean=None):
     """Collapsed scoreboard row shared by modeled and pending games."""
     state = str(g.get("abstract_state") or "").lower()
     in_progress = state in ("live", "final")
     hide_pregame = " hidden" if in_progress else ""
     time_text = str(g.get("time_pt") or "Time TBD")
-    market_text = _summary_market_line(g)
+    market_text = _summary_market_line(g, lean)
     game_no = (f"<span class='game-no'>{_esc(g['game_label'])}</span>"
                if g.get("game_label") else "")
     away_label = _summary_team_label(g, "away")
@@ -4733,7 +4735,7 @@ def cmb_card(g, strength_scale=None, ctx=None):
     return (
         "<article class='card'>"
         "<details class='game-card'>"
-        + _scoreboard_summary(g, ctx)
+        + _scoreboard_summary(g, ctx, fav)
         + "<div class='game-detail'>"
         + _detail_context_html(g)
         + (read_html or "")
@@ -5743,7 +5745,7 @@ def score_refresh_js():
 
 
 def html_document(body, built_txt, title=None, extra_js=None):
-    title = title or f"MLB matchup leans - {SLATE_DATE}"
+    title = title or f"{PUBLIC_MODEL_NAME} - {SLATE_DATE}"
     extra_script = f"<script>{extra_js}</script>" if extra_js else ""
     return (
         "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
@@ -5752,7 +5754,7 @@ def html_document(body, built_txt, title=None, extra_js=None):
         "<meta name='robots' content='noindex'>"
         f"<style>{font_face_css()}{CSS}{CSS_GRADES}</style></head><body>"
         f"<div class='mx-wrap'>"
-        "<div class='topbar'><div class='brand'>MLB matchup leans</div>"
+        f"<div class='topbar'><div class='brand'>{PUBLIC_MODEL_NAME}</div>"
         "<div style='display:flex;gap:8px'>"
         "<button id='themeBtn' class='theme' type='button'>Theme: auto</button></div></div>"
         f"{body}</div>"
@@ -6203,6 +6205,59 @@ def hybrid_selection(lean, away_abbr, home_abbr, market_p):
     return None
 
 
+def attach_hybrid_snapshot(frame, odds, snapshot_utc):
+    """Stamp the public Hybrid decision and its two-sided pregame market.
+
+    The same values are repeated on both pitcher-side rows for a game so the
+    paired dump remains self-contained. Pending ledger rows may refresh these
+    fields only from a later accepted pregame snapshot; once graded they are
+    immutable. Historical v12 rows predate this instrumentation and remain the
+    explicitly retrospective, close-derived archive.
+    """
+    if frame is None or frame.empty:
+        return frame
+    string_cols = ("selection_rule_tag", "hybrid_action", "hybrid_selection",
+                   "pregame_market_utc")
+    number_cols = ("pregame_away_ml", "pregame_home_ml", "pregame_p_home",
+                   "hybrid_p", "hybrid_ml")
+    for col in string_cols:
+        frame[col] = None
+    for col in number_cols:
+        frame[col] = np.nan
+    for game_pk, gg in frame.groupby("game_pk", sort=False):
+        a = gg[gg["side"] == "away"]
+        h = gg[gg["side"] == "home"]
+        if a.empty or h.empty:
+            continue
+        a, h = a.iloc[0], h.iloc[0]
+        home = _abbr(a.get("opp_team"))
+        away = _abbr(h.get("opp_team"))
+        home_off, away_off = _f(a.get("edge_xwOBA")), _f(h.get("edge_xwOBA"))
+        lean = None
+        if home_off is not None and away_off is not None and home_off != away_off:
+            lean = home if home_off > away_off else away
+        market = (odds or {}).get(game_pk) or (odds or {}).get(str(game_pk)) or {}
+        p_home = _f(market.get("p_home"))
+        p_lean = (p_home if lean == home else 1.0 - p_home
+                  if lean == away and p_home is not None else None)
+        action = hybrid_action(p_lean)
+        pick = hybrid_selection(lean, away, home, p_lean)
+        selected_ml = (market.get("home_ml") if pick == home else
+                       market.get("away_ml") if pick == away else None)
+        mask = frame["game_pk"].eq(game_pk)
+        frame.loc[mask, "selection_rule_tag"] = HYBRID_RULE_TAG
+        frame.loc[mask, "pregame_market_utc"] = snapshot_utc
+        frame.loc[mask, "pregame_away_ml"] = market.get("away_ml")
+        frame.loc[mask, "pregame_home_ml"] = market.get("home_ml")
+        frame.loc[mask, "pregame_p_home"] = p_home
+        frame.loc[mask, "hybrid_action"] = action
+        frame.loc[mask, "hybrid_selection"] = pick
+        frame.loc[mask, "hybrid_p"] = p_lean if action == "FOLLOW" else (
+            1.0 - p_lean if action == "FADE" and p_lean is not None else np.nan)
+        frame.loc[mask, "hybrid_ml"] = selected_ml
+    return frame
+
+
 def _delta_label(delta):
     """LOW/MEDIUM/HIGH display band for a usable absolute model delta."""
     if delta is None:
@@ -6336,7 +6391,7 @@ def _render_lean_market_value_panel(led):
     """Hybrid-rule validation panel for market-calibration.html."""
     a = _lean_market_value_analysis(led)
     if not a:
-        return ("<div class='gr-head'><h2 class='gr-h1'>Hybrid rule</h2>"
+        return (f"<div class='gr-head'><h2 class='gr-h1'>{PUBLIC_MODEL_NAME}</h2>"
                 "<div class='gr-lead'>Branch diagnostics appear once graded "
                 "leans carry a closing moneyline.</div></div>")
 
@@ -6345,7 +6400,7 @@ def _render_lean_market_value_panel(led):
     slope_txt = f"{slope_pp:+.2f} pp" if np.isfinite(slope_pp) else "—"
 
     summary = (
-        "<div class='gr-head'><h2 class='gr-h1'>Hybrid rule</h2>"
+        f"<div class='gr-head'><h2 class='gr-h1'>{PUBLIC_MODEL_NAME}</h2>"
         "<div class='gr-lead'>Follow the model when the market gives its "
         f"selected side at least {100 * a['threshold']:.0f}%; back the other "
         "side below that. Current prediction family, scored at the "
@@ -6723,7 +6778,7 @@ def records_strip_html():
                  f"{_esc(MODEL_TAG)}</span>")
         if n_all:
             inner += (f" <span class='muted'>· {n_all} graded under earlier "
-                      "families — <a href='grades.html'>full ledger</a></span>")
+                      "families retained internally</span>")
     else:
         # Label the record with the metric those rows were predicted under,
         # not MODEL_RATE_LABEL. Still read off the rows even now the family is
@@ -6752,7 +6807,8 @@ def records_strip_html():
             # a lean predicted under a specific statistic, and dropping the
             # label is how this strip once published "wOBA full 217-164" over
             # 381 xwOBA games -- read off the ROWS, never MODEL_RATE_LABEL.
-            bits.append(f"{label} hybrid {rule['w']}-{rule['l']} "
+            bits.append(f"{PUBLIC_MODEL_NAME} ({label}) retrospective "
+                        f"{rule['w']}-{rule['l']} "
                         f"({rule['actual']:.3f})")
             se = rule["excess_se"]
             if se is not None and np.isfinite(se) and se > 0:
@@ -6770,9 +6826,9 @@ def records_strip_html():
         if scope:
             bits.append(f"<span class='muted'>{scope}</span>")
         inner = " <span class='muted'>·</span> ".join(bits)
-    return ("<div class='gradestrip'><span class='lab'>Record</span>"
+    return ("<div class='gradestrip'><span class='lab'>Full v12 retro</span>"
             f"<span>{inner}</span><span class='grade-links'>"
-            "<a href='grades.html'>full ledger →</a></span></div>")
+            "<a href='grades.html'>v12 ledger →</a></span></div>")
 
 
 def _wlt_badge(v):
@@ -6841,6 +6897,12 @@ def _row_hybrid(r):
     """
     if r.get("model_tag") not in RECORD_TAGS:
         return None, None, None
+    locked_pick = r.get("hybrid_selection")
+    locked_action = r.get("hybrid_action")
+    if (r.get("selection_rule_tag") == HYBRID_RULE_TAG
+            and isinstance(locked_pick, str) and locked_pick
+            and locked_action in ("FOLLOW", "FADE")):
+        return locked_action, locked_pick, r.get("hybrid_full")
     lean = r.get("xw_lean")
     if not isinstance(lean, str) or not lean:
         return None, None, None
@@ -6911,9 +6973,8 @@ def _grades_row(r, show_ml=False):
                             "prediction families; this row shows the lean it "
                             "published at the time", "lean only")
             else:
-                why, tag = ("no two-sided closing price is attached yet, so "
-                            "the rule cannot act; the model lean is shown "
-                            "instead", "awaiting close")
+                why, tag = ("no locked pregame market exists on this row and "
+                            "no closing market is attached yet", "awaiting market")
             sel_cell += f"<span class='sp' title='{why}'>{tag}</span>"
         res = r["xw_full"]
     elif action == "FADE":
@@ -6935,7 +6996,10 @@ def _grades_row(r, show_ml=False):
     if show_ml:
         cells.append(("c-ml", "ML",
                       _lean_ml_cell(r, "xw_lean") if action is None
-                      else _pick_ml_cell(r, pick)))
+                      else (_fmt_ml_cell(r.get("hybrid_ml"))
+                            if r.get("selection_rule_tag") == HYBRID_RULE_TAG
+                            and pd.notna(pd.to_numeric(r.get("hybrid_ml"), errors="coerce"))
+                            else _pick_ml_cell(r, pick))))
     cells += [("c-final", "Final", final),
               ("c-res", "Result", _wlt_badge(res))]
     cls = "gr-row void" if status == "void" else "gr-row"
@@ -6960,9 +7024,12 @@ def _grades_day_header(date, day, ncols):
     lab += f" <span class='n'>· {n} game{'' if n == 1 else 's'}</span>"
     # Day record only once something on that date is graded; an all-pending
     # date would otherwise show a meaningless 0-0.
-    decided = day["xw_full"].isin(["W", "L", "T"]).sum() if "xw_full" in day else 0
+    displayed_grades = pd.Series(
+        [_row_hybrid(r)[2] for _, r in day.iterrows()], index=day.index,
+        dtype=object)
+    decided = displayed_grades.isin(["W", "L", "T"]).sum()
     if decided:
-        lab += f"<span class='rec'>{_rec_parts(day['xw_full'])[0]}</span>"
+        lab += f"<span class='rec'>{_rec_parts(displayed_grades)[0]}</span>"
     return (f"<tr class='gr-day'><th colspan='{ncols}' scope='colgroup'>"
             f"{lab}</th></tr>")
 
@@ -6997,10 +7064,15 @@ def render_grades_html(built_txt):
             "<a href='market-calibration.html'>market calibration →</a></div>")
     led = load_ledger_df()
     if led is None:
-        body = back + ("<div class='legend'><div class='lg-title'>Grading ledger · "
+        body = back + (f"<div class='legend'><div class='lg-title'>{PUBLIC_MODEL_NAME} ledger · "
                        "no graded data yet — the ledger appears after the first CI run."
                        "</div></div>")
-        return html_document(body, built_txt, title="MLB lean grades")
+        return html_document(body, built_txt, title=f"{PUBLIC_MODEL_NAME} ledger")
+
+    # The public archive is one product with one rule. Older prediction-family
+    # leans remain in the CSV and internal report, but are not mixed into the
+    # XWOBA Market Hybrid table under a shared Selection heading.
+    led = led[led["model_tag"].isin(RECORD_TAGS)].copy()
 
     # Scoped to the current record family, like the graded count they sit
     # beside. Pooling them there would put "30 graded" next to a void count
@@ -7009,8 +7081,8 @@ def render_grades_html(built_txt):
     _fam = led["model_tag"].isin(RECORD_TAGS)
     n_pend = int((_fam & (led["status"] == "pending")).sum())
     n_void = int((_fam & (led["status"] == "void")).sum())
-    head = ("<div class='gr-head'><h1 class='gr-h1'>Grading ledger</h1>"
-            "<div class='gr-lead'>Every lean this model has published, graded "
+    head = (f"<div class='gr-head'><h1 class='gr-h1'>{PUBLIC_MODEL_NAME} ledger</h1>"
+            "<div class='gr-lead'>Every v12 Hybrid selection in the public archive, graded "
             f"against the final score. Built <span class='stamp'>{built_txt}"
             "</span>.</div></div>")
 
@@ -7088,7 +7160,7 @@ def render_grades_html(built_txt):
             rule = _lean_market_agg(obs, priced, **hyb)
             lean_only = _lean_market_agg(obs, priced)
             n_fade = int((~obs["hybrid_follow"]).sum())
-            stat("Hybrid selection", f"{rule['w']}-{rule['l']}",
+            stat(f"Full v12 {label} retro Hybrid", f"{rule['w']}-{rule['l']}",
                  f"{rule['actual']:.3f} · lean alone "
                  f"{lean_only['w']}-{lean_only['l']} · {n_fade} faded")
             # z leads. A raw rate in a price-selected sample is mostly base
@@ -7156,13 +7228,12 @@ def render_grades_html(built_txt):
                 "devigged DK closing price, and z and flat close ROI are the "
                 "primary metrics")
             notes.append(
-                "the threshold was chosen on these rows, so this is a "
-                "discovery record — the out-of-sample version scores only "
-                "games played after it was frozen and prints every build in "
-                "data/ledger_report.txt")
-        # The scope of every tile above, stated once. Without it the header
-        # reads as a summary of the table underneath it, which spans every
-        # family the ledger has ever held.
+                "this is the full retrospective v12 Hybrid history: legacy "
+                "v12 rows derive the rule from the devigged close; newly "
+                "instrumented rows preserve the current two-sided pregame "
+                "market and locked public selection")
+        # Keep the explicit family tag available for an empty or partially
+        # migrated v12 archive; the visible table itself is already v12-only.
         if scope:
             notes.append(f"current model family only — {scope}; the table "
                          f"below lists all {n_all} rows, and "
@@ -7180,11 +7251,10 @@ def render_grades_html(built_txt):
         summary = ("<div class='gr-summary'>" + "".join(stats) + "</div>"
                    + (f"<div class='gr-note'>{'. '.join(notes)}.</div>" if notes else ""))
 
-    show_ml = "close_home_ml" in led.columns and led["close_home_ml"].notna().any()
-    # The table is the archive: every family, every status, metric-neutral
-    # column headers because the rows behind them were predicted under
-    # different statistics. The summary above is scoped to the current family
-    # and labelled from its own rows, which is why the two counts differ.
+    show_ml = (("close_home_ml" in led.columns and led["close_home_ml"].notna().any())
+               or ("hybrid_ml" in led.columns and led["hybrid_ml"].notna().any()))
+    # The public archive is v12-only. Pending and void rows remain visible so
+    # every attempted publication in the family is accounted for.
     heads = (["Game", "Selection"]
              + (["ML"] if show_ml else [])
              + ["Final", "Result"])
@@ -7193,29 +7263,24 @@ def render_grades_html(built_txt):
     for date, day in led.groupby("game_date", sort=False):
         body.append(_grades_day_header(date, day, len(heads)))
         body += [_grades_row(r, show_ml) for _, r in day.iterrows()]
-    # The table spans every family; the Selection column does not. Say so once
-    # here rather than leaving the per-row markers to carry it alone.
-    tnote = ("<div class='gr-note'><b>Selection</b> is what the published rule "
-             f"picked, and it is shown only on {_esc(MODEL_TAG)} rows — the "
-             "family the rule is registered against. A <b>FADE</b> row backs "
-             "the club the model did not lean, at that club's price, and its "
-             "result is graded accordingly. Earlier families are marked "
-             "<b>lean only</b> and show the lean they actually published; "
-             "rows with no closing price yet are marked <b>awaiting close</b>. "
-             "Δ is the model's separation for the matchup and is omitted on a "
-             "faded row, where it describes the side the rule declined.</div>")
+    tnote = ("<div class='gr-note'><b>Selection</b> is the XWOBA Market Hybrid "
+             "side. A <b>FADE</b> backs the club opposite the raw v12 lean. "
+             "New rows use the locked current pregame price; earlier v12 rows "
+             "form the retrospective archive and derive the rule from the "
+             "devigged close. Δ is omitted on a fade because it describes the "
+             "model side the rule declined.</div>")
     table = ("<div class='gr-tablewrap'><table class='gr'><thead><tr>"
              + "".join(f"<th>{h}</th>" for h in heads)
              + f"</tr></thead><tbody>{''.join(body)}</tbody></table></div>")
     return html_document(back + head + summary + tnote + table, built_txt,
-                         title="MLB lean grades")
+                         title=f"{PUBLIC_MODEL_NAME} ledger")
 
 
 def render_market_calibration_html(built_txt):
     """Market-only calibration plus current-family model×price diagnostics."""
     nav = ("<div class='backlink ledger-nav'>"
-           "<a href='grades.html'>← full ledger</a>"
-           "<a href='index.html'>today's leans →</a></div>")
+           "<a href='grades.html'>← v12 ledger</a>"
+           "<a href='index.html'>today's selections →</a></div>")
     head = ("<div class='gr-head'><h1 class='gr-h1'>Market calibration</h1>"
             "<div class='gr-lead'>What the devigged DK close implied, against "
             "what actually happened — split by side and by price rung. This "
@@ -7286,7 +7351,7 @@ def render_combined_html(xw_df, pl_df, pitcher_rows_df, built_txt,
                                   league_baseline=league_baseline, odds=odds, streaks=streaks)
     # Cards lead. The record strip and the model/build stamp sit below them.
     footer = (records_strip_html()
-              + _legend_head(f"MLB matchup leans — Statcast {MODEL_RATE_LABEL}", built_txt))
+              + _legend_head(f"{PUBLIC_MODEL_NAME} — Statcast {MODEL_RATE_LABEL}", built_txt))
     if not games:
         inner = "<div class='legend'><div class='lg-title'>No paired probables yet — " \
                 "probables/lineups not posted. Check back closer to first pitch.</div></div>" + footer
@@ -7307,7 +7372,7 @@ def render_combined_html(xw_df, pl_df, pitcher_rows_df, built_txt,
 def empty_slate_html(built_txt):
     body = (
         "<div class='legend'>"
-        f"<div class='lg-title'>MLB matchup leans · {SLATE_DATE} · built {built_txt}</div>"
+        f"<div class='lg-title'>{PUBLIC_MODEL_NAME} · {SLATE_DATE} · built {built_txt}</div>"
         "<div class='lg-keys'><span class='k'>No MLB games scheduled for this date.</span></div>"
         "</div>") + records_strip_html()
     return html_document(body, built_txt)
@@ -7433,6 +7498,16 @@ def main():
         matchup_platoon_df = pd.DataFrame()
         platoon_detail_df, league_ops_overall = pd.DataFrame(), np.nan
 
+    # The public model is the matchup direction plus the current market. Fetch
+    # the market BEFORE the dump so the exact selection shown on the page is
+    # also the immutable pregame selection the ledger will grade.
+    log("Fetching pregame odds (best-effort) ...")
+    try:
+        odds = fetch_pregame_odds(data["slate_df"])
+    except Exception as e:  # noqa: BLE001
+        log(f"pregame odds skipped: {e!r}")
+        odds = {}
+
     # Dump an auditable pregame snapshot for the grading ledger. The grader
     # rejects rows captured at/after their scheduled start, so in-progress
     # refreshes cannot alter the published pregame record.
@@ -7447,6 +7522,8 @@ def main():
                 frame["scheduled_start_utc"] = frame["game_datetime_utc"]
             for col, series in lu_cols.items():
                 frame[col] = frame["game_pk"].map(series)
+    attach_hybrid_snapshot(matchup_df, odds, snapshot_utc)
+    attach_hybrid_snapshot(matchup_platoon_df, odds, snapshot_utc)
     os.makedirs(DATA_DIR, exist_ok=True)
     # One decision for both dumps, taken from the primary frame: they describe
     # the same games at the same instant, and naming them from separate reads
@@ -7460,13 +7537,6 @@ def main():
     if matchup_platoon_df is not None and not matchup_platoon_df.empty:
         matchup_platoon_df.to_csv(dump_path("leans", SLATE_DATE, "pl", post_hoc),
                                   index=False)
-
-    log("Fetching pregame odds (best-effort, display-only) ...")
-    try:
-        odds = fetch_pregame_odds(data["slate_df"])
-    except Exception as e:  # noqa: BLE001
-        log(f"pregame odds skipped: {e!r}")
-        odds = {}
 
     log("Fetching current streaks (best-effort, display-only) ...")
     try:

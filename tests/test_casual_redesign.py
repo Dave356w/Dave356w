@@ -357,7 +357,7 @@ class RenderTests(unittest.TestCase):
         self.assertIn("class='summary-center'", html)
         self.assertIn("class='summary-team home'", html)
         self.assertIn(">7:05 PM ET</span>", html)
-        self.assertIn(">LAD -160</span>", html)
+        self.assertIn(">LAD -160 · FOLLOW</span>", html)
         detail = html.split("<div class='game-detail'>", 1)[1]
         self.assertIn("class='read'", detail)
         self.assertIn("class='market'", detail)

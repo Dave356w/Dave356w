@@ -123,6 +123,32 @@ class LedgerLockTests(unittest.TestCase):
             "starter_only_no_fullgame_lean",
         )
 
+    def test_hybrid_selection_and_two_sided_market_are_snapshotted(self):
+        xw = _dump_rows(
+            321, "2026-07-27", "2026-07-27T15:00:00+00:00",
+            "2026-07-27T22:00:00+00:00")
+        stamp = "2026-07-27T15:01:00+00:00"
+        build_site.attach_hybrid_snapshot(
+            xw, {321: {"away_ml": -140, "home_ml": 125, "p_home": .30}},
+            stamp)
+        for col in ("selection_rule_tag", "pregame_market_utc",
+                    "pregame_away_ml", "pregame_home_ml", "pregame_p_home",
+                    "hybrid_action", "hybrid_selection", "hybrid_p",
+                    "hybrid_ml"):
+            self.assertEqual(xw[col].nunique(dropna=False), 1, col)
+        self.assertEqual(xw.iloc[0]["selection_rule_tag"],
+                         build_site.HYBRID_RULE_TAG)
+        self.assertEqual(xw.iloc[0]["pregame_market_utc"], stamp)
+        self.assertEqual(xw.iloc[0]["hybrid_action"], "FADE")
+        self.assertEqual(xw.iloc[0]["hybrid_selection"], "AWA")
+        self.assertAlmostEqual(xw.iloc[0]["hybrid_p"], .70)
+        self.assertEqual(xw.iloc[0]["hybrid_ml"], -140)
+
+        row = grade_leans.rows_from_dump(xw, None)[0]
+        self.assertEqual(row["hybrid_selection"], "AWA")
+        self.assertEqual(row["pregame_away_ml"], -140)
+        self.assertIsNone(row["hybrid_full"])
+
     def test_grades_page_omits_family_history_and_model_column(self):
         ledger = pd.DataFrame([
             dict(game_pk=1, game_date="2026-07-20", away="A", home="B",
@@ -1856,10 +1882,8 @@ class RecordScopeTests(unittest.TestCase):
             self._row(4, "xw+plat_consol_v2", "B", "L", 5, 3),
         ])
 
-    # Assertions run against the HEADER, never the whole page: the archive
-    # table below it prints a per-day record for every family, and the base64
-    # font blob matches most short digit strings. Both are correct and
-    # neither is the claim under test.
+    # Assertions run against the header so the base64 font blob cannot match
+    # short digit strings and create a false positive.
     def _pages(self, led):
         with mock.patch.object(build_site, "load_ledger_df", return_value=led):
             page = build_site.render_grades_html("test build")
@@ -1915,11 +1939,12 @@ class RecordScopeTests(unittest.TestCase):
             self.assertNotIn(f"{lean_rec} (", strip)
 
     def test_the_scope_of_the_number_is_stated_next_to_it(self):
-        """A record over a subset, printed above a table of every row, has to
-        say which rows -- otherwise it reads as a summary of the table."""
-        for name, html in self._pages(self._mixed()).items():
-            self.assertIn("1 of 4 graded rows", html, f"{name} states no scope")
-            self.assertIn(build_site.MODEL_TAG, html, f"{name} names no family")
+        """The strip states its ledger scope; the public table is v12-only."""
+        pages = self._pages(self._mixed())
+        self.assertIn("1 of 4 graded rows", pages["strip"])
+        self.assertIn(build_site.MODEL_TAG, pages["strip"])
+        self.assertNotIn("1 of 4 graded rows", pages["grades page"])
+        self.assertIn("Every v12 Hybrid selection", pages["grades page"])
 
     def test_no_scope_note_when_the_family_is_every_graded_row(self):
         """The note has to disappear on its own, or it becomes noise that a
@@ -1948,10 +1973,12 @@ class RecordScopeTests(unittest.TestCase):
                              f"{name} published a foreign family's record")
             self.assertIn(f"graded games yet under {build_site.MODEL_TAG}",
                           html, f"{name} did not say the family is empty")
-            # ...and it still points at where the history went, so an empty
-            # headline never reads as "this model has never been graded".
-            self.assertIn("2 graded", html.replace("; 2 rows graded", "; 2 graded"),
-                          f"{name} hid the historical rows entirely")
+        # The compact strip may explain that the internal ledger has older
+        # rows, but the public archive intentionally does not display them.
+        pages = self._pages(led)
+        self.assertIn("2 graded", pages["strip"].replace(
+            "; 2 rows graded", "; 2 graded"))
+        self.assertNotIn("xw+plat_consol_v2", pages["grades page"])
 
 class LockProvenanceTests(unittest.TestCase):
     def _led(self, statuses):
@@ -2940,7 +2967,7 @@ class LeanMarketValueTests(unittest.TestCase):
                   self._frame(n=4, tag="xw+plat_consol_v0")):
             self.assertEqual(build_site._lean_market_value_analysis(d), {})
             html = build_site._render_lean_market_value_panel(d)
-            self.assertIn("Hybrid rule", html)
+            self.assertIn(build_site.PUBLIC_MODEL_NAME, html)
             self.assertIn("once graded leans", html)
 
     def test_every_value_table_row_emits_four_cells(self):
@@ -3002,6 +3029,16 @@ class HybridRuleTests(unittest.TestCase):
         self.assertEqual(build_site.hybrid_action(.450001), "FOLLOW")
         self.assertEqual(build_site.hybrid_action(.99), "FOLLOW")
         self.assertEqual(build_site.hybrid_action(.01), "FADE")
+
+    def test_daily_record_aggregates_the_hybrid_grade(self):
+        day = pd.DataFrame([dict(
+            model_tag=build_site.MODEL_TAG,
+            selection_rule_tag=build_site.HYBRID_RULE_TAG,
+            hybrid_action="FADE", hybrid_selection="A", hybrid_full="L",
+            xw_lean="H", xw_full="W", away="A", home="H")])
+        html = build_site._grades_day_header("2026-08-31", day, 6)
+        self.assertIn("0-1", html)
+        self.assertNotIn("1-0", html)
 
     def test_an_exact_pickem_follows_the_model(self):
         """A devigged .500 market has no favourite, and sits well above .45.
@@ -3200,7 +3237,7 @@ class HybridRuleTests(unittest.TestCase):
         self.assertIn("lean only", older)
         self.assertIn(build_site.MODEL_TAG, older)
         unpriced = build_site._grades_row(row(build_site.MODEL_TAG, "H", np.nan), True)
-        self.assertIn("awaiting close", unpriced)
+        self.assertIn("awaiting market", unpriced)
         # A .30 home lean is a hybrid FADE to A: show A, A's price, and the
         # inverted selection result while preserving the write-once raw fields.
         faded = build_site._grades_row(row(build_site.MODEL_TAG, "H", .30), True)
@@ -3213,7 +3250,7 @@ class HybridRuleTests(unittest.TestCase):
             True)
         self.assertIn("no lean", noleaan)
         # Each mark is unique to its own case.
-        self.assertNotIn("awaiting close", older)
+        self.assertNotIn("awaiting market", older)
         self.assertNotIn("lean only", unpriced)
 
         page = build_site.render_grades_html("test build")
@@ -3272,27 +3309,26 @@ class HybridRuleTests(unittest.TestCase):
         n = int(lines[0].split("n=")[1].split(",")[0])
         self.assertIn(f"same {n} rows", joined)
 
-    def test_the_rule_is_never_written_back_into_the_ledger(self):
-        """`xw_full` is the LEAN's grade and must stay that way.
-
-        Regrading the stored column under the hybrid would mutate immutable
-        graded rows, destroy the lean-alone control the hybrid is read
-        against, make this family's history incomparable with every other
-        family's, and change what `bp_ablation` and the weight fit are
-        measuring. The rule is a VIEW over the ledger, derived at read time
-        from columns that are themselves write-once.
-        """
+    def test_the_locked_hybrid_has_separate_ledger_fields(self):
+        """The public selection is stored without overwriting the raw lean."""
         import grade_leans
-        led = build_site.load_ledger_df()
-        if led is None:
-            self.skipTest("ledger unavailable")
-        self.assertEqual(
-            [c for c in led.columns if "hybrid" in c.lower()], [],
-            "the hybrid is a derived view; storing it creates a second home "
-            "for a value that can then drift from its derivation")
-        # And the writer never names one either.
         writer = set(grade_leans.LEDGER_COLS) | set(grade_leans.AUDIT_COLS)
-        self.assertEqual([c for c in writer if "hybrid" in c.lower()], [])
+        self.assertIn("xw_full", writer)
+        self.assertIn("hybrid_full", writer)
+        self.assertTrue({"selection_rule_tag", "pregame_market_utc",
+                         "pregame_away_ml", "pregame_home_ml",
+                         "pregame_p_home", "hybrid_action",
+                         "hybrid_selection", "hybrid_p", "hybrid_ml"}
+                        .issubset(writer))
+
+    def test_locked_row_uses_stored_selection_and_grade(self):
+        row = pd.Series(dict(
+            model_tag=build_site.MODEL_TAG,
+            selection_rule_tag=build_site.HYBRID_RULE_TAG,
+            hybrid_action="FADE", hybrid_selection="A", hybrid_full="L",
+            xw_lean="H", xw_full="W", close_p_home=.80,
+            away="A", home="H"))
+        self.assertEqual(build_site._row_hybrid(row), ("FADE", "A", "L"))
 
     def test_a_faded_ledger_row_inverts_the_leans_grade(self):
         """The rule backed the other side, so the lean's W is the rule's L."""

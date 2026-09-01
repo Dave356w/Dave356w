@@ -6,13 +6,13 @@ run time, nothing is re-tuned as rows arrive, and only slates STRICTLY AFTER
 the registration date are scored. Tracked separately from forward_test.py's
 two arms, which hold different hypotheses registered on a different date.
 
-THE RULE. Let q be the model-selected side's two-sided no-vig market
+THE RULE. Let q be the model-selected side's locked two-sided no-vig pregame
 probability. Follow the xwOBA lean when q >= 0.45; back the opposing side when
 q < 0.45. Exactly 0.45 follows. Abstain when the model publishes no lean or no
 valid two-sided price exists. Flat one unit.
 
-    ModelSideP = close_p_home        if the lean is the home side
-                 1 - close_p_home    otherwise
+    ModelSideP = pregame_p_home        if the lean is the home side
+                 1 - pregame_p_home    otherwise
 
 This is a hard-switch DIRECTION rule. It does not estimate the selected side's
 win probability and nothing here should be read as one.
@@ -71,15 +71,10 @@ WHAT IT CANNOT DO.
   * It cannot make the discovery sample count. Rows on or before the
     registration date are excluded by construction, and re-including them to
     "get more power" destroys the only property this module has.
-  * It cannot score at the price the protocol specifies. The registered
-    protocol calls for the no-vig probability available AT DECISION TIME; the
-    ledger carries only the close, because the no-lookahead invariant keeps
-    every market column off a pending row. So this scores the CLOSING basis,
-    which is the same basis forward_test.py uses and the same basis the
-    discovery numbers above were measured on -- consistent, but a CLV reading
-    rather than the obtainable-price reading. Closing the gap needs a
-    decision-time price persisted pregame; until then an operator paper-
-    tracking this rule should record their own obtainable price separately.
+  * It cannot turn the historical reconstruction into published picks. The
+    v12 discovery rows predate decision-time market locking and therefore stay
+    close-derived retrospective evidence. Forward rows require the stored
+    pregame selection and price; they never fall back to the close.
   * It cannot separate the rule from always-chalk quickly, or perhaps at all.
     See GATE_SWITCHES.
   * It cannot tell you the model is bad, or good. It tests one derived
@@ -102,6 +97,7 @@ import pandas as pd
 REGISTERED_ON = "2026-09-01"      # slates STRICTLY after this date are scored
 THRESHOLD = 0.45                  # q >= THRESHOLD follows the lean; below fades
 STAKE = 1.0                       # flat
+RULE_TAG = "xwoba_market_hybrid_v1"
 # No delta band, no price band, no upper favourite cutoff. The specification
 # freezes exactly one number and this module holds it: the ledger showed no
 # stable point at which strong favourites become systematically overvalued, and
@@ -140,6 +136,14 @@ def _payout(ml):
 
 REQUIRED_COLUMNS = ("status", "game_date", "close_p_home", "xw_lean", "home",
                     "full_home", "full_away", "close_home_ml", "close_away_ml")
+LOCKED_COLUMNS = (
+    "selection_rule_tag", "pregame_p_home", "pregame_home_ml",
+    "pregame_away_ml", "hybrid_action", "hybrid_selection", "hybrid_p",
+    "hybrid_ml", "hybrid_full", "away",
+)
+FORWARD_BASE_COLUMNS = (
+    "status", "game_date", "xw_lean", "home", "full_home", "full_away",
+)
 
 
 def decidable(led):
@@ -202,6 +206,39 @@ def apply_rule(g):
     return g
 
 
+def apply_locked_rule(g):
+    """Score the immutable pregame selection and price stored in the ledger."""
+    g = g.copy()
+    lean_home = g["xw_lean"].eq(g["home"]).to_numpy()
+    home_won = (g["full_home"] > g["full_away"]).to_numpy()
+    g["lean_home"] = lean_home
+    g["lean_won"] = np.where(lean_home, home_won, ~home_won)
+    g["lean_ml"] = np.where(
+        lean_home, g["pregame_home_ml"], g["pregame_away_ml"])
+    g["model_side_p"] = np.where(
+        lean_home, g["pregame_p_home"], 1 - g["pregame_p_home"])
+    g["follow"] = g["hybrid_action"].eq("FOLLOW").to_numpy()
+    g["bet_home"] = g["hybrid_selection"].eq(g["home"]).to_numpy()
+    g["bet_won"] = g["hybrid_full"].eq("W").to_numpy()
+    g["p_bet"] = pd.to_numeric(g["hybrid_p"], errors="coerce")
+    g["ml_bet"] = pd.to_numeric(g["hybrid_ml"], errors="coerce")
+    g["profit"] = np.where(
+        g["bet_won"], STAKE * _payout(g["ml_bet"]), -STAKE)
+    g["lean_profit"] = np.where(
+        g["lean_won"], STAKE * _payout(g["lean_ml"]), -STAKE)
+    g["switch_delta"] = g["profit"] - g["lean_profit"]
+
+    chalk_home = (g["pregame_p_home"] >= 0.5).to_numpy()
+    g["chalk_won"] = np.where(chalk_home, home_won, ~home_won)
+    g["chalk_p"] = np.where(
+        chalk_home, g["pregame_p_home"], 1 - g["pregame_p_home"])
+    chalk_ml = np.where(
+        chalk_home, g["pregame_home_ml"], g["pregame_away_ml"])
+    g["chalk_profit"] = np.where(
+        g["chalk_won"], STAKE * _payout(chalk_ml), -STAKE)
+    return g
+
+
 def scored_rows(led=None):
     """Graded rows AFTER the registration date, with the hybrid rule applied.
 
@@ -213,16 +250,31 @@ def scored_rows(led=None):
         if not os.path.exists(LEDGER):
             return None
         led = pd.read_csv(LEDGER, low_memory=False)
-    g = decidable(led)
-    if g is None:
+    if any(c not in getattr(led, "columns", ()) for c in FORWARD_BASE_COLUMNS):
         return None
+    # A ledger written before decision-time locking is a valid zero-row
+    # forward sample, not an unreadable ledger. Never fall back to its close.
+    if any(c not in led.columns for c in LOCKED_COLUMNS):
+        return led.iloc[0:0].copy()
     # Strictly after: the registration date itself already held graded rows, so
     # `>=` would silently readmit part of the discovery sample. This is the ONE
     # place the forward row set is decided.
-    g = g[g["game_date"].astype(str) > REGISTERED_ON]
+    g = led[(led["status"] == "graded")
+            & (led["game_date"].astype(str) > REGISTERED_ON)
+            & led["xw_lean"].notna()
+            & led["selection_rule_tag"].eq(RULE_TAG)
+            & led["hybrid_action"].isin(["FOLLOW", "FADE"])
+            & (led["hybrid_selection"].eq(led["home"])
+               | led["hybrid_selection"].eq(led["away"]))
+            & led["hybrid_full"].isin(["W", "L"])
+            & pd.to_numeric(led["pregame_p_home"], errors="coerce").notna()
+            & pd.to_numeric(led["pregame_home_ml"], errors="coerce").notna()
+            & pd.to_numeric(led["pregame_away_ml"], errors="coerce").notna()
+            & pd.to_numeric(led["hybrid_p"], errors="coerce").notna()
+            & pd.to_numeric(led["hybrid_ml"], errors="coerce").notna()].copy()
     if g.empty:
         return g
-    return apply_rule(g)
+    return apply_locked_rule(g)
 
 
 def _excess_z(won, p):
@@ -294,7 +346,8 @@ def report_lines(led=None):
     out.append(_line(g, "control: always-chalk", won_col="chalk_won",
                      p_col="chalk_p", profit_col="chalk_profit"))
     if n_sw:
-        same = int((sw["bet_home"].values == (sw["close_p_home"] >= 0.5).values).sum())
+        same = int((sw["bet_home"].values
+                    == (sw["pregame_p_home"] >= 0.5).values).sum())
         out.append(f"    the fade branch backed the favourite in {same} of "
                    f"{n_sw} switched games (construction says all of them)")
 
