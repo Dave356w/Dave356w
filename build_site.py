@@ -6886,21 +6886,56 @@ def _grades_row(r, show_ml=False):
     abstained = (status == "graded" and not isinstance(r["xw_lean"], str)
                  and any(str(r.get(c)) == "starter_unmeasured_no_lean"
                          for c in ("pitching_basis_away", "pitching_basis_home")))
-    # This is the model ledger, not the hybrid-rule ledger. Every row therefore
-    # shows the lean that was actually published for that game, its closing
-    # price, and its own grade. The hybrid is a separate market-direction
-    # overlay (and is not always chalk), so substituting its FADE selection
-    # here makes the archive stop agreeing with xw_lean/xw_full.
+    # The table publishes the RULE's selection, so its result column has to be
+    # the rule's too. Where the rule cannot act the row falls back to the
+    # model's own lean and SAYS SO in the cell -- never silently, because a
+    # lean result standing unlabelled in a selection column is the same
+    # substitution that once published a pooled record under a current-family
+    # name.
+    action, pick, rule_grade = _row_hybrid(r)
+    current = r.get("model_tag") in RECORD_TAGS
     if abstained:
         sel_cell = ("<span class='muted' title='no lean published: a starter "
                     "had no measured season line'>no lean</span>")
+        res = r["xw_full"]
+    elif action is None:
+        # Three different reasons the rule did not act, and the cell has to say
+        # WHICH -- an unlabelled lean sitting in a selection column is the
+        # substitution that once published a pooled record under a
+        # current-family label.
+        sel_cell = _lean_cell(r["xw_lean"], r["xw_delta"], muted=True)
+        if isinstance(r.get("xw_lean"), str) and r["xw_lean"]:
+            if not current:
+                why, tag = ("the hybrid rule is registered against "
+                            f"{MODEL_TAG} and is not applied to earlier "
+                            "prediction families; this row shows the lean it "
+                            "published at the time", "lean only")
+            else:
+                why, tag = ("no two-sided closing price is attached yet, so "
+                            "the rule cannot act; the model lean is shown "
+                            "instead", "awaiting close")
+            sel_cell += f"<span class='sp' title='{why}'>{tag}</span>"
+        res = r["xw_full"]
+    elif action == "FADE":
+        # Δ is deliberately NOT shown here. It is the model's separation in
+        # favour of the side the rule just declined; printed beside the club
+        # the rule selected it would read as the model rating THAT team, which
+        # is the opposite of what the number means.
+        sel_cell = _lean_cell(pick, None)
+        sel_cell += ("<span class='sp fade-mark' title='faded: the market "
+                     "priced the model&#39;s side below the threshold, so the "
+                     "rule backed the other team; Δ describes the lean that "
+                     "was faded, not this selection'>FADE</span>")
+        res = rule_grade
     else:
-        sel_cell = _lean_cell(r["xw_lean"], r["xw_delta"])
-    res = r["xw_full"]
+        sel_cell = _lean_cell(pick, r["xw_delta"])
+        res = rule_grade
     cells = [("c-game", "Game", game),
-             ("c-lean", "Model lean", sel_cell)]
+             ("c-lean", "Selection", sel_cell)]
     if show_ml:
-        cells.append(("c-ml", "ML", _lean_ml_cell(r, "xw_lean")))
+        cells.append(("c-ml", "ML",
+                      _lean_ml_cell(r, "xw_lean") if action is None
+                      else _pick_ml_cell(r, pick)))
     cells += [("c-final", "Final", final),
               ("c-res", "Result", _wlt_badge(res))]
     cls = "gr-row void" if status == "void" else "gr-row"
@@ -7150,7 +7185,7 @@ def render_grades_html(built_txt):
     # column headers because the rows behind them were predicted under
     # different statistics. The summary above is scoped to the current family
     # and labelled from its own rows, which is why the two counts differ.
-    heads = (["Game", "Model lean"]
+    heads = (["Game", "Selection"]
              + (["ML"] if show_ml else [])
              + ["Final", "Result"])
     led = led.sort_values(["game_date", "game_pk"], ascending=[False, True])
@@ -7158,12 +7193,17 @@ def render_grades_html(built_txt):
     for date, day in led.groupby("game_date", sort=False):
         body.append(_grades_day_header(date, day, len(heads)))
         body += [_grades_row(r, show_ml) for _, r in day.iterrows()]
-    tnote = ("<div class='gr-note'><b>Model lean</b> is the side published for "
-             "that game, and <b>Result</b> grades that lean. The ML is the "
-             "leaned side's closing price. The separate hybrid rule follows "
-             f"the lean when its devigged market probability is at least "
-             f"{100 * HYBRID_THRESHOLD:.0f}% and otherwise selects the other "
-             "side; it does not rewrite this ledger.</div>")
+    # The table spans every family; the Selection column does not. Say so once
+    # here rather than leaving the per-row markers to carry it alone.
+    tnote = ("<div class='gr-note'><b>Selection</b> is what the published rule "
+             f"picked, and it is shown only on {_esc(MODEL_TAG)} rows — the "
+             "family the rule is registered against. A <b>FADE</b> row backs "
+             "the club the model did not lean, at that club's price, and its "
+             "result is graded accordingly. Earlier families are marked "
+             "<b>lean only</b> and show the lean they actually published; "
+             "rows with no closing price yet are marked <b>awaiting close</b>. "
+             "Δ is the model's separation for the matchup and is omitted on a "
+             "faded row, where it describes the side the rule declined.</div>")
     table = ("<div class='gr-tablewrap'><table class='gr'><thead><tr>"
              + "".join(f"<th>{h}</th>" for h in heads)
              + f"</tr></thead><tbody>{''.join(body)}</tbody></table></div>")
