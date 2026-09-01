@@ -3120,11 +3120,11 @@ class HybridRuleTests(unittest.TestCase):
             self.skipTest("no faded rows in the committed ledger yet")
         self.assertEqual(fade, chalk)
 
-    def test_the_site_and_the_forward_test_decide_every_row_identically(self):
+    def test_the_row_hybrid_helper_and_forward_test_decide_identically(self):
         """Two implementations of one rule, held against each other.
 
-        `build_site._row_hybrid` walks the ledger a row at a time for the
-        table; `hybrid_test` derives the same rule in bulk for the registered
+        `build_site._row_hybrid` derives the display diagnostics one row at a
+        time; `hybrid_test` derives the same rule in bulk for the registered
         forward test. They share the threshold but not the code, so this is
         the check that the surface a reader sees and the instrument that will
         judge the rule cannot drift apart -- the failure mode that let the site
@@ -3181,14 +3181,8 @@ class HybridRuleTests(unittest.TestCase):
         self.assertIn("30.0% no-vig", h)
         self.assertIn("Their average price</span><span>58.6% implied", h)
 
-    def test_the_ledger_labels_each_undecidable_case_distinctly(self):
-        """Three different reasons the rule did not act, three different marks.
-
-        A lean sitting unlabelled under a "Selection" heading is the
-        substitution this repo already shipped once. Out-of-family, no lean,
-        and no-price are separate facts and a reader must be able to tell which
-        one a row is.
-        """
+    def test_the_ledger_always_shows_the_published_model_lean(self):
+        """Market overlays must not replace the per-game model archive."""
         def row(tag, lean, ph, basis=None):
             return pd.Series(dict(
                 model_tag=tag, xw_lean=lean, close_p_home=ph, home="H",
@@ -3197,17 +3191,20 @@ class HybridRuleTests(unittest.TestCase):
                 close_home_ml=-140, close_away_ml=120,
                 pitching_basis_away=basis, pitching_basis_home=None))
         older = build_site._grades_row(row("woba+plat_consol_v5", "H", .60), True)
-        self.assertIn("lean only", older)
-        self.assertIn(build_site.MODEL_TAG, older)          # the title says why
+        self.assertIn("data-l='Model lean'>H", older)
         unpriced = build_site._grades_row(row(build_site.MODEL_TAG, "H", np.nan), True)
-        self.assertIn("awaiting close", unpriced)
+        self.assertIn("data-l='Model lean'>H", unpriced)
+        # A .30 home lean is a hybrid FADE to A, but the ledger must retain H,
+        # H's moneyline, and H's model grade.
+        faded = build_site._grades_row(row(build_site.MODEL_TAG, "H", .30), True)
+        self.assertIn("data-l='Model lean'>H", faded)
+        self.assertIn("data-l='ML'>-140", faded)
+        self.assertIn("<span class='wlt W'>W</span>", faded)
+        self.assertNotIn("FADE", faded)
         noleaan = build_site._grades_row(
             row(build_site.MODEL_TAG, np.nan, .60, basis="starter_unmeasured_no_lean"),
             True)
         self.assertIn("no lean", noleaan)
-        # Each mark is unique to its own case.
-        self.assertNotIn("awaiting close", older)
-        self.assertNotIn("lean only", unpriced)
 
     def test_the_report_and_the_site_publish_the_same_hybrid_record(self):
         """Third artifact in the chain, and the one that had drifted.

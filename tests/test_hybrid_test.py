@@ -123,6 +123,23 @@ class SwitchRuleTests(unittest.TestCase):
         chalk_home = (sw["close_p_home"] >= 0.5).values
         np.testing.assert_array_equal(sw["bet_home"].values, chalk_home)
 
+    def test_always_chalk_is_the_larger_devigged_probability(self):
+        """The chalk control selects max(p_home, 1-p_home), not the lean."""
+        p = np.array([.20, .49, .51, .80])
+        g = ht.scored_rows(_led(p, lean_home=[True, False, True, False],
+                                home_won=True))
+        expected_home = p > (1 - p)
+        actual_home = np.where(g["chalk_won"].to_numpy(), True, False)
+        np.testing.assert_array_equal(actual_home, expected_home)
+        np.testing.assert_allclose(g["chalk_p"].to_numpy(), np.maximum(p, 1 - p))
+
+    def test_hybrid_is_not_always_chalk(self):
+        """A model side at 45%-49.9% is followed even though it is the dog."""
+        g = ht.scored_rows(_led([.45, .49], lean_home=True, home_won=True))
+        self.assertTrue(g["follow"].all())
+        self.assertTrue(g["bet_home"].all())
+        self.assertTrue((g["close_p_home"] < .5).all())
+
     def test_a_followed_game_has_exactly_zero_switch_delta(self):
         """The registered headline counts only switched games.
 
