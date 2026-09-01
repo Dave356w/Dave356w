@@ -45,6 +45,7 @@ import numpy as np
 import pandas as pd
 import requests
 
+import hybrid_test
 import pitch_arsenal
 import player_priors
 
@@ -4046,8 +4047,8 @@ def _lean_implied_p(odds, fav, away_abbr, home_abbr):
 
     Prefers the devigged `p_home` the market feed already supplies; falls back
     to devigging the two moneylines itself so a game with prices but no
-    `p_home` still places into a conviction cell rather than silently losing
-    its signal.
+    `p_home` still resolves to a hybrid branch rather than silently losing its
+    signal.
 
     That fallback calls `_imp_ml` rather than restating it. It used to carry
     its own copy of the American-odds conversion -- written as
@@ -4092,26 +4093,23 @@ def _model_version_short():
     return f"V{m.group(1)}" if m else MODEL_TAG
 
 
-# Family-wise bar for the 3x5 profile grid. A cell's excess is the largest of
-# up to 15 draws, so 2 sd is the wrong reference: at |z| = 2 roughly one cell in
-# the grid clears it every build by chance alone. 2.7 is the ~0.05 family-wise
-# threshold across 15, and it is a REFERENCE rather than a gate -- the number
-# and its spread always print, only the sentence beside them changes. Measured
-# on the live grid at the time of writing: 3 of 14 cells cleared 2.0, none
-# cleared 2.7, and value_probe's permutation put the best cell at p = 0.20.
-_PROFILE_FAMILYWISE_Z = 2.7
+# Reference bar for the branch read. The hybrid publishes TWO branches rather
+# than the 21 cells this replaces, so the family-wise correction that grid
+# needed (|z| >= 2.7 across 15 draws) is no longer the right bar: at two
+# branches the ~0.05 family-wise threshold is |z| ~ 2.2. Stated as a REFERENCE
+# and not a gate -- the number and its spread always print, only the sentence
+# beside them changes.
+_BRANCH_FAMILYWISE_Z = 2.2
 
 
-def _profile_read(parts):
-    """One honest sentence about what a profile cell's excess can support.
+def _branch_read(parts):
+    """One honest sentence about what a branch's excess can support.
 
-    Replaces a THIN / DEVELOPING / LARGER SAMPLE label keyed on n >= 10 and
-    n >= 20. That was a threshold cliff of the kind this repo has twice fixed
-    elsewhere: n=19 read DEVELOPING and n=20 LARGER SAMPLE, so one completed
-    game relabelled a cell's credibility with no change in what it knew, and
-    "LARGER SAMPLE" described an n=20 cell still carrying +/-11pp. The read
-    below moves continuously with the standard error instead, so nothing
-    switches on a row count.
+    Moves continuously with the standard error rather than switching on a row
+    count, which is the threshold-cliff fix this repo has now applied four
+    times. Note what it does NOT say: nothing here calls a branch profitable,
+    because a branch clearing its bar on the discovery sample is a statement
+    about rows the rule was fitted on.
     """
     se, excess, n = parts.get("excess_se"), parts.get("excess"), parts.get("n")
     try:
@@ -4121,46 +4119,18 @@ def _profile_read(parts):
     if not ok:
         return f"n={n}"
     z = abs(float(excess) / float(se))
-    if z < _PROFILE_FAMILYWISE_Z:
+    if z < _BRANCH_FAMILYWISE_Z:
         return f"within noise · n={n}"
-    return f"outside noise across all 15 cells · n={n}"
+    return f"outside noise across both branches · n={n}"
 
 
-def _profile_pooled_line(ctx):
-    """The current family's overall excess, as the cell's own reference.
+def _excess_pm(parts):
+    """` ± X.X` for a published excess, or "" when no spread can be formed.
 
-    A cell carries a median SE of ~15pp; the pooled line carries ~3.6pp on the
-    same rows. Showing only the cell made the reader's anchor the least
-    measurable number on the card, and left them no way to see that the cell is
-    a slice of something better estimated. It is deliberately NOT a
-    recommendation and carries its own spread for the same reason the cell
-    does: the pooled figure is the CURRENT family's, and value_probe measures
-    that same statistic flipping sign family to family (v7 -0.68, wOBA v5
-    -2.74, v12 +1.98), so it is context, never an edge.
-    """
-    parts = (ctx or {}).get("pooled")
-    if not parts:
-        return ""
-    return (f"<div class='vline'><span class='vk'>All {_model_version_short()} "
-            f"games</span><span>{100 * parts['excess']:+.1f} pp"
-            f"{_profile_excess_se(parts)} · n={parts['n']}</span></div>")
-
-
-def _profile_excess_se(parts):
-    """` ± X.X pp` for a profile cell's excess, or "" when it cannot be formed.
-
-    The card used to print the excess bare, on the stated grounds that "the
-    calibration table carries the error bar". It does not: that table renders
-    the 2x3 (`cell`) buckets -- LOW/ACTIVE x oppose/no-backing/agree -- while
-    this panel renders the 3x5 (`profile`) buckets. Different cuts, different
-    n, so a 3x5 cell has no counterpart there and its `excess_se` reached no
-    surface at all. That is two recorded anti-patterns at once: a column
-    carried to no surface, and a published excess with no sampling
-    distribution beside it.
-
-    Sized by `_excess_se`, so it is the Poisson-binomial SE at the market's own
-    prices and is defined at n=1 -- which matters here more than anywhere,
-    because CONVICTION_CELL_MIN is 1 and a one-game cell publishes a headline.
+    Every excess on this site prints with one of these. `_excess_se` sizes it
+    at the market's own prices under the null that each game settles at its
+    close, so it is defined at n=1 and can never collapse to ±0.0 the way a
+    p-hat form does on an all-W or all-L branch.
     """
     se = parts.get("excess_se")
     try:
@@ -4171,76 +4141,110 @@ def _profile_excess_se(parts):
     return f" ± {100 * float(se):.1f}"
 
 
-def _conviction_tail(ctx, delta, p_lean):
-    """Market-adjusted history for this game's exact 3x5 V12 profile."""
-    version = _model_version_short()
-    key = _profile_cell(delta, p_lean)
-    parts = ctx.get(("profile", key)) if key else None
+def _branch_history(ctx, action):
+    """Historical record of the branch this game's price puts it in."""
+    parts = (ctx or {}).get(("branch", action)) if action else None
     if not parts:
-        msg = (f"No completed {version} games in this profile yet."
-               if key else "Unavailable until both Δ and a no-vig price resolve.")
-        return ("<div class='vline hist'><span class='vk'>V12 profile:</span>"
+        msg = ("No completed games in this branch yet." if action
+               else "Unavailable until a no-vig price resolves.")
+        return ("<div class='vline hist'><span class='vk'>Branch history:</span>"
                 f"<span>{msg}</span></div>")
 
-    d_label, m_label = _profile_delta_label(delta), _profile_market_label(p_lean)
-    n = parts["n"]
+    version = _model_version_short()
+    chalk = (ctx or {}).get(("chalk", action))
+    # The control has to sit inside the branch panel, not below it. On the FADE
+    # branch it will read IDENTICALLY to the record above it -- fading a lean
+    # priced under the threshold backs the favourite on every row, so the two
+    # are the same bet. That is the single most important thing this panel can
+    # tell a reader, and it is self-evident only if both numbers are adjacent.
+    chalk_line = ""
+    if chalk:
+        chalk_line = (f"<div class='vline'><span class='vk'>Always chalk</span>"
+                      f"<span>{100 * chalk['actual']:.1f}%"
+                      f" · {100 * chalk['excess']:+.1f} pp</span></div>")
+    pooled = (ctx or {}).get("pooled")
+    pooled_line = ""
+    if pooled:
+        pooled_line = (f"<div class='vline'><span class='vk'>All {version} games"
+                       f"</span><span>{100 * pooled['excess']:+.1f} pp"
+                       f"{_excess_pm(pooled)} · n={pooled['n']}</span></div>")
     return (
         "<div class='vprofile'>"
-        f"<div class='vprofile-title'>{version} PROFILE</div>"
-        f"<div class='vprofile-band'>{d_label} Δ · {_esc(m_label)} MARKET</div>"
-        f"<div class='vline'><span class='vk'>Historical actual</span>"
+        f"<div class='vprofile-title'>{version} {action} BRANCH</div>"
+        f"<div class='vprofile-band'>HISTORICAL · NOT A FORWARD RESULT</div>"
+        f"<div class='vline'><span class='vk'>Selection won</span>"
         f"<span>{100 * parts['actual']:.1f}%</span></div>"
         f"<div class='vline'><span class='vk'>Market implied</span>"
         f"<span>{100 * parts['implied']:.1f}%</span></div>"
-        f"<div class='vline'><span class='vk'>Performance vs market</span>"
-        f"<span><b>{100 * parts['excess']:+.1f} pp</b>{_profile_excess_se(parts)}"
-        "</span></div>"
+        f"<div class='vline'><span class='vk'>vs market</span>"
+        f"<span><b>{100 * parts['excess']:+.1f} pp</b>{_excess_pm(parts)}</span></div>"
+        f"{chalk_line}"
         f"<div class='vline'><span class='vk'>Read</span>"
-        f"<span>{_esc(_profile_read(parts))}</span></div>"
-        f"{_profile_pooled_line(ctx)}"
+        f"<span>{_esc(_branch_read(parts))}</span></div>"
+        f"{pooled_line}"
         "</div>"
     )
 
 
 def _verdict_html(fav, odds, away_abbr, home_abbr, ctx=None, delta=None):
-    """Per-game V12 delta, market price, and matched 3x5 profile panel.
+    """Per-game panel: the model's lean, the price, and the rule's selection.
 
-    Historical actual, implied probability and excess come from the exact
-    current-family 3x5 profile. A live card uses the current pregame price to
-    choose its market band, while history is bucketed on closes; the profile
-    can therefore change before first pitch.
+    This is the site's one published decision surface. It shows what the hybrid
+    rule selects for THIS game and the historical record of the branch that
+    selection came from -- replacing a 3x5 delta x price grid whose cells ran
+    as thin as one game.
+
+    Two things it deliberately does not do. It never calls a selection a bet:
+    the copy carries no betting language and a test pins that, because
+    `value_probe` measures the naive version of exactly this rule losing
+    monotonically and the branch records here are the sample the threshold was
+    chosen on. And it never hides the always-chalk control, because the FADE
+    branch is chalk-identical by construction.
+
+    A live card uses the current pregame price while history is bucketed on
+    closes, so a game can cross the threshold before first pitch.
     """
     ctx = ctx or {}
     if fav is None:
         return ("<div class='verdict'><div class='l'>Model vs market</div>"
-                "<div class='vt'>No model lean.</div></div>")
+                "<div class='vt'>No model lean — the rule abstains.</div></div>")
 
     p_lean = _lean_implied_p(odds, fav, away_abbr, home_abbr)
-    key = _conviction_cell(delta, p_lean)
-    strength = _profile_delta_label(delta) or "UNAVAILABLE"
-    direction = _conviction_direction_label(p_lean) or "UNAVAILABLE"
+    action = hybrid_action(p_lean)
+    pick = hybrid_selection(fav, away_abbr, home_abbr, p_lean)
     d = _f(delta)
     delta_txt = f"{abs(d):.4f}".lstrip("0") if d is not None else "—"
+    strength = _delta_label(delta) or "—"
 
     odds = odds or {}
     price = odds.get("home_ml") if fav == home_abbr else odds.get("away_ml")
     price_txt = _fmt_ml(price) if price is not None else "—"
-    p_txt = f"{100 * p_lean:.1f}% no-vig" if p_lean is not None else "no no-vig price yet"
-    history = _conviction_tail(ctx, delta, p_lean)
-    # The warm left rule means only that the market is NOT backing this lean
-    # -- it opposes it, or (at an exact pick'em) simply has no favourite. It
-    # has never meant "bet this side". The condition is unchanged by the
-    # pick'em fix, but the claim it makes had to narrow with the band: a
-    # rule reading "market opposes" would be false on a -110/-110 game.
-    cls = " edge" if key and direction != "MARKET AGREE" else ""
+    p_txt = (f"{100 * p_lean:.1f}% no-vig" if p_lean is not None
+             else "no no-vig price yet")
+
+    if action is None:
+        sel_txt = "awaiting a two-sided price"
+    else:
+        sel_price = None
+        if pick is not None:
+            sel_price = (odds.get("home_ml") if pick == home_abbr
+                         else odds.get("away_ml"))
+        sel_txt = (f"<b>{action} → {_esc(pick)}</b>"
+                   + (f" {_fmt_ml(sel_price)}" if sel_price is not None else ""))
+    history = _branch_history(ctx, action)
+    # The warm rule marks a FADE -- the one case where the published selection
+    # differs from the model's own lean. It has never meant "bet this side".
+    cls = " edge" if action == "FADE" else ""
     version = _model_version_short()
     return (
         f"<div class='verdict{cls}'><div class='l'>Model vs market</div>"
         "<div class='vt'>"
-        f"<div class='vline'><span class='vk'>{version} Δ:</span> "
-        f"<span>{delta_txt} · {strength}</span></div>"
+        f"<div class='vline'><span class='vk'>Model lean:</span> "
+        f"<span>{_esc(fav)} · {version} Δ {delta_txt} ({strength})</span></div>"
         f"<div class='vline'><span class='vk'>Market:</span> "
         f"<span>{_esc(fav)} {price_txt} · {p_txt}</span></div>"
+        f"<div class='vline'><span class='vk'>Rule:</span> "
+        f"<span>{sel_txt}</span></div>"
         f"{history}</div></div>"
     )
 
@@ -5482,6 +5486,13 @@ table.gr tbody tr:last-child td{border-bottom:none}
 table.gr tbody tr.gr-row:hover td{background:var(--surface-2)}
 table.gr tr.void td{opacity:.45}
 table.gr .sp{display:block;margin-top:2px;font:400 12.5px/1.3 var(--sans);color:var(--faint)}
+/* Marks the rows where the published rule departed from the model's own
+   lean. Warm, because it is the one thing on the row a reader scanning the
+   archive needs to spot; deliberately not a badge, so it cannot read as a
+   recommendation. */
+table.gr .sp.fade-mark{display:inline-block;margin:2px 0 0 6px;padding:0 5px;
+  border-radius:4px;font:700 10.5px/1.6 var(--sans);letter-spacing:.1em;
+  color:rgba(var(--warm-tx),1);background:rgba(var(--warm-tx),.10)}
 .gr-game{font:650 14px/1.3 var(--sans)}
 .gr-game .at{color:var(--faint);font-weight:500}
 
@@ -5755,49 +5766,6 @@ def _team_record_parts(frame):
     }
 
 
-def _team_performance_rows(led):
-    """Per-club xwOBA full-game accuracy over the displayed ledger lineage.
-
-    Each row has three mutually useful views: every prediction involving the
-    club, games where the club was the lean, and games where its opponent was
-    the lean. Only settled W/L/T decisions between two MLB clubs count; this
-    excludes pending/void rows, abstentions, and the All-Star exhibition.
-    """
-    clubs = _ledger_club_labels()
-    g = _display_grades(led)
-    if g.empty:
-        return []
-    valid = (g["xw_full"].isin(("W", "L", "T"))
-             & g["away"].isin(clubs) & g["home"].isin(clubs)
-             & (g["xw_lean"].eq(g["away"]) | g["xw_lean"].eq(g["home"])))
-    g = g[valid]
-    teams = sorted(set(g["away"]) | set(g["home"]))
-    rows = []
-    for team in teams:
-        all_games = g[g["away"].eq(team) | g["home"].eq(team)]
-        leaned_on = all_games[all_games["xw_lean"].eq(team)]
-        leaned_against = all_games[~all_games["xw_lean"].eq(team)]
-        rows.append({
-            "team": team,
-            "label": clubs[team],
-            "all": _team_record_parts(all_games),
-            "on": _team_record_parts(leaned_on),
-            "against": _team_record_parts(leaned_against),
-        })
-    return rows
-
-
-# Conventional American-odds rungs. Bands are in PRICE, not probability,
-# because "is -180 fairly priced" is the question actually being asked, and a
-# probability band would blur two different prices into one row. American odds
-# never fall between -100 and +100, so plain numeric ordering is a valid ladder
-# and the favourite/underdog split falls out of the sign.
-# Bounds are INCLUSIVE at both ends and match the labels exactly. The first
-# version used a half-open `lo < ml <= hi`, which silently dropped a price of
-# exactly +100: it is not > 100, and it is not <= -100, so it fell through
-# every rung. The page's own home/away counts caught it (385 vs 384 where the
-# two must be equal), which is the argument for printing n per side rather
-# than only a total.
 _ODDS_LADDER = (
     (None, -250, "≤ -250"),
     (-249, -175, "-249 to -175"),
@@ -5951,13 +5919,26 @@ def _lean_market_observations(led):
     `market_p` is the closing no-vig probability of the LEANED team, not always
     the home team. `market_edge = market_p - .50` keeps the direction: positive
     means the market agrees and prices the lean as a favourite; negative means
-    the model is leaning an underdog. The 2×3 discovery grid keeps that sign;
-    it never collapses equal-distance favourites and underdogs into one cell.
+    the model is leaning an underdog. That sign is the whole hybrid axis, so it
+    is never collapsed into a distance-from-even.
+
+    Every column the hybrid rule needs is derived here rather than at each
+    surface, for the reason `_conviction_cell` used to give and this replaces:
+    two copies of a selection rule on one site will drift and the reader cannot
+    see which they are reading. `opp_ml` is what makes that possible -- a faded
+    row is BET AT THE OTHER SIDE'S PRICE, so a frame carrying only the leaned
+    side's moneyline cannot score the rule that this site now publishes.
+
+    The always-chalk columns ride along for a reason specific to this rule: the
+    fade branch backs the favourite on every row by construction, so its record
+    IS the chalk record on those rows. Deriving both here means the two can
+    never be computed from different row sets, and every surface that shows a
+    fade result can show the control beside it.
 
     The ledger has no per-game SE/SD for xw_delta. Do not manufacture one from
     lineup dispersion or opponent-rate SD -- those are different quantities.
-    Until a true delta uncertainty is persisted, |xw_delta| is the model-
-    strength axis and the page labels its fixed .012 discovery split honestly.
+    `delta` is retained as a reported quantity, but it is no longer a bucketing
+    axis: the hybrid reads a DIRECTION and a PRICE, never the delta's size.
     """
     cols = {"close_p_home", "close_home_ml", "close_away_ml",
             "xw_lean", "xw_full", "home", "away"}
@@ -5991,6 +5972,8 @@ def _lean_market_observations(led):
     market_p = np.where(hv, pv, 1.0 - pv)
     close_ml = np.where(hv, hml.loc[valid].to_numpy(dtype=float),
                         aml.loc[valid].to_numpy(dtype=float))
+    opp_ml = np.where(hv, aml.loc[valid].to_numpy(dtype=float),
+                      hml.loc[valid].to_numpy(dtype=float))
     won = gv["xw_full"].eq("W").to_numpy(dtype=bool)
     dv = delta.loc[valid].to_numpy(dtype=float)
 
@@ -5998,10 +5981,11 @@ def _lean_market_observations(led):
         "delta": dv,
         "market_p": market_p,
         "close_ml": close_ml,
+        "opp_ml": opp_ml,
         "won": won.astype(float),
     })
     obs = obs[np.isfinite(obs["delta"]) & np.isfinite(obs["market_p"])
-              & np.isfinite(obs["close_ml"])
+              & np.isfinite(obs["close_ml"]) & np.isfinite(obs["opp_ml"])
               & obs["market_p"].between(0.0, 1.0, inclusive="neither")].copy()
     if obs.empty:
         return obs
@@ -6011,104 +5995,127 @@ def _lean_market_observations(led):
         _american_unit_profit(ml, bool(w))
         for ml, w in zip(obs["close_ml"], obs["won"])
     ]
-    obs = obs[np.isfinite(obs["profit"])].copy()
+
+    # --- the published rule, derived once ---------------------------------
+    # `>=` follows, so a game priced at exactly the threshold follows the
+    # model. That is the specification, and hybrid_test pins the same
+    # comparison on the forward-scoring side.
+    follow = obs["market_p"].to_numpy(dtype=float) >= HYBRID_THRESHOLD
+    lean_won = obs["won"].to_numpy(dtype=float)
+    obs["hybrid_follow"] = follow
+    obs["hybrid_won"] = np.where(follow, lean_won, 1.0 - lean_won)
+    obs["hybrid_p"] = np.where(follow, obs["market_p"], 1.0 - obs["market_p"])
+    obs["hybrid_ml"] = np.where(follow, obs["close_ml"], obs["opp_ml"])
+    obs["hybrid_resid"] = obs["hybrid_won"] - obs["hybrid_p"]
+    obs["hybrid_profit"] = [
+        _american_unit_profit(ml, bool(w))
+        for ml, w in zip(obs["hybrid_ml"], obs["hybrid_won"])
+    ]
+
+    # --- controls, on the IDENTICAL rows -----------------------------------
+    # Always-chalk is the control the fade branch has to be read against --
+    # that branch backs the favourite on every row by construction, so the two
+    # must come out equal. Always-home is the coin-flip yardstick.
+    #
+    # Both are derived HERE, from the same frame as the record, so no surface
+    # can score a control over a different row set than the number beside it.
+    # That is not hypothetical: this page once scored its controls on every
+    # graded row while scoring the model on the decided ones, and the `n=`
+    # marker written to catch exactly that was blind to it.
+    chalk_is_lean = obs["market_p"].to_numpy(dtype=float) >= 0.50
+    obs["chalk_won"] = np.where(chalk_is_lean, lean_won, 1.0 - lean_won)
+    obs["chalk_p"] = np.where(chalk_is_lean, obs["market_p"], 1.0 - obs["market_p"])
+    chalk_ml = np.where(chalk_is_lean, obs["close_ml"], obs["opp_ml"])
+    obs["chalk_resid"] = obs["chalk_won"] - obs["chalk_p"]
+    obs["chalk_profit"] = [
+        _american_unit_profit(ml, bool(w))
+        for ml, w in zip(chalk_ml, obs["chalk_won"])
+    ]
+
+    obs["home_won"] = np.where(hv, lean_won, 1.0 - lean_won)
+    obs["home_p"] = np.where(hv, obs["market_p"], 1.0 - obs["market_p"])
+    home_ml = np.where(hv, obs["close_ml"], obs["opp_ml"])
+    obs["home_resid"] = obs["home_won"] - obs["home_p"]
+    obs["home_profit"] = [
+        _american_unit_profit(ml, bool(w))
+        for ml, w in zip(home_ml, obs["home_won"])
+    ]
+
+    obs = obs[np.isfinite(obs["profit"]) & np.isfinite(obs["hybrid_profit"])
+              & np.isfinite(obs["chalk_profit"])
+              & np.isfinite(obs["home_profit"])].copy()
     return obs
 
 
-def _lean_market_agg(obs, mask):
-    """Compact result/price summary for one exploratory model×market bucket."""
+def _lean_market_agg(obs, mask, won="won", p="market_p",
+                     resid="market_resid", profit="profit"):
+    """Compact result/price summary for one bucket of the observation frame.
+
+    Parameterised by column set so the model's own lean, the published hybrid
+    selection and the always-chalk control are all summarised by ONE function
+    over ONE row mask. Three copies of this arithmetic is how a control ends up
+    scored on a different row set than the record beside it -- which happened
+    here once already, when the grades page scored controls on every graded row
+    and the model on the decided ones.
+    """
     s = obs.loc[mask]
     if s.empty:
         return None
     n = int(len(s))
-    w = int(s["won"].sum())
-    # Shared with the price ladder above -- see _excess_se for why neither
-    # surface may estimate this from the outcomes it is testing.
-    resid_se = _excess_se(s["market_p"])
+    w = int(s[won].sum())
+    # Poisson-binomial at the market's own prices -- see `_excess_se` for why
+    # no surface here may estimate this from the outcomes it is testing.
+    resid_se = _excess_se(s[p])
     return {
         "n": n,
         "w": w,
         "l": n - w,
-        "implied": float(s["market_p"].mean()),
-        "actual": float(s["won"].mean()),
-        "excess": float(s["market_resid"].mean()),
+        "implied": float(s[p].mean()),
+        "actual": float(s[won].mean()),
+        "excess": float(s[resid].mean()),
         "excess_se": resid_se,
-        "roi": float(s["profit"].mean()),
-        "units": float(s["profit"].sum()),
+        "roi": float(s[profit].mean()),
+        "units": float(s[profit].sum()),
     }
 
 
-# Fixed discovery grid for the per-game V12 panel. The old 2×2 used
-# |market_p - .50|, so a -149 favourite and a +123 underdog could inherit the
-# same historical record merely because both prices sat more than five points
-# from a coin flip. Direction is the information the card is trying to show,
-# so the market axis is now the LEANED team's no-vig probability:
+# --- the published selection rule ------------------------------------------
+# The site publishes ONE rule and every surface reads it from here. The
+# threshold is imported from `hybrid_test` rather than restated, because that
+# module is the registration and a second literal is the "one value, three
+# homes" defect this repo already paid for once: a config copy of a code
+# default drifted, and 14 ledger rows carry v10 math under a v9 tag as a
+# result. There must be exactly one 0.45 in this repository.
 #
-#   p < .45           DEEP MARKET OPPOSE
-#   .45 <= p <= .50   NO MARKET BACKING
-#   p > .50           MARKET AGREE
+# This replaces a 2x3 delta x direction discovery grid AND a 3x5 delta x price
+# profile grid -- 21 published cells, most of them thin. That was the surface
+# `value_probe` warns about in the sharpest terms: on this ledger any grid
+# search hands back a cell near +20% ROI whether or not anything is there,
+# because at 21-82 rows a cell's null sd is 8-21 percentage points of ROI. The
+# hybrid has two branches, so a reader is never shown a one-game headline, and
+# the delta's MAGNITUDE leaves the display axis entirely -- it never entered
+# the rule, and `value_probe`'s joint logit puts z(xw_net) at -0.13 against
+# price, so bucketing by it was showing a reader structure that is not there.
 #
-# THE MIDDLE BAND IS CLOSED AT .50 ON PURPOSE, and its name is the reason.
-# A devigged .500 is a market with no favourite -- it arises exactly when the
-# two prices mirror (-110/-110), and on this ledger those are the same 10 rows.
-# The band used to be half-open, so a pick'em fell into MARKET AGREE and the
-# card told the reader the market sided with the lean on a game where the
-# market had no side. That is the boundary claim this repo already retired
-# once: the old home-relative split filed the same 10 rows as "home favoured",
-# and the price-band rewrite was justified by "a band has no such boundary
-# claim to make". A three-way split cannot avoid filing a no-favourite market
-# somewhere, so the question is which claim survives the boundary. "Agree"
-# ASSERTS the market backs the lean and is false at .500; "no backing" DENIES
-# it and is true across the whole closed band -- a slight underdog price and
-# an exact pick'em are both markets that decline to back the lean. So the
-# pick'em moves to the band whose label stays true, rather than earning a
-# fourth column that would be empty in every family (0 of 147 v12 rows sit at
-# .500, and pick'ems run ~1.5%% of games ledger-wide).
-#
-# The delta axis is fixed at .012 rather than re-cut into terciles every build:
-# that makes a live game's label stable as the ledger grows. The .012 boundary
-# was selected after looking at the current V12 history, so it is explicitly a
-# DISCOVERY cut, not an out-of-sample betting rule. These constants affect only
-# display/monitoring; they never enter the lean and do not bump MODEL_TAG.
-_CONVICTION_DELTA_ACTIVE = 0.012
-_CONVICTION_DEEP_OPPOSE = 0.45
-_CONVICTION_AGREE = 0.50
+# Display and monitoring only. The rule never enters a lean and does not bump
+# MODEL_TAG.
+HYBRID_THRESHOLD = hybrid_test.THRESHOLD
 
-# Reader-facing per-game profile cuts. The calibration page retains its 2x3
-# discovery grid; live cards match both delta and a five-band market range.
-_PROFILE_DELTA_MEDIUM = 0.012
-_PROFILE_DELTA_HIGH = 0.025
-
-# (cell key, row label). Each entry carried a third "reader-facing phrase"
-# that only ever reached _CONVICTION_PHRASE, which no surface read -- the same
-# unrendered-prose defect deleted from this module alongside the price bands.
-# Dropped rather than reworded for the rename: writing fresh copy into a
-# structure nothing renders is how the last one survived as long as it did.
-_CONVICTION_CELLS = (
-    ("low-deep-oppose", "LOW Δ · DEEP MARKET OPPOSE"),
-    ("low-no-backing", "LOW Δ · NO MARKET BACKING"),
-    ("low-agree", "LOW Δ · MARKET AGREE"),
-    ("active-deep-oppose", "ACTIVE Δ · DEEP MARKET OPPOSE"),
-    ("active-no-backing", "ACTIVE Δ · NO MARKET BACKING"),
-    ("active-agree", "ACTIVE Δ · MARKET AGREE"),
-)
+# Reported alongside the action, never used to bucket a record. Kept because a
+# reader who has the delta on the card can see it is not what moved the
+# selection; dropping it would hide that the rule ignores it.
+_DELTA_MEDIUM = 0.012
+_DELTA_HIGH = 0.025
 
 
-def _conviction_delta_label(delta):
-    """LOW/ACTIVE label for a model delta, or None when unusable."""
-    if delta is None:
-        return None
-    try:
-        delta = abs(float(delta))
-    except (TypeError, ValueError):
-        return None
-    if not np.isfinite(delta):
-        return None
-    return "ACTIVE" if delta >= _CONVICTION_DELTA_ACTIVE else "LOW"
+def hybrid_action(market_p):
+    """FOLLOW / FADE for the leaned side's no-vig price, or None when unusable.
 
-
-def _conviction_direction_label(market_p):
-    """Direction of the leaned side's no-vig price, or None when unusable."""
+    `>=` follows: a game priced at exactly the threshold follows the model.
+    That is the registered specification and `hybrid_test` pins the identical
+    comparison, so a live card and the forward test can never disagree about a
+    boundary game.
+    """
     if market_p is None:
         return None
     try:
@@ -6117,44 +6124,31 @@ def _conviction_direction_label(market_p):
         return None
     if not np.isfinite(market_p) or not (0.0 < market_p < 1.0):
         return None
-    if market_p < _CONVICTION_DEEP_OPPOSE:
-        return "DEEP MARKET OPPOSE"
-    # Closed at .50: an exact pick'em has no favourite, so the label that
-    # survives the boundary is the one that denies backing, not the one that
-    # asserts it. See the grid comment above.
-    if market_p <= _CONVICTION_AGREE:
-        return "NO MARKET BACKING"
-    return "MARKET AGREE"
+    return "FOLLOW" if market_p >= HYBRID_THRESHOLD else "FADE"
 
 
-def _conviction_cell(delta, market_p, _legacy_q2=None):
-    """Fixed V12 delta × leaned-side market-direction cell for one game.
+def hybrid_selection(lean, away_abbr, home_abbr, market_p):
+    """The team the published rule selects, or None when it cannot decide.
 
-    The single derivation behind both surfaces that use the matrix -- the
-    calibration page's table and the per-game verdict on the leans page -- so a
-    card can never disagree with the table about which cell a game is in. That
-    is the metric_label() lesson applied to a bucketing rule: two copies of a
-    cut on one site will drift, and the reader cannot see which they are
-    reading.
-
-    `_legacy_q2` is accepted but ignored so callers built against the former
-    tercile API do not fail during a rolling deploy. The cell no longer depends
-    on a ledger-derived threshold.
+    Returns the lean itself on FOLLOW and the opposing club on FADE. Abstains
+    (None) with no lean or no usable two-sided price -- a v5 abstention
+    publishes no direction, so there is nothing to fade, and inventing one
+    would manufacture a selection the model declined to make.
     """
-    strength = _conviction_delta_label(delta)
-    direction = _conviction_direction_label(market_p)
-    if strength is None or direction is None:
+    action = hybrid_action(market_p)
+    if action is None or not lean:
         return None
-    direction_key = {
-        "DEEP MARKET OPPOSE": "deep-oppose",
-        "NO MARKET BACKING": "no-backing",
-        "MARKET AGREE": "agree",
-    }[direction]
-    return f"{strength.lower()}-{direction_key}"
+    if action == "FOLLOW":
+        return lean
+    if lean == home_abbr:
+        return away_abbr
+    if lean == away_abbr:
+        return home_abbr
+    return None
 
 
-def _profile_delta_label(delta):
-    """LOW/MEDIUM/HIGH display band for a usable absolute V12 delta."""
+def _delta_label(delta):
+    """LOW/MEDIUM/HIGH display band for a usable absolute model delta."""
     if delta is None:
         return None
     try:
@@ -6163,108 +6157,82 @@ def _profile_delta_label(delta):
         return None
     if not np.isfinite(delta):
         return None
-    if delta < _PROFILE_DELTA_MEDIUM:
+    if delta < _DELTA_MEDIUM:
         return "LOW"
-    if delta < _PROFILE_DELTA_HIGH:
+    if delta < _DELTA_HIGH:
         return "MEDIUM"
     return "HIGH"
 
 
-def _profile_market_label(market_p):
-    """Five-band leaned-side no-vig market label, or None when unusable."""
-    if market_p is None:
-        return None
-    try:
-        market_p = float(market_p)
-    except (TypeError, ValueError):
-        return None
-    if not np.isfinite(market_p) or not (0.0 < market_p < 1.0):
-        return None
-    if market_p < 0.45:
-        return "<45%"
-    if market_p <= 0.50:
-        return "45–50%"
-    if market_p <= 0.60:
-        return "50–60%"
-    if market_p <= 0.65:
-        return "60–65%"
-    return ">65%"
-
-
-def _profile_cell(delta, market_p):
-    """Stable key for the per-game 3x5 V12 profile grid."""
-    d_label = _profile_delta_label(delta)
-    m_label = _profile_market_label(market_p)
-    if d_label is None or m_label is None:
-        return None
-    return d_label.lower(), m_label
-
-
 def _lean_market_value_analysis(led):
-    """Current-family price/lean relationship used by market calibration page.
+    """Current-family hybrid-branch summary for the market calibration page.
 
-    Returns the raw observation frame plus the fixed discovery threshold and
-    two outcome tables:
+    Returns the observation frame plus one row per published branch, the
+    always-chalk control on the identical rows, and the model's own lean for
+    reference. Every figure is a DISCOVERY result: the threshold was chosen on
+    these rows, so nothing here is out-of-sample and the page says so.
 
-      regime_rows:    a 2×3 V12-delta × market-direction layout.
-      direction_rows: the three market-direction bands pooled over delta.
-
-    All cells are historical discovery summaries for the current prediction
-    family. The fixed .012 delta cut was outcome-informed and is therefore a
-    monitoring diagnostic, not a production betting rule.
+    The 2x3 delta x direction matrix and the three direction-band totals this
+    replaces are gone rather than relabelled. They cut the same rows nine ways
+    on an axis -- the delta's magnitude -- that the published rule does not
+    read, and `value_probe` puts that axis at z = -0.13 against price. Nine
+    published cells on a null axis is the grid-search surface this repo has
+    already been fooled by once.
     """
     obs = _lean_market_observations(led)
     if obs.empty:
         return {}
 
-    obs["cell"] = [_conviction_cell(d, p)
-                   for d, p in zip(obs["delta"], obs["market_p"])]
-
-    # Relationship of raw model separation to the market's *signed* support
-    # for the leaned team. Only the fitted line is used: it is reported as the
-    # "market response" tile and stated in the note.
-    #
-    # The per-game residual from this fit -- the "price dislocation" -- was
-    # computed here and rendered nowhere, so it is gone. It is a real quantity
-    # and a residual-sign cut may be worth adding later, but a column carried
-    # on the returned frame that no surface reads is how a description of an
-    # invisible diagnostic ended up in the note in the first place.
+    # Retained because it is the evidence for the rule having NO upper
+    # favourite cutoff: if the close already charged more as the model's
+    # separation grew, a cutoff would have something to bite on. Reported as a
+    # single slope, never used to bucket a record.
     x = obs["delta"].to_numpy(dtype=float)
     y = obs["market_edge"].to_numpy(dtype=float)
-    # Both statistics need a spread on BOTH axes, not just a second row: a
-    # constant column makes corrcoef divide by its own zero sd and hand back a
-    # silent nan behind a RuntimeWarning. The slope was already guarded this
-    # way; the correlation was not.
+    # Both statistics need a spread on BOTH axes: a constant column makes
+    # corrcoef divide by its own zero sd and hand back a silent nan.
     spread = (len(obs) > 1 and float(np.std(x)) > 0 and float(np.std(y)) > 0)
-    corr = float(np.corrcoef(x, y)[0, 1]) if spread else np.nan
     if spread:
         slope, intercept = np.polyfit(x, y, 1)
     else:
         slope = intercept = np.nan
 
-    regime_rows = [(label, _lean_market_agg(obs, obs["cell"].eq(key)))
-                   for key, label in _CONVICTION_CELLS]
-    direction_rows = [
-        ("DEEP MARKET OPPOSE · p <45%",
-         _lean_market_agg(obs, obs["market_p"] < _CONVICTION_DEEP_OPPOSE)),
-        ("NO MARKET BACKING · 45–50%",
-         _lean_market_agg(
-             obs,
-             (obs["market_p"] >= _CONVICTION_DEEP_OPPOSE)
-             & (obs["market_p"] <= _CONVICTION_AGREE),
-         )),
-        ("MARKET AGREE · p >50%",
-         _lean_market_agg(obs, obs["market_p"] > _CONVICTION_AGREE)),
+    follow = obs["hybrid_follow"]
+    hyb = dict(won="hybrid_won", p="hybrid_p", resid="hybrid_resid",
+               profit="hybrid_profit")
+    chalk = dict(won="chalk_won", p="chalk_p", resid="chalk_resid",
+                 profit="chalk_profit")
+    all_rows = obs["won"].notna()
+    branch_rows = [
+        (f"FOLLOW · p ≥ {100 * HYBRID_THRESHOLD:.0f}%",
+         _lean_market_agg(obs, follow, **hyb)),
+        # Plain "<": the table escapes every label through `_esc`, so a
+        # pre-escaped entity here would render as literal "&lt;".
+        (f"FADE · p < {100 * HYBRID_THRESHOLD:.0f}%",
+         _lean_market_agg(obs, ~follow, **hyb)),
+        ("Hybrid, both branches", _lean_market_agg(obs, all_rows, **hyb)),
+    ]
+    home = dict(won="home_won", p="home_p", resid="home_resid",
+                profit="home_profit")
+    control_rows = [
+        ("Model lean, unmodified", _lean_market_agg(obs, all_rows)),
+        ("Always chalk", _lean_market_agg(obs, all_rows, **chalk)),
+        ("Always home", _lean_market_agg(obs, all_rows, **home)),
+        # The row that makes the fade branch legible: it must match the FADE
+        # line above EXACTLY. If it ever does not, the two were computed over
+        # different rows and that is a bug rather than a discovery.
+        ("Always chalk · FADE rows only",
+         _lean_market_agg(obs, ~follow, **chalk)),
     ]
     return {
         "obs": obs,
         "n": int(len(obs)),
-        "delta_active": _CONVICTION_DELTA_ACTIVE,
-        "corr": corr,
+        "n_fade": int((~follow).sum()),
+        "threshold": HYBRID_THRESHOLD,
         "slope": float(slope),
         "intercept": float(intercept),
-        "regime_rows": regime_rows,
-        "direction_rows": direction_rows,
+        "branch_rows": branch_rows,
+        "control_rows": control_rows,
     }
 
 
@@ -6309,92 +6277,76 @@ def _lean_market_value_table(rows, first_head="Situation"):
 
 
 def _render_lean_market_value_panel(led):
-    """Model × market price-validation panel for market-calibration.html."""
+    """Hybrid-rule validation panel for market-calibration.html."""
     a = _lean_market_value_analysis(led)
     if not a:
-        return ("<div class='gr-head'><h2 class='gr-h1'>Model × market value</h2>"
-                "<div class='gr-lead'>Current-family value diagnostics appear "
-                "once graded leans carry a closing moneyline.</div></div>")
+        return ("<div class='gr-head'><h2 class='gr-h1'>Hybrid rule</h2>"
+                "<div class='gr-lead'>Branch diagnostics appear once graded "
+                "leans carry a closing moneyline.</div></div>")
 
-    corr = a["corr"]
     slope = a["slope"]
-    intercept = a["intercept"]
-    corr_txt = f"{corr:+.3f}" if np.isfinite(corr) else "—"
-    # Slope is probability per one full xwOBA unit. Reporting the response to
-    # +.010 delta keeps it on a scale a reader can compare with the .012 split.
     slope_pp = slope * 0.010 * 100 if np.isfinite(slope) else np.nan
     slope_txt = f"{slope_pp:+.2f} pp" if np.isfinite(slope_pp) else "—"
-    sign = "+" if slope >= 0 else "−"
-    equation = (f"market edge = {intercept * 100:+.2f} pp {sign} "
-                f"{abs(slope * 0.010 * 100):.2f} pp per .010 Δ"
-                if np.isfinite(slope) else "unavailable")
 
     summary = (
-        "<div class='gr-head'><h2 class='gr-h1'>Model × market value</h2>"
-        "<div class='gr-lead'>Does closing price get richer as the model's "
-        "lean gets stronger — and what happens when the leaned side is priced "
-        "as a favourite or an underdog? Current prediction family only.</div></div>"
+        "<div class='gr-head'><h2 class='gr-h1'>Hybrid rule</h2>"
+        "<div class='gr-lead'>Follow the model when the market gives its "
+        f"selected side at least {100 * a['threshold']:.0f}%; back the other "
+        "side below that. Current prediction family, scored at the "
+        "close.</div></div>"
         "<div class='gr-summary'>"
-        f"<div class='gr-stat'><div class='l'>Priced decisions</div><div class='v'>{a['n']}</div>"
+        f"<div class='gr-stat'><div class='l'>Priced decisions</div>"
+        f"<div class='v'>{a['n']}</div>"
         "<div class='s'>settled full-game leans</div></div>"
-        f"<div class='gr-stat'><div class='l'>V12 Δ split</div><div class='v'>"
-        f"{a['delta_active']:.4f}</div>"
-        "<div class='s'>low &lt; cut · active ≥ cut</div></div>"
-        "<div class='gr-stat'><div class='l'>Direction cuts</div>"
-        "<div class='v'>45% · 50%</div>"
-        "<div class='s'>deep oppose · no backing · agree</div></div>"
-        f"<div class='gr-stat'><div class='l'>Δ vs market edge</div>"
-        f"<div class='v'>{corr_txt}</div><div class='s'>Pearson r</div></div>"
+        f"<div class='gr-stat'><div class='l'>Threshold</div>"
+        f"<div class='v'>{100 * a['threshold']:.0f}%</div>"
+        "<div class='s'>follow at or above · fade below</div></div>"
+        f"<div class='gr-stat'><div class='l'>Selections changed</div>"
+        f"<div class='v'>{a['n_fade']}</div>"
+        f"<div class='s'>{100 * a['n_fade'] / a['n']:.1f}% of decisions faded</div></div>"
         f"<div class='gr-stat'><div class='l'>Market response</div>"
-        f"<div class='v'>{slope_txt}</div><div class='s'>leaned-team p per +.010 Δ</div></div>"
+        f"<div class='v'>{slope_txt}</div>"
+        "<div class='s'>leaned-team p per +.010 Δ</div></div>"
         "</div>"
     )
     note = (
-        "<div class='gr-note'><b>Calculation.</b> For the leaned team, "
-        "<b>market p</b> is the devigged DK closing probability; "
-        "<b>market edge</b> = market p − 50%; <b>market excess</b> = "
-        "result − market p; and "
-        "<b>flat ROI</b> is one unit risked at the closing ML on every row. "
-        "The <b>market response</b> tile is the slope of <b>"
-        + _esc(equation) + "</b>, fitted across every priced decision: a "
-        "positive slope means the close already charges more as the model's "
-        "separation grows. <b>±</b> is one standard error on the excess, taken "
-        "under the null that every game settles at its own market price. A "
-        "bucket whose excess is smaller than about twice its ± is "
-        "indistinguishable from correctly priced, and at these sample sizes "
-        "most of them are. The six cells use a fixed V12 |Δ| split at .012 "
-        "and the leaned side's market direction: below 45% is deep opposition, "
-        "45% through 50% inclusive is no backing, and above 50% is agreement. "
-        "A devigged 50% is a market with no favourite, so it sits in the band "
-        "that declines to back the lean rather than the one that agrees with "
-        "it. The .012 boundary was selected after inspecting this V12 "
-        "history, so every record and ROI here is a historical discovery result, "
-        "not an out-of-sample betting rule.</div>"
+        "<div class='gr-note'><b>Every number on this panel is a discovery "
+        "result, not a forward test.</b> The "
+        f"{100 * a['threshold']:.0f}% threshold was chosen after looking at "
+        "these rows, so the branch records below describe the sample the rule "
+        "was fitted on. The out-of-sample version is registered separately and "
+        "scores only games played after it was frozen; it is printed every "
+        "build in <b>data/ledger_report.txt</b>. "
+        "<b>Calculation.</b> For each row the selection is bet flat at its own "
+        "devigged DK closing moneyline; <b>actual vs implied</b> is the "
+        "realised rate against what that price implied, and <b>±</b> is one "
+        "standard error under the null that every game settles at its own "
+        "market price. A branch whose excess is smaller than about twice its ± "
+        "is indistinguishable from correctly priced. "
+        "<b>Read the fade branch against the control directly beneath it.</b> "
+        "Backing the other side of a lean priced below the threshold means "
+        "backing the favourite on every such game, so the fade branch and "
+        "always-chalk on those rows are the same bet and must match exactly — "
+        "the fade result carries no model content of its own. The "
+        "<b>market response</b> slope is why the rule has no upper favourite "
+        "cutoff: the close does not systematically get richer as the model's "
+        "separation grows, so there is no point at which strong favourites "
+        "become reliably overvalued.</div>"
     )
-    regime_head = (
-        "<div class='gr-head'><h2 class='gr-h1'>V12 discovery matrix</h2>"
-        "<div class='gr-lead'>Fixed Δ strength crossed with the direction of "
-        "the leaned team's no-vig closing price. Thin cells remain visible with "
-        "their n and ROI rather than being pooled with a different direction.</div></div>"
+    branch_head = (
+        "<div class='gr-head'><h2 class='gr-h1'>By branch</h2>"
+        "<div class='gr-lead'>What the published rule selected, and how those "
+        "selections settled against their own closing prices.</div></div>"
     )
-    side_head = (
+    control_head = (
         "<div class='gr-head' style='margin-top:18px'><h2 class='gr-h1'>"
-        "Market-direction totals</h2><div class='gr-lead'>The same three "
-        "direction bands pooled over Δ, for context only.</div></div>"
+        "Controls</h2><div class='gr-lead'>The same rows scored two other "
+        "ways. A record is only a result relative to these.</div></div>"
     )
-    return (summary + note + regime_head
-            + _lean_market_value_table(a["regime_rows"])
-            + side_head + _lean_market_value_table(a["direction_rows"]))
-
-
-def _team_metric_cell(parts):
-    """Record + decision accuracy + n, with ties excluded from accuracy."""
-    w, l, t, n = (parts[k] for k in ("w", "l", "t", "n"))
-    record = f"{w}-{l}" + (f"-{t}" if t else "")
-    accuracy = f"{100 * w / (w + l):.1f}%" if w + l else "—"
-    return (f"<span class='tm-record'>{record}</span>"
-            f"<span class='tm-accuracy'>{accuracy}</span>"
-            f"<span class='tm-n'>n={n}</span>")
+    return (summary + note + branch_head
+            + _lean_market_value_table(a["branch_rows"], first_head="Branch")
+            + control_head
+            + _lean_market_value_table(a["control_rows"], first_head="Control"))
 
 
 def _record_grades(led):
@@ -6486,65 +6438,58 @@ def _baseline_controls(g):
     return out
 
 
-CONVICTION_CELL_MIN = 1
+# Emergency kill switch only: raise it to suppress branch records entirely.
+# It is 1 rather than a sample floor because with two branches a thin one is
+# self-describing -- the record prints its own n and its own standard error,
+# and `_branch_read` says "within noise" whenever the spread cannot support
+# more. Suppressing a number invites someone to recompute it without the
+# caveat, which is the rule this repo settled when it deleted `N_FIT_MIN`.
+BRANCH_RECORD_MIN = 1
 
 
-def conviction_cell_records():
-    """Current-model records for calibration cells and per-game profiles.
+def hybrid_branch_records():
+    """Current-family records for each hybrid branch, plus its chalk control.
 
-    The calibration surface consumes the 2x3 ``('cell', key)`` entries; live
-    cards consume the 3x5 ``('profile', (delta_band, market_band))`` entries.
-    Both are scored on `_record_grades`, because pooling older model math would
-    answer a different question.
+    Keys: ``("branch", "FOLLOW"|"FADE")`` for the rule's own record,
+    ``("chalk", ...)`` for always-chalk on the IDENTICAL rows, and ``"pooled"``
+    for the whole family. Scored on `_record_grades`, because pooling older
+    prediction math would answer a different question.
 
-    Thin cells are part of the requested discovery surface, so the default
-    floor is one completed game. The card prints `n`, calls the result a
-    historical discovery cell, AND carries its own error bar.
+    THESE ARE DISCOVERY ROWS. The threshold was chosen on this sample, so a
+    branch's excess here is not evidence the rule works -- `hybrid_test.py`
+    holds the forward registration and is the only thing that can answer that.
+    Every surface rendering these says so; that is not decoration.
 
-    That last clause is a correction. This said "the calibration table carries
-    the error bar", which was false: that table renders the 2x3 (`cell`)
-    buckets and this panel renders the 3x5 (`profile`) buckets, so a profile
-    cell has no counterpart there and its `excess_se` was computed and shown
-    nowhere. At CONVICTION_CELL_MIN = 1 that let a single game publish a
-    headline excess with no spread beside it -- live at the fix, `low x >65%`
-    read +33.8 pp off n=1, against an SE of +/-47.3.
-
-    Keeping `CONVICTION_CELL_MIN` as a constant preserves a simple emergency
-    kill switch without silently substituting a pooled record.
+    The chalk control is keyed per branch on purpose. Pooled it would be one
+    number a reader has to hold against two, and on the FADE branch it is not a
+    comparison at all but an identity: fading a sub-threshold lean backs the
+    favourite on every row, so `("chalk", "FADE")` and `("branch", "FADE")`
+    must come out equal. If they ever differ, the row sets have drifted apart
+    and that is a bug, not a finding.
     """
     led = load_ledger_df()
     if led is None:
         return {}
-    a = _lean_market_value_analysis(led)
-    if not a:
+    obs = _lean_market_observations(led)
+    if obs.empty:
         return {}
-    out = {"cell_delta_active": a["delta_active"], "cell_n": a["n"]}
-    obs = a["obs"]
-    # The pooled reference the per-game panel prints beside its cell. Same rows,
-    # same aggregate, ~4x the precision (SE ~3.6pp against a cell median ~15pp).
+    out = {"n": int(len(obs)), "threshold": HYBRID_THRESHOLD}
+    # The pooled reference the per-game panel prints beside its branch. Same
+    # rows, same aggregate, several times the precision.
     pooled = _lean_market_agg(obs, obs["won"].notna())
     if pooled:
         out["pooled"] = pooled
-    for key, _label in _CONVICTION_CELLS:
-        parts = _lean_market_agg(obs, obs["cell"].eq(key))
-        if parts and parts["n"] >= CONVICTION_CELL_MIN:
-            out[("cell", key)] = parts
-    for d_key, d_lo, d_hi in (
-        ("low", 0.0, _PROFILE_DELTA_MEDIUM),
-        ("medium", _PROFILE_DELTA_MEDIUM, _PROFILE_DELTA_HIGH),
-        ("high", _PROFILE_DELTA_HIGH, np.inf),
-    ):
-        d_mask = (obs["delta"] >= d_lo) & (obs["delta"] < d_hi)
-        for m_label, m_mask in (
-            ("<45%", obs["market_p"] < 0.45),
-            ("45–50%", (obs["market_p"] >= 0.45) & (obs["market_p"] <= 0.50)),
-            ("50–60%", (obs["market_p"] > 0.50) & (obs["market_p"] <= 0.60)),
-            ("60–65%", (obs["market_p"] > 0.60) & (obs["market_p"] <= 0.65)),
-            (">65%", obs["market_p"] > 0.65),
-        ):
-            parts = _lean_market_agg(obs, d_mask & m_mask)
-            if parts and parts["n"] >= CONVICTION_CELL_MIN:
-                out[("profile", (d_key, m_label))] = parts
+    for action, mask in (("FOLLOW", obs["hybrid_follow"]),
+                         ("FADE", ~obs["hybrid_follow"])):
+        parts = _lean_market_agg(obs, mask, won="hybrid_won",
+                                 p="hybrid_p", resid="hybrid_resid",
+                                 profit="hybrid_profit")
+        if parts and parts["n"] >= BRANCH_RECORD_MIN:
+            out[("branch", action)] = parts
+        ctl = _lean_market_agg(obs, mask, won="chalk_won", p="chalk_p",
+                               resid="chalk_resid", profit="chalk_profit")
+        if ctl and ctl["n"] >= BRANCH_RECORD_MIN:
+            out[("chalk", action)] = ctl
     return out
 
 
@@ -6730,25 +6675,48 @@ def records_strip_html():
         # constant and the rows can still disagree for a day.
         from market_backfill import metric_label
         label = metric_label(g)
-        bits = [f"{label} full {_rec_txt(g['xw_full'])}"]
-        # vs-market (z / flat ROI) — mirrors the grades-page core card;
-        # market columns are absent until the first market run.
-        if "close_p_home" in g.columns and g["close_p_home"].notna().any():
-            try:
-                from market_backfill import vs_market_summary
-                m = vs_market_summary(g, verbose=False).get(label)
-            except Exception as e:  # noqa: BLE001
-                log(f"vs-market strip degraded: {e!r}")
-                m = None
-            if m:
-                bits.append(f"{label} vs mkt z {m['z']:+.2f} ({m['roi_units']:+.2f}u)")
+        # The strip headlines the SAME statistic the grades page it links to
+        # headlines: the published rule's selection, over the same priced rows,
+        # from the same aggregate. Two public surfaces showing different
+        # records for "the model" is the artifacts-disagreeing anti-pattern,
+        # and here the reader would be one click from seeing both.
+        obs = _lean_market_observations(led)
+        bits = []
+        if obs.empty:
+            # No price means the rule cannot act; fall back to the model's own
+            # lean and SAY which it is, rather than letting an unlabelled
+            # record stand in for the rule's.
+            bits.append(f"{label} lean {_rec_txt(g['xw_full'])}")
+        else:
+            priced = obs["won"].notna()
+            rule = _lean_market_agg(obs, priced, won="hybrid_won",
+                                    p="hybrid_p", resid="hybrid_resid",
+                                    profit="hybrid_profit")
+            # The metric label stays on the record. The selection is built on
+            # a lean predicted under a specific statistic, and dropping the
+            # label is how this strip once published "wOBA full 217-164" over
+            # 381 xwOBA games -- read off the ROWS, never MODEL_RATE_LABEL.
+            bits.append(f"{label} hybrid {rule['w']}-{rule['l']} "
+                        f"({rule['actual']:.3f})")
+            se = rule["excess_se"]
+            if se is not None and np.isfinite(se) and se > 0:
+                bits.append(f"vs mkt z {rule['excess'] / se:+.2f} "
+                            f"({rule['units']:+.2f}u)")
+            ctl = _lean_market_agg(obs, priced, won="chalk_won", p="chalk_p",
+                                   resid="chalk_resid", profit="chalk_profit")
+            if ctl:
+                # The control travels with the headline. A record with no
+                # yardstick beside it is what this strip was fixed for once
+                # already, when it published .570 with nothing to read it
+                # against.
+                bits.append("<span class='muted'>always chalk "
+                            f"{ctl['w']}-{ctl['l']}</span>")
         if scope:
             bits.append(f"<span class='muted'>{scope}</span>")
         inner = " <span class='muted'>·</span> ".join(bits)
     return ("<div class='gradestrip'><span class='lab'>Record</span>"
             f"<span>{inner}</span><span class='grade-links'>"
-            "<a href='grades.html'>full ledger →</a>"
-            "<a href='team-grades.html'>by team →</a></span></div>")
+            "<a href='grades.html'>full ledger →</a></span></div>")
 
 
 def _wlt_badge(v):
@@ -6772,6 +6740,14 @@ def _lean_ml_cell(r, lean_col):
     return _fmt_ml_cell(r.get("close_home_ml") if lean == r.get("home") else r.get("close_away_ml"))
 
 
+def _pick_ml_cell(r, pick):
+    """Closing moneyline of the side the rule actually selected."""
+    if not isinstance(pick, str) or not pick:
+        return "<span class='muted'>—</span>"
+    return _fmt_ml_cell(r.get("close_home_ml") if pick == r.get("home")
+                        else r.get("close_away_ml"))
+
+
 def _lean_cell(lean, delta, muted=False):
     if not isinstance(lean, str) or not lean:
         return "<span class='muted'>—</span>"
@@ -6780,6 +6756,37 @@ def _lean_cell(lean, delta, muted=False):
         f" <span class='muted'>Δ{delta3(d)}</span>" if pd.notna(d) else ""
     )
     return f"<span class='muted'>{txt}</span>" if muted else txt
+
+
+def _row_hybrid(r):
+    """(action, selection, result) for one ledger row under the published rule.
+
+    Row-level twin of the columns `_lean_market_observations` derives in bulk,
+    and the ONLY place the ledger table decides what the rule did. Returns
+    ``(None, None, None)`` whenever the rule cannot act -- no lean, or no
+    two-sided close -- because an abstention must render as an abstention
+    rather than borrowing the model's own result.
+
+    The result on a faded row is the lean's grade INVERTED: the rule backed the
+    other side, so a lean that lost is a selection that won. Ties are mapped
+    explicitly rather than by subtraction, which is what swallows them.
+    """
+    lean = r.get("xw_lean")
+    if not isinstance(lean, str) or not lean:
+        return None, None, None
+    ph = pd.to_numeric(r.get("close_p_home"), errors="coerce")
+    if pd.isna(ph):
+        return None, None, None
+    home, away = r.get("home"), r.get("away")
+    market_p = float(ph) if lean == home else 1.0 - float(ph)
+    action = hybrid_action(market_p)
+    pick = hybrid_selection(lean, away, home, market_p)
+    if action is None or pick is None:
+        return None, None, None
+    grade = r.get("xw_full")
+    if action == "FADE":
+        grade = {"W": "L", "L": "W"}.get(grade, grade)
+    return action, pick, grade
 
 
 def _grades_row(r, show_ml=False):
@@ -6809,15 +6816,46 @@ def _grades_row(r, show_ml=False):
     abstained = (status == "graded" and not isinstance(r["xw_lean"], str)
                  and any(str(r.get(c)) == "starter_unmeasured_no_lean"
                          for c in ("pitching_basis_away", "pitching_basis_home")))
-    lean_cell = ("<span class='muted' title='no lean published: a starter had "
-                 "no measured season line'>no lean</span>" if abstained
-                 else _lean_cell(r["xw_lean"], r["xw_delta"]))
+    # The table publishes the RULE's selection, so its result column has to be
+    # the rule's too. Where the rule cannot act the row falls back to the
+    # model's own lean and SAYS SO in the cell -- never silently, because a
+    # lean result standing unlabelled in a selection column is the same
+    # substitution that once published a pooled record under a current-family
+    # name.
+    action, pick, rule_grade = _row_hybrid(r)
+    if abstained:
+        sel_cell = ("<span class='muted' title='no lean published: a starter "
+                    "had no measured season line'>no lean</span>")
+        res = r["xw_full"]
+    elif action is None:
+        sel_cell = _lean_cell(r["xw_lean"], r["xw_delta"], muted=True)
+        if isinstance(r.get("xw_lean"), str) and r["xw_lean"]:
+            sel_cell += ("<span class='sp' title='no two-sided closing price, "
+                         "so the rule could not act; the model lean is shown "
+                         "instead'>lean · unpriced</span>")
+        res = r["xw_full"]
+    elif action == "FADE":
+        # Δ is deliberately NOT shown here. It is the model's separation in
+        # favour of the side the rule just declined; printed beside the club
+        # the rule selected it would read as the model rating THAT team, which
+        # is the opposite of what the number means.
+        sel_cell = _lean_cell(pick, None)
+        sel_cell += ("<span class='sp fade-mark' title='faded: the market "
+                     "priced the model&#39;s side below the threshold, so the "
+                     "rule backed the other team; Δ describes the lean that "
+                     "was faded, not this selection'>FADE</span>")
+        res = rule_grade
+    else:
+        sel_cell = _lean_cell(pick, r["xw_delta"])
+        res = rule_grade
     cells = [("c-game", "Game", game),
-             ("c-lean", "Lean", lean_cell)]
+             ("c-lean", "Selection", sel_cell)]
     if show_ml:
-        cells.append(("c-ml", "ML", _lean_ml_cell(r, "xw_lean")))
+        cells.append(("c-ml", "ML",
+                      _lean_ml_cell(r, "xw_lean") if action is None
+                      else _pick_ml_cell(r, pick)))
     cells += [("c-final", "Final", final),
-              ("c-res", "Result", _wlt_badge(r["xw_full"]))]
+              ("c-res", "Result", _wlt_badge(res))]
     cls = "gr-row void" if status == "void" else "gr-row"
     tds = "".join(f"<td class='{c}' data-l='{lab}'>{v}</td>" for c, lab, v in cells)
     return f"<tr class='{cls}'>{tds}</tr>"
@@ -6874,7 +6912,6 @@ def _lock_provenance(led):
 def render_grades_html(built_txt):
     back = ("<div class='backlink ledger-nav'>"
             "<a href='index.html'>← today's leans</a>"
-            "<a href='team-grades.html'>performance by team →</a>"
             "<a href='market-calibration.html'>market calibration →</a></div>")
     led = load_ledger_df()
     if led is None:
@@ -6919,73 +6956,106 @@ def render_grades_html(built_txt):
                       "data/ledger_report.txt" if n_all else "")
                    + ".</div>")
     else:
-        # Rows on which the model actually published a decision. A graded row
-        # is a game that was played; a decided row is one this model called.
-        # v5 abstains on an unmeasured starter, so the two diverge, and every
-        # count below has to say which one it is -- ledger_report.txt already
-        # does. Measured from xw_lean, the field that says whether a decision
-        # was published, never by subtracting W and L (that swallows ties).
+        # EVERY TILE BELOW IS SCORED ON ONE ROW SET: current family, decided,
+        # settled, and carrying a two-sided close. That is stricter than the
+        # decided set this header used to score, and deliberately so -- the
+        # published rule needs a price to act, so a record over rows it could
+        # not have acted on is not this rule's record. One derivation, one
+        # denominator, controls included. The alternative is the discrepancy
+        # this repo already shipped once, when the controls were scored on
+        # every graded row while the model was scored on the decided ones.
+        obs = _lean_market_observations(led)
         decided = g[g["xw_lean"].notna()]
         n_abst = int(g["xw_lean"].isna().sum())
         pend_sub = f"{n_pend} pending" + (f" · {n_void} void" if n_void else "")
         if n_abst:
             pend_sub += f" · {n_abst} abstained"
         stat("Graded", str(len(g)), pend_sub)
-        # Metric read off the graded rows, not the running build. Still true
-        # with the family pinned: MODEL_TAG flips a slate before any row under
-        # it grades, so on that morning the constant names a metric no row on
-        # this page was predicted under.
+
+        # Metric read off the graded rows, not the running build: MODEL_TAG
+        # flips a slate before any row under it grades, so on that morning the
+        # constant names a metric no row on this page was predicted under.
         from market_backfill import metric_label
         label = metric_label(g)
-        b, p = _rec_parts(decided["xw_full"]); stat(f"{label} · full", b, p)
-        # vs-market scoreboard (closing DK MLs attached by grade_leans.py via
-        # market_backfill; columns absent until the first market run). z leads
-        # the cell -- it is the primary metric, per the note below. The bucket
-        # is keyed by the same metric_label call, so the lookup cannot miss.
-        if "close_p_home" in g.columns and g["close_p_home"].notna().any():
-            try:
-                from market_backfill import vs_market_summary
-                mkt = vs_market_summary(g, verbose=False)
-            except Exception as e:  # noqa: BLE001
-                log(f"vs-market summary degraded: {e!r}")
-                mkt = {}
-            m = mkt.get(label)
-            if m:
-                stat(f"{label} · vs mkt", f"z {m['z']:+.2f}",
-                     f"{m['w']}-{m['n'] - m['w']} · {m['roi_units']:+.2f}u flat",
-                     tone="cool" if m["z"] > 0 else "warm")
-        notes.append(f"{label} graded full-game vs devigged DK closing ML (ESPN capture); "
-                     "z and flat ROI are the primary metrics")
+        if obs.empty:
+            # No price means the rule cannot act. Show the model's own record,
+            # say so, and KEEP THE CONTROLS -- a record with no yardstick
+            # beside it is the defect `_baseline_controls` was written for, and
+            # dropping them on this path would reintroduce it wherever the
+            # market backfill has not run.
+            b_, p_ = _rec_parts(decided["xw_full"])
+            stat(f"{label} lean · full", b_, p_)
+            ctl_labels = {"home": "Always home", "market": "Always chalk"}
+            for key, w, l in _baseline_controls(decided):
+                if not (w + l):
+                    continue
+                sub = f"{w / (w + l):.3f}"
+                if w + l != len(decided):
+                    sub += f" · n={w + l}"
+                stat(ctl_labels[key], f"{w}-{l}", sub, tone="dim")
+            notes.append("no graded row carries a closing price yet, so the "
+                         "published rule cannot be scored and the record above "
+                         "is the model's own lean")
+            notes.append("controls on the same decided rows — always the home "
+                         "side, always the devigged closing favourite")
+        else:
+            hyb = dict(won="hybrid_won", p="hybrid_p", resid="hybrid_resid",
+                       profit="hybrid_profit")
+            n_obs = int(len(obs))
+            priced = obs["won"].notna()
+            rule = _lean_market_agg(obs, priced, **hyb)
+            lean_only = _lean_market_agg(obs, priced)
+            n_fade = int((~obs["hybrid_follow"]).sum())
+            stat("Hybrid selection", f"{rule['w']}-{rule['l']}",
+                 f"{rule['actual']:.3f} · lean alone "
+                 f"{lean_only['w']}-{lean_only['l']} · {n_fade} faded")
+            # z leads. A raw rate in a price-selected sample is mostly base
+            # rate -- the statistic this repo already retired from the per-game
+            # panel for exactly that reason.
+            se = rule["excess_se"]
+            z = (rule["excess"] / se
+                 if se is not None and np.isfinite(se) and se > 0 else np.nan)
+            stat("vs market", f"z {z:+.2f}" if np.isfinite(z) else "—",
+                 f"{100 * rule['excess']:+.1f} pp · {rule['units']:+.2f}u flat",
+                 tone="cool" if np.isfinite(z) and z > 0 else "warm")
+            # Controls, from the SAME aggregate over the SAME rows as the
+            # record above them, so no `n=` reconciliation is needed and the
+            # denominators cannot drift apart in the first place.
+            for lab, cols in (
+                ("Always chalk", dict(won="chalk_won", p="chalk_p",
+                                      resid="chalk_resid",
+                                      profit="chalk_profit")),
+                ("Always home", dict(won="home_won", p="home_p",
+                                     resid="home_resid",
+                                     profit="home_profit")),
+            ):
+                ctl = _lean_market_agg(obs, priced, **cols)
+                if ctl:
+                    stat(lab, f"{ctl['w']}-{ctl['l']}",
+                         f"{ctl['actual']:.3f}", tone="dim")
+            notes.append(
+                "the record above is the published rule's selection, not the "
+                f"model's raw lean: follow the {label} lean when the market "
+                f"gives it at least {100 * HYBRID_THRESHOLD:.0f}%, and back "
+                "the other side below that")
+            notes.append(
+                f"controls on the same {n_obs} rows — always the home side, "
+                "always the devigged closing favourite; every figure above is "
+                "scored on the current-family decisions that settled with a "
+                "devigged DK closing price, and z and flat close ROI are the "
+                "primary metrics")
+            notes.append(
+                "the threshold was chosen on these rows, so this is a "
+                "discovery record — the out-of-sample version scores only "
+                "games played after it was frozen and prints every build in "
+                "data/ledger_report.txt")
         # The scope of every tile above, stated once. Without it the header
         # reads as a summary of the table underneath it, which spans every
         # family the ledger has ever held.
         if scope:
-            notes.append(f"every figure above is scored on the current model "
-                         f"family only — {scope}; the table below lists all "
-                         f"{n_all}, and data/ledger_report.txt scores each "
-                         "family separately")
-        # Controls. The model's record is unreadable without them: .570 is a
-        # result only relative to what always-home and always-chalk got on the
-        # same games. Muted so they read as the yardstick, not as headlines.
-        ctl_labels = {"home": "Always home", "market": "Always chalk"}
-        shown = []
-        for key, w, l in _baseline_controls(decided):
-            if not (w + l):
-                continue
-            sub = f"{w / (w + l):.3f}"
-            # Against the decided count, not len(g): a control scored on every
-            # graded row matches len(g) exactly when the difference is the
-            # abstentions, so this marker went silent in the one case it exists
-            # to catch.
-            if w + l != len(decided):
-                sub += f" · n={w + l}"
-            stat(ctl_labels[key], f"{w}-{l}", sub, tone="dim")
-            shown.append(key)
-        ctl_what = {"home": "always the home side",
-                    "market": "always the devigged closing favourite"}
-        if shown:
-            notes.append("controls on the same decided rows — "
-                         + ", ".join(ctl_what[k] for k in shown))
+            notes.append(f"current model family only — {scope}; the table "
+                         f"below lists all {n_all} rows, and "
+                         "data/ledger_report.txt scores each family separately")
         # Provenance, not a blanket claim: state how many rows the ledger can
         # actually show locked pregame.
         verified, legacy, late = _lock_provenance(led)
@@ -7022,7 +7092,7 @@ def render_market_calibration_html(built_txt):
     """Market-only calibration plus current-family model×price diagnostics."""
     nav = ("<div class='backlink ledger-nav'>"
            "<a href='grades.html'>← full ledger</a>"
-           "<a href='team-grades.html'>performance by team →</a></div>")
+           "<a href='index.html'>today's leans →</a></div>")
     head = ("<div class='gr-head'><h1 class='gr-h1'>Market calibration</h1>"
             "<div class='gr-lead'>What the devigged DK close implied, against "
             "what actually happened — split by side and by price rung. This "
@@ -7083,87 +7153,6 @@ def render_market_calibration_html(built_txt):
                          title="MLB market calibration")
 
 
-def render_team_grades_html(built_txt):
-    """Render the displayed ledger lineage's record split by MLB club."""
-    nav = ("<div class='backlink ledger-nav'>"
-           "<a href='grades.html'>← full ledger</a>"
-           "<a href='market-calibration.html'>market calibration →</a></div>")
-    led = load_ledger_df()
-    # Named for the rows it shows, not for tonight's build -- and this page
-    # deliberately keeps POOLING every graded family where the headline
-    # surfaces no longer do. Thirty clubs into one family's rows is one or two
-    # games each, which is not a per-club accuracy. The lead says so, so a
-    # reader who has just seen a current-family record on the strip is told
-    # why this page's numbers cover more games rather than left to infer it.
-    from market_backfill import metric_label
-    label = (MODEL_RATE_LABEL if led is None
-             else metric_label(_display_grades(led)))
-    head = ("<div class='gr-head'><h1 class='gr-h1'>Performance by team</h1>"
-            f"<div class='gr-lead'>{label} full-game accuracy for every MLB club, "
-            "split by whether the model leaned on that team or against it. "
-            "Pooled over every graded model family — a single family leaves "
-            "most clubs one or two games — so this is not comparable with the "
-            "current-family record on the ledger header. "
-            f"Built <span class='stamp'>{built_txt}</span>.</div></div>")
-    if led is None:
-        empty = ("<div class='legend'><div class='lg-title'>No graded data yet — "
-                 "team performance appears after the first CI run.</div></div>")
-        return html_document(nav + head + empty, built_txt,
-                             title="MLB team performance")
-
-    rows = _team_performance_rows(led)
-    if not rows:
-        empty = "<div class='gr-note'>No graded MLB club decisions yet.</div>"
-        return html_document(nav + head + empty, built_txt,
-                             title="MLB team performance")
-
-    # Summing the leaned-on slices counts each prediction exactly once. The
-    # all-games slices intentionally count it once under each participating
-    # club and are therefore not used for the page-level record.
-    total = {
-        key: sum(r["on"][key] for r in rows)
-        for key in ("n", "w", "l", "t")
-    }
-    base = f"{total['w']}-{total['l']}" + (f"-{total['t']}" if total["t"] else "")
-    accuracy = (f"{100 * total['w'] / (total['w'] + total['l']):.1f}%"
-                if total["w"] + total["l"] else "—")
-    summary = (
-        "<div class='gr-summary'>"
-        f"<div class='gr-stat'><div class='l'>MLB clubs</div><div class='v'>{len(rows)}</div></div>"
-        f"<div class='gr-stat'><div class='l'>Graded games</div><div class='v'>{total['n']}</div></div>"
-        f"<div class='gr-stat'><div class='l'>Overall record</div><div class='v'>{base}</div></div>"
-        f"<div class='gr-stat'><div class='l'>Accuracy</div><div class='v'>{accuracy}</div></div>"
-        "</div>"
-        "<div class='gr-note'><b>All games</b> counts the model's result for "
-        "every prediction involving that club; <b>leaned on</b> and "
-        "<b>leaned against</b> partition those games. Accuracy is W ÷ (W + L), "
-        "with ties shown in the record but excluded from the rate. Exhibition "
-        "teams are omitted, and small samples are descriptive rather than predictive.</div>"
-    )
-
-    body = []
-    for r in rows:
-        team = (f"<span class='team-code'>{_esc(r['team'])}</span>"
-                f"<span class='sp'>{_esc(r['label'])}</span>")
-        cells = [
-            ("c-game", "Team", team),
-            ("c-lean", "All", _team_metric_cell(r["all"])),
-            ("c-ml", "Picked", _team_metric_cell(r["on"])),
-            ("c-final", "Faded", _team_metric_cell(r["against"])),
-        ]
-        tds = "".join(
-            f"<td class='{cls}' data-l='{lab}'>{value}</td>"
-            for cls, lab, value in cells
-        )
-        body.append(f"<tr class='gr-row'>{tds}</tr>")
-    heads = ("Team", "All games", "Leaned on", "Leaned against")
-    table = ("<div class='gr-tablewrap'><table class='gr team-gr'><thead><tr>"
-             + "".join(f"<th>{h}</th>" for h in heads)
-             + f"</tr></thead><tbody>{''.join(body)}</tbody></table></div>")
-    return html_document(nav + head + summary + table, built_txt,
-                         title="MLB team performance")
-
-
 def render_combined_html(xw_df, pl_df, pitcher_rows_df, built_txt,
                          opp_hitters_df=None, detail_df=None, lg_ops=None,
                          slate_df=None, lineup_df=None,
@@ -7181,12 +7170,12 @@ def render_combined_html(xw_df, pl_df, pitcher_rows_df, built_txt,
         return html_document(inner, built_txt, extra_js=score_refresh_js())
     strength_scale = lean_strength_scale(_slate_deltas(games))
     logo_assets, logo_css = _logo_assets(games)
-    # Per-game history is current-family and direction-specific. The pooled
-    # price-band fallback that used to sit beside it is gone, not merely
-    # unwired: it could make a favourite and an underdog inherit one
-    # historical result, which is the ambiguity this panel removes. Do not
-    # reintroduce a fallback that pools across directions.
-    ctx = {**(conviction_cell_records() or {}),
+    # Per-game history is current-family and keyed on the published rule's own
+    # branch, with the always-chalk control on the identical rows. Do not
+    # reintroduce a fallback that pools the two branches: FOLLOW and FADE are
+    # different bets at different prices, and on FADE the control is an
+    # identity rather than a comparison.
+    ctx = {**(hybrid_branch_records() or {}),
            "logo_ids": set(logo_assets)}
     body = logo_css + build_combined(games, strength_scale, ctx) + footer
     return html_document(body, built_txt, extra_js=score_refresh_js())
@@ -7239,13 +7228,10 @@ def write_grades_page(built_txt=None):
     grades_path = os.path.join(OUT_DIR, "grades.html")
     with open(grades_path, "w") as f:
         f.write(render_grades_html(built_txt))
-    team_grades_path = os.path.join(OUT_DIR, "team-grades.html")
-    with open(team_grades_path, "w") as f:
-        f.write(render_team_grades_html(built_txt))
     calib_path = os.path.join(OUT_DIR, "market-calibration.html")
     with open(calib_path, "w") as f:
         f.write(render_market_calibration_html(built_txt))
-    log(f"Wrote {grades_path}, {team_grades_path} and {calib_path}")
+    log(f"Wrote {grades_path} and {calib_path}")
     return grades_path
 
 

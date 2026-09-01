@@ -1058,6 +1058,88 @@ precedent — they are how the fix is known to look.
   file; recompute it. Since 2026-08-06 they are scored on the **decided** rows,
   not every graded one — see the abstention instance below.
 
+- **Twenty-one published cells collapsed to two, and the surface renamed to
+  the rule it actually publishes.** The site used to show a per-game 3×5
+  delta × price *profile* grid on the leans page and a 2×3 delta × direction
+  *discovery matrix* plus three direction totals on the calibration page — 21
+  cells over the same few hundred rows, several of them one game. All of them
+  are gone, replaced by the hybrid rule's two branches (`hybrid_action`,
+  `hybrid_selection`), and `team-grades.html` is deleted outright.
+
+  **The delta axis was the problem, not the cell counts.** Both grids bucketed
+  on |Δ|, which the published rule does not read at all and which
+  `value_probe`'s joint logit puts at z = −0.13 against price — adding it to
+  the close makes out-of-sample prediction *worse*. So 21 cells were cutting
+  the ledger on a null axis, and that is precisely the surface the same entry
+  warns about: on this data any grid search returns a cell near +20% ROI
+  whether or not anything is there, because at 21–82 rows a cell's null sd is
+  8–21 percentage points of ROI. Two branches at n=208 and n=15 cannot produce
+  that artifact the way fifteen cells at n=1 could.
+
+  **Three things the collapse forced, each worth keeping.** The family-wise bar
+  moved 2.7 → 2.2 (`_BRANCH_FAMILYWISE_Z`) because it is a property of how many
+  cells are published, not a constant — a bar sized for 15 draws is simply
+  wrong for 2, and leaving it would have been a stale constant of exactly the
+  kind recorded above. `_lean_market_agg` became column-parameterised so the
+  record, the rule's selection and both controls are **one** aggregate over
+  **one** row mask. And every control is now derived in
+  `_lean_market_observations` beside the record, which is what finally makes
+  "controls on the same rows" true by construction rather than by a `n=`
+  marker reconciling two derivations — the marker that went blind in the one
+  case it existed to catch.
+
+  **The load-bearing display fact, and the reason the control sits inside the
+  panel rather than under it: the FADE branch is always-chalk, exactly.**
+  Fading a lean priced below .45 backs a side priced above .55, which is the
+  favourite on every such game — verified 15 of 15, and `("chalk", "FADE")`
+  comes back *equal to* `("branch", "FADE")` on the committed ledger, which a
+  test now asserts as a construction rather than observes as a coincidence. A
+  reader shown 11-4 / +23.8% without that adjacency reads a chalk result as the
+  rule's own skill, in a window where chalk beat its price by +4.0pp.
+
+  **`HYBRID_THRESHOLD` is imported from `hybrid_test`, never restated**, and a
+  test greps the source to forbid a second `= 0.45` assignment. Two copies of a
+  threshold is the "one value, three homes" defect one file out: the display
+  could then drift from the registration and publish a selection the forward
+  test would not score. Note the historical coincidence and do not read it as
+  evidence — `_CONVICTION_DEEP_OPPOSE` was *already* 0.45, so the hybrid's
+  threshold matches a boundary that was chosen for a display band before it was
+  chosen for a rule.
+
+  Every branch record these pages publish is a **discovery** figure and each
+  surface says so in its own copy (`NOT A FORWARD RESULT` on the card, a lead
+  sentence on the calibration panel, a note on the grades page), pointing at
+  `data/ledger_report.txt` for the registered out-of-sample version. That is
+  the whole reason the rule could be published at all: the site shows what the
+  rule selects, and `hybrid_test.py` — not the site — is what will eventually
+  say whether it works.
+
+  **`team-grades.html` went with them, and that is a deletion to justify rather
+  than assume.** It pooled every graded family because one family leaves most
+  clubs one or two games, so it was the last surface on the site answering a
+  different question over a different row set from everything beside it — and
+  club identity is not an input to the rule. It is NOT a control (the entry
+  below is about controls, and always-home and always-chalk both survive and
+  are now scored on stricter rows than before), and nothing else read
+  `_team_performance_rows`. Recoverable from git history if per-club accuracy
+  is ever wanted back.
+
+  **The front-page strip moved with them, and it had to.** It headlined the raw
+  lean (139-84, z +2.11) while the grades page one click away headlined the
+  rule's selection (146-77, z +2.72) — the artifacts-disagreeing entry below,
+  with *both* artifacts public and the reader able to see both. It now reads
+  the same aggregate, carries always-chalk beside it, and keeps the metric
+  label read off the rows: the existing provenance test caught the label being
+  dropped, which is the "wOBA full 217-164" guard doing exactly its job.
+
+  Display-only throughout: no lean, delta, grade or ledger row moves, and
+  `MODEL_TAG` is unchanged. What did change is which rows the published record
+  is scored on — current family, decided, settled AND priced — because the
+  rule needs a price to act, so a record over rows it could not have acted on
+  is not this rule's record. Where no row carries a price the surfaces fall
+  back to the model's own lean and **say which one they are showing**; the
+  controls survive that path too, since always-home needs no price.
+
 - **Threshold cliffs, third instance — a credibility label keyed on a row
   count.** The per-game profile panel graded its own sample
   `THIN / DEVELOPING / LARGER SAMPLE` at `n >= 10` and `n >= 20`. One completed
