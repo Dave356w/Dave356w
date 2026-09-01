@@ -925,6 +925,20 @@ def report_text(led):
             say(_fl)
     except Exception as _exc:                      # noqa: BLE001 - see above
         say(f"pre-registered forward test unavailable ({type(_exc).__name__})")
+
+    # Second registration, same reasoning and the same load-bearing guard: the
+    # hybrid market-direction rule (hybrid_test.py), registered separately from
+    # the two arms above because it holds a different hypothesis and a
+    # different registration date. Kept as its own module rather than a third
+    # arm so neither registration's frozen block can be edited while reaching
+    # for the other's.
+    try:
+        import hybrid_test
+        say("")
+        for _hl in hybrid_test.report_lines(led):
+            say(_hl)
+    except Exception as _exc:                      # noqa: BLE001 - see above
+        say(f"pre-registered hybrid test unavailable ({type(_exc).__name__})")
     return "\n".join(lines)
 
 
