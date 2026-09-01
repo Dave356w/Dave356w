@@ -2,8 +2,9 @@
 
 Daily MLB full-game moneyline selections combining the v12 Statcast xwOBA
 matchup model with the devigged market, built and published as a static site by
-GitHub Actions on a pregame trigger. The Hybrid follows the model when its side
-has at least 45% market win probability and otherwise backs the opposing side.
+GitHub Actions on a pregame trigger. The Hybrid keeps the **XWOBA SIDE** when
+its side has at least 45% market win probability and otherwise selects the
+opposing **MARKET FAVORITE**.
 
 **<https://dave356w.github.io/Dave356w/>**
 

@@ -3040,6 +3040,18 @@ class HybridRuleTests(unittest.TestCase):
         self.assertIn("0-1", html)
         self.assertNotIn("1-0", html)
 
+    def test_public_labels_describe_the_selected_side_not_rule_jargon(self):
+        game = {"away_abbr": "A", "home_abbr": "H"}
+        # The model can keep a slight underdog; calling this "follow" hid the
+        # fact a user actually needs to understand.
+        game["odds"] = {"p_home": .48, "home_ml": 105, "away_ml": -125}
+        self.assertEqual(build_site._summary_market_line(game, "H"),
+                         "H +105 · XWOBA SIDE")
+        # Below the threshold the opposing side is necessarily the favorite.
+        game["odds"] = {"p_home": .30, "home_ml": 220, "away_ml": -260}
+        self.assertEqual(build_site._summary_market_line(game, "H"),
+                         "A -260 · MARKET FAVORITE")
+
     def test_an_exact_pickem_follows_the_model(self):
         """A devigged .500 market has no favourite, and sits well above .45.
 
@@ -3054,7 +3066,7 @@ class HybridRuleTests(unittest.TestCase):
         self.assertEqual(build_site.hybrid_action(pk), "FOLLOW")
         html = build_site._verdict_html(
             "H", {"home_ml": -110, "away_ml": -110}, "A", "H", {}, .02)
-        self.assertIn("FOLLOW → H", html)
+        self.assertIn("XWOBA SIDE → H", html)
         self.assertIn("50.0% no-vig", html)
         # Nothing on a followed game may read as opposition or as an accent.
         self.assertNotIn("verdict edge", html)
@@ -3073,7 +3085,7 @@ class HybridRuleTests(unittest.TestCase):
         fade = build_site._verdict_html(
             "A", {"home_ml": -260, "away_ml": 215}, "A", "H", {}, .02)
         self.assertIn("verdict edge", fade)
-        self.assertIn("FADE → H", fade)
+        self.assertIn("MARKET FAVORITE → H", fade)
 
     def test_unusable_prices_abstain_rather_than_defaulting_to_a_branch(self):
         """No price is not a fade. Defaulting either way invents a selection."""
@@ -3102,7 +3114,7 @@ class HybridRuleTests(unittest.TestCase):
         html = build_site._verdict_html(
             "PIT", dict(p_home=.529, away_ml=103), "PIT", "SD", ctx, .0187,
         )
-        self.assertIn("Past V12 FOLLOW picks · 14 completed games", html)
+        self.assertIn("Past V12 model-side selections · 14 completed games", html)
         self.assertIn("Won</span><span>10-4 (71.4%)", html)
         # Named for what it is. This sat directly under the game's own
         # "47.1% no-vig" as a bare "Market implied 48.1%", two unrelated
@@ -3123,9 +3135,9 @@ class HybridRuleTests(unittest.TestCase):
             "This game",
             "Model lean</span><span>PIT · V12 Δ .0187 (MEDIUM)",
             "Market price</span><span>PIT +103 · 47.1% no-vig",
-            "Rule</span><span><b>FOLLOW → PIT</b> +103",
-            "so the rule follows the model",
-            "Past V12 FOLLOW picks · 14 completed games",
+            "Rule</span><span><b>XWOBA SIDE → PIT</b> +103",
+            "remains the XWOBA side",
+            "Past V12 model-side selections · 14 completed games",
             "not a prediction for this game",
             "Won</span><span>10-4 (71.4%)",
             "Their average price</span><span>48.1% implied",
@@ -3207,7 +3219,7 @@ class HybridRuleTests(unittest.TestCase):
         h = build_site._verdict_html(
             "LAD", dict(p_home=.70, away_ml=200, home_ml=-260), "LAD", "ARI",
             ctx, .005)
-        self.assertIn("Past V12 FADE picks · 15 completed games", h)
+        self.assertIn("Past V12 market-favorite selections · 15 completed games", h)
         self.assertIn("not a prediction for this game", h)
         # The bare rate must not appear as its own value; it is qualified by
         # the record it came from.
@@ -3244,7 +3256,7 @@ class HybridRuleTests(unittest.TestCase):
         self.assertIn("data-l='Selection'>A", faded)
         self.assertIn("data-l='ML'>+120", faded)
         self.assertIn("<span class='wlt L'>L</span>", faded)
-        self.assertIn("FADE", faded)
+        self.assertIn("MARKET FAVORITE", faded)
         noleaan = build_site._grades_row(
             row(build_site.MODEL_TAG, np.nan, .60, basis="starter_unmeasured_no_lean"),
             True)

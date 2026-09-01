@@ -357,7 +357,7 @@ class RenderTests(unittest.TestCase):
         self.assertIn("class='summary-center'", html)
         self.assertIn("class='summary-team home'", html)
         self.assertIn(">7:05 PM ET</span>", html)
-        self.assertIn(">LAD -160 · FOLLOW</span>", html)
+        self.assertIn(">LAD -160 · XWOBA SIDE</span>", html)
         detail = html.split("<div class='game-detail'>", 1)[1]
         self.assertIn("class='read'", detail)
         self.assertIn("class='market'", detail)
@@ -500,7 +500,7 @@ class RenderTests(unittest.TestCase):
         self.assertIn("60.5% no-vig", agree)
         # The market backs this lean, so the rule follows it and the card is
         # not accented.
-        self.assertIn("FOLLOW → LAD", agree)
+        self.assertIn("XWOBA SIDE → LAD", agree)
         self.assertNotIn("verdict edge", agree)
         dis = b.cmb_card(g_dis, None)
         # The warm accent now marks a FADE specifically -- the one case where
@@ -529,13 +529,13 @@ class RenderTests(unittest.TestCase):
         follow = b._verdict_html(
             "ARI", dict(p_home=.62, home_ml=-160), "LAD", "ARI", ctx, .02,
         )
-        self.assertIn("Past V12 FOLLOW picks · 208 completed games", follow)
-        self.assertIn("FOLLOW → ARI", follow)
+        self.assertIn("Past V12 model-side selections · 208 completed games", follow)
+        self.assertIn("XWOBA SIDE → ARI", follow)
         self.assertIn("Won</span><span>135-73 (64.9%)", follow)
         self.assertIn("Beat that price by</span><span><b>+8.5 pp", follow)
         # The reason has to sit on the decision, not be inferable from two
         # numbers printed above it.
-        self.assertIn("so the rule follows the model", follow)
+        self.assertIn("remains the XWOBA side", follow)
 
         # A lean the market prices below the threshold: the rule selects the
         # OTHER club, and the panel has to name it.
@@ -543,20 +543,20 @@ class RenderTests(unittest.TestCase):
             "LAD", dict(p_home=.70, away_ml=200, home_ml=-260), "LAD", "ARI",
             ctx, .005,
         )
-        self.assertIn("Past V12 FADE picks · 15 completed games", fade)
-        self.assertIn("FADE → ARI", fade)
+        self.assertIn("Past V12 market-favorite selections · 15 completed games", fade)
+        self.assertIn("MARKET FAVORITE → ARI", fade)
         self.assertIn("Won</span><span>11-4 (73.3%)", fade)
         self.assertIn("within noise", fade)
         # On a fade the selected club appears nowhere else on the panel, so
         # the reason line has to name it.
-        self.assertIn("so the rule backs ARI instead", fade)
+        self.assertIn("market favorite, ARI, instead", fade)
 
         # A missing branch says so; it never substitutes the other branch or a
         # pooled family.
         fb = b._verdict_html(
             "ARI", dict(p_home=.62, home_ml=-160), "LAD", "ARI", {}, .02,
         )
-        self.assertIn("No completed V12 FOLLOW picks yet", fb)
+        self.assertIn("No completed V12 model-side selections yet", fb)
         self.assertNotIn("completed games", fb)
 
     def test_the_fade_branch_prints_its_chalk_control(self):
