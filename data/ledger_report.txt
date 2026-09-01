@@ -1,5 +1,8 @@
 LEAN LEDGER — 229 graded games (223 with a lean, 6 abstained)  [xw+plat_consol_v12]
 xwOBA lean   full: 139-84  (0.623)   F5: 104-87-32  (0.545)
+hybrid rule  full: 146-77  (0.655)   vs price z=+2.72  +31.50u   (n=223, 15 faded)
+  always chalk, same 223 rows: 137-86  (0.614)   vs price z=+1.24
+  RETROSPECTIVE: the 45% threshold was chosen on these rows. The registered forward test is below.
 platoon lean full: 106-67  (0.613)   F5: 89-57-27  (0.610)   (reliable-only, n=173)
 xwOBA on same subset  full: 111-62  (0.642)   F5: 81-65-27  (0.555)
 xwOBA F5 by |Δ| tercile:
