@@ -209,7 +209,7 @@ LEDGER_COLS = [
     "home_off_edge","away_off_edge","xw_net","xw_lean","xw_delta",
     "ops_net","ops_lean","ops_delta","ops_valid","consensus",
     "status","full_away","full_home","f5_away","f5_home",
-    "xw_full","xw_f5","ops_full","ops_f5",
+    "xw_full","xw_f5","ops_full","ops_f5","hybrid_full",
 ]
 # Audit-only columns. The lineup_* fields record each side's lineup
 # resolution (posted / partial_filled / projected + posted and Savant-backfill
@@ -219,6 +219,12 @@ LEDGER_COLS = [
 # grading.
 AUDIT_COLS = [
     "snapshot_utc", "scheduled_start_utc", "lock_status",
+    # XWOBA Market Hybrid decision and the exact current two-sided market used
+    # at the last accepted pregame snapshot. Historical v12 rows are NaN and
+    # remain available as the explicitly retrospective close-derived archive.
+    "selection_rule_tag", "pregame_market_utc",
+    "pregame_away_ml", "pregame_home_ml", "pregame_p_home",
+    "hybrid_action", "hybrid_selection", "hybrid_p", "hybrid_ml",
     "lineup_status_away", "lineup_status_home",
     "lineup_posted_away", "lineup_posted_home",
     "lineup_savant_backfill_away", "lineup_savant_backfill_home",
@@ -281,6 +287,9 @@ MODEL_FIELDS = [
     "home_off_edge","away_off_edge","xw_net","xw_lean","xw_delta",
     "ops_net","ops_lean","ops_delta","ops_valid","consensus",
     "snapshot_utc","scheduled_start_utc","lock_status",
+    "selection_rule_tag","pregame_market_utc",
+    "pregame_away_ml","pregame_home_ml","pregame_p_home",
+    "hybrid_action","hybrid_selection","hybrid_p","hybrid_ml",
     "lineup_status_away","lineup_status_home",
     "lineup_posted_away","lineup_posted_home",
     "lineup_savant_backfill_away","lineup_savant_backfill_home",
@@ -335,7 +344,9 @@ def load_ledger():
         # predates them but receive strings on pending refresh, and for
         # consensus, whose "NA" marker read_csv parses as NaN (a ledger with
         # no AGREE/DIVERGE row yet reloads it as float64).
-        for c in ("xw_full", "xw_f5", "ops_full", "ops_f5", "consensus",
+        for c in ("xw_full", "xw_f5", "ops_full", "ops_f5", "hybrid_full", "consensus",
+                  "selection_rule_tag", "pregame_market_utc",
+                  "hybrid_action", "hybrid_selection",
                   "lineup_status_away", "lineup_status_home",
                   "opener_away", "opener_home",
                   "opener_reason_away", "opener_reason_home",
@@ -460,6 +471,15 @@ def rows_from_dump(xw_df, pl_df):
             ops_valid=ops_valid, consensus=consensus,
             snapshot_utc=snapshot_utc, scheduled_start_utc=scheduled_start_utc,
             lock_status=lock_status,
+            selection_rule_tag=a.get("selection_rule_tag", np.nan),
+            pregame_market_utc=a.get("pregame_market_utc", np.nan),
+            pregame_away_ml=a.get("pregame_away_ml", np.nan),
+            pregame_home_ml=a.get("pregame_home_ml", np.nan),
+            pregame_p_home=a.get("pregame_p_home", np.nan),
+            hybrid_action=a.get("hybrid_action", np.nan),
+            hybrid_selection=a.get("hybrid_selection", np.nan),
+            hybrid_p=a.get("hybrid_p", np.nan),
+            hybrid_ml=a.get("hybrid_ml", np.nan),
             lineup_status_away=a.get("lineup_status_away", np.nan),
             lineup_status_home=a.get("lineup_status_home", np.nan),
             lineup_posted_away=a.get("lineup_posted_away", np.nan),
@@ -545,6 +565,7 @@ def rows_from_dump(xw_df, pl_df):
             status="pending", full_away=np.nan, full_home=np.nan,
             f5_away=np.nan, f5_home=np.nan,
             xw_full=None, xw_f5=None, ops_full=None, ops_f5=None,
+            hybrid_full=None,
         ))
     return out
 
@@ -641,6 +662,8 @@ def grade(led):
             led.at[idx, "full_away"], led.at[idx, "full_home"] = fa, fh
             led.at[idx, "f5_away"],   led.at[idx, "f5_home"]   = f5a, f5h
             led.at[idx, "xw_full"] = _wlt(led.at[idx, "xw_lean"], aw, hm, fa, fh, False)
+            led.at[idx, "hybrid_full"] = _wlt(
+                led.at[idx, "hybrid_selection"], aw, hm, fa, fh, False)
             if f5a is not None:
                 led.at[idx, "xw_f5"] = _wlt(led.at[idx, "xw_lean"], aw, hm, f5a, f5h, True)
             if bool(led.at[idx, "ops_valid"]):
