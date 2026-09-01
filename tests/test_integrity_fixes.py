@@ -1812,7 +1812,7 @@ class BaselineControlTests(unittest.TestCase):
             page = build_site.render_grades_html("test build")
         self.assertIn("Always home", page)
         self.assertIn("Always chalk", page)
-        self.assertIn("controls on the same decided rows", page)
+        self.assertIn("<b>XWOBA SIDE</b> at 45% or higher", page)
 
     def test_an_abstained_game_is_scored_by_neither_the_record_nor_a_control(self):
         """v5 abstains, so a graded row can carry no lean. A control needs no
@@ -1870,6 +1870,7 @@ class RecordScopeTests(unittest.TestCase):
                     model_tag=tag, model_metric="xwOBA", xw_lean=lean,
                     xw_delta=.01, xw_full=full, xw_f5=full,
                     full_away=fa, full_home=fh, close_p_home=.6,
+                    close_home_ml=-140, close_away_ml=120,
                     lock_status="pregame")
 
     def _mixed(self):
@@ -1944,7 +1945,13 @@ class RecordScopeTests(unittest.TestCase):
         self.assertIn("1 of 4 graded rows", pages["strip"])
         self.assertIn(build_site.MODEL_TAG, pages["strip"])
         self.assertNotIn("1 of 4 graded rows", pages["grades page"])
-        self.assertIn("Every v12 Hybrid selection", pages["grades page"])
+        self.assertIn("V12 selections and results", pages["grades page"])
+
+    def test_public_record_surfaces_use_plain_current_labels(self):
+        for name, html in self._pages(self._mixed()).items():
+            visible = re.sub(r"<(?:style|script)\b.*?</(?:style|script)>", "",
+                             html, flags=re.S | re.I)
+            self.assertNotRegex(visible.lower(), r"\bretro(?:spective)?\b", name)
 
     def test_no_scope_note_when_the_family_is_every_graded_row(self):
         """The note has to disappear on its own, or it becomes noise that a
@@ -1993,7 +2000,7 @@ class LockProvenanceTests(unittest.TestCase):
         led = pd.DataFrame({"game_pk": [1, 2, 3]})
         self.assertEqual(build_site._lock_provenance(led), (0, 3, 0))
 
-    def test_page_states_late_snapshots_separately(self):
+    def test_page_omits_verbose_lock_provenance(self):
         # MODEL_TAG so the row survives the header's RECORD_TAGS filter; the
         # lock note itself is whole-ledger, but the page needs a non-empty
         # family to render the summary block that carries it.
@@ -2006,8 +2013,8 @@ class LockProvenanceTests(unittest.TestCase):
         ])
         with mock.patch.object(build_site, "load_ledger_df", return_value=ledger):
             page = build_site.render_grades_html("test build")
-        self.assertIn("1 snapshotted after first pitch", page)
-        self.assertNotIn("1 legacy rows", page)
+        self.assertNotIn("snapshotted after first pitch", page)
+        self.assertNotIn("legacy rows", page)
 
 
 class ModelTagProvenanceTests(unittest.TestCase):

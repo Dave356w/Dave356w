@@ -1008,7 +1008,7 @@ Actions**. After that the workflow deploys on each scheduled run (and on manual
 ## Grading ledger
 
 Grades are rendered under the public product name **XWOBA Market Hybrid**. The
-main page leads with the full v12 retrospective Hybrid record and links to
+main page leads with the full v12 Hybrid record and links to
 **`grades.html`**, whose public archive contains only `RECORD_TAGS` (v12) rows.
 Earlier model families remain in the CSV and internal report, but are not mixed
 into the public table.
@@ -1022,8 +1022,8 @@ writes the selected side's result to `hybrid_full`, separately from the raw
 lean's `xw_full`. Collapsed matchup cards show that same Hybrid selection and
 price, and daily records aggregate `hybrid_full`, not `xw_full`.
 
-Historical v12 rows predate selection locking. They remain explicitly
-retrospective: the Hybrid selection is reconstructed from the devigged closing
+Historical v12 rows predate selection locking. Their Hybrid selection is
+reconstructed from the devigged closing
 market, marked `XWOBA SIDE` or `MARKET FAVORITE`, and graded against the stored final. A row
 with neither a locked pregame market nor a usable closing market is marked
 `awaiting market`; a v5-style model abstention is marked `no lean`.
@@ -1038,10 +1038,10 @@ denominators cannot drift apart. The public page intentionally omits
 model-family history and per-row model labels; those remain available in the
 underlying ledger and Actions report.
 
-The full retrospective record is a **discovery** figure: the threshold was
+The full v12 record is a **discovery** figure: the threshold was
 chosen on these rows. The registered out-of-sample diagnostic still prints in
-`data/ledger_report.txt`; the page labels the public history as retrospective
-rather than leaving a reader to infer it. Both pages render purely from
+`data/ledger_report.txt`; the page presents the v12 history without mixing in
+older model families. Both pages render purely from
 `data/mlb_lean_ledger.csv`; grading runs before the build in CI (with a second
 pass after it to ingest the day's fresh dumps), so the page reflects last
 night's results in the same run.
@@ -1075,7 +1075,7 @@ Every CI run, `grade_leans.py`:
   terciles, DIVERGE head-to-head, and — once 120 graded F5 decisions
   accumulate — a pitching-vs-lineup logit weight fit), followed by immutable
   record lines for every historical model family. The hybrid line is
-  retrospective and says so; the registered forward test prints further down
+  a historical reconstruction; the registered forward test prints further down
   the same file. Retrospective surfaces share `hybrid_test.apply_rule`; forward
   scoring uses `apply_locked_rule` and refuses rows without a stored pregame
   selection, so a closing move cannot rewrite a published pick.
@@ -1084,7 +1084,7 @@ The rule is stored in **separate** ledger fields; it never overwrites the raw
 model fields. `xw_full` stays the lean's grade — the control the Hybrid is read
 against and the input used by the existing ablation and weight-fit analyses —
 while `hybrid_full` grades the locked public selection. Legacy v12 selections
-remain a close-derived retrospective view because no pregame selection snapshot
+remain a close-derived historical reconstruction because no pregame selection snapshot
 exists for them.
 
 The ledger persists by being committed: the workflow's `Commit ledger` step
