@@ -1132,6 +1132,37 @@ precedent — they are how the fix is known to look.
   label read off the rows: the existing provenance test caught the label being
   dropped, which is the "wOBA full 217-164" guard doing exactly its job.
 
+  **Two follow-ups, both recorded because they are the shape of the mistake
+  rather than one-off copy edits.** First, the per-game panel led its history
+  block with `Selection won 73.3%` directly under tonight's two clubs. That is
+  the rate at which PAST picks in the same branch won, and this site publishes
+  no per-game probability at all — but placed there it reads as one, and the
+  line below it (`Market implied 58.6%`) sat two rows under the same game's own
+  `37.4% no-vig` with nothing saying the two percentages measure different
+  things. The panel is now split into a labelled `This game` zone and a
+  `Past V12 FADE picks · 15 completed games` zone, every history row is past
+  tense (`Won 11-4 (73.3%)`, `Their average price`, `Beat that price by`), and
+  the decision line carries a plain-English reason — on a FADE the selected
+  club otherwise appears nowhere else on the panel. **A number is not made
+  unambiguous by being correct; it is made unambiguous by what sits next to
+  it.** The same commit found adjacency alone had failed for the chalk control:
+  on FADE it is equal to the record above it *to the decimal*, so without a
+  clause saying why, a reader sees duplicated data or a bug rather than "this
+  branch has no model content". It now says so in words.
+
+  Second, the ledger table applied the rule to **every** family. `_row_hybrid`
+  is now gated on `RECORD_TAGS`: the rule is registered against the current
+  family, and applying it to an older one publishes a selection nobody could
+  have made — under lean math the rule was never paired with, and with a grade
+  the function then inverts. Earlier rows are marked `lean only`. The three
+  reasons the rule cannot act — out of family, no lean, no price — now carry
+  three distinct marks, because a lean sitting unlabelled under a "Selection"
+  heading is the substitution recorded further down this file. And the header
+  now accounts for **every** row of the family (223 decided of 244; 6 with no
+  lean, 15 pending), since a record quoted over 223 of 244 without saying where
+  the other 21 went invites the reader to assume the rule decided them all —
+  the same defect as a control whose denominator is never stated.
+
   Display-only throughout: no lean, delta, grade or ledger row moves, and
   `MODEL_TAG` is unchanged. What did change is which rows the published record
   is scored on — current family, decided, settled AND priced — because the

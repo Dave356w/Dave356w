@@ -4107,21 +4107,25 @@ def _branch_read(parts):
 
     Moves continuously with the standard error rather than switching on a row
     count, which is the threshold-cliff fix this repo has now applied four
-    times. Note what it does NOT say: nothing here calls a branch profitable,
-    because a branch clearing its bar on the discovery sample is a statement
-    about rows the rule was fitted on.
+    times. It returns the VERDICT only -- the sample size is carried by the
+    block heading above it, and printing `n` twice in six lines was one of the
+    things making this panel hard to read.
+
+    Note what it does NOT say: nothing here calls a branch profitable, because
+    a branch clearing its bar on the discovery sample is a statement about rows
+    the rule was fitted on.
     """
-    se, excess, n = parts.get("excess_se"), parts.get("excess"), parts.get("n")
+    se, excess = parts.get("excess_se"), parts.get("excess")
     try:
         ok = se is not None and np.isfinite(se) and se > 0
     except TypeError:
         ok = False
     if not ok:
-        return f"n={n}"
+        return "spread unavailable"
     z = abs(float(excess) / float(se))
     if z < _BRANCH_FAMILYWISE_Z:
-        return f"within noise · n={n}"
-    return f"outside noise across both branches · n={n}"
+        return "within noise"
+    return "outside noise across both branches"
 
 
 def _excess_pm(parts):
@@ -4142,46 +4146,75 @@ def _excess_pm(parts):
 
 
 def _branch_history(ctx, action):
-    """Historical record of the branch this game's price puts it in."""
-    parts = (ctx or {}).get(("branch", action)) if action else None
+    """Track record of the branch this game's price puts it in.
+
+    Every line here describes PAST games, and the wording has to make that
+    impossible to misread. The version this replaces led with
+    "Selection won  73.3%" directly under tonight's teams, which reads as this
+    pick's win probability -- it is the historical rate of past picks in the
+    same branch, and the panel publishes no per-game probability at all. The
+    count therefore moves into the heading, every value row is past tense, and
+    the two percentages that used to sit unlabelled beside each other (this
+    game's 37.4% no-vig against the branch's 58.6% average price) are now
+    named for what they are.
+    """
+    if not action:
+        # The rule line already says the rule abstains and why; a second line
+        # restating it is the redundancy this rewrite is removing.
+        return ""
+    parts = (ctx or {}).get(("branch", action))
     if not parts:
-        msg = ("No completed games in this branch yet." if action
-               else "Unavailable until a no-vig price resolves.")
-        return ("<div class='vline hist'><span class='vk'>Branch history:</span>"
-                f"<span>{msg}</span></div>")
+        return ("<div class='vline hist'><span class='vk'>Track record:</span>"
+                f"<span>No completed {_model_version_short()} {action} picks "
+                "yet.</span></div>")
 
     version = _model_version_short()
+    n = parts["n"]
+    rows = [
+        ("Won", f"{parts['w']}-{parts['l']} ({100 * parts['actual']:.1f}%)"),
+        ("Their average price", f"{100 * parts['implied']:.1f}% implied"),
+        ("Beat that price by",
+         f"<b>{100 * parts['excess']:+.1f} pp</b>{_excess_pm(parts)}"
+         f" · {_esc(_branch_read(parts))}"),
+    ]
+    # The control, and a sentence saying what it means HERE. Adjacency alone
+    # was not enough: on FADE the two lines are identical to the decimal, and
+    # without a clause saying why, a reader sees duplicated data or a bug
+    # rather than the point -- that this branch has no model content.
     chalk = (ctx or {}).get(("chalk", action))
-    # The control has to sit inside the branch panel, not below it. On the FADE
-    # branch it will read IDENTICALLY to the record above it -- fading a lean
-    # priced under the threshold backs the favourite on every row, so the two
-    # are the same bet. That is the single most important thing this panel can
-    # tell a reader, and it is self-evident only if both numbers are adjacent.
-    chalk_line = ""
+    note = ""
     if chalk:
-        chalk_line = (f"<div class='vline'><span class='vk'>Always chalk</span>"
-                      f"<span>{100 * chalk['actual']:.1f}%"
-                      f" · {100 * chalk['excess']:+.1f} pp</span></div>")
+        rows.append(("Always chalk, same games",
+                     f"{chalk['w']}-{chalk['l']} "
+                     f"({100 * chalk['actual']:.1f}%) · "
+                     f"{100 * chalk['excess']:+.1f} pp"))
+        if action == "FADE":
+            note = ("Identical by construction: backing the other side of a "
+                    "lean priced under "
+                    f"{100 * HYBRID_THRESHOLD:.0f}% always lands on the "
+                    "favourite, so this branch IS the chalk bet.")
+        else:
+            note = ("Chalk is the yardstick: it backs the favourite on these "
+                    "same games, whatever the model said.")
+    body = "".join(
+        f"<div class='vline'><span class='vk'>{k}</span><span>{v}</span></div>"
+        for k, v in rows)
+    # Directly under the chalk row, before anything else: a note explaining a
+    # row two rows above it is a note the reader has to hunt for.
+    if note:
+        body += f"<div class='vnote'>{note}</div>"
     pooled = (ctx or {}).get("pooled")
-    pooled_line = ""
     if pooled:
-        pooled_line = (f"<div class='vline'><span class='vk'>All {version} games"
-                       f"</span><span>{100 * pooled['excess']:+.1f} pp"
-                       f"{_excess_pm(pooled)} · n={pooled['n']}</span></div>")
+        body += (f"<div class='vline'><span class='vk'>Every {version} pick"
+                 f"</span><span>{100 * pooled['excess']:+.1f} pp"
+                 f"{_excess_pm(pooled)} vs price · n={pooled['n']}</span></div>")
     return (
         "<div class='vprofile'>"
-        f"<div class='vprofile-title'>{version} {action} BRANCH</div>"
-        f"<div class='vprofile-band'>HISTORICAL · NOT A FORWARD RESULT</div>"
-        f"<div class='vline'><span class='vk'>Selection won</span>"
-        f"<span>{100 * parts['actual']:.1f}%</span></div>"
-        f"<div class='vline'><span class='vk'>Market implied</span>"
-        f"<span>{100 * parts['implied']:.1f}%</span></div>"
-        f"<div class='vline'><span class='vk'>vs market</span>"
-        f"<span><b>{100 * parts['excess']:+.1f} pp</b>{_excess_pm(parts)}</span></div>"
-        f"{chalk_line}"
-        f"<div class='vline'><span class='vk'>Read</span>"
-        f"<span>{_esc(_branch_read(parts))}</span></div>"
-        f"{pooled_line}"
+        f"<div class='vprofile-title'>Past {version} {action} picks · "
+        f"{n} completed {'game' if n == 1 else 'games'}</div>"
+        "<div class='vprofile-band'>Track record of this branch — "
+        "not a prediction for this game, and not a forward test</div>"
+        f"{body}"
         "</div>"
     )
 
@@ -4189,17 +4222,15 @@ def _branch_history(ctx, action):
 def _verdict_html(fav, odds, away_abbr, home_abbr, ctx=None, delta=None):
     """Per-game panel: the model's lean, the price, and the rule's selection.
 
-    This is the site's one published decision surface. It shows what the hybrid
-    rule selects for THIS game and the historical record of the branch that
-    selection came from -- replacing a 3x5 delta x price grid whose cells ran
-    as thin as one game.
+    The site's one published decision surface. It is laid out in two labelled
+    zones -- what is true of THIS game, then the track record of the branch it
+    landed in -- because every clarity problem this panel has had came from a
+    reader carrying a historical rate down onto tonight's teams.
 
     Two things it deliberately does not do. It never calls a selection a bet:
-    the copy carries no betting language and a test pins that, because
-    `value_probe` measures the naive version of exactly this rule losing
-    monotonically and the branch records here are the sample the threshold was
-    chosen on. And it never hides the always-chalk control, because the FADE
-    branch is chalk-identical by construction.
+    the copy carries no betting language and a test pins that. And it never
+    hides the always-chalk control, because the FADE branch is chalk-identical
+    by construction and says so in words rather than by adjacency alone.
 
     A live card uses the current pregame price while history is bucketed on
     closes, so a game can cross the threshold before first pitch.
@@ -4222,31 +4253,47 @@ def _verdict_html(fav, odds, away_abbr, home_abbr, ctx=None, delta=None):
     p_txt = (f"{100 * p_lean:.1f}% no-vig" if p_lean is not None
              else "no no-vig price yet")
 
+    thr = f"{100 * HYBRID_THRESHOLD:.0f}%"
     if action is None:
-        sel_txt = "awaiting a two-sided price"
+        rule_line = ("<div class='vline'><span class='vk'>Rule</span>"
+                     "<span>abstains — no two-sided price yet</span></div>")
     else:
         sel_price = None
         if pick is not None:
             sel_price = (odds.get("home_ml") if pick == home_abbr
                          else odds.get("away_ml"))
-        sel_txt = (f"<b>{action} → {_esc(pick)}</b>"
-                   + (f" {_fmt_ml(sel_price)}" if sel_price is not None else ""))
+        # The reason, in plain words, on the line that carries the decision.
+        # Without it a reader has to reverse-engineer the threshold from two
+        # numbers printed above -- and on a FADE the selected club appears
+        # nowhere else on the panel.
+        why = (f"market gives {_esc(fav)} at least {thr}, so the rule follows "
+               "the model" if action == "FOLLOW" else
+               f"market gives {_esc(fav)} under {thr}, so the rule backs "
+               f"{_esc(pick)} instead")
+        rule_line = (
+            f"<div class='vline'><span class='vk'>Rule</span>"
+            f"<span><b>{action} → {_esc(pick)}</b>"
+            + (f" {_fmt_ml(sel_price)}" if sel_price is not None else "")
+            + f"</span></div><div class='vnote'>{why}</div>")
+
     history = _branch_history(ctx, action)
-    # The warm rule marks a FADE -- the one case where the published selection
-    # differs from the model's own lean. It has never meant "bet this side".
+    # The warm accent marks a FADE -- the one case where the published
+    # selection differs from the model's own lean. It has never meant "bet
+    # this side".
     cls = " edge" if action == "FADE" else ""
     version = _model_version_short()
     return (
         f"<div class='verdict{cls}'><div class='l'>Model vs market</div>"
         "<div class='vt'>"
-        f"<div class='vline'><span class='vk'>Model lean:</span> "
+        "<div class='vprofile-title vgroup'>This game</div>"
+        f"<div class='vline'><span class='vk'>Model lean</span>"
         f"<span>{_esc(fav)} · {version} Δ {delta_txt} ({strength})</span></div>"
-        f"<div class='vline'><span class='vk'>Market:</span> "
+        f"<div class='vline'><span class='vk'>Market price</span>"
         f"<span>{_esc(fav)} {price_txt} · {p_txt}</span></div>"
-        f"<div class='vline'><span class='vk'>Rule:</span> "
-        f"<span>{sel_txt}</span></div>"
+        f"{rule_line}"
         f"{history}</div></div>"
     )
+
 
 def _hitter_row_html(i, hr):
     """One batting-order row: name + batting hand, Statcast percentile bar, and
@@ -5317,7 +5364,16 @@ td.bar{width:86px;padding:4px 8px 4px 2px}
 .verdict .hist>span:last-child{margin-top:1px;color:var(--ink)}
 .verdict .vprofile{margin-top:7px;padding-top:7px;border-top:1px solid var(--line-2)}
 .verdict .vprofile-title{font:700 11px/1.3 var(--sans);letter-spacing:.13em;color:var(--muted)}
-.verdict .vprofile-band{margin:2px 0 6px;color:var(--ink);font-weight:750}
+.verdict .vprofile-band{margin:2px 0 6px;color:var(--muted);font-weight:600;
+  font-size:12.5px;line-height:1.35}
+/* Zone heading inside the 'this game' half, so the two halves of the
+   panel are visibly separate rather than one list a reader carries a
+   historical rate down through. */
+.verdict .vprofile-title.vgroup{margin-bottom:3px}
+/* One-line plain-English reason under the line it explains. Indented
+   to the value column so it reads as a note on that row, not a new row. */
+.verdict .vnote{margin:2px 0 1px;font:500 12.5px/1.4 var(--sans);
+  color:var(--faint)}
 .verdict .vprofile .vline{justify-content:space-between;gap:14px;font-weight:600}
 .verdict .vprofile .vline>span:last-child{text-align:right;color:var(--ink)}
 
@@ -6763,14 +6819,28 @@ def _row_hybrid(r):
 
     Row-level twin of the columns `_lean_market_observations` derives in bulk,
     and the ONLY place the ledger table decides what the rule did. Returns
-    ``(None, None, None)`` whenever the rule cannot act -- no lean, or no
-    two-sided close -- because an abstention must render as an abstention
-    rather than borrowing the model's own result.
+    ``(None, None, None)`` whenever the rule cannot act, which is three
+    distinct cases the caller has to tell apart and label:
+
+      * the row predates the current record family -- see below;
+      * no lean was published (a v5 abstention);
+      * no two-sided close is attached (every pending row, by no-lookahead).
+
+    An abstention must render as an abstention rather than borrowing the
+    model's own result under a selection heading.
+
+    SCOPED TO `RECORD_TAGS`. The rule is registered against the current
+    prediction family, and applying it to an older family's rows publishes a
+    selection nobody could have made -- under lean math the rule was never
+    paired with, and with a grade this function would then invert. The archive
+    still shows those rows; it shows them as the leans they were.
 
     The result on a faded row is the lean's grade INVERTED: the rule backed the
     other side, so a lean that lost is a selection that won. Ties are mapped
     explicitly rather than by subtraction, which is what swallows them.
     """
+    if r.get("model_tag") not in RECORD_TAGS:
+        return None, None, None
     lean = r.get("xw_lean")
     if not isinstance(lean, str) or not lean:
         return None, None, None
@@ -6823,16 +6893,28 @@ def _grades_row(r, show_ml=False):
     # substitution that once published a pooled record under a current-family
     # name.
     action, pick, rule_grade = _row_hybrid(r)
+    current = r.get("model_tag") in RECORD_TAGS
     if abstained:
         sel_cell = ("<span class='muted' title='no lean published: a starter "
                     "had no measured season line'>no lean</span>")
         res = r["xw_full"]
     elif action is None:
+        # Three different reasons the rule did not act, and the cell has to say
+        # WHICH -- an unlabelled lean sitting in a selection column is the
+        # substitution that once published a pooled record under a
+        # current-family label.
         sel_cell = _lean_cell(r["xw_lean"], r["xw_delta"], muted=True)
         if isinstance(r.get("xw_lean"), str) and r["xw_lean"]:
-            sel_cell += ("<span class='sp' title='no two-sided closing price, "
-                         "so the rule could not act; the model lean is shown "
-                         "instead'>lean · unpriced</span>")
+            if not current:
+                why, tag = ("the hybrid rule is registered against "
+                            f"{MODEL_TAG} and is not applied to earlier "
+                            "prediction families; this row shows the lean it "
+                            "published at the time", "lean only")
+            else:
+                why, tag = ("no two-sided closing price is attached yet, so "
+                            "the rule cannot act; the model lean is shown "
+                            "instead", "awaiting close")
+            sel_cell += f"<span class='sp' title='{why}'>{tag}</span>"
         res = r["xw_full"]
     elif action == "FADE":
         # Δ is deliberately NOT shown here. It is the model's separation in
@@ -7038,6 +7120,35 @@ def render_grades_html(built_txt):
                 f"model's raw lean: follow the {label} lean when the market "
                 f"gives it at least {100 * HYBRID_THRESHOLD:.0f}%, and back "
                 "the other side below that")
+            # Account for EVERY row of the current family, not just the ones
+            # the rule could act on. A record quoted over 223 of 244 rows
+            # without saying where the other 21 went invites the reader to
+            # assume the rule decided them all -- the same defect as a control
+            # whose denominator is never stated.
+            fam_rows = led[led["model_tag"].isin(RECORD_TAGS)]
+            n_fam_all = int(len(fam_rows))
+            n_fam_pend = int((fam_rows["status"] == "pending").sum())
+            missing = n_fam_all - n_obs - n_abst - n_fam_pend
+            cover = (f"the rule decided {n_obs} of the {n_fam_all} "
+                     f"{_esc(MODEL_TAG)} rows in the ledger — "
+                     f"{n_obs - n_fade} followed, {n_fade} faded")
+            unable = []
+            if n_abst:
+                unable.append(f"{n_abst} published no lean to act on")
+            if n_fam_pend:
+                unable.append(f"{n_fam_pend} are still pending (a pending row "
+                              "carries no closing price by design)")
+            if missing > 0:
+                # Two causes reach here and the clause must not name only one:
+                # a graded row with no two-sided close, and a tie, which the
+                # observation frame drops because a push has no W/L to score.
+                unable.append(f"{missing} are graded but unscoreable — a tie, "
+                              "or no two-sided close")
+            if unable:
+                cover += "; of the rest, " + " and ".join(
+                    [", ".join(unable[:-1]), unable[-1]] if len(unable) > 1
+                    else unable)
+            notes.append(cover)
             notes.append(
                 f"controls on the same {n_obs} rows — always the home side, "
                 "always the devigged closing favourite; every figure above is "
@@ -7082,10 +7193,22 @@ def render_grades_html(built_txt):
     for date, day in led.groupby("game_date", sort=False):
         body.append(_grades_day_header(date, day, len(heads)))
         body += [_grades_row(r, show_ml) for _, r in day.iterrows()]
+    # The table spans every family; the Selection column does not. Say so once
+    # here rather than leaving the per-row markers to carry it alone.
+    tnote = ("<div class='gr-note'><b>Selection</b> is what the published rule "
+             f"picked, and it is shown only on {_esc(MODEL_TAG)} rows — the "
+             "family the rule is registered against. A <b>FADE</b> row backs "
+             "the club the model did not lean, at that club's price, and its "
+             "result is graded accordingly. Earlier families are marked "
+             "<b>lean only</b> and show the lean they actually published; "
+             "rows with no closing price yet are marked <b>awaiting close</b>. "
+             "Δ is the model's separation for the matchup and is omitted on a "
+             "faded row, where it describes the side the rule declined.</div>")
     table = ("<div class='gr-tablewrap'><table class='gr'><thead><tr>"
              + "".join(f"<th>{h}</th>" for h in heads)
              + f"</tr></thead><tbody>{''.join(body)}</tbody></table></div>")
-    return html_document(back + head + summary + table, built_txt, title="MLB lean grades")
+    return html_document(back + head + summary + tnote + table, built_txt,
+                         title="MLB lean grades")
 
 
 def render_market_calibration_html(built_txt):

@@ -1014,9 +1014,18 @@ strip** for the complete model lineage, linking to the ledger.
 full-game W/L/T grade, with pending and void rows included. The selection is
 the hybrid rule's, not the raw lean: rows where the market priced the model's
 side below the threshold are marked `FADE` and carry the opposing club, with
-the grade inverted accordingly. Where the rule cannot act — no lean, or no
-two-sided close — the row shows the model's own lean, labelled as such, rather
-than borrowing a result the rule never produced.
+the grade inverted accordingly.
+
+The Selection column is **scoped to `RECORD_TAGS`** — the family the rule is
+registered against. Applying it to an earlier family would publish a selection
+nobody could have made, under lean math the rule was never paired with and with
+a grade the code would then invert; those rows are marked `lean only` and show
+the lean they actually published. The other two cases the rule cannot act on
+carry their own distinct marks rather than a shared one: `awaiting close` for a
+row with no two-sided price yet (every pending row, by no-lookahead), and
+`no lean` for a v5 abstention. The header states the split explicitly, so every
+row of the current family is accounted for rather than only the ones the rule
+could score.
 
 Two trivial-strategy **controls** sit in the same summary strip as the record,
 scored on the *identical* rows: *always home* (the null hypothesis for any

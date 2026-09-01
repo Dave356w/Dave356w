@@ -496,6 +496,7 @@ class RenderTests(unittest.TestCase):
         g_agree, g_dis = self._cards()
         agree = b.cmb_card(g_agree, None)
         self.assertIn("V12 Δ .0920 (HIGH)", agree)
+        self.assertIn("This game", agree)
         self.assertIn("60.5% no-vig", agree)
         # The market backs this lean, so the rule follows it and the card is
         # not accented.
@@ -506,7 +507,7 @@ class RenderTests(unittest.TestCase):
         # the published selection differs from the model's own lean -- rather
         # than "the market is not backing this", which covered games the rule
         # follows anyway.
-        self.assertIn("Branch history:", dis)
+        self.assertIn("Track record:", dis)
 
     def test_verdict_shows_the_branch_the_rule_put_this_game_in(self):
         """FOLLOW and FADE can never inherit one pooled record.
@@ -528,10 +529,13 @@ class RenderTests(unittest.TestCase):
         follow = b._verdict_html(
             "ARI", dict(p_home=.62, home_ml=-160), "LAD", "ARI", ctx, .02,
         )
-        self.assertIn("V12 FOLLOW BRANCH", follow)
+        self.assertIn("Past V12 FOLLOW picks · 208 completed games", follow)
         self.assertIn("FOLLOW → ARI", follow)
-        self.assertIn("Selection won</span><span>64.9%", follow)
-        self.assertIn("vs market</span><span><b>+8.5 pp", follow)
+        self.assertIn("Won</span><span>135-73 (64.9%)", follow)
+        self.assertIn("Beat that price by</span><span><b>+8.5 pp", follow)
+        # The reason has to sit on the decision, not be inferable from two
+        # numbers printed above it.
+        self.assertIn("so the rule follows the model", follow)
 
         # A lean the market prices below the threshold: the rule selects the
         # OTHER club, and the panel has to name it.
@@ -539,18 +543,21 @@ class RenderTests(unittest.TestCase):
             "LAD", dict(p_home=.70, away_ml=200, home_ml=-260), "LAD", "ARI",
             ctx, .005,
         )
-        self.assertIn("V12 FADE BRANCH", fade)
+        self.assertIn("Past V12 FADE picks · 15 completed games", fade)
         self.assertIn("FADE → ARI", fade)
-        self.assertIn("Selection won</span><span>73.3%", fade)
-        self.assertIn("within noise · n=15", fade)
+        self.assertIn("Won</span><span>11-4 (73.3%)", fade)
+        self.assertIn("within noise", fade)
+        # On a fade the selected club appears nowhere else on the panel, so
+        # the reason line has to name it.
+        self.assertIn("so the rule backs ARI instead", fade)
 
         # A missing branch says so; it never substitutes the other branch or a
         # pooled family.
         fb = b._verdict_html(
             "ARI", dict(p_home=.62, home_ml=-160), "LAD", "ARI", {}, .02,
         )
-        self.assertIn("No completed games in this branch yet", fb)
-        self.assertNotIn("FADE BRANCH", fb)
+        self.assertIn("No completed V12 FOLLOW picks yet", fb)
+        self.assertNotIn("completed games", fb)
 
     def test_the_fade_branch_prints_its_chalk_control(self):
         """The fade branch IS always-chalk, so the control must sit beside it.
@@ -573,9 +580,14 @@ class RenderTests(unittest.TestCase):
             "LAD", dict(p_home=.70, away_ml=200, home_ml=-260), "LAD", "ARI",
             ctx, .005,
         )
-        self.assertIn("Always chalk", h)
-        # Identical to the record above it, which is the point being made.
-        self.assertIn("73.3% · +14.7 pp", h)
+        self.assertIn("Always chalk, same games", h)
+        # Identical to the record above it, which is the point being made...
+        self.assertIn("11-4 (73.3%) · +14.7 pp", h)
+        # ...and adjacency alone did not carry it. On a fade the two rows are
+        # equal to the decimal, so without this clause a reader sees duplicated
+        # data or a bug rather than "this branch has no model content".
+        self.assertIn("Identical by construction", h)
+        self.assertIn("IS the chalk bet", h)
 
     def test_verdict_panel_prints_its_own_error_bar(self):
         """A published excess must carry its sampling distribution.
@@ -594,7 +606,10 @@ class RenderTests(unittest.TestCase):
             "ARI", dict(p_home=.662, home_ml=-196), "LAD", "ARI", ctx, .005,
         )
         self.assertIn("+33.8 pp</b> ± 47.3", h)
-        self.assertIn("within noise · n=1", h)
+        self.assertIn("within noise", h)
+        # Singular, and the count lives in the heading rather than being
+        # repeated on the row beneath it.
+        self.assertIn("1 completed game<", h)
 
     def test_verdict_panel_leaves_no_computed_key_unrendered(self):
         """Every key _lean_market_agg returns must reach a surface.
@@ -658,11 +673,11 @@ class RenderTests(unittest.TestCase):
         h = b._verdict_html(
             "LAD", dict(p_home=.70, away_ml=200, home_ml=-260), "LAD", "ARI",
             ctx, .005)
-        self.assertIn("All V12 games", h)
-        self.assertIn("+7.0 pp ± 3.3 · n=223", h)
+        self.assertIn("Every V12 pick", h)
+        self.assertIn("+7.0 pp ± 3.3 vs price · n=223", h)
         # Absent pooled entry must not break the panel.
         ctx.pop("pooled")
-        self.assertNotIn("All V12 games", b._verdict_html(
+        self.assertNotIn("Every V12 pick", b._verdict_html(
             "LAD", dict(p_home=.70, away_ml=200, home_ml=-260), "LAD", "ARI",
             ctx, .005))
 
@@ -679,7 +694,9 @@ class RenderTests(unittest.TestCase):
                                           units=27.94)}
         h = b._verdict_html(
             "ARI", dict(p_home=.62, home_ml=-160), "LAD", "ARI", ctx, .02)
-        self.assertIn("NOT A FORWARD RESULT", h)
+        self.assertIn("not a forward test", h)
+        # And it must not read as a claim about tonight's game.
+        self.assertIn("not a prediction for this game", h)
 
     def test_verdict_never_claims_a_value_bet(self):
         """Measured walk-forward, no bucket in this ledger beats the close.
@@ -1436,7 +1453,7 @@ class CardCopyTests(unittest.TestCase):
 
     def test_verdict_uses_structured_labels_and_read_uses_sentence_punctuation(self):
         html = self._card()
-        for label in ("Model lean:", "Market:", "Rule:"):
+        for label in ("Model lean", "Market price", "Rule", "This game"):
             self.assertIn(label, html)
         self.assertIn("That is a <b>", html)
 
