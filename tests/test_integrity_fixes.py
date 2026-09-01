@@ -3065,11 +3065,14 @@ class HybridRuleTests(unittest.TestCase):
         html = build_site._verdict_html(
             "PIT", dict(p_home=.529, away_ml=103), "PIT", "SD", ctx, .0187,
         )
-        self.assertIn("V12 FOLLOW BRANCH", html)
-        self.assertIn("Selection won</span><span>71.4%", html)
-        self.assertIn("Market implied</span><span>48.1%", html)
-        self.assertIn("vs market</span><span><b>+23.3 pp", html)
-        self.assertIn("within noise · n=14", html)
+        self.assertIn("Past V12 FOLLOW picks · 14 completed games", html)
+        self.assertIn("Won</span><span>10-4 (71.4%)", html)
+        # Named for what it is. This sat directly under the game's own
+        # "47.1% no-vig" as a bare "Market implied 48.1%", two unrelated
+        # percentages a line apart with nothing saying they differ.
+        self.assertIn("Their average price</span><span>48.1% implied", html)
+        self.assertIn("Beat that price by</span><span><b>+23.3 pp", html)
+        self.assertIn("within noise", html)
 
     def test_pit_acceptance_panel_has_the_requested_reads(self):
         ctx = {("branch", "FOLLOW"): dict(
@@ -3080,14 +3083,17 @@ class HybridRuleTests(unittest.TestCase):
             "PIT", dict(p_home=.529, away_ml=103), "PIT", "SD", ctx, .0187,
         )
         for expected in (
-            "Model lean:</span> <span>PIT · V12 Δ .0187 (MEDIUM)",
-            "Market:</span> <span>PIT +103 · 47.1% no-vig",
-            "Rule:</span> <span><b>FOLLOW → PIT</b> +103",
-            "V12 FOLLOW BRANCH",
-            "Selection won</span><span>71.4%",
-            "Market implied</span><span>48.1%",
-            "vs market</span><span><b>+23.3 pp",
-            "within noise · n=14",
+            "This game",
+            "Model lean</span><span>PIT · V12 Δ .0187 (MEDIUM)",
+            "Market price</span><span>PIT +103 · 47.1% no-vig",
+            "Rule</span><span><b>FOLLOW → PIT</b> +103",
+            "so the rule follows the model",
+            "Past V12 FOLLOW picks · 14 completed games",
+            "not a prediction for this game",
+            "Won</span><span>10-4 (71.4%)",
+            "Their average price</span><span>48.1% implied",
+            "Beat that price by</span><span><b>+23.3 pp",
+            "within noise",
         ):
             self.assertIn(expected, html)
         for banned in ("value bet", "best bet", "free money", "lock"):
@@ -3147,11 +3153,69 @@ class HybridRuleTests(unittest.TestCase):
             (np.array([gr == "W" for _, _, gr in rows]) == expected_won).all(),
             "the table and the forward test disagree about a selection's result")
 
+    def test_the_panel_never_presents_history_as_this_games_chances(self):
+        """The clarity defect this layout exists to fix.
+
+        The panel used to lead its history block with "Selection won  73.3%"
+        directly under tonight's two clubs, which reads as this pick's win
+        probability. It is the rate at which PAST picks in the same branch won,
+        and the site publishes no per-game probability at all. So the block is
+        headed by its own sample, every value row is past tense, and the two
+        percentages that used to sit unlabelled a line apart -- this game's
+        no-vig price and the branch's average price -- are each named.
+        """
+        ctx = {("branch", "FADE"): dict(n=15, w=11, l=4, implied=.586,
+                                        actual=.733, excess=.147,
+                                        excess_se=.127, roi=.238, units=3.56)}
+        h = build_site._verdict_html(
+            "LAD", dict(p_home=.70, away_ml=200, home_ml=-260), "LAD", "ARI",
+            ctx, .005)
+        self.assertIn("Past V12 FADE picks · 15 completed games", h)
+        self.assertIn("not a prediction for this game", h)
+        # The bare rate must not appear as its own value; it is qualified by
+        # the record it came from.
+        self.assertNotIn("<span>73.3%</span>", h)
+        self.assertIn("Won</span><span>11-4 (73.3%)", h)
+        # The game's own price and the branch's average price are distinct
+        # numbers and must be distinctly labelled.
+        self.assertIn("30.0% no-vig", h)
+        self.assertIn("Their average price</span><span>58.6% implied", h)
+
+    def test_the_ledger_labels_each_undecidable_case_distinctly(self):
+        """Three different reasons the rule did not act, three different marks.
+
+        A lean sitting unlabelled under a "Selection" heading is the
+        substitution this repo already shipped once. Out-of-family, no lean,
+        and no-price are separate facts and a reader must be able to tell which
+        one a row is.
+        """
+        def row(tag, lean, ph, basis=None):
+            return pd.Series(dict(
+                model_tag=tag, xw_lean=lean, close_p_home=ph, home="H",
+                away="A", away_sp="P1", home_sp="P2", xw_full="W",
+                xw_delta=.01, status="graded", full_away=1, full_home=3,
+                close_home_ml=-140, close_away_ml=120,
+                pitching_basis_away=basis, pitching_basis_home=None))
+        older = build_site._grades_row(row("woba+plat_consol_v5", "H", .60), True)
+        self.assertIn("lean only", older)
+        self.assertIn(build_site.MODEL_TAG, older)          # the title says why
+        unpriced = build_site._grades_row(row(build_site.MODEL_TAG, "H", np.nan), True)
+        self.assertIn("awaiting close", unpriced)
+        noleaan = build_site._grades_row(
+            row(build_site.MODEL_TAG, np.nan, .60, basis="starter_unmeasured_no_lean"),
+            True)
+        self.assertIn("no lean", noleaan)
+        # Each mark is unique to its own case.
+        self.assertNotIn("awaiting close", older)
+        self.assertNotIn("lean only", unpriced)
+
     def test_a_faded_ledger_row_inverts_the_leans_grade(self):
         """The rule backed the other side, so the lean's W is the rule's L."""
-        def row(lean, ph, grade):
-            return pd.Series(dict(xw_lean=lean, close_p_home=ph, home="H",
-                                  away="A", xw_full=grade))
+        def row(lean, ph, grade, tag=None):
+            return pd.Series(dict(
+                xw_lean=lean, close_p_home=ph, home="H", away="A",
+                xw_full=grade,
+                model_tag=build_site.MODEL_TAG if tag is None else tag))
         # Lean priced at .30 -> faded onto the home side, grade inverts.
         self.assertEqual(build_site._row_hybrid(row("A", .70, "L")),
                          ("FADE", "H", "W"))
@@ -3168,6 +3232,17 @@ class HybridRuleTests(unittest.TestCase):
                          (None, None, None))
         self.assertEqual(build_site._row_hybrid(row("H", np.nan, "W")),
                          (None, None, None))
+        # And a row from an earlier prediction family is out of scope: the
+        # rule is registered against the current one, so applying it there
+        # would publish a selection nobody could have made -- under lean math
+        # the rule was never paired with, and with a grade this function would
+        # then invert.
+        self.assertEqual(
+            build_site._row_hybrid(row("A", .70, "L", tag="woba+plat_consol_v5")),
+            (None, None, None))
+        for tag in build_site.RECORD_TAGS:
+            self.assertEqual(build_site._row_hybrid(row("A", .70, "L", tag=tag)),
+                             ("FADE", "H", "W"))
 
 
 class DevigDerivationTests(unittest.TestCase):
