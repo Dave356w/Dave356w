@@ -4164,10 +4164,12 @@ def _branch_history(ctx, action):
         # The rule line already says the rule abstains and why; a second line
         # restating it is the redundancy this rewrite is removing.
         return ""
+    history_branch = ("model-side" if action == "FOLLOW"
+                      else "market-favorite")
     parts = (ctx or {}).get(("branch", action))
     if not parts:
         return ("<div class='vline hist'><span class='vk'>Track record:</span>"
-                f"<span>No completed {_model_version_short()} {action} picks "
+                f"<span>No completed {_model_version_short()} {history_branch} selections "
                 "yet.</span></div>")
 
     version = _model_version_short()
@@ -4212,7 +4214,7 @@ def _branch_history(ctx, action):
                  f"{_excess_pm(pooled)} vs price · n={pooled['n']}</span></div>")
     return (
         "<div class='vprofile'>"
-        f"<div class='vprofile-title'>Past {version} {action} picks · "
+        f"<div class='vprofile-title'>Past {version} {history_branch} selections · "
         f"{n} completed {'game' if n == 1 else 'games'}</div>"
         "<div class='vprofile-band'>Track record of this branch — "
         "not a prediction for this game, and not a forward test</div>"
@@ -4268,13 +4270,14 @@ def _verdict_html(fav, odds, away_abbr, home_abbr, ctx=None, delta=None):
         # Without it a reader has to reverse-engineer the threshold from two
         # numbers printed above -- and on a FADE the selected club appears
         # nowhere else on the panel.
-        why = (f"market gives {_esc(fav)} at least {thr}, so the rule follows "
-               "the model" if action == "FOLLOW" else
+        public_branch = hybrid_public_label(action)
+        why = (f"market gives {_esc(fav)} at least {thr}, so {_esc(fav)} "
+               "remains the XWOBA side" if action == "FOLLOW" else
                f"market gives {_esc(fav)} under {thr}, so the rule backs "
-               f"{_esc(pick)} instead")
+               f"the market favorite, {_esc(pick)}, instead")
         rule_line = (
             f"<div class='vline'><span class='vk'>Rule</span>"
-            f"<span><b>{action} → {_esc(pick)}</b>"
+            f"<span><b>{public_branch} → {_esc(pick)}</b>"
             + (f" {_fmt_ml(sel_price)}" if sel_price is not None else "")
             + f"</span></div><div class='vnote'>{why}</div>")
 
@@ -4653,7 +4656,7 @@ def _summary_market_line(g, lean=None):
     if action is None or pick is None:
         return "Selection pending"
     ml = odds.get("home_ml") if pick == home else odds.get("away_ml")
-    return f"{pick} {_fmt_ml(ml)} · {action}".strip()
+    return f"{pick} {_fmt_ml(ml)} · {hybrid_public_label(action)}".strip()
 
 
 def _summary_team_html(g, side, ctx):
@@ -6185,6 +6188,11 @@ def hybrid_action(market_p):
     return "FOLLOW" if market_p >= HYBRID_THRESHOLD else "FADE"
 
 
+def hybrid_public_label(action):
+    """Plain-language public label for an internal Hybrid branch code."""
+    return {"FOLLOW": "XWOBA SIDE", "FADE": "MARKET FAVORITE"}.get(action, "")
+
+
 def hybrid_selection(lean, away_abbr, home_abbr, market_p):
     """The team the published rule selects, or None when it cannot decide.
 
@@ -6315,11 +6323,11 @@ def _lean_market_value_analysis(led):
                  profit="chalk_profit")
     all_rows = obs["won"].notna()
     branch_rows = [
-        (f"FOLLOW · p ≥ {100 * HYBRID_THRESHOLD:.0f}%",
+        (f"XWOBA SIDE · XWOBA-side p ≥ {100 * HYBRID_THRESHOLD:.0f}%",
          _lean_market_agg(obs, follow, **hyb)),
         # Plain "<": the table escapes every label through `_esc`, so a
         # pre-escaped entity here would render as literal "&lt;".
-        (f"FADE · p < {100 * HYBRID_THRESHOLD:.0f}%",
+        (f"MARKET FAVORITE · XWOBA-side p < {100 * HYBRID_THRESHOLD:.0f}%",
          _lean_market_agg(obs, ~follow, **hyb)),
         ("Hybrid, both branches", _lean_market_agg(obs, all_rows, **hyb)),
     ]
@@ -6332,7 +6340,7 @@ def _lean_market_value_analysis(led):
         # The row that makes the fade branch legible: it must match the FADE
         # line above EXACTLY. If it ever does not, the two were computed over
         # different rows and that is a bug rather than a discovery.
-        ("Always chalk · FADE rows only",
+        ("Always chalk · market-favorite rows only",
          _lean_market_agg(obs, ~follow, **chalk)),
     ]
     return {
@@ -6411,10 +6419,10 @@ def _render_lean_market_value_panel(led):
         "<div class='s'>settled full-game leans</div></div>"
         f"<div class='gr-stat'><div class='l'>Threshold</div>"
         f"<div class='v'>{100 * a['threshold']:.0f}%</div>"
-        "<div class='s'>follow at or above · fade below</div></div>"
+        "<div class='s'>XWOBA side at or above · market favorite below</div></div>"
         f"<div class='gr-stat'><div class='l'>Selections changed</div>"
         f"<div class='v'>{a['n_fade']}</div>"
-        f"<div class='s'>{100 * a['n_fade'] / a['n']:.1f}% of decisions faded</div></div>"
+        f"<div class='s'>{100 * a['n_fade'] / a['n']:.1f}% became market-favorite selections</div></div>"
         f"<div class='gr-stat'><div class='l'>Market response</div>"
         f"<div class='v'>{slope_txt}</div>"
         "<div class='s'>leaned-team p per +.010 Δ</div></div>"
@@ -6434,11 +6442,11 @@ def _render_lean_market_value_panel(led):
         "standard error under the null that every game settles at its own "
         "market price. A branch whose excess is smaller than about twice its ± "
         "is indistinguishable from correctly priced. "
-        "<b>Read the fade branch against the control directly beneath it.</b> "
+        "<b>Read the market-favorite branch against the control directly beneath it.</b> "
         "Backing the other side of a lean priced below the threshold means "
-        "backing the favourite on every such game, so the fade branch and "
+        "backing the favourite on every such game, so that branch and "
         "always-chalk on those rows are the same bet and must match exactly — "
-        "the fade result carries no model content of its own. The "
+        "the market-favorite result carries no model content of its own. The "
         "<b>market response</b> slope is why the rule has no upper favourite "
         "cutoff: the close does not systematically get richer as the model's "
         "separation grows, so there is no point at which strong favourites "
@@ -6983,13 +6991,15 @@ def _grades_row(r, show_ml=False):
         # the rule selected it would read as the model rating THAT team, which
         # is the opposite of what the number means.
         sel_cell = _lean_cell(pick, None)
-        sel_cell += ("<span class='sp fade-mark' title='faded: the market "
-                     "priced the model&#39;s side below the threshold, so the "
-                     "rule backed the other team; Δ describes the lean that "
-                     "was faded, not this selection'>FADE</span>")
+        sel_cell += ("<span class='sp fade-mark' title='the model side was "
+                     "priced below the threshold, so this selection is the "
+                     "market favorite; Δ describes the declined model side, "
+                     "not this selection'>MARKET FAVORITE</span>")
         res = rule_grade
     else:
         sel_cell = _lean_cell(pick, r["xw_delta"])
+        sel_cell += ("<span class='sp' title='the market gave the XWOBA side "
+                     "at least the threshold'>XWOBA SIDE</span>")
         res = rule_grade
     cells = [("c-game", "Game", game),
              ("c-lean", "Selection", sel_cell)]
@@ -7162,7 +7172,8 @@ def render_grades_html(built_txt):
             n_fade = int((~obs["hybrid_follow"]).sum())
             stat(f"Full v12 {label} retro Hybrid", f"{rule['w']}-{rule['l']}",
                  f"{rule['actual']:.3f} · lean alone "
-                 f"{lean_only['w']}-{lean_only['l']} · {n_fade} faded")
+                 f"{lean_only['w']}-{lean_only['l']} · "
+                 f"{n_fade} market-favorite selections")
             # z leads. A raw rate in a price-selected sample is mostly base
             # rate -- the statistic this repo already retired from the per-game
             # panel for exactly that reason.
@@ -7189,9 +7200,9 @@ def render_grades_html(built_txt):
                          f"{ctl['actual']:.3f}", tone="dim")
             notes.append(
                 "the record above is the published rule's selection, not the "
-                f"model's raw lean: follow the {label} lean when the market "
-                f"gives it at least {100 * HYBRID_THRESHOLD:.0f}%, and back "
-                "the other side below that")
+                f"model's raw lean: keep the {label} XWOBA side when its "
+                f"market probability is at least {100 * HYBRID_THRESHOLD:.0f}%; "
+                "below that, select the market favorite")
             # Account for EVERY row of the current family, not just the ones
             # the rule could act on. A record quoted over 223 of 244 rows
             # without saying where the other 21 went invites the reader to
@@ -7203,7 +7214,8 @@ def render_grades_html(built_txt):
             missing = n_fam_all - n_obs - n_abst - n_fam_pend
             cover = (f"the rule decided {n_obs} of the {n_fam_all} "
                      f"{_esc(MODEL_TAG)} rows in the ledger — "
-                     f"{n_obs - n_fade} followed, {n_fade} faded")
+                     f"{n_obs - n_fade} XWOBA-side selections, "
+                     f"{n_fade} market favorites")
             unable = []
             if n_abst:
                 unable.append(f"{n_abst} published no lean to act on")
@@ -7264,10 +7276,12 @@ def render_grades_html(built_txt):
         body.append(_grades_day_header(date, day, len(heads)))
         body += [_grades_row(r, show_ml) for _, r in day.iterrows()]
     tnote = ("<div class='gr-note'><b>Selection</b> is the XWOBA Market Hybrid "
-             "side. A <b>FADE</b> backs the club opposite the raw v12 lean. "
+             "side. <b>XWOBA SIDE</b> keeps the raw v12 side; "
+             "<b>MARKET FAVORITE</b> selects the favorite opposite it. "
              "New rows use the locked current pregame price; earlier v12 rows "
              "form the retrospective archive and derive the rule from the "
-             "devigged close. Δ is omitted on a fade because it describes the "
+             "devigged close. Δ is omitted on a market-favorite selection "
+             "because it describes the "
              "model side the rule declined.</div>")
     table = ("<div class='gr-tablewrap'><table class='gr'><thead><tr>"
              + "".join(f"<th>{h}</th>" for h in heads)
