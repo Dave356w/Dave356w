@@ -91,3 +91,7 @@ pre-registered forward test  (registered 2026-08-29; fade the lean when gap > 0.
     +175 or longer        no qualifying bets yet
     GATE: 4 of ~1200 bets. Prior is NULL, not negative — directionally the best cut measured, and still indistinguishable from zero.
     Bands are context only; the registered rule is unbanded, because the band was chosen after seeing it.
+
+pre-registered hybrid market-direction test  (registered 2026-09-01; follow the lean at q >= 0.45, fade below)
+    eligible rows since registration: 0 over 0 slates
+    nothing to score yet. Prior is NULL: the fade branch is always-chalk by construction and its discovery window favoured chalk by +4.0pp.
