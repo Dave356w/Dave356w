@@ -1426,13 +1426,14 @@ pre-registered forward tests (`forward_test.py`, `hybrid_test.py`). The grades
 page carries the baseline controls and the lock provenance. Read these before
 writing a new probe.
 
-**Probes run on demand.** Six read committed artifacts and run anywhere:
+**Probes run on demand.** Seven read committed artifacts and run anywhere:
 
 | probe | question |
 |---|---|
 | `value_probe.py` | is there a tradable relationship between `xw_net` and price? (incl. band grids) |
 | `forward_test.py` | pre-registered fade rule, frozen 2026-08-29 (also prints every build) |
 | `hybrid_test.py` | pre-registered hybrid market-direction rule, frozen 2026-09-01 (also prints every build) |
+| `hfa_probe.py` | does adding a home-field term to the lean improve it? (no) |
 | `interaction_probe.py` | do single signals or other combiners beat `B·P/L`? |
 | `dispersion_probe.py` | does a concentrated lineup beat the mean it is averaged into? |
 | `bp_ablation.py` | does removing the bullpen term change any decision? |
@@ -1445,6 +1446,69 @@ Seven need a live API and therefore a GitHub runner — `espn_403_probe`,
 a workflow under `.github/workflows/` and each says so in its own header. Savant
 and StatsAPI are unreachable from the dev environment, so a probe that needs
 them cannot be smoke-tested locally; run the workflow.
+
+### Measured and rejected
+
+- **Home-field in the lean.** The model's lean is `net = home_off - away_off`
+  with **no home-field term anywhere** — verified in the source, not recalled;
+  the `HFA=+0.177` in `ledger_report.txt` is a diagnostic F5 logit intercept
+  that never touches a lean. The market by contrast prices it exactly: over
+  766 home closes, 53.0% actual against 53.2% implied, and the model leans home
+  on 50.7% of 758 graded rows while home wins 53.2%. So the omission is real
+  and the natural proposal is to add the term. **Measured, it makes the lean
+  worse.** `hfa_probe.py` is the instrument.
+
+  Fitting `P(home) = σ(a + b·xw_net)` puts the correctly-centred decision
+  boundary at `xw_net = -a/b`, so the shift is `h = a/b`. Inside the current
+  scale family (n=320): `a = +0.156 ± 0.115` (z = +1.35, home-field present but
+  **not** significant), `b = +19.04 ± 4.75` (z = +4.01, the delta itself
+  clearly does predict), `h = +0.0082`, flipping 11.6% of leans.
+
+  Walk-forward over 253 rows / 19 slates, refitting `h` on prior slates only:
+  current lean 156-97 (+6.4 ± 3.1 vs price, ROI +8.7%) against the corrected
+  lean's 153-100 (+5.3 ± 3.1, ROI +6.3%). On the 25 flipped games the paired
+  delta is **−0.238u per flip, z = −0.62, CI [−0.98, +0.51]**. A fixed-h
+  holdout (fit on the first 160, scored on the last 160) agrees in sign and
+  magnitude at −0.223u per flip, so this is not the per-slate refit noise that
+  killed `forward_test`'s arm 1. Neither is significant; nothing here says the
+  correction hurts, only that there is no evidence it helps.
+
+  **Three things worth keeping.**
+
+  *The scale family is load-bearing and nearly produced a much bigger wrong
+  answer.* Fitting across every graded family gives `b = +6.56` and
+  `h = +0.0198` — flipping 25% of leans and pushing the home-lean share to
+  75.5% against a 53.2% home win rate. That fit pools incompatible `xw_net`
+  units, which attenuates `b`; and since `h = a/b`, an attenuated `b`
+  **inflates** the correction, here by 2.4x. `_SCALE_FAMILIES` exists for
+  exactly this, and a probe that ignored it would have reported a change
+  2.4x more consequential than the one that exists.
+
+  *`h` is not a constant.* Across the 19 walk-forward slates it ranged
+  −0.0104..+0.0114 (sd 0.0055) and **3 of 19 slates fitted a NEGATIVE h** —
+  16% of the time the data says correct toward the away side. A parameter that
+  changes sign is not a home-field advantage.
+
+  *Why it fails mechanically, which is the reusable part.* A constant shift
+  only changes the decision where `|xw_net| < |h|` — the model's **weakest**
+  leans. There it replaces a weak matchup read with "pick home", and home wins
+  only ~53%, while the current lean beats always-home by eight points
+  (61.7% against 53.8%). **Being blind to a factor is not the same as being
+  improved by adding it**: the delta is doing real work, and a constant
+  degrades the games where that work is thinnest. The market's home-field
+  content is worth having when PRICING a game, and the published hybrid rule
+  already consults the price — so it reaches the selection through the market,
+  where it is handled once. Adding it to the lean too double-counts it.
+
+  **Two predictions made before measuring were wrong, recorded because the
+  errors are the instructive part.** It was predicted that an HFA-aware lean
+  would "likely dissolve the fade branch": measured, fades go 15 → 13 of 223.
+  `h` is small relative to the price distance needed to cross the 45%
+  threshold, so the branch barely moves. And it was implied the correction
+  would obviously improve accuracy, on the reasoning that the model was
+  missing something real. It was missing something real, and adding it still
+  lost. Gate if anyone revisits: ~1,469 flipped games (~1,100 slates) to
+  separate a +0.10u/flip effect, so this cannot be settled by waiting.
 
 ### Rules these have earned
 
