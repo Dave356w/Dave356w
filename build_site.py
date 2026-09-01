@@ -6220,7 +6220,7 @@ def attach_hybrid_snapshot(frame, odds, snapshot_utc):
     paired dump remains self-contained. Pending ledger rows may refresh these
     fields only from a later accepted pregame snapshot; once graded they are
     immutable. Historical v12 rows predate this instrumentation and remain the
-    explicitly retrospective, close-derived archive.
+    historical, close-derived archive.
     """
     if frame is None or frame.empty:
         return frame
@@ -6409,10 +6409,9 @@ def _render_lean_market_value_panel(led):
 
     summary = (
         f"<div class='gr-head'><h2 class='gr-h1'>{PUBLIC_MODEL_NAME}</h2>"
-        "<div class='gr-lead'>Follow the model when the market gives its "
-        f"selected side at least {100 * a['threshold']:.0f}%; back the other "
-        "side below that. Current prediction family, scored at the "
-        "close.</div></div>"
+        "<div class='gr-lead'><b>XWOBA SIDE</b> at "
+        f"{100 * a['threshold']:.0f}% or higher; <b>MARKET FAVORITE</b> "
+        "below.</div></div>"
         "<div class='gr-summary'>"
         f"<div class='gr-stat'><div class='l'>Priced decisions</div>"
         f"<div class='v'>{a['n']}</div>"
@@ -6428,30 +6427,9 @@ def _render_lean_market_value_panel(led):
         "<div class='s'>leaned-team p per +.010 Δ</div></div>"
         "</div>"
     )
-    note = (
-        "<div class='gr-note'><b>Every number on this panel is a discovery "
-        "result, not a forward test.</b> The "
-        f"{100 * a['threshold']:.0f}% threshold was chosen after looking at "
-        "these rows, so the branch records below describe the sample the rule "
-        "was fitted on. The out-of-sample version is registered separately and "
-        "scores only games played after it was frozen; it is printed every "
-        "build in <b>data/ledger_report.txt</b>. "
-        "<b>Calculation.</b> For each row the selection is bet flat at its own "
-        "devigged DK closing moneyline; <b>actual vs implied</b> is the "
-        "realised rate against what that price implied, and <b>±</b> is one "
-        "standard error under the null that every game settles at its own "
-        "market price. A branch whose excess is smaller than about twice its ± "
-        "is indistinguishable from correctly priced. "
-        "<b>Read the market-favorite branch against the control directly beneath it.</b> "
-        "Backing the other side of a lean priced below the threshold means "
-        "backing the favourite on every such game, so that branch and "
-        "always-chalk on those rows are the same bet and must match exactly — "
-        "the market-favorite result carries no model content of its own. The "
-        "<b>market response</b> slope is why the rule has no upper favourite "
-        "cutoff: the close does not systematically get richer as the model's "
-        "separation grows, so there is no point at which strong favourites "
-        "become reliably overvalued.</div>"
-    )
+    note = ("<div class='gr-note'>Results use each selection's devigged "
+            "closing price. The 45% threshold was selected from these rows; "
+            "always chalk is shown on the same games.</div>")
     branch_head = (
         "<div class='gr-head'><h2 class='gr-h1'>By branch</h2>"
         "<div class='gr-lead'>What the published rule selected, and how those "
@@ -6774,7 +6752,7 @@ def records_strip_html():
     # data/ledger_report.txt scores, so the public number and the internal one
     # stop being able to disagree.
     g = _record_grades(led)
-    scope, n_fam, n_all = _record_scope_note(led, g)
+    scope, _, n_all = _record_scope_note(led, g)
     if g.empty:
         # Deliberately NOT a fallback to the pooled record. A bump resets this
         # to zero until the family's first row grades (v11 shipped and was
@@ -6815,7 +6793,7 @@ def records_strip_html():
             # a lean predicted under a specific statistic, and dropping the
             # label is how this strip once published "wOBA full 217-164" over
             # 381 xwOBA games -- read off the ROWS, never MODEL_RATE_LABEL.
-            bits.append(f"{PUBLIC_MODEL_NAME} ({label}) retrospective "
+            bits.append(f"{PUBLIC_MODEL_NAME} ({label}) "
                         f"{rule['w']}-{rule['l']} "
                         f"({rule['actual']:.3f})")
             se = rule["excess_se"]
@@ -6834,7 +6812,7 @@ def records_strip_html():
         if scope:
             bits.append(f"<span class='muted'>{scope}</span>")
         inner = " <span class='muted'>·</span> ".join(bits)
-    return ("<div class='gradestrip'><span class='lab'>Full v12 retro</span>"
+    return ("<div class='gradestrip'><span class='lab'>V12 record</span>"
             f"<span>{inner}</span><span class='grade-links'>"
             "<a href='grades.html'>v12 ledger →</a></span></div>")
 
@@ -7092,8 +7070,8 @@ def render_grades_html(built_txt):
     n_pend = int((_fam & (led["status"] == "pending")).sum())
     n_void = int((_fam & (led["status"] == "void")).sum())
     head = (f"<div class='gr-head'><h1 class='gr-h1'>{PUBLIC_MODEL_NAME} ledger</h1>"
-            "<div class='gr-lead'>Every v12 Hybrid selection in the public archive, graded "
-            f"against the final score. Built <span class='stamp'>{built_txt}"
+            "<div class='gr-lead'>V12 selections and results. Built "
+            f"<span class='stamp'>{built_txt}"
             "</span>.</div></div>")
 
     # Header stats score the current record family; the TABLE below still
@@ -7101,7 +7079,7 @@ def render_grades_html(built_txt):
     # is the archive, the header is a claim about this model -- and it is why
     # _record_scope_note is printed rather than left implicit.
     g = _record_grades(led)
-    scope, n_fam, n_all = _record_scope_note(led, g)
+    _, _, n_all = _record_scope_note(led, g)
     stats, notes = [], []
 
     def stat(lab, val, sub=None, tone=""):
@@ -7120,6 +7098,8 @@ def render_grades_html(built_txt):
                       "data/ledger_report.txt" if n_all else "")
                    + ".</div>")
     else:
+        notes = [f"<b>XWOBA SIDE</b> at {100 * HYBRID_THRESHOLD:.0f}% or higher; "
+                 "<b>MARKET FAVORITE</b> below"]
         # EVERY TILE BELOW IS SCORED ON ONE ROW SET: current family, decided,
         # settled, and carrying a two-sided close. That is stricter than the
         # decided set this header used to score, and deliberately so -- the
@@ -7157,20 +7137,14 @@ def render_grades_html(built_txt):
                 if w + l != len(decided):
                     sub += f" · n={w + l}"
                 stat(ctl_labels[key], f"{w}-{l}", sub, tone="dim")
-            notes.append("no graded row carries a closing price yet, so the "
-                         "published rule cannot be scored and the record above "
-                         "is the model's own lean")
-            notes.append("controls on the same decided rows — always the home "
-                         "side, always the devigged closing favourite")
         else:
             hyb = dict(won="hybrid_won", p="hybrid_p", resid="hybrid_resid",
                        profit="hybrid_profit")
-            n_obs = int(len(obs))
             priced = obs["won"].notna()
             rule = _lean_market_agg(obs, priced, **hyb)
             lean_only = _lean_market_agg(obs, priced)
             n_fade = int((~obs["hybrid_follow"]).sum())
-            stat(f"Full v12 {label} retro Hybrid", f"{rule['w']}-{rule['l']}",
+            stat(f"V12 {label} Hybrid", f"{rule['w']}-{rule['l']}",
                  f"{rule['actual']:.3f} · lean alone "
                  f"{lean_only['w']}-{lean_only['l']} · "
                  f"{n_fade} market-favorite selections")
@@ -7198,68 +7172,6 @@ def render_grades_html(built_txt):
                 if ctl:
                     stat(lab, f"{ctl['w']}-{ctl['l']}",
                          f"{ctl['actual']:.3f}", tone="dim")
-            notes.append(
-                "the record above is the published rule's selection, not the "
-                f"model's raw lean: keep the {label} XWOBA side when its "
-                f"market probability is at least {100 * HYBRID_THRESHOLD:.0f}%; "
-                "below that, select the market favorite")
-            # Account for EVERY row of the current family, not just the ones
-            # the rule could act on. A record quoted over 223 of 244 rows
-            # without saying where the other 21 went invites the reader to
-            # assume the rule decided them all -- the same defect as a control
-            # whose denominator is never stated.
-            fam_rows = led[led["model_tag"].isin(RECORD_TAGS)]
-            n_fam_all = int(len(fam_rows))
-            n_fam_pend = int((fam_rows["status"] == "pending").sum())
-            missing = n_fam_all - n_obs - n_abst - n_fam_pend
-            cover = (f"the rule decided {n_obs} of the {n_fam_all} "
-                     f"{_esc(MODEL_TAG)} rows in the ledger — "
-                     f"{n_obs - n_fade} XWOBA-side selections, "
-                     f"{n_fade} market favorites")
-            unable = []
-            if n_abst:
-                unable.append(f"{n_abst} published no lean to act on")
-            if n_fam_pend:
-                unable.append(f"{n_fam_pend} are still pending (a pending row "
-                              "carries no closing price by design)")
-            if missing > 0:
-                # Two causes reach here and the clause must not name only one:
-                # a graded row with no two-sided close, and a tie, which the
-                # observation frame drops because a push has no W/L to score.
-                unable.append(f"{missing} are graded but unscoreable — a tie, "
-                              "or no two-sided close")
-            if unable:
-                cover += "; of the rest, " + " and ".join(
-                    [", ".join(unable[:-1]), unable[-1]] if len(unable) > 1
-                    else unable)
-            notes.append(cover)
-            notes.append(
-                f"controls on the same {n_obs} rows — always the home side, "
-                "always the devigged closing favourite; every figure above is "
-                "scored on the current-family decisions that settled with a "
-                "devigged DK closing price, and z and flat close ROI are the "
-                "primary metrics")
-            notes.append(
-                "this is the full retrospective v12 Hybrid history: legacy "
-                "v12 rows derive the rule from the devigged close; newly "
-                "instrumented rows preserve the current two-sided pregame "
-                "market and locked public selection")
-        # Keep the explicit family tag available for an empty or partially
-        # migrated v12 archive; the visible table itself is already v12-only.
-        if scope:
-            notes.append(f"current model family only — {scope}; the table "
-                         f"below lists all {n_all} rows, and "
-                         "data/ledger_report.txt scores each family separately")
-        # Provenance, not a blanket claim: state how many rows the ledger can
-        # actually show locked pregame.
-        verified, legacy, late = _lock_provenance(led)
-        lock = f"<b>{verified}</b> of <b>{len(led)}</b> rows carry a pregame lock timestamp"
-        if legacy:
-            lock += (f"; {legacy} legacy rows predate that instrumentation "
-                     "and are unverified")
-        if late:
-            lock += f"; {late} snapshotted after first pitch"
-        notes.append(lock)
         summary = ("<div class='gr-summary'>" + "".join(stats) + "</div>"
                    + (f"<div class='gr-note'>{'. '.join(notes)}.</div>" if notes else ""))
 
@@ -7275,18 +7187,10 @@ def render_grades_html(built_txt):
     for date, day in led.groupby("game_date", sort=False):
         body.append(_grades_day_header(date, day, len(heads)))
         body += [_grades_row(r, show_ml) for _, r in day.iterrows()]
-    tnote = ("<div class='gr-note'><b>Selection</b> is the XWOBA Market Hybrid "
-             "side. <b>XWOBA SIDE</b> keeps the raw v12 side; "
-             "<b>MARKET FAVORITE</b> selects the favorite opposite it. "
-             "New rows use the locked current pregame price; earlier v12 rows "
-             "form the retrospective archive and derive the rule from the "
-             "devigged close. Δ is omitted on a market-favorite selection "
-             "because it describes the "
-             "model side the rule declined.</div>")
     table = ("<div class='gr-tablewrap'><table class='gr'><thead><tr>"
              + "".join(f"<th>{h}</th>" for h in heads)
              + f"</tr></thead><tbody>{''.join(body)}</tbody></table></div>")
-    return html_document(back + head + summary + tnote + table, built_txt,
+    return html_document(back + head + summary + table, built_txt,
                          title=f"{PUBLIC_MODEL_NAME} ledger")
 
 
