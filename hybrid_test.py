@@ -138,31 +138,37 @@ def _payout(ml):
     return np.where(ml > 0, ml / 100.0, 100.0 / np.abs(ml))
 
 
-def scored_rows(led=None):
-    """Graded rows AFTER the registration date, with the hybrid rule applied.
+REQUIRED_COLUMNS = ("status", "game_date", "close_p_home", "xw_lean", "home",
+                    "full_home", "full_away", "close_home_ml", "close_away_ml")
 
-    Returns None when the ledger is unavailable or lacks a required column, and
-    an empty frame when nothing has been played yet -- callers distinguish the
-    two, because "not scored" and "scored, no rows" are different states.
+
+def decidable(led):
+    """Graded rows the rule can act on, with no date filter applied.
+
+    A v5 abstention has no lean and is excluded here, which is the rule's own
+    "abstain" branch; a row with no two-sided close cannot be scored at all.
+    `xw_net` is deliberately NOT required: the hybrid reads a DIRECTION and a
+    PRICE, never the delta's magnitude.
+
+    Returns None when the frame is unusable, so a caller can tell "not scored"
+    from "scored, nothing qualified".
     """
-    if led is None:
-        if not os.path.exists(LEDGER):
-            return None
-        led = pd.read_csv(LEDGER, low_memory=False)
-    need = ["status", "game_date", "close_p_home", "xw_lean", "home",
-            "full_home", "full_away", "close_home_ml", "close_away_ml"]
-    if any(c not in getattr(led, "columns", ()) for c in need):
+    if any(c not in getattr(led, "columns", ()) for c in REQUIRED_COLUMNS):
         return None
-    # xw_net is deliberately NOT required: the hybrid reads a direction and a
-    # price, never the delta's magnitude. A v5 abstention has no lean and is
-    # excluded here, which is the rule's own "abstain" branch.
-    g = led[(led["status"] == "graded") & led["close_p_home"].notna()
-            & led["xw_lean"].notna()].copy()
-    # Strictly after: the registration date itself already held graded rows, so
-    # `>=` would silently readmit part of the discovery sample.
-    g = g[g["game_date"].astype(str) > REGISTERED_ON]
-    if g.empty:
-        return g
+    return led[(led["status"] == "graded") & led["close_p_home"].notna()
+               & led["xw_lean"].notna()].copy()
+
+
+def apply_rule(g):
+    """Attach the rule's columns to a frame from `decidable`. Pure.
+
+    Split out of `scored_rows` so the RETROSPECTIVE reading printed in
+    `data/ledger_report.txt` and the FORWARD reading registered here run the
+    same arithmetic instead of two copies that can drift. The date filter lives
+    in `scored_rows` alone and this function must never learn one: the whole
+    value of the registration is that its row set is decided in exactly one
+    place, and a filter here could quietly narrow it.
+    """
     lean_home = (g["xw_lean"] == g["home"]).values
     home_won = (g["full_home"] > g["full_away"]).values
     g["lean_home"] = lean_home
@@ -194,6 +200,29 @@ def scored_rows(led=None):
     chalk_ml = np.where(chalk_home, g["close_home_ml"], g["close_away_ml"])
     g["chalk_profit"] = np.where(g["chalk_won"], STAKE * _payout(chalk_ml), -STAKE)
     return g
+
+
+def scored_rows(led=None):
+    """Graded rows AFTER the registration date, with the hybrid rule applied.
+
+    Returns None when the ledger is unavailable or lacks a required column, and
+    an empty frame when nothing has been played yet -- callers distinguish the
+    two, because "not scored" and "scored, no rows" are different states.
+    """
+    if led is None:
+        if not os.path.exists(LEDGER):
+            return None
+        led = pd.read_csv(LEDGER, low_memory=False)
+    g = decidable(led)
+    if g is None:
+        return None
+    # Strictly after: the registration date itself already held graded rows, so
+    # `>=` would silently readmit part of the discovery sample. This is the ONE
+    # place the forward row set is decided.
+    g = g[g["game_date"].astype(str) > REGISTERED_ON]
+    if g.empty:
+        return g
+    return apply_rule(g)
 
 
 def _excess_z(won, p):
