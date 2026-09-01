@@ -1069,10 +1069,20 @@ Every CI run, `grade_leans.py`:
   scoreboard (record vs market-expected wins → z, flat-stake ROI), and
   `market-calibration.html` splits the same rows by hybrid branch.
 - **Reports** the current `RECORD_TAGS` family to the Actions log and
-  `data/ledger_report.txt` (overall, reliable-only platoon subset, |Δ|
+  `data/ledger_report.txt` (overall, the published hybrid rule's record with
+  its always-chalk control beside it, reliable-only platoon subset, |Δ|
   terciles, DIVERGE head-to-head, and — once 120 graded F5 decisions
   accumulate — a pitching-vs-lineup logit weight fit), followed by immutable
-  record lines for every historical model family.
+  record lines for every historical model family. The hybrid line is
+  retrospective and says so; the registered forward test prints further down
+  the same file. Both derive from `hybrid_test.apply_rule`, so the report and
+  the public pages cannot disagree about the rule's record.
+
+The rule is never written back into the ledger. `xw_full` stays the **lean's**
+grade — it is the control the hybrid is read against, it is what makes v12's
+history comparable with every other family's, and it is what `bp_ablation` and
+the weight fit are measuring. The hybrid is a view derived at read time from
+write-once columns.
 
 The ledger persists by being committed: the workflow's `Commit ledger` step
 pushes `data/` back to `main` on each run (the `contents: write` permission).

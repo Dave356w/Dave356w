@@ -731,6 +731,63 @@ def _abstained(fam):
     return int(fam["xw_lean"].isna().sum()) if "xw_lean" in fam else 0
 
 
+def _hybrid_retrospective_lines(g):
+    """The published rule's record over the CURRENT family's graded rows.
+
+    Why this exists: the public pages headline the hybrid selection while this
+    report headlined the raw lean, so the two artifacts disagreed about "the
+    model's record" -- 146-77 on the site against 139-84 here, on the same
+    games. That is the internal-vs-public divergence this repo has an entry
+    for, and the fix is to print both from one derivation rather than to pick
+    a winner: the lean line above is the control the hybrid line has to be read
+    against, and the chalk line is the control they BOTH have to be read
+    against.
+
+    Retrospective, and labelled so. The threshold was chosen on these rows, so
+    nothing here is out-of-sample; the registered forward reading is the
+    `hybrid_test` block further down this same report, which scores only slates
+    after the rule was frozen.
+
+    Arithmetic comes from `hybrid_test.apply_rule`, never a local copy -- one
+    rule, one implementation, so this line and the forward block below cannot
+    drift apart.
+    """
+    try:
+        import hybrid_test
+        d = hybrid_test.decidable(g)
+        if d is None or d.empty:
+            return []
+        h = hybrid_test.apply_rule(d)
+    except Exception as _exc:                      # noqa: BLE001
+        # Same load-bearing guard as the forward-test block: this function runs
+        # inside the job that ingests pregame rows, and a cosmetic line must
+        # never be able to cost a slate.
+        return [f"hybrid (retrospective) unavailable ({type(_exc).__name__})"]
+
+    n = len(h)
+    won = h["bet_won"].astype(bool)
+    w, l = int(won.sum()), int(n - won.sum())
+    n_fade = int((~h["follow"]).sum())
+    se = float(np.sqrt(np.sum(h["p_bet"] * (1 - h["p_bet"]))) / n)
+    z = (won.mean() - h["p_bet"].mean()) / se if se > 0 else float("nan")
+    units = float(h["profit"].sum())
+    cw = int(h["chalk_won"].astype(bool).sum())
+    cse = float(np.sqrt(np.sum(h["chalk_p"] * (1 - h["chalk_p"]))) / n)
+    cz = ((h["chalk_won"].astype(bool).mean() - h["chalk_p"].mean()) / cse
+          if cse > 0 else float("nan"))
+    out = [
+        f"hybrid rule  full: {w}-{l}  ({w / (w + l):.3f})"
+        if (w + l) else f"hybrid rule  full: {w}-{l}",
+    ]
+    out[0] += (f"   vs price z={z:+.2f}  {units:+.2f}u   "
+               f"(n={n}, {n_fade} faded)")
+    out.append(f"  always chalk, same {n} rows: {cw}-{n - cw}  "
+               f"({cw / n:.3f})   vs price z={cz:+.2f}")
+    out.append("  RETROSPECTIVE: the 45% threshold was chosen on these rows. "
+               "The registered forward test is below.")
+    return out
+
+
 def _record_grades(led):
     """Graded rows whose tags share the current prediction methodology."""
     return led[(led["status"] == "graded") & (led["model_tag"].isin(RECORD_TAGS))].copy()
@@ -794,6 +851,8 @@ def report_text(led):
             + (f" ({len(g) - _abs} with a lean, {_abs} abstained)" if _abs else "")
             + f"  [{' + '.join(RECORD_TAGS)}]")
         say(f"{MODEL_METRIC_LABEL} lean   full: {_rec(g['xw_full'])}   F5: {_rec(g['xw_f5'])}")
+        for _hl in _hybrid_retrospective_lines(g):
+            say(_hl)
         ov = g[g["ops_valid"] == True]                                # noqa: E712
         if len(ov):
             say(f"platoon lean full: {_rec(ov['ops_full'])}   F5: {_rec(ov['ops_f5'])}   (reliable-only, n={len(ov)})")

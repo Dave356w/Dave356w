@@ -1266,6 +1266,51 @@ precedent — they are how the fix is known to look.
   mechanism that arms it. **A control is only a control if it is scored on the
   rows the model was scored on — when a model gains the ability to abstain,
   every baseline beside it inherits that filter.**
+- **The same entry, fourth instance, caused by a display change.** The site's
+  move to publish the hybrid rule left `ledger_report.txt` headlining the raw
+  lean — 139-84 in the report against 146-77 on the page it links to, the same
+  games, both called "the model's record". The display PR checked that the
+  strip and the grades page agreed with each other and stopped there; the
+  internal artifact was not in the diff and so was not in the check.
+
+  **The fix is to print both, not to pick a winner.** The lean line is the
+  control the hybrid line is read against, and always-chalk on the identical
+  rows is the control they both are; the report now carries all three plus a
+  `RETROSPECTIVE` marker pointing at the registered forward block further down
+  the same file. The arithmetic moved into `hybrid_test.apply_rule`, a pure
+  function with **no date filter**, so the retrospective and forward readings
+  cannot drift; the filter stays in `scored_rows` alone, because the whole
+  value of the registration is that its row set is decided in exactly one
+  place.
+
+  **The general lesson: when a display change alters what a published number
+  MEANS, the internal artifact is part of that change even when it is not in
+  the diff.** Grep for the other place the statistic is printed before opening
+  the PR, not after.
+
+- **Regrading the ledger under a derived rule — asked for, and correctly not
+  done.** The natural follow-up to publishing the hybrid is to write it back
+  into `data/mlb_lean_ledger.csv`. It is recorded here because the request is
+  reasonable and will recur.
+
+  `xw_full` is the LEAN's grade. Overwriting it under the hybrid would mutate
+  immutable graded rows; destroy the lean-alone control the hybrid is read
+  against, so the published comparison would become the rule against itself;
+  make v12's history incomparable with every other family's on a report whose
+  per-family lines exist precisely to be comparable; and silently change what
+  `bp_ablation` and the SP-vs-lineup weight fit are measuring, since both read
+  `xw_full` as a statement about the model's prediction rather than about a
+  betting rule layered on it.
+
+  Adding a *new* stored column was also rejected, for a weaker but sufficient
+  reason: the hybrid grade is a deterministic function of `xw_lean`, `home`,
+  `close_p_home` and `xw_full`, all of which are write-once (`attach_market`
+  never revises a close it has already set). Storing it creates a second home
+  for a value that can then drift from its derivation — the defect that put
+  v10 math under a v9 tag. **The rule is a VIEW over the ledger, derived at
+  read time, and a test asserts no `hybrid*` column exists in the artifact or
+  in the writer's column lists.**
+
 - **Internal and public artifacts disagreeing.** `data/ledger_report.txt` once
   said the current family had no graded games while the site published a pooled
   record. Both now render from the same ledger through

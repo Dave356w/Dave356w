@@ -3209,6 +3209,80 @@ class HybridRuleTests(unittest.TestCase):
         self.assertNotIn("awaiting close", older)
         self.assertNotIn("lean only", unpriced)
 
+    def test_the_report_and_the_site_publish_the_same_hybrid_record(self):
+        """Third artifact in the chain, and the one that had drifted.
+
+        data/ledger_report.txt headlined the raw lean while the public pages
+        headlined the rule's selection -- 139-84 against 146-77 on the same
+        games. Both now derive from `hybrid_test.apply_rule`, so this asserts
+        the whole chain agrees: the report, the grades page and the forward
+        test's own arithmetic.
+        """
+        import grade_leans
+        import hybrid_test
+        led = build_site.load_ledger_df()
+        if led is None:
+            self.skipTest("ledger unavailable")
+        obs = build_site._lean_market_observations(led)
+        if obs.empty:
+            self.skipTest("no priced current-family rows")
+        rule = build_site._lean_market_agg(
+            obs, obs["won"].notna(), won="hybrid_won", p="hybrid_p",
+            resid="hybrid_resid", profit="hybrid_profit")
+        lines = grade_leans._hybrid_retrospective_lines(
+            grade_leans._record_grades(led))
+        self.assertTrue(lines, "the report prints no hybrid line")
+        head = lines[0]
+        self.assertIn(f"{rule['w']}-{rule['l']}", head)
+        self.assertIn(f"n={rule['n']}", head)
+        # The units figure is the one most likely to drift silently, because
+        # it depends on the price each selection was scored at.
+        self.assertIn(f"{rule['units']:+.2f}u", head)
+        # And the retrospective label is not optional: without it the line
+        # reads as an out-of-sample result.
+        self.assertTrue(any("RETROSPECTIVE" in ln for ln in lines))
+
+    def test_the_report_hybrid_line_carries_its_control(self):
+        """A record with no yardstick beside it is the defect this repo has
+        an entry for. The report's lean line is one control; always-chalk on
+        the identical rows is the other, and it must travel with the record
+        rather than being left to the reader to find elsewhere."""
+        import grade_leans
+        led = build_site.load_ledger_df()
+        if led is None:
+            self.skipTest("ledger unavailable")
+        g = grade_leans._record_grades(led)
+        lines = grade_leans._hybrid_retrospective_lines(g)
+        if not lines:
+            self.skipTest("no decidable current-family rows")
+        joined = " ".join(lines)
+        self.assertIn("always chalk", joined)
+        # Scored on the same rows as the record, and it says so.
+        n = int(lines[0].split("n=")[1].split(",")[0])
+        self.assertIn(f"same {n} rows", joined)
+
+    def test_the_rule_is_never_written_back_into_the_ledger(self):
+        """`xw_full` is the LEAN's grade and must stay that way.
+
+        Regrading the stored column under the hybrid would mutate immutable
+        graded rows, destroy the lean-alone control the hybrid is read
+        against, make this family's history incomparable with every other
+        family's, and change what `bp_ablation` and the weight fit are
+        measuring. The rule is a VIEW over the ledger, derived at read time
+        from columns that are themselves write-once.
+        """
+        import grade_leans
+        led = build_site.load_ledger_df()
+        if led is None:
+            self.skipTest("ledger unavailable")
+        self.assertEqual(
+            [c for c in led.columns if "hybrid" in c.lower()], [],
+            "the hybrid is a derived view; storing it creates a second home "
+            "for a value that can then drift from its derivation")
+        # And the writer never names one either.
+        writer = set(grade_leans.LEDGER_COLS) | set(grade_leans.AUDIT_COLS)
+        self.assertEqual([c for c in writer if "hybrid" in c.lower()], [])
+
     def test_a_faded_ledger_row_inverts_the_leans_grade(self):
         """The rule backed the other side, so the lean's W is the rule's L."""
         def row(lean, ph, grade, tag=None):
