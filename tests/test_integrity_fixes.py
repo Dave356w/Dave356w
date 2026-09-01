@@ -1867,7 +1867,12 @@ class RecordScopeTests(unittest.TestCase):
                     "grades page": page.split("<div class='gr-tablewrap'>")[0]}
 
     def _marks(self, rec):
-        return {"strip": f"full {rec}", "grades page": f">{rec}<"}
+        # The record itself plus the opening paren of its rate, NOT the strip's
+        # surrounding copy. The marker used to be `full {rec}`, which pinned a
+        # word that is not the claim under test -- the claim is which ROWS the
+        # number covers -- so a wording change failed this for a reason with
+        # nothing to do with family scoping.
+        return {"strip": f"{rec} (", "grades page": f">{rec}<"}
 
     def test_strip_and_header_score_only_the_current_family(self):
         pages = self._pages(self._mixed())
@@ -1879,6 +1884,35 @@ class RecordScopeTests(unittest.TestCase):
                           f"{name} lost the current-family record")
             self.assertNotIn(pooled[name], html,
                              f"{name} still pools every family")
+
+    def test_the_strip_and_the_grades_page_headline_the_same_record(self):
+        """One click apart, so they cannot be allowed to disagree.
+
+        The strip used to headline the raw lean while the grades page it links
+        to headlined the published rule's selection -- 139-84 against 146-77 on
+        the same rows. That is the internal-vs-public artifacts defect with
+        both artifacts public. Both now read the same aggregate.
+        """
+        led = build_site.load_ledger_df()
+        if led is None:
+            self.skipTest("ledger unavailable")
+        obs = build_site._lean_market_observations(led)
+        if obs.empty:
+            self.skipTest("no priced current-family rows")
+        rule = build_site._lean_market_agg(
+            obs, obs["won"].notna(), won="hybrid_won", p="hybrid_p",
+            resid="hybrid_resid", profit="hybrid_profit")
+        rec = f"{rule['w']}-{rule['l']}"
+        strip = build_site.records_strip_html()
+        header = build_site.render_grades_html("test build").split(
+            "<div class='gr-tablewrap'>")[0]
+        self.assertIn(f"{rec} (", strip)
+        self.assertIn(f">{rec}<", header)
+        # And neither may be showing the unmodified lean instead.
+        lean = build_site._lean_market_agg(obs, obs["won"].notna())
+        lean_rec = f"{lean['w']}-{lean['l']}"
+        if lean_rec != rec:
+            self.assertNotIn(f"{lean_rec} (", strip)
 
     def test_the_scope_of_the_number_is_stated_next_to_it(self):
         """A record over a subset, printed above a table of every row, has to
@@ -1893,7 +1927,7 @@ class RecordScopeTests(unittest.TestCase):
         cur = build_site.MODEL_TAG
         led = pd.DataFrame([self._row(1, cur, "B", "W", 2, 4)])
         strip = self._pages(led)["strip"]
-        self.assertIn("full 1-0", strip)
+        self.assertIn("1-0 (", strip)
         self.assertNotIn("graded rows are", strip)
 
     def test_an_empty_family_never_falls_back_to_the_pooled_record(self):
@@ -1918,16 +1952,6 @@ class RecordScopeTests(unittest.TestCase):
             # headline never reads as "this model has never been graded".
             self.assertIn("2 graded", html.replace("; 2 rows graded", "; 2 graded"),
                           f"{name} hid the historical rows entirely")
-
-    def test_the_team_page_still_pools_and_says_so(self):
-        """Per-club accuracy needs volume, not comparability -- a single
-        family leaves most clubs one or two games. It keeps pooling, and the
-        lead states it so the two pages cannot read as contradicting."""
-        led = self._mixed()
-        with mock.patch.object(build_site, "load_ledger_df", return_value=led):
-            page = build_site.render_team_grades_html("test build")
-        self.assertIn("Pooled over every graded model family", page)
-
 
 class LockProvenanceTests(unittest.TestCase):
     def _led(self, statuses):
@@ -2168,7 +2192,6 @@ class ModelTagProvenanceTests(unittest.TestCase):
             pages = {
                 "record strip": build_site.records_strip_html(),
                 "grades page": build_site.render_grades_html("test build"),
-                "team page": build_site.render_team_grades_html("test build"),
             }
         for name, page in pages.items():
             self.assertIn(other_label, page, f"{name} lost its metric label")
@@ -2187,7 +2210,10 @@ class ModelTagProvenanceTests(unittest.TestCase):
         # The vs-market cell is looked up by that same label; a mismatch used
         # to drop it silently rather than raise.
         self.assertIn("vs mkt", pages["record strip"])
-        self.assertIn("vs mkt", pages["grades page"])
+        # The grades page scores the published RULE's selection, so its tile is
+        # "vs market" rather than the strip's raw-lean "vs mkt". Different
+        # statistics, deliberately different labels.
+        self.assertIn("vs market", pages["grades page"])
 
     def test_vs_market_cell_key_matches_the_label_it_is_looked_up_by(self):
         """The vs-market bucket and its lookup must share one derivation.
@@ -2774,15 +2800,33 @@ class LeanMarketValueTests(unittest.TestCase):
     # it. Adding a column means adding it here, which forces the question the
     # blacklist below could not ask: what renders this?
     OBS_COLUMNS = {
-        "delta":        "x-axis of the corr/slope fit; picks the cell's Δ half",
-        "market_p":     "picks the cell's direction half; agg implied/excess",
-        "close_ml":     "input to profit, and the price a row is scored at",
-        "won":          "agg w / actual",
-        "market_edge":  "y-axis of the corr/slope fit -> 'market response' tile",
-        "market_resid": "agg excess -> 'actual vs implied' cell",
-        "profit":       "agg roi / units -> 'flat close ROI' cell",
+        "delta":         "x-axis of the slope fit -> 'market response' tile",
+        "market_p":      "decides the branch; agg implied/excess on the lean",
+        "close_ml":      "input to profit, and the price the lean is scored at",
+        "opp_ml":        "input to hybrid_ml / chalk / home profit on a fade",
+        "won":           "agg w / actual for the 'model lean' control row",
+        "market_edge":   "y-axis of the slope fit -> 'market response' tile",
+        "market_resid":  "agg excess -> 'model lean' actual vs implied",
+        "profit":        "agg roi / units -> 'model lean' flat ROI",
+        "hybrid_follow": "masks the FOLLOW / FADE branch rows",
+        "hybrid_won":    "agg w / actual for each branch",
+        "hybrid_p":      "agg implied and the SE for each branch",
+        "hybrid_ml":     "input to hybrid_profit; the price a selection is at",
+        "hybrid_resid":  "agg excess -> branch 'actual vs implied' cell",
+        "hybrid_profit": "agg roi / units -> branch 'flat close ROI' cell",
+        "chalk_won":     "agg w / actual for the always-chalk control",
+        "chalk_p":       "agg implied and the SE for the chalk control",
+        "chalk_resid":   "agg excess -> chalk control 'actual vs implied'",
+        "chalk_profit":  "agg roi / units -> chalk control 'flat close ROI'",
+        "home_won":      "agg w / actual for the always-home control",
+        "home_p":        "agg implied and the SE for the home control",
+        "home_resid":    "agg excess -> home control 'actual vs implied'",
+        "home_profit":   "agg roi / units -> home control 'flat close ROI'",
     }
-    ANALYSIS_ONLY_COLUMNS = {"cell": "masks the 2x3 regime_rows"}
+    # The analysis no longer decorates the frame: the 2x3 `cell` column is
+    # gone with the grid it masked, and every column the surfaces read is now
+    # derived once in `_lean_market_observations`.
+    ANALYSIS_ONLY_COLUMNS = {}
 
     def test_observation_frame_carries_no_unrendered_column(self):
         """Every column on these frames must reach a surface.
@@ -2809,11 +2853,13 @@ class LeanMarketValueTests(unittest.TestCase):
             "analysis frame gained/lost a column; name the surface that "
             "reads it in ANALYSIS_ONLY_COLUMNS")
 
-    # close_ml is the one column the analysis does not read back: it is the
-    # price each row was scored at and the input `profit` was derived from,
-    # kept so a row's payout stays auditable against its own price. Stated as
-    # an exemption rather than left to look like a consumed column.
-    RETAINED_INPUT_COLUMNS = {"close_ml"}
+    # The moneyline columns are the ones the analysis does not read back: they
+    # are the prices each row was scored at and the inputs the profit columns
+    # were derived from, kept so a row's payout stays auditable against its own
+    # price. `opp_ml` in particular is what makes a faded row scoreable at all
+    # -- the rule bets the other side. Stated as exemptions rather than left to
+    # look like consumed columns.
+    RETAINED_INPUT_COLUMNS = {"close_ml", "opp_ml", "hybrid_ml"}
 
     def test_every_declared_observation_column_is_actually_read(self):
         """The allowlist is a claim about consumption; hold it to that.
@@ -2836,17 +2882,15 @@ class LeanMarketValueTests(unittest.TestCase):
                         build_site._lean_market_value_analysis(self._frame(n=6))
 
     def test_degenerate_spread_yields_nan_not_a_numpy_warning(self):
-        """A frame with one distinct price has no correlation to report.
+        """A frame with one distinct price has no slope to report.
 
-        corrcoef divides by the sd of each axis, so a constant column returns
-        nan from a divide-by-zero rather than raising. The page renders that
-        as an em dash, but the arithmetic must not be attempted at all --
-        which is what the slope beside it already did.
+        polyfit on a constant axis is a rank-deficient fit, so the arithmetic
+        must not be attempted at all rather than left to emit a warning. The
+        page renders the result as an em dash.
         """
         with warnings.catch_warnings():
             warnings.simplefilter("error")
             a = build_site._lean_market_value_analysis(self._frame(n=6))
-        self.assertTrue(np.isnan(a["corr"]))
         self.assertTrue(np.isnan(a["slope"]))
         html = build_site._render_lean_market_value_panel(self._frame(n=6))
         self.assertIn("—", html)
@@ -2896,7 +2940,7 @@ class LeanMarketValueTests(unittest.TestCase):
                   self._frame(n=4, tag="xw+plat_consol_v0")):
             self.assertEqual(build_site._lean_market_value_analysis(d), {})
             html = build_site._render_lean_market_value_panel(d)
-            self.assertIn("Model × market value", html)
+            self.assertIn("Hybrid rule", html)
             self.assertIn("once graded leans", html)
 
     def test_every_value_table_row_emits_four_cells(self):
@@ -2910,110 +2954,110 @@ class LeanMarketValueTests(unittest.TestCase):
         self.assertEqual(html.count("<td "), 8)
 
 
-class ConvictionCellTests(unittest.TestCase):
-    """The per-game conviction cell shown on the leans page.
+class HybridRuleTests(unittest.TestCase):
+    """The published selection rule, shared by the leans and calibration pages.
 
-    Structural only: no cell record or threshold is frozen here.
+    Structural only: no branch record is frozen here. The one constant that IS
+    pinned is that there is exactly ONE threshold, imported from the
+    registration in `hybrid_test` rather than restated -- see
+    `test_the_threshold_has_exactly_one_home`.
     """
 
     def test_card_and_calibration_table_place_a_game_identically(self):
         """One derivation, or the card and the table will drift apart.
 
-        The calibration page's 2x3 and the per-game row must never disagree
-        about which cell a game is in -- that is the metric_label() lesson
-        applied to a bucketing rule.
+        The calibration page's branch rows and the per-game panel must never
+        disagree about which branch a game is in -- the metric_label() lesson
+        applied to a selection rule. Both go through `hybrid_action`, so this
+        re-places every bucketed row and demands the same answer.
         """
         led = build_site.load_ledger_df()
         a = build_site._lean_market_value_analysis(led)
         if not a:
             self.skipTest("no current-family rows to place")
         obs = a["obs"]
-        # every graded row the table bucketed must re-place to the same cell
-        for delta, mp, cell in zip(obs["delta"], obs["market_p"], obs["cell"]):
-            self.assertEqual(build_site._conviction_cell(delta, mp), cell)
+        for mp, follow in zip(obs["market_p"], obs["hybrid_follow"]):
+            self.assertEqual(build_site.hybrid_action(mp),
+                             "FOLLOW" if follow else "FADE")
 
-    def test_cell_boundaries_match_the_declared_direction_grid(self):
-        # .012 itself is ACTIVE; only values below it are LOW.
-        self.assertEqual(build_site._conviction_cell(.011999, .60), "low-agree")
-        self.assertEqual(build_site._conviction_cell(.012, .60), "active-agree")
-        # .45 enters the no-backing band; agreement starts strictly above .50.
-        self.assertEqual(build_site._conviction_cell(.012, .449999),
-                         "active-deep-oppose")
-        self.assertEqual(build_site._conviction_cell(.012, .45),
-                         "active-no-backing")
-        self.assertEqual(build_site._conviction_cell(.012, .499999),
-                         "active-no-backing")
-        self.assertEqual(build_site._conviction_cell(.012, .50),
-                         "active-no-backing")
-        self.assertEqual(build_site._conviction_cell(.012, .500001),
-                         "active-agree")
+    def test_the_threshold_has_exactly_one_home(self):
+        """The display rule and the registered forward test are one constant.
 
-    def test_an_exact_pickem_is_never_called_agreement(self):
-        """A devigged .500 market has no favourite, so it backs no lean.
-
-        This is the boundary claim the price-band rewrite already retired
-        once -- the old home-relative split filed the same mirrored-price
-        rows as "home favoured" -- and the direction axis reintroduced it by
-        closing MARKET AGREE over [.50, 1]. A three-way split has to file a
-        no-favourite market somewhere; it must be the band whose label is
-        still true there, which is the one that denies backing rather than
-        asserts it.
+        Two copies of a threshold is the "one value, three homes" defect that
+        stamped 14 ledger rows with v10 math under a v9 tag. If this ever
+        fails, someone has written a second 0.45 and the site can now publish
+        a selection the forward test would not score.
         """
-        # -110/-110 is the canonical pick'em and devigs to exactly .5
+        import hybrid_test
+        self.assertIs(build_site.HYBRID_THRESHOLD, hybrid_test.THRESHOLD)
+        src = open(build_site.__file__).read()
+        # The literal may appear in prose or a docstring, but never as a
+        # standalone assignment that could drift from the registration.
+        self.assertNotRegex(src, r"(?m)^_?[A-Z_]*THRESHOLD[A-Z_]*\s*=\s*0\.45")
+
+    def test_branch_boundaries_are_closed_on_the_follow_side(self):
+        """Exactly at the threshold FOLLOWS. `>` would reverse a boundary game."""
+        self.assertEqual(build_site.hybrid_action(.449999), "FADE")
+        self.assertEqual(build_site.hybrid_action(.45), "FOLLOW")
+        self.assertEqual(build_site.hybrid_action(.450001), "FOLLOW")
+        self.assertEqual(build_site.hybrid_action(.99), "FOLLOW")
+        self.assertEqual(build_site.hybrid_action(.01), "FADE")
+
+    def test_an_exact_pickem_follows_the_model(self):
+        """A devigged .500 market has no favourite, and sits well above .45.
+
+        The grid this replaced had to file a no-favourite market into one of
+        three direction bands and got the boundary claim wrong once. The
+        hybrid makes no such claim: a pick'em is simply above the threshold,
+        so the rule follows the model and the card says exactly that.
+        """
         pk = build_site._lean_implied_p(
             {"home_ml": -110, "away_ml": -110}, "H", "A", "H")
         self.assertEqual(pk, 0.5)
-        self.assertEqual(build_site._conviction_direction_label(pk),
-                         "NO MARKET BACKING")
-        self.assertNotIn("AGREE", build_site._conviction_direction_label(pk))
-        self.assertEqual(build_site._conviction_cell(.02, pk),
-                         "active-no-backing")
-        # and the card must not print agreement anywhere on such a game
+        self.assertEqual(build_site.hybrid_action(pk), "FOLLOW")
         html = build_site._verdict_html(
             "H", {"home_ml": -110, "away_ml": -110}, "A", "H", {}, .02)
-        self.assertNotIn("MARKET AGREE", html)
-        self.assertEqual(build_site._profile_market_label(pk), "45–50%")
+        self.assertIn("FOLLOW → H", html)
         self.assertIn("50.0% no-vig", html)
-
-    def test_the_warm_accent_never_claims_opposition_on_a_pickem(self):
-        """The accent means 'not backed', which a pick'em satisfies.
-
-        It shares the band with a slight underdog, so the rule fires -- but
-        the rendered text must not upgrade that into an opposition claim.
-        """
-        html = build_site._verdict_html(
-            "H", {"home_ml": -110, "away_ml": -110}, "A", "H", {}, .02)
-        self.assertIn("verdict edge", html)
+        # Nothing on a followed game may read as opposition or as an accent.
+        self.assertNotIn("verdict edge", html)
         for banned in ("OPPOSE", "opposes", "against"):
             self.assertNotIn(banned, html)
 
-    def test_unplaceable_games_return_none_rather_than_a_default_cell(self):
-        for delta, mp in ((None, .5), (.01, None), (float("nan"), .5),
-                          (.01, float("nan")), (.01, 0.0), (.01, 1.0),
-                          ("x", .5)):
-            self.assertIsNone(build_site._conviction_cell(delta, mp))
+    def test_the_warm_accent_marks_a_fade_and_nothing_else(self):
+        """The accent means the rule departed from the model's own lean.
 
-    def test_every_cell_key_is_reachable_from_the_declared_cuts(self):
-        """Every declared cell must be produced by some (Δ, price) pair.
-
-        Replaces a check on a third "reader-facing phrase" column that only
-        ever reached _CONVICTION_PHRASE, which no surface rendered. A cell
-        nothing can land in is the same defect one level out, so the grid is
-        now pinned against the cuts rather than against unrendered copy.
+        It used to mean "the market is not backing this", which fired on games
+        the rule follows anyway -- an accent with no decision behind it.
         """
-        reachable = {
-            build_site._conviction_cell(d, p)
-            for d in (0.001, 0.05)
-            for p in (0.10, 0.30, 0.449999, 0.45, 0.4999, 0.50, 0.5001, 0.90)
-        }
-        declared = {key for key, _label in build_site._CONVICTION_CELLS}
-        self.assertEqual(declared, reachable - {None})
-        for _key, label in build_site._CONVICTION_CELLS:
-            self.assertRegex(label, r"^(LOW|ACTIVE) Δ · ")
+        follow = build_site._verdict_html(
+            "H", {"home_ml": -110, "away_ml": -110}, "A", "H", {}, .02)
+        self.assertNotIn("verdict edge", follow)
+        fade = build_site._verdict_html(
+            "A", {"home_ml": -260, "away_ml": 215}, "A", "H", {}, .02)
+        self.assertIn("verdict edge", fade)
+        self.assertIn("FADE → H", fade)
 
-    def test_developing_profile_is_shown_with_market_adjusted_detail(self):
+    def test_unusable_prices_abstain_rather_than_defaulting_to_a_branch(self):
+        """No price is not a fade. Defaulting either way invents a selection."""
+        for mp in (None, float("nan"), 0.0, 1.0, "x", -0.1, 1.5):
+            self.assertIsNone(build_site.hybrid_action(mp))
+            self.assertIsNone(build_site.hybrid_selection("H", "A", "H", mp))
+        # A usable price with no lean is also an abstention.
+        self.assertIsNone(build_site.hybrid_selection(None, "A", "H", .60))
+        self.assertIsNone(build_site.hybrid_selection("", "A", "H", .60))
+
+    def test_a_fade_selects_the_other_club_on_either_side(self):
+        """The mirror has to work whichever side the model leaned."""
+        self.assertEqual(build_site.hybrid_selection("H", "A", "H", .30), "A")
+        self.assertEqual(build_site.hybrid_selection("A", "A", "H", .30), "H")
+        self.assertEqual(build_site.hybrid_selection("H", "A", "H", .60), "H")
+        # A lean naming neither club cannot be mirrored, so it abstains.
+        self.assertIsNone(build_site.hybrid_selection("XXX", "A", "H", .30))
+
+    def test_branch_panel_is_shown_with_market_adjusted_detail(self):
         ctx = {
-            ("profile", ("medium", "45–50%")): dict(
+            ("branch", "FOLLOW"): dict(
                 n=14, w=10, l=4, implied=.481, actual=.714, excess=.233,
                 excess_se=.121, roi=.352, units=4.93,
             ),
@@ -3021,15 +3065,14 @@ class ConvictionCellTests(unittest.TestCase):
         html = build_site._verdict_html(
             "PIT", dict(p_home=.529, away_ml=103), "PIT", "SD", ctx, .0187,
         )
-        self.assertIn("V12 PROFILE", html)
-        self.assertIn("MEDIUM Δ · 45–50% MARKET", html)
-        self.assertIn("Historical actual</span><span>71.4%", html)
+        self.assertIn("V12 FOLLOW BRANCH", html)
+        self.assertIn("Selection won</span><span>71.4%", html)
         self.assertIn("Market implied</span><span>48.1%", html)
-        self.assertIn("Performance vs market</span><span><b>+23.3 pp", html)
+        self.assertIn("vs market</span><span><b>+23.3 pp", html)
         self.assertIn("within noise · n=14", html)
 
-    def test_pit_acceptance_panel_has_the_requested_four_reads(self):
-        ctx = {("profile", ("medium", "45–50%")): dict(
+    def test_pit_acceptance_panel_has_the_requested_reads(self):
+        ctx = {("branch", "FOLLOW"): dict(
             n=14, w=10, l=4, implied=.481, actual=.714, excess=.233,
             excess_se=.121, roi=.352, units=4.93,
         )}
@@ -3037,25 +3080,94 @@ class ConvictionCellTests(unittest.TestCase):
             "PIT", dict(p_home=.529, away_ml=103), "PIT", "SD", ctx, .0187,
         )
         for expected in (
-            "V12 Δ:</span> <span>.0187 · MEDIUM",
+            "Model lean:</span> <span>PIT · V12 Δ .0187 (MEDIUM)",
             "Market:</span> <span>PIT +103 · 47.1% no-vig",
-            "V12 PROFILE",
-            "MEDIUM Δ · 45–50% MARKET",
-            "Historical actual</span><span>71.4%",
+            "Rule:</span> <span><b>FOLLOW → PIT</b> +103",
+            "V12 FOLLOW BRANCH",
+            "Selection won</span><span>71.4%",
             "Market implied</span><span>48.1%",
-            "Performance vs market</span><span><b>+23.3 pp",
+            "vs market</span><span><b>+23.3 pp",
             "within noise · n=14",
         ):
             self.assertIn(expected, html)
         for banned in ("value bet", "best bet", "free money", "lock"):
             self.assertNotIn(banned, html.lower())
 
-    def test_records_respect_the_cell_floor(self):
+    def test_records_respect_the_branch_floor(self):
         led = build_site.load_ledger_df()
-        with mock.patch.object(build_site, "CONVICTION_CELL_MIN", 10**6):
-            out = build_site.conviction_cell_records()
+        with mock.patch.object(build_site, "BRANCH_RECORD_MIN", 10**6):
+            out = build_site.hybrid_branch_records()
         self.assertEqual([k for k in out if isinstance(k, tuple)], [])
-        self.assertIn("cell_delta_active", out)
+        self.assertIn("threshold", out)
+
+    def test_the_fade_branch_record_equals_its_chalk_control(self):
+        """Not a coincidence to be observed -- a construction to be enforced.
+
+        Fading a lean priced below .45 backs a side priced above .55, which is
+        the favourite by definition. If these two ever differ, the record and
+        its control were computed over different rows, which is the exact
+        defect the shared observation frame exists to make impossible.
+        """
+        out = build_site.hybrid_branch_records()
+        fade, chalk = out.get(("branch", "FADE")), out.get(("chalk", "FADE"))
+        if not fade or not chalk:
+            self.skipTest("no faded rows in the committed ledger yet")
+        self.assertEqual(fade, chalk)
+
+    def test_the_site_and_the_forward_test_decide_every_row_identically(self):
+        """Two implementations of one rule, held against each other.
+
+        `build_site._row_hybrid` walks the ledger a row at a time for the
+        table; `hybrid_test` derives the same rule in bulk for the registered
+        forward test. They share the threshold but not the code, so this is
+        the check that the surface a reader sees and the instrument that will
+        judge the rule cannot drift apart -- the failure mode that let the site
+        publish a pooled record under a current-family label.
+        """
+        import hybrid_test
+        led = build_site.load_ledger_df()
+        if led is None:
+            self.skipTest("ledger unavailable")
+        g = led[(led["status"] == "graded") & led["xw_lean"].notna()
+                & led["close_p_home"].notna()
+                & led["model_tag"].isin(build_site.RECORD_TAGS)]
+        if g.empty:
+            self.skipTest("no priced current-family rows")
+        lean_home = (g["xw_lean"] == g["home"]).to_numpy()
+        home_won = (g["full_home"] > g["full_away"]).to_numpy()
+        p_lean = np.where(lean_home, g["close_p_home"], 1 - g["close_p_home"])
+        follow = p_lean >= hybrid_test.THRESHOLD
+        lean_won = np.where(lean_home, home_won, ~home_won)
+        expected_won = np.where(follow, lean_won, ~lean_won)
+        rows = [build_site._row_hybrid(r) for _, r in g.iterrows()]
+        self.assertTrue(
+            (np.array([a == "FOLLOW" for a, _, _ in rows]) == follow).all(),
+            "the table and the forward test disagree about a game's branch")
+        self.assertTrue(
+            (np.array([gr == "W" for _, _, gr in rows]) == expected_won).all(),
+            "the table and the forward test disagree about a selection's result")
+
+    def test_a_faded_ledger_row_inverts_the_leans_grade(self):
+        """The rule backed the other side, so the lean's W is the rule's L."""
+        def row(lean, ph, grade):
+            return pd.Series(dict(xw_lean=lean, close_p_home=ph, home="H",
+                                  away="A", xw_full=grade))
+        # Lean priced at .30 -> faded onto the home side, grade inverts.
+        self.assertEqual(build_site._row_hybrid(row("A", .70, "L")),
+                         ("FADE", "H", "W"))
+        self.assertEqual(build_site._row_hybrid(row("A", .70, "W")),
+                         ("FADE", "H", "L"))
+        # A tie stays a tie rather than being swallowed by an inversion.
+        self.assertEqual(build_site._row_hybrid(row("A", .70, "T")),
+                         ("FADE", "H", "T"))
+        # Followed rows pass the grade straight through.
+        self.assertEqual(build_site._row_hybrid(row("H", .60, "W")),
+                         ("FOLLOW", "H", "W"))
+        # No lean and no price both abstain rather than guessing.
+        self.assertEqual(build_site._row_hybrid(row(None, .60, "W")),
+                         (None, None, None))
+        self.assertEqual(build_site._row_hybrid(row("H", np.nan, "W")),
+                         (None, None, None))
 
 
 class DevigDerivationTests(unittest.TestCase):

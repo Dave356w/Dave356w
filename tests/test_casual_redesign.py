@@ -495,57 +495,97 @@ class RenderTests(unittest.TestCase):
     def test_verdict_agree_and_disagree(self):
         g_agree, g_dis = self._cards()
         agree = b.cmb_card(g_agree, None)
-        self.assertIn(".0920 · HIGH", agree)
+        self.assertIn("V12 Δ .0920 (HIGH)", agree)
         self.assertIn("60.5% no-vig", agree)
+        # The market backs this lean, so the rule follows it and the card is
+        # not accented.
+        self.assertIn("FOLLOW → LAD", agree)
+        self.assertNotIn("verdict edge", agree)
         dis = b.cmb_card(g_dis, None)
-        self.assertIn("verdict edge", dis)
-        self.assertIn("V12 profile:", dis)
+        # The warm accent now marks a FADE specifically -- the one case where
+        # the published selection differs from the model's own lean -- rather
+        # than "the market is not backing this", which covered games the rule
+        # follows anyway.
+        self.assertIn("Branch history:", dis)
 
-    def test_verdict_shows_the_exact_delta_by_market_profile(self):
-        """Distinct 3x5 profiles can never inherit one pooled record."""
+    def test_verdict_shows_the_branch_the_rule_put_this_game_in(self):
+        """FOLLOW and FADE can never inherit one pooled record.
+
+        They are different bets at different prices -- on a fade the rule backs
+        the side the model did not pick -- so a panel that pooled them would
+        show a reader a record for a selection nobody made.
+        """
         ctx = {
-            ("profile", ("medium", "60–65%")): dict(
-                n=14, w=10, l=4, implied=.624, actual=.714, excess=.090,
-                excess_se=.126, roi=.121, units=1.69,
+            ("branch", "FOLLOW"): dict(
+                n=208, w=135, l=73, implied=.564, actual=.649, excess=.085,
+                excess_se=.034, roi=.134, units=27.94,
             ),
-            ("profile", ("low", "<45%")): dict(
-                n=7, w=0, l=7, implied=.413, actual=0, excess=-.413,
-                excess_se=.186, roi=-1.0, units=-7.0,
+            ("branch", "FADE"): dict(
+                n=15, w=11, l=4, implied=.586, actual=.733, excess=.147,
+                excess_se=.127, roi=.238, units=3.56,
             ),
         }
-        agree = b._verdict_html(
+        follow = b._verdict_html(
             "ARI", dict(p_home=.62, home_ml=-160), "LAD", "ARI", ctx, .02,
         )
-        self.assertIn("MEDIUM Δ · 60–65% MARKET", agree)
-        self.assertIn("Historical actual</span><span>71.4%", agree)
-        self.assertIn("Performance vs market</span><span><b>+9.0 pp", agree)
-        self.assertIn("within noise · n=14", agree)
-        dis = b._verdict_html(
-            "LAD", dict(p_home=.62, away_ml=140), "LAD", "ARI", ctx, .005,
+        self.assertIn("V12 FOLLOW BRANCH", follow)
+        self.assertIn("FOLLOW → ARI", follow)
+        self.assertIn("Selection won</span><span>64.9%", follow)
+        self.assertIn("vs market</span><span><b>+8.5 pp", follow)
+
+        # A lean the market prices below the threshold: the rule selects the
+        # OTHER club, and the panel has to name it.
+        fade = b._verdict_html(
+            "LAD", dict(p_home=.70, away_ml=200, home_ml=-260), "LAD", "ARI",
+            ctx, .005,
         )
-        self.assertIn("LOW Δ · &lt;45% MARKET", dis)
-        self.assertIn("Historical actual</span><span>0.0%", dis)
-        self.assertIn("Performance vs market</span><span><b>-41.3 pp", dis)
-        self.assertIn("within noise · n=7", dis)
-        # A missing V12 cell says so; it never substitutes a pooled family.
+        self.assertIn("V12 FADE BRANCH", fade)
+        self.assertIn("FADE → ARI", fade)
+        self.assertIn("Selection won</span><span>73.3%", fade)
+        self.assertIn("within noise · n=15", fade)
+
+        # A missing branch says so; it never substitutes the other branch or a
+        # pooled family.
         fb = b._verdict_html(
             "ARI", dict(p_home=.62, home_ml=-160), "LAD", "ARI", {}, .02,
         )
-        self.assertIn("No completed V12 games in this profile yet", fb)
-        self.assertNotIn("Across every model version", fb)
+        self.assertIn("No completed games in this branch yet", fb)
+        self.assertNotIn("FADE BRANCH", fb)
 
-    def test_profile_panel_prints_its_own_error_bar(self):
-        """A published excess must carry its sampling distribution.
+    def test_the_fade_branch_prints_its_chalk_control(self):
+        """The fade branch IS always-chalk, so the control must sit beside it.
 
-        This panel used to print the excess bare, justified in
-        `conviction_cell_records` by "the calibration table carries the error
-        bar". It does not: that table renders the 2x3 `cell` buckets and this
-        panel renders the 3x5 `profile` buckets, so a profile cell has no
-        counterpart there. With CONVICTION_CELL_MIN = 1 that let one game
-        publish a headline with no spread beside it.
+        Fading a lean priced under the threshold backs a side priced over
+        1 - threshold, i.e. the favourite, on every such game. A reader shown
+        the fade record without the control would read a chalk result as the
+        rule's own skill -- the failure this repo recorded when a raw win-loss
+        was published in a bucket with no control beside it.
         """
         ctx = {
-            ("profile", ("low", ">65%")): dict(
+            ("branch", "FADE"): dict(n=15, w=11, l=4, implied=.586,
+                                     actual=.733, excess=.147, excess_se=.127,
+                                     roi=.238, units=3.56),
+            ("chalk", "FADE"): dict(n=15, w=11, l=4, implied=.586,
+                                    actual=.733, excess=.147, excess_se=.127,
+                                    roi=.238, units=3.56),
+        }
+        h = b._verdict_html(
+            "LAD", dict(p_home=.70, away_ml=200, home_ml=-260), "LAD", "ARI",
+            ctx, .005,
+        )
+        self.assertIn("Always chalk", h)
+        # Identical to the record above it, which is the point being made.
+        self.assertIn("73.3% · +14.7 pp", h)
+
+    def test_verdict_panel_prints_its_own_error_bar(self):
+        """A published excess must carry its sampling distribution.
+
+        BRANCH_RECORD_MIN is 1, so a one-game branch can publish a headline.
+        `_excess_se` is defined at n=1 where a p-hat form would read 0.0 --
+        rendering the least certain number on the page as the most certain.
+        """
+        ctx = {
+            ("branch", "FOLLOW"): dict(
                 n=1, w=1, l=0, implied=.662, actual=1.0, excess=.338,
                 excess_se=.473, roi=.51, units=.51,
             ),
@@ -553,13 +593,10 @@ class RenderTests(unittest.TestCase):
         h = b._verdict_html(
             "ARI", dict(p_home=.662, home_ml=-196), "LAD", "ARI", ctx, .005,
         )
-        # The excess and its SE travel together; the n=1 cell is the case that
-        # matters, because _excess_se is defined there and p-hat-based forms
-        # would read 0.0.
-        self.assertIn("+33.8 pp</b> \u00b1 47.3", h)
-        self.assertIn("within noise \u00b7 n=1", h)
+        self.assertIn("+33.8 pp</b> ± 47.3", h)
+        self.assertIn("within noise · n=1", h)
 
-    def test_profile_panel_leaves_no_computed_key_unrendered(self):
+    def test_verdict_panel_leaves_no_computed_key_unrendered(self):
         """Every key _lean_market_agg returns must reach a surface.
 
         `excess_se` was computed, returned and rendered nowhere for two days --
@@ -567,67 +604,82 @@ class RenderTests(unittest.TestCase):
         card deliberately delegates elsewhere are named here so that adding a
         NEW one fails until it is either rendered or listed.
         """
-        parts = dict(n=14, w=10, l=4, implied=.624, actual=.714, excess=.090,
-                     excess_se=.126, roi=.121, units=1.69)
-        ctx = {("profile", ("medium", "60–65%")): parts}
+        parts = dict(n=208, w=135, l=73, implied=.564, actual=.649, excess=.085,
+                     excess_se=.034, roi=.134, units=27.94)
+        ctx = {("branch", "FOLLOW"): parts}
         h = b._verdict_html(
             "ARI", dict(p_home=.62, home_ml=-160), "LAD", "ARI", ctx, .02,
         )
         rendered = {"n", "implied", "actual", "excess", "excess_se"}
-        # w/l/roi/units are the value-table's columns, not the card's: the card
-        # reports calibration, never a betting result (see the test below).
+        # w/l/roi/units are the calibration table's columns, not the card's:
+        # the card reports calibration and never a betting result.
         delegated = {"w", "l", "roi", "units"}
         self.assertEqual(set(parts) - rendered - delegated, set())
         for key in ("roi", "units"):
             self.assertNotIn(f"{100 * parts[key]:+.1f}%", h)
 
-    def test_profile_read_has_no_threshold_cliff(self):
-        """One completed game must not relabel a cell's credibility.
+    def test_branch_read_has_no_threshold_cliff(self):
+        """One completed game must not relabel a branch's credibility.
 
-        The old label was THIN / DEVELOPING / LARGER SAMPLE at n >= 10 and
-        n >= 20, so n=19 and n=20 read differently with no change in what the
-        cell knew -- the threshold-cliff anti-pattern, third instance in this
-        repo. The read is now driven by the standard error, which moves
-        continuously, so holding excess and se fixed while n crosses an old
-        boundary must change nothing.
+        The read is driven by the standard error, which moves continuously, so
+        holding excess and se fixed while n crosses any old boundary must
+        change nothing. Fourth instance of the threshold-cliff fix.
         """
         base = dict(w=0, l=0, implied=.50, actual=.60, excess=.06,
                     excess_se=.11, roi=.0, units=.0)
-        reads = {b._profile_read(dict(base, n=n)) for n in (9, 10, 19, 20, 21)}
-        # Only the printed n differs; the verdict itself is identical.
+        reads = {b._branch_read(dict(base, n=n)) for n in (9, 10, 19, 20, 21)}
         verdicts = {r.split("·")[0].strip() for r in reads}
         self.assertEqual(len(verdicts), 1, reads)
 
-    def test_profile_read_turns_on_the_familywise_bar_not_two_sd(self):
-        """A cell's excess is the largest of up to 15 draws.
+    def test_branch_read_uses_the_two_branch_familywise_bar(self):
+        """The bar must match the number of branches actually published.
 
-        At |z| = 2 roughly one cell in the grid clears the bar every build by
-        chance, so the sentence must not promote a 2-sigma cell.
+        The grid this replaced needed |z| >= 2.7 across 15 cells. With two
+        branches that is too strict; the ~0.05 family-wise bar is ~2.2. Pinned
+        so the constant cannot drift away from the surface it describes.
         """
         se = .10
-        just_over_two = dict(n=30, w=0, l=0, implied=.5, actual=.6,
-                             excess=2.1 * se, excess_se=se, roi=0, units=0)
-        clears_family = dict(just_over_two, excess=3.0 * se)
-        self.assertIn("within noise", b._profile_read(just_over_two))
-        self.assertIn("outside noise", b._profile_read(clears_family))
+        self.assertAlmostEqual(b._BRANCH_FAMILYWISE_Z, 2.2, places=6)
+        under = dict(n=30, w=0, l=0, implied=.5, actual=.6,
+                     excess=2.1 * se, excess_se=se, roi=0, units=0)
+        over = dict(under, excess=2.4 * se)
+        self.assertIn("within noise", b._branch_read(under))
+        self.assertIn("outside noise", b._branch_read(over))
 
-    def test_profile_panel_shows_the_pooled_reference(self):
-        """The cell is unpowered; the reader gets the powered number beside it."""
+    def test_verdict_panel_shows_the_pooled_reference(self):
+        """A thin branch is read against the powered number beside it."""
         ctx = {
-            ("profile", ("medium", "60–65%")): dict(
-                n=14, w=10, l=4, implied=.624, actual=.714, excess=.090,
-                excess_se=.126, roi=.121, units=1.69),
-            "pooled": dict(n=183, w=114, l=69, implied=.552, actual=.623,
-                           excess=.071, excess_se=.036, roi=.05, units=9.2),
+            ("branch", "FADE"): dict(
+                n=15, w=11, l=4, implied=.586, actual=.733, excess=.147,
+                excess_se=.127, roi=.238, units=3.56),
+            "pooled": dict(n=223, w=139, l=84, implied=.554, actual=.623,
+                           excess=.070, excess_se=.033, roi=.10, units=22.6),
         }
         h = b._verdict_html(
-            "ARI", dict(p_home=.62, home_ml=-160), "LAD", "ARI", ctx, .02)
+            "LAD", dict(p_home=.70, away_ml=200, home_ml=-260), "LAD", "ARI",
+            ctx, .005)
         self.assertIn("All V12 games", h)
-        self.assertIn("+7.1 pp ± 3.6 · n=183", h)
+        self.assertIn("+7.0 pp ± 3.3 · n=223", h)
         # Absent pooled entry must not break the panel.
         ctx.pop("pooled")
         self.assertNotIn("All V12 games", b._verdict_html(
-            "ARI", dict(p_home=.62, home_ml=-160), "LAD", "ARI", ctx, .02))
+            "LAD", dict(p_home=.70, away_ml=200, home_ml=-260), "LAD", "ARI",
+            ctx, .005))
+
+    def test_the_panel_never_calls_a_branch_record_a_forward_result(self):
+        """The threshold was chosen on these rows; the copy has to say so.
+
+        Without it the panel publishes a +8.5pp discovery excess that reads
+        like out-of-sample evidence -- which is the reading `hybrid_test.py`
+        exists to prevent.
+        """
+        ctx = {("branch", "FOLLOW"): dict(n=208, w=135, l=73, implied=.564,
+                                          actual=.649, excess=.085,
+                                          excess_se=.034, roi=.134,
+                                          units=27.94)}
+        h = b._verdict_html(
+            "ARI", dict(p_home=.62, home_ml=-160), "LAD", "ARI", ctx, .02)
+        self.assertIn("NOT A FORWARD RESULT", h)
 
     def test_verdict_never_claims_a_value_bet(self):
         """Measured walk-forward, no bucket in this ledger beats the close.
@@ -1384,7 +1436,7 @@ class CardCopyTests(unittest.TestCase):
 
     def test_verdict_uses_structured_labels_and_read_uses_sentence_punctuation(self):
         html = self._card()
-        for label in ("V12 Δ:", "Market:", "V12 profile:"):
+        for label in ("Model lean:", "Market:", "Rule:"):
             self.assertIn(label, html)
         self.assertIn("That is a <b>", html)
 

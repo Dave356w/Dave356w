@@ -1010,16 +1010,28 @@ Actions**. After that the workflow deploys on each scheduled run (and on manual
 Grades are also rendered into the site: the main page shows a **records
 strip** for the complete model lineage, linking to the ledger.
 **`grades.html`** preserves that combined headline and shows every game's
-xwOBA lean, closing ML, final score, and full-game W/L/T grade, with pending
-and void rows included. Two trivial-strategy **controls** sit in the same
-summary strip as the model's own record, scored on the identical graded rows:
-*always home* (the null hypothesis for any side-picking model, and the
-full-game twin of the F5 home baseline in `ledger_report.txt`) and *always
-chalk* (the devigged closing favourite — the strategy the model has to beat,
-since the closing line is free). The chalk control is defined only on rows
-carrying a close, so it prints its own `n`. The public page intentionally
-omits model-family history and per-row model labels; those remain available in
-the underlying ledger and Actions report. Both pages render purely from
+**published selection**, its closing ML, the final score and the selection's
+full-game W/L/T grade, with pending and void rows included. The selection is
+the hybrid rule's, not the raw lean: rows where the market priced the model's
+side below the threshold are marked `FADE` and carry the opposing club, with
+the grade inverted accordingly. Where the rule cannot act — no lean, or no
+two-sided close — the row shows the model's own lean, labelled as such, rather
+than borrowing a result the rule never produced.
+
+Two trivial-strategy **controls** sit in the same summary strip as the record,
+scored on the *identical* rows: *always home* (the null hypothesis for any
+side-picking model, and the full-game twin of the F5 home baseline in
+`ledger_report.txt`) and *always chalk* (the devigged closing favourite — the
+strategy the rule has to beat, since the closing line is free). Both are
+derived on the same observation frame as the record itself, so their
+denominators cannot drift apart. The public page intentionally omits
+model-family history and per-row model labels; those remain available in the
+underlying ledger and Actions report.
+
+The strip's record is a **discovery** figure: the threshold was chosen on
+these rows. The out-of-sample version scores only games played after the rule
+was frozen and prints every build in `data/ledger_report.txt`; the page says
+so rather than leaving a reader to infer it. Both pages render purely from
 `data/mlb_lean_ledger.csv`; grading runs before the build in CI (with a second
 pass after it to ingest the day's fresh dumps), so the page reflects last
 night's results in the same run.
@@ -1044,8 +1056,9 @@ Every CI run, `grade_leans.py`:
   DraftKings (provider 100) opening/closing moneylines + devigged
   `close_p_home`. Idempotent; a row that can't be verified keeps NaN market
   columns and retries next run. A market outage never fails the grading run.
-  `grades.html` then shows each lean's closing ML and a vs-market scoreboard
-  (record vs market-expected wins → z, flat-stake ROI).
+  `grades.html` then shows each selection's closing ML and a vs-market
+  scoreboard (record vs market-expected wins → z, flat-stake ROI), and
+  `market-calibration.html` splits the same rows by hybrid branch.
 - **Reports** the current `RECORD_TAGS` family to the Actions log and
   `data/ledger_report.txt` (overall, reliable-only platoon subset, |Δ|
   terciles, DIVERGE head-to-head, and — once 120 graded F5 decisions
