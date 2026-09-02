@@ -3834,6 +3834,25 @@ def _abbr(name):
     return ABBR.get(name, str(name or "")[:3].upper())
 
 
+def ledger_abbr(model_abbr):
+    """Translate THIS module's club abbreviation into the ledger's namespace.
+
+    Two abbreviation namespaces meet in this repo and exactly one club differs:
+    the model's display map follows StatsAPI (`AZ`) while `grade_leans.ABBR`
+    persists ESPN/ledger-style `ARI`. Every other field crosses that boundary
+    as a full team name and is abbreviated by grade_leans' own map, so this is
+    the only place the two can disagree.
+
+    It is a named function rather than an inline conditional because it now has
+    two callers, and a second copy of the alias is how `hybrid_selection` came
+    to be written in the wrong namespace in the first place. Anything this
+    module writes for the LEDGER goes through here; anything it renders on a
+    card does not, because a card is internally consistent in the model's own
+    namespace.
+    """
+    return "ARI" if model_abbr == "AZ" else model_abbr
+
+
 def _fmt_ml(v):
     if v is None:
         return "—"
@@ -5804,15 +5823,15 @@ def _ledger_club_labels():
     """Ledger abbreviation -> familiar club label for the 30 MLB clubs.
 
     The model's display map follows StatsAPI's Arizona abbreviation (AZ),
-    while grade_leans.py persists ESPN/ledger-style ARI. Normalize that one
-    boundary here. Building the set from the existing club maps also keeps
+    while grade_leans.py persists ESPN/ledger-style ARI. `ledger_abbr` owns
+    that one boundary; this reads the ledger, so it goes through it too.
+    Building the set from the existing club maps also keeps
     exhibition abbreviations such as AME/NAT off the team page without a
     second hand-maintained list of clubs.
     """
     out = {}
     for full_name, stats_abbr in ABBR.items():
-        ledger_abbr = "ARI" if stats_abbr == "AZ" else stats_abbr
-        out[ledger_abbr] = TEAM_LABELS.get(full_name, full_name)
+        out[ledger_abbr(stats_abbr)] = TEAM_LABELS.get(full_name, full_name)
     return out
 
 
@@ -6253,13 +6272,18 @@ def attach_hybrid_snapshot(frame, odds, snapshot_utc):
         selected_ml = (market.get("home_ml") if pick == home else
                        market.get("away_ml") if pick == away else None)
         mask = frame["game_pk"].eq(game_pk)
+        # `pick` stays in this module's namespace above so it can be compared
+        # against `home`/`away`; it is translated on the way OUT because this
+        # column is persisted to the ledger, where `hybrid_test` matches it
+        # against the ledger's own `home`/`away` and `grade_leans._wlt` grades
+        # it against them. An untranslated `AZ` matches neither club there.
         frame.loc[mask, "selection_rule_tag"] = HYBRID_RULE_TAG
         frame.loc[mask, "pregame_market_utc"] = snapshot_utc
         frame.loc[mask, "pregame_away_ml"] = market.get("away_ml")
         frame.loc[mask, "pregame_home_ml"] = market.get("home_ml")
         frame.loc[mask, "pregame_p_home"] = p_home
         frame.loc[mask, "hybrid_action"] = action
-        frame.loc[mask, "hybrid_selection"] = pick
+        frame.loc[mask, "hybrid_selection"] = ledger_abbr(pick) if pick else pick
         frame.loc[mask, "hybrid_p"] = p_lean if action == "FOLLOW" else (
             1.0 - p_lean if action == "FADE" and p_lean is not None else np.nan)
         frame.loc[mask, "hybrid_ml"] = selected_ml

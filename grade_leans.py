@@ -634,7 +634,20 @@ def _f5(innings, side):
     return tot
 
 def _wlt(lean, away, home, ra, rh, allow_tie):
+    """W/L/T for a selection, or None when there is nothing to grade.
+
+    A selection naming NEITHER club is an abstention, not a loss. The naive
+    `"W" if lean == winner else "L"` graded such a row `L` whichever side won,
+    because the mismatch fell through the else -- silently, and into a ledger
+    column that is immutable once written. That fired for real: build_site
+    persisted `hybrid_selection` in the model's StatsAPI namespace (`AZ`) while
+    this module writes `home`/`away` as `ARI`, so every Arizona selection would
+    have graded a loss regardless of the score. The namespace is fixed at the
+    write site; this returns None so the next such leak is a visible gap rather
+    than a fabricated result.
+    """
     if lean is None or (isinstance(lean, float) and math.isnan(lean)): return None
+    if lean != away and lean != home: return None
     if ra == rh: return "T" if allow_tie else None
     return "W" if lean == (home if rh > ra else away) else "L"
 
