@@ -934,7 +934,7 @@ paid silently.
 
 | Path | Purpose |
 |------|---------|
-| `build_site.py` | One-shot generator: fetch → matchup dataframes → writes `public/index.html` and `public/grades.html` (fully self-contained: inline CSS, dark-mode via `prefers-color-scheme`, no external assets). Also dumps the day's leans to `data/leans_<date>_{xw,pl}.csv` for the grading ledger — or to `rebuild_leans_<date>_...` when every game on the slate has already started, so a post-rollover rebuild adds a later view instead of overwriting the pregame one. |
+| `build_site.py` | One-shot generator: fetch → matchup dataframes → writes `public/index.html`, `public/grades.html` and `public/leaderboard.html` (fully self-contained: inline CSS, dark-mode via `prefers-color-scheme`, no external assets). Also dumps the day's leans to `data/leans_<date>_{xw,pl}.csv` for the grading ledger — or to `rebuild_leans_<date>_...` when every game on the slate has already started, so a post-rollover rebuild adds a later view instead of overwriting the pregame one. |
 | `grade_leans.py` | Grading ledger: ingests the lean dumps as pending rows, grades them against StatsAPI linescores (full-game + F5), attaches closing DK moneylines (via `market_backfill`), writes `data/mlb_lean_ledger.csv` + `data/ledger_report.txt`. |
 | `pitch_arsenal.py` | Pitch-mix shadow arm: the opposing lineup re-weighted by the starter's arsenal. Off by default (`PITCH_MIX_SHADOW=1`), inert when on — writes shadow columns for forward testing and never moves a lean. |
 | `pitch_arsenal_probe.py` | Measurement that gates the arm: cell dispersion split into signal and sampling noise, year-over-year reliability, and the noise budget the arm must clear. Prints only; writes nothing to `data/`. |
@@ -1004,6 +1004,35 @@ Environment variables:
 Enable Pages with **Settings → Pages → Build and deployment → Source: GitHub
 Actions**. After that the workflow deploys on each scheduled run (and on manual
 `workflow_dispatch`). The site is served at `https://dave356w.github.io/dave356w/`.
+
+## Season leaderboard
+
+`leaderboard.html` publishes two season boards off the same Savant custom
+leaderboards the build already fetches: the top 100 starting pitchers by
+xwOBA allowed, and the top 15 batters at each primary position. Both are
+regressed with the model's own `shrink_xwoba` at `XWOBA_SHRINK_K`, so a
+number on this page is the number a lean is built on.
+
+Three things about it are decisions rather than defaults:
+
+- **No playing-time qualifier.** At K = 100 a 12-PA bat keeps 12/112 of his
+  deviation and lands beside the target, so the regression does the
+  qualifying continuously and a hard `PA >= N` cut would only reintroduce the
+  threshold cliff. Every row prints its own PA/BF so the reader can see how
+  much of a rate is the player.
+- **Two shrink targets, one per board.** Batters regress toward the batter
+  pool's unweighted centre and pitchers toward the PA-weighted league rate —
+  the same pair `_pctile_ref_bat` / `_pctile_ref_pit` already use, so a rank
+  here cannot disagree with the percentile bar on the same player's card.
+- **SP means `start_share > RP_MAX_START_SHARE`**, the same rotation/relief
+  predicate `relief_pitcher_ids` uses — never a batters-faced proxy. The role
+  map is read from the cache `build_pitching_plans` already populated, so the
+  board adds no request to the critical path and states its own coverage
+  instead of implying a full rotation.
+
+Display only: no lean, delta, dump or ledger row, and no `MODEL_TAG`
+implication. The whole step is failure-isolated — it runs after everything the
+lean needs is in hand, and a failure leaves the last good copy live.
 
 ## Grading ledger
 

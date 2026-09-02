@@ -2320,12 +2320,35 @@ def fetch_all(slate_date, provider=None, calibration_history=None,
     log(f"lineup sources: {side_status.value_counts().to_dict()} of {2 * len(slate_df)} sides; "
         f"projected_or_partial={n_proj}; savant_backfills={n_backfill}")
 
+    # Season leaderboard inputs. Best-effort in the same sense as the odds and
+    # pitch-mix steps: this runs after everything the lean needs is already in
+    # hand, and any failure here drops the boards rather than the build. The
+    # role map is read from the cache build_pitching_plans populated -- a
+    # display surface must not add a request to the critical path, and a club
+    # that failed to load above stays out rather than being retried.
+    leaderboard = None
+    try:
+        role_map = {}
+        for roles in _team_pitcher_role_cache.values():
+            role_map.update(roles or {})
+        leaderboard = leaderboard_boards(
+            batter_cust, pitcher_cust, league_baseline, people, role_map,
+            load_people=provider.load_people)
+        if leaderboard:
+            lm = leaderboard["meta"]
+            log(f"  leaderboard: {len(leaderboard['sp'])} SP of {lm['n_sp']} "
+                f"identified | {lm['n_bat_ranked']} batters over "
+                f"{len(leaderboard['bat'])} positions")
+    except Exception as e:  # noqa: BLE001
+        log(f"  leaderboard unavailable: {e!r}")
+
     return {
         "empty": False,
         "slate_df": slate_df,
         "pitchers_df": pitchers_df,
         "batted_ball_profile_df": batted_ball_profile_df,
         "league_baseline": league_baseline,
+        "leaderboard": leaderboard,
         "people": people,
         "player_splits_hit": player_splits_hit,
         "player_splits_pit": player_splits_pit,
@@ -2938,6 +2961,206 @@ def pctile_rank_raw(value, ref_arr, invert=False):
     frac = float(np.searchsorted(ref_arr, float(value), side="right")) / ref_arr.size
     pct = 100.0 * (1.0 - frac if invert else frac)
     return max(0.0, min(100.0, pct))
+
+
+# --- season leaderboards (display only) --------------------------------------
+# Two boards built from the same Savant custom leaderboards the model already
+# fetches, regressed with the model's own `shrink_xwoba` at XWOBA_SHRINK_K.
+# Display only: nothing here reaches a lean, a delta, a dump or a ledger row,
+# so it carries no MODEL_TAG implication.
+#
+# NO QUALIFIER, DELIBERATELY. A hard `PA >= N` cut is the threshold-cliff
+# anti-pattern this repo has already fixed twice, and shrinkage makes it
+# unnecessary rather than merely unfashionable: at K=100 a 12-PA bat keeps
+# 12/112 of his deviation, so he lands within a hair of the pool centre and
+# cannot top a board. The regression IS the qualifier, applied continuously.
+# `pa` is still printed on every row so a reader can see how much of a number
+# is the player and how much is the target.
+#
+# THE TWO BOARDS USE DIFFERENT SHRINK TARGETS AND THAT IS NOT AN OVERSIGHT.
+# They are the same two targets `_pctile_ref_bat` / `_pctile_ref_pit` already
+# use, for the reason argued at their call site: a rank against a population
+# has to regress toward that population's own centre. Playing time is awarded
+# for hitting well, so the PA-weighted league rate sits where the regulars are,
+# and regressing a fringe bat toward it lands him in the middle of a group he
+# is not drawn from -- he then ranks high for a reason that is arithmetic
+# rather than hitting. That distortion was measured on 2026-08-04 at 23
+# PERCENTILE points pool-wide and 45 in the sub-qualified tail (a rank error,
+# not a gap between the two targets, which is far smaller). The pitcher pool
+# needs no such correction: the same diagnostic put slate probables 0.0016
+# below the league rate, i.e. already centred on it.
+#
+# So using the league rate for batters here would publish a leaderboard whose
+# order disagrees with the percentile bar on the same player's card -- the
+# internal/public artifacts-disagreeing defect, one surface out. Both targets
+# arrive from `league_baseline`, which is where fetch_all stashes them, so
+# neither is recomputed here and neither can drift from the bars.
+LEADERBOARD_SP_N = 100          # SP rows published
+LEADERBOARD_BAT_N = 15          # batter rows published per position
+# Fielding order, then bat-only roles. Anything StatsAPI reports that is not
+# listed lands after these in alphabetical order rather than being dropped: a
+# position we failed to anticipate should look unfamiliar, not vanish.
+LEADERBOARD_POS_ORDER = ("C", "1B", "2B", "3B", "SS", "LF", "CF", "RF",
+                         "OF", "DH", "TWP")
+
+
+def shrunk_rate_board(cust, prior, k, keep_ids=None):
+    """player_id / pa / rate / shrunk for a Savant custom leaderboard.
+
+    `keep_ids` restricts the pool. It does not change any surviving player's
+    number -- `shrink_xwoba` is per row against a shared target -- so this is a
+    filter on WHO is published, never on what they are worth.
+
+    Returns an empty frame (not None) when the board is unusable, so a caller
+    can render "no rows" without distinguishing two failure shapes it would
+    treat identically anyway.
+    """
+    empty = pd.DataFrame(columns=["player_id", "pa", "rate", "shrunk"])
+    cols = getattr(cust, "columns", [])
+    src = MODEL_RATE_SOURCE_COL
+    if cust is None or src not in cols or "pa" not in cols or "player_id" not in cols:
+        return empty
+    out = pd.DataFrame({
+        "player_id": pd.to_numeric(cust["player_id"], errors="coerce"),
+        "pa": pd.to_numeric(cust["pa"], errors="coerce"),
+        "rate": pd.to_numeric(cust[src], errors="coerce"),
+    })
+    out = out[out["player_id"].notna() & out["rate"].notna()
+              & out["pa"].notna() & (out["pa"] > 0)]
+    if keep_ids is not None:
+        out = out[out["player_id"].astype("int64").isin(
+            {int(i) for i in keep_ids})]
+    if out.empty:
+        return empty
+    out = out.reset_index(drop=True)
+    out["player_id"] = out["player_id"].astype("int64")
+    # Personal priors, exactly as build_pctile_ref takes them. Under an xwOBA
+    # build `player_prior_vector` returns the scalar unchanged (the frozen
+    # priors are wOBA-denominated and player_prior_history refuses them), so
+    # this is a no-op today and the right call the day an xwOBA prior set
+    # ships -- at which point both surfaces move together instead of one.
+    target = player_prior_vector(out["player_id"], prior)
+    out["shrunk"] = pd.to_numeric(
+        shrink_xwoba(out["rate"], out["pa"], target, k), errors="coerce")
+    return out[out["shrunk"].notna()].reset_index(drop=True)
+
+
+def starter_ids(pitcher_cust, role_map):
+    """Pitcher ids whose season workload is primarily starting, or None.
+
+    `role_map` is player id -> `load_team_pitcher_roles` line. The predicate is
+    `start_share > RP_MAX_START_SHARE` -- the SAME one `relief_pitcher_ids` and
+    `prior_population_centres` use, so "SP" means one thing on this site. Do
+    not substitute a BF proxy: a high-BF reliever and a low-BF starter both
+    exist, and the repo already has the rotation/relief split measured.
+
+    Returns None when no role line is available at all, which a caller must
+    render as "cannot say" rather than as an empty rotation.
+    """
+    cols = getattr(pitcher_cust, "columns", [])
+    if not role_map or pitcher_cust is None or "player_id" not in cols:
+        return None
+    out = set()
+    for pid in pd.to_numeric(pitcher_cust["player_id"], errors="coerce").dropna():
+        share = (role_map.get(int(pid)) or {}).get("start_share")
+        if share is not None and pd.notna(share) and float(share) > RP_MAX_START_SHARE:
+            out.add(int(pid))
+    return out
+
+
+def _pos_sort_key(pos):
+    try:
+        return (0, LEADERBOARD_POS_ORDER.index(pos), "")
+    except ValueError:
+        return (1, 0, str(pos))
+
+
+def leaderboard_boards(batter_cust, pitcher_cust, league_baseline, people,
+                       role_map, k=None, load_people=None):
+    """The two published boards, or None when neither can be built.
+
+    Returns {"sp": frame, "bat": [(position, frame), ...], "meta": {...}} with
+    `meta` carrying the provenance every count on the page is quoted from --
+    pool sizes, the two targets, and how many pitchers carried a role line.
+    Report provenance, do not assert coverage: the SP board is only as complete
+    as the role map, which `fetch_all` builds from the clubs it has already
+    called for, and the page says so rather than implying a full rotation.
+
+    `people` supplies names and positions and is what the build has already
+    fetched: every league hitter (so the batter board needs nothing new) plus
+    the slate's probables. `load_people` is an optional one-shot lookup for the
+    ids still missing after selection -- the ~100 published starters, most of
+    whom are not pitching today. It is called ONCE, AFTER the boards are cut,
+    so the request is proportional to what is published rather than to the
+    season board. A failure there costs names, not the page.
+    """
+    k = XWOBA_SHRINK_K if k is None else k
+    league_baseline = league_baseline or {}
+    people = dict(people or {})
+    prior_pit = _f(league_baseline.get(MODEL_RATE_INTERNAL_COL))
+    prior_bat = _f(league_baseline.get("_pctile_prior_bat"))
+    if prior_bat is None:
+        prior_bat = prior_pit
+    if prior_pit is None or prior_bat is None:
+        return None
+
+    sp_ids = starter_ids(pitcher_cust, role_map)
+    sp = shrunk_rate_board(pitcher_cust, prior_pit, k,
+                           keep_ids=sp_ids if sp_ids is not None else None)
+    if sp_ids is None:
+        sp = sp.iloc[0:0]
+    # Lower xwOBA allowed is better, so the SP board ascends. Ties break on the
+    # larger sample: two identical shrunk rates are not equally well measured.
+    sp = sp.sort_values(["shrunk", "pa"], ascending=[True, False]).head(
+        LEADERBOARD_SP_N).reset_index(drop=True)
+
+    bat = shrunk_rate_board(batter_cust, prior_bat, k)
+    bat["pos"] = [(people.get(int(i)) or {}).get("pos") for i in bat["player_id"]]
+    # A pitcher who took a plate appearance is not on a batter leaderboard, and
+    # a hitter with no bio is not filed under a position we did not read.
+    bat = bat[bat["pos"].notna() & (bat["pos"] != "P")]
+    boards = []
+    for pos in sorted(set(bat["pos"]), key=_pos_sort_key):
+        g = bat[bat["pos"] == pos]
+        # Higher xwOBA is better for a bat -- the opposite of the SP board, and
+        # the reason the two are separate calls rather than one parameterised
+        # sort with a flag nobody reads.
+        g = g.sort_values(["shrunk", "pa"], ascending=[False, False])
+        boards.append((pos, g.head(LEADERBOARD_BAT_N).reset_index(drop=True)))
+
+    # Names last, for the published rows only.
+    published = set(sp["player_id"]) | {i for _, g in boards
+                                        for i in g["player_id"]}
+    missing = sorted(i for i in published
+                     if not (people.get(int(i)) or {}).get("name"))
+    if missing and load_people:
+        try:
+            people.update(load_people(missing) or {})
+        except Exception as e:  # noqa: BLE001
+            log(f"  leaderboard: bio lookup failed for {len(missing)} "
+                f"players, ids shown instead ({e!r})")
+
+    def name_of(pid):
+        return (people.get(int(pid)) or {}).get("name") or f"player {int(pid)}"
+
+    sp["name"] = [name_of(i) for i in sp["player_id"]]
+    boards = [(pos, g.assign(name=[name_of(i) for i in g["player_id"]]))
+              for pos, g in boards]
+
+    meta = {
+        "k": float(k),
+        "prior_pit": prior_pit,
+        "prior_bat": prior_bat,
+        "n_pitchers": 0 if pitcher_cust is None else int(len(pitcher_cust)),
+        "n_batters": 0 if batter_cust is None else int(len(batter_cust)),
+        "n_sp": 0 if sp_ids is None else len(sp_ids),
+        "sp_roles_known": sp_ids is not None,
+        "n_role_lines": len(role_map or {}),
+        "n_bat_ranked": int(len(bat)),
+    }
+    if sp.empty and not boards:
+        return None
+    return {"sp": sp, "bat": boards, "meta": meta}
 
 
 def segment_pitcher_blocks(df, rate_cols):
@@ -5596,6 +5819,16 @@ tr.gr-day .d{color:var(--ink)}
 tr.gr-day .n{color:var(--faint);font-weight:500}
 tr.gr-day .rec{float:right;color:var(--muted)}
 
+/* ---------- season leaderboard ---------- */
+/* Reuses the ledger table wholesale -- wrap, sticky head, and the phone
+   relabelling -- so a second table idiom never enters the site. Only the
+   rank/name/value trio inside the first two cells is new. */
+.lb-head{margin-top:22px}
+.lb-rank{display:inline-block;min-width:2.4ch;margin-right:10px;
+  font:600 13px/1 var(--mono);font-variant-numeric:tabular-nums;color:var(--faint)}
+.lb-name{font:650 14px/1.3 var(--sans);color:var(--ink)}
+.lb-val{font-weight:700;color:rgba(var(--lean-tx),1)}
+
 /* ---------- badges ---------- */
 .wlt{display:inline-block;min-width:17px;text-align:center;font:700 12.5px/1 var(--mono);
   padding:3px 6px;border-radius:var(--r-s)}
@@ -6838,6 +7071,7 @@ def records_strip_html():
         inner = " <span class='muted'>·</span> ".join(bits)
     return ("<div class='gradestrip'><span class='lab'>V12 record</span>"
             f"<span>{inner}</span><span class='grade-links'>"
+            "<a href='leaderboard.html'>leaderboard →</a>"
             "<a href='grades.html'>v12 ledger →</a></span></div>")
 
 
@@ -7073,6 +7307,7 @@ def _lock_provenance(led):
 def render_grades_html(built_txt):
     back = ("<div class='backlink ledger-nav'>"
             "<a href='index.html'>← today's leans</a>"
+            "<a href='leaderboard.html'>leaderboard</a>"
             "<a href='market-calibration.html'>market calibration →</a></div>")
     led = load_ledger_df()
     if led is None:
@@ -7216,6 +7451,114 @@ def render_grades_html(built_txt):
              + f"</tr></thead><tbody>{''.join(body)}</tbody></table></div>")
     return html_document(back + head + summary + table, built_txt,
                          title=f"{PUBLIC_MODEL_NAME} ledger")
+
+
+def _leaderboard_table(rows, rank_start=1, invert=False):
+    """One board's rows as the site's standard responsive table body."""
+    out = []
+    for i, r in enumerate(rows.itertuples(index=False), start=rank_start):
+        pa = "" if pd.isna(r.pa) else f"{int(round(float(r.pa))):,}"
+        out.append(
+            "<tr class='gr-row'>"
+            f"<td class='c-game'><span class='lb-rank'>{i}</span>"
+            f"<span class='lb-name'>{_esc(r.name)}</span></td>"
+            f"<td class='c-res lb-val'>{float(r.shrunk):.4f}</td>"
+            f"<td class='c-lean' data-l='raw'>{float(r.rate):.4f}</td>"
+            f"<td class='c-ml' data-l='{'bf' if invert else 'pa'}'>{pa}</td>"
+            "</tr>")
+    return "".join(out)
+
+
+def _leaderboard_board_html(title, sub, rows, invert=False):
+    head = ("<tr><th>Player</th>"
+            f"<th>Shrunk {_esc(MODEL_RATE_LABEL)}</th>"
+            "<th>Raw</th>"
+            f"<th>{'BF' if invert else 'PA'}</th></tr>")
+    if rows is None or rows.empty:
+        body = ("<tr class='gr-row'><td class='c-game' colspan='4'>"
+                "No rows available for this board.</td></tr>")
+    else:
+        body = _leaderboard_table(rows, invert=invert)
+    return (f"<div class='gr-head lb-head'><h2 class='gr-h1'>{_esc(title)}</h2>"
+            f"<div class='gr-lead'>{sub}</div></div>"
+            f"<div class='gr-tablewrap'><table class='gr'><thead>{head}</thead>"
+            f"<tbody>{body}</tbody></table></div>")
+
+
+def render_leaderboard_html(built_txt, boards):
+    """Season xwOBA boards at the model's own shrinkage.
+
+    Display only. Renders whatever `leaderboard_boards` could build and states
+    what it could not -- an SP board with no role map says so instead of
+    printing a short rotation as though that were the league.
+    """
+    nav = ("<div class='backlink ledger-nav'>"
+           "<a href='index.html'>&larr; today's selections</a>"
+           "<a href='grades.html'>v12 ledger &rarr;</a></div>")
+    if not boards:
+        body = nav + ("<div class='legend'><div class='lg-title'>Leaderboard "
+                      "unavailable &mdash; the Savant season boards did not "
+                      "load on this build. The last good page stays live until "
+                      "they do.</div></div>")
+        return html_document(body, built_txt,
+                             title=f"{PUBLIC_MODEL_NAME} leaderboard")
+    m = boards["meta"]
+    lead = (
+        f"Season {_esc(MODEL_RATE_LABEL)} regressed toward a population centre "
+        f"at <b>K = {m['k']:.0f}</b> &mdash; the same constant and the same "
+        "<code>shrink_xwoba</code> the model's own leans are built on. A rate "
+        "is shown beside its raw value and its sample so the reader can see "
+        "how much of it is the player. <b>There is no playing-time cut:</b> at "
+        f"K = {m['k']:.0f} a thin sample is pulled to within a hair of the "
+        "target and cannot reach the top of a board, so the regression does "
+        "the qualifying continuously instead of at a cliff. "
+        f"Built <span class='stamp'>{built_txt}</span>.")
+    head = (f"<div class='gr-head'><h1 class='gr-h1'>Season leaderboard</h1>"
+            f"<div class='gr-lead'>{lead}</div></div>")
+
+    sp_sub = (
+        f"Lowest {_esc(MODEL_RATE_LABEL)} allowed, best first. Starters are "
+        f"those whose season start share exceeds {RP_MAX_START_SHARE:.0%} "
+        "&mdash; the same rotation/relief predicate the bullpen pool uses, so "
+        "SP means one thing across this site. Regressed toward the "
+        f"<b>PA-weighted league rate {m['prior_pit']:.4f}</b>, which the "
+        "pitcher pool already sits on.")
+    if not m["sp_roles_known"]:
+        sp_sub += (" <b>No role data was available on this build</b>, so no "
+                   "starter could be identified and the board is empty rather "
+                   "than guessed at.")
+    else:
+        sp_sub += (f" Role lines were read for {m['n_role_lines']} pitchers "
+                   f"and {m['n_sp']} of the {m['n_pitchers']} on the season "
+                   "board qualified as starters; a club this build had no "
+                   "reason to call is not represented.")
+
+    bat_sub = (
+        f"Highest {_esc(MODEL_RATE_LABEL)}, best first, grouped by the primary "
+        "position StatsAPI lists for each player. Regressed toward the "
+        f"<b>batter pool's own unweighted centre {m['prior_bat']:.4f}</b> "
+        "rather than the league rate above. That difference is deliberate and "
+        "is the same target the percentile bars on a matchup card rank "
+        "against: a rank against a population has to regress toward that "
+        "population's centre, or a fringe bat is measured against a group he "
+        "is not drawn from. "
+        f"{m['n_bat_ranked']} of {m['n_batters']} batters on the season board "
+        "carry a position and are ranked.")
+
+    sections = [_leaderboard_board_html(
+        f"Top {LEADERBOARD_SP_N} starting pitchers", sp_sub,
+        boards["sp"], invert=True)]
+    for pos, rows in boards["bat"]:
+        sections.append(_leaderboard_board_html(
+            f"{_esc(pos)} &mdash; top {LEADERBOARD_BAT_N}",
+            bat_sub if pos == boards["bat"][0][0] else
+            f"Top {LEADERBOARD_BAT_N} by shrunk {_esc(MODEL_RATE_LABEL)} at "
+            f"{_esc(pos)}.",
+            rows))
+    body = nav + head + "".join(sections) + _legend_head(
+        f"{PUBLIC_MODEL_NAME} leaderboard", built_txt)
+    return html_document(body, built_txt,
+                         title=f"{PUBLIC_MODEL_NAME} leaderboard")
 
 
 def render_market_calibration_html(built_txt):
@@ -7365,6 +7708,25 @@ def write_grades_page(built_txt=None):
     return grades_path
 
 
+def write_leaderboard_page(built_txt, boards):
+    """Write leaderboard.html, or leave the last good one in place.
+
+    Returns the path written, or None. Never raises: this page is a display
+    surface hanging off a build whose real product is the slate, so it follows
+    the same rule as the odds fetch -- a failure costs a log line.
+    """
+    try:
+        os.makedirs(OUT_DIR, exist_ok=True)
+        path = os.path.join(OUT_DIR, "leaderboard.html")
+        with open(path, "w") as f:
+            f.write(render_leaderboard_html(built_txt, boards))
+        log(f"Wrote {path}")
+        return path
+    except Exception as e:  # noqa: BLE001
+        log(f"Leaderboard page not written ({e!r}); last good copy stays live.")
+        return None
+
+
 def main():
     built_txt = _built_text_now()
     if "--grades-only" in sys.argv:
@@ -7389,6 +7751,12 @@ def main():
             f.write(empty_slate_html(built_txt))
         log(f"Wrote {out_path}")
         return 0
+
+    # Written here rather than at the end so every later early return still
+    # publishes it -- a probables-not-posted slate has no cards and the same
+    # season boards. Failure-isolated: the leans page is what this build exists
+    # to produce, and a leaderboard render must never be what stops it.
+    write_leaderboard_page(built_txt, data.get("leaderboard"))
 
     log(f"Building {MODEL_RATE_LABEL} matchup ...")
     matchup_df, pitcher_rows_df, opp_hitters_df = build_xwoba_matchup(
