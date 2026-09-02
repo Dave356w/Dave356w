@@ -982,6 +982,71 @@ precedent — they are how the fix is known to look.
   ceiling, a CI spanning near-zero to above that ceiling. Do not quote those
   two as findings.
 
+- **One value, two namespaces — and a comparison that graded the mismatch a
+  loss.** `attach_hybrid_snapshot` wrote `hybrid_selection` as a club
+  ABBREVIATION drawn from `build_site.ABBR`, which follows StatsAPI (`AZ` for
+  Arizona). `grade_leans` copied that column into the ledger verbatim while
+  deriving `home`, `away` and `xw_lean` through its OWN map, which persists
+  ESPN/ledger-style `ARI`. Every other team field crosses that boundary as a
+  full team name and is abbreviated once, on the ledger side; this was the only
+  one that crossed already abbreviated, so it was the only one that could
+  disagree. Exactly one club differs, which is why it survived review.
+
+  **Both consequences were silent, and the worse one fabricated a result.**
+  `_wlt` compared the selection against the two clubs and fell through to
+  `else: "L"` — so an Arizona selection graded a LOSS whichever side won,
+  into `hybrid_full`, which is immutable once written. Separately
+  `hybrid_test.scored_rows` requires the selection to name one of the two
+  clubs, so the same row vanished from the registered forward test's
+  denominator with nothing anywhere recording a rejection. The two masked each
+  other: the fabricated grade never reached the registered headline because the
+  filter had already dropped the row.
+
+  Caught before it cost a graded row — at the sighting the ledger held 29
+  locked rows and the one Arizona selection among them (2026-09-02 PHI@ARI) was
+  still pending. Standing exposure is not negligible: ARI is 6.7% of the
+  current family's decidable rows and the rule selects ARI on 38% of them, so
+  roughly 2.5% of forward rows would have been mis-graded and silently
+  excluded, against a near gate of 41 switches.
+
+  Three parts to the fix, and the third is the reusable one:
+
+  * **The alias got a name, not a second copy.** `build_site.ledger_abbr()`
+    is the inline conditional that was already inside `_ledger_club_labels`,
+    lifted out and called from both sites. `pick` stays in the model namespace
+    while it is compared against `home`/`away` to select the money line, and is
+    translated on the way OUT — translating earlier would have stored the wrong
+    side's price. build_site owns the translation because it holds BOTH maps;
+    grade_leans holds only its own, so putting it there would have meant a
+    sixth copy of the `AZ`/`ARI` alias (`ledger_abbr` itself, `_ESPN2SA`,
+    `market_backfill.LEDGER2SA`, `market_backfill.ESPN2SA` and
+    `pythag_control_probe.LEDGER2SA` are the five that exist). Collapsing
+    those five is a separate change and is not attempted here.
+  * **`_wlt` no longer invents a grade.** A selection naming neither club
+    returns `None` — an abstention — rather than `L`. The guard sits before the
+    tie branch, so an unrecognised selection is not a tie either.
+  * **The dropped rows are counted and printed.** `hybrid_test._committed` is
+    now the denominator `scored_rows` is a subset of, and `unscorable()` is the
+    difference; the report prints a WARNING line when it is non-zero. This is
+    the controls entry's rule applied to a pre-registered test: a record over
+    223 of 244 rows must say where the other 21 went, and a forward sample
+    whose denominator can shrink invisibly is worse, because nobody is watching
+    a number that is not printed.
+
+  **The general lesson: an identifier that crosses a module boundary already
+  encoded is a namespace, and two namespaces will differ in exactly the place
+  nobody checks.** Prefer passing the unencoded form (here, the full team name,
+  which is what every other field does) so the receiver encodes once. Where you
+  cannot, make the mismatch LOUD — `tests/test_selection_namespace.py` walks
+  all 30 clubs through both maps rather than asserting `AZ -> ARI`, because
+  pinning the instance would pass while a thirty-first divergence went by. And
+  an equality test whose else-branch is a RESULT (`"W" if ... else "L"`) is a
+  silent-failure generator: give it a third answer.
+
+  No lean, delta or ledger row moves; `MODEL_TAG` is unchanged. What changes is
+  which club a persisted selection names, and that an unscorable row is
+  reported rather than absorbed.
+
 - **One value, three homes.** `.github/workflows/build.yml` pinned `MODEL_TAG`,
   `RECORD_TAGS`, and `SCALE_TAGS` job-level while both modules also defaulted
   them. The v10 commit bumped the modules and missed the workflow; the env wins,

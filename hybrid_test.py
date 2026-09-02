@@ -239,6 +239,33 @@ def apply_locked_rule(g):
     return g
 
 
+def _ledger(led):
+    """The frame to score, or None when it cannot be read at all."""
+    if led is None:
+        if not os.path.exists(LEDGER):
+            return None
+        led = pd.read_csv(LEDGER, low_memory=False)
+    if any(c not in getattr(led, "columns", ()) for c in FORWARD_BASE_COLUMNS):
+        return None
+    return led
+
+
+def _committed(led):
+    """Rows the rule COMMITTED to in the forward window, usable or not.
+
+    Strictly after the registration date: the registration date itself already
+    held graded rows, so `>=` would silently readmit part of the discovery
+    sample. This and `scored_rows` are the ONLY places the forward row set is
+    decided, and this one is deliberately the looser of the two -- it is the
+    denominator `scored_rows` is a subset of.
+    """
+    return led[(led["status"] == "graded")
+               & (led["game_date"].astype(str) > REGISTERED_ON)
+               & led["xw_lean"].notna()
+               & led["selection_rule_tag"].eq(RULE_TAG)
+               & led["hybrid_action"].isin(["FOLLOW", "FADE"])]
+
+
 def scored_rows(led=None):
     """Graded rows AFTER the registration date, with the hybrid rule applied.
 
@@ -246,35 +273,45 @@ def scored_rows(led=None):
     an empty frame when nothing has been played yet -- callers distinguish the
     two, because "not scored" and "scored, no rows" are different states.
     """
+    led = _ledger(led)
     if led is None:
-        if not os.path.exists(LEDGER):
-            return None
-        led = pd.read_csv(LEDGER, low_memory=False)
-    if any(c not in getattr(led, "columns", ()) for c in FORWARD_BASE_COLUMNS):
         return None
     # A ledger written before decision-time locking is a valid zero-row
     # forward sample, not an unreadable ledger. Never fall back to its close.
     if any(c not in led.columns for c in LOCKED_COLUMNS):
         return led.iloc[0:0].copy()
-    # Strictly after: the registration date itself already held graded rows, so
-    # `>=` would silently readmit part of the discovery sample. This is the ONE
-    # place the forward row set is decided.
-    g = led[(led["status"] == "graded")
-            & (led["game_date"].astype(str) > REGISTERED_ON)
-            & led["xw_lean"].notna()
-            & led["selection_rule_tag"].eq(RULE_TAG)
-            & led["hybrid_action"].isin(["FOLLOW", "FADE"])
-            & (led["hybrid_selection"].eq(led["home"])
-               | led["hybrid_selection"].eq(led["away"]))
-            & led["hybrid_full"].isin(["W", "L"])
-            & pd.to_numeric(led["pregame_p_home"], errors="coerce").notna()
-            & pd.to_numeric(led["pregame_home_ml"], errors="coerce").notna()
-            & pd.to_numeric(led["pregame_away_ml"], errors="coerce").notna()
-            & pd.to_numeric(led["hybrid_p"], errors="coerce").notna()
-            & pd.to_numeric(led["hybrid_ml"], errors="coerce").notna()].copy()
+    g = _committed(led)
+    g = g[(g["hybrid_selection"].eq(g["home"])
+           | g["hybrid_selection"].eq(g["away"]))
+          & g["hybrid_full"].isin(["W", "L"])
+          & pd.to_numeric(g["pregame_p_home"], errors="coerce").notna()
+          & pd.to_numeric(g["pregame_home_ml"], errors="coerce").notna()
+          & pd.to_numeric(g["pregame_away_ml"], errors="coerce").notna()
+          & pd.to_numeric(g["hybrid_p"], errors="coerce").notna()
+          & pd.to_numeric(g["hybrid_ml"], errors="coerce").notna()].copy()
     if g.empty:
         return g
     return apply_locked_rule(g)
+
+
+def unscorable(led=None):
+    """Count of committed forward rows that could not be scored.
+
+    A row here is one the rule ACTED on -- tagged, in the window, graded, with
+    a FOLLOW or FADE -- that the eligibility filter then dropped for a missing
+    or malformed field. Dropping it is right; dropping it SILENTLY is not, and
+    that is not hypothetical: an Arizona selection persisted in the model's
+    `AZ` namespace matched neither the ledger's `home` nor its `away`, so it
+    failed this filter without appearing anywhere. A registered test whose
+    denominator can shrink invisibly is the surface CLAUDE.md's controls entry
+    warns about, so the report states this count instead of absorbing it.
+    """
+    led = _ledger(led)
+    if led is None or any(c not in led.columns for c in LOCKED_COLUMNS):
+        return 0
+    scored = scored_rows(led)
+    n_scored = 0 if scored is None else len(scored)
+    return int(len(_committed(led)) - n_scored)
 
 
 def _excess_z(won, p):
@@ -307,12 +344,21 @@ def report_lines(led=None):
     out = [f"pre-registered hybrid market-direction test  (registered "
            f"{REGISTERED_ON}; follow the lean at q >= {THRESHOLD:.2f}, "
            f"fade below)"]
-    g = scored_rows(led)
+    # Resolve the ledger ONCE. `scored_rows` and `unscorable` each read it from
+    # disk when handed None, and `unscorable` calls `scored_rows` again, so the
+    # default path otherwise parsed the same CSV three times per build.
+    led = _ledger(led)
+    g = None if led is None else scored_rows(led)
     if g is None:
         out.append("    ledger unavailable or missing columns -- not scored")
         return out
     slates = g["game_date"].nunique() if len(g) else 0
     out.append(f"    eligible rows since registration: {len(g)} over {slates} slates")
+    dropped = unscorable(led)
+    if dropped:
+        out.append(f"    WARNING: {dropped} committed row(s) in the window carry "
+                   "a FOLLOW/FADE but no scorable selection, price or grade. "
+                   "They are excluded above -- see hybrid_test.unscorable.")
     if not len(g):
         out.append(f"    nothing to score yet. Prior is {PRIOR.upper()}: the fade "
                    "branch is always-chalk by construction and its discovery "
