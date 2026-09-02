@@ -2997,11 +2997,19 @@ def pctile_rank_raw(value, ref_arr, invert=False):
 # neither is recomputed here and neither can drift from the bars.
 LEADERBOARD_SP_N = 100          # SP rows published
 LEADERBOARD_BAT_N = 15          # batter rows published per position
-# Fielding order, then bat-only roles. Anything StatsAPI reports that is not
-# listed lands after these in alphabetical order rather than being dropped: a
-# position we failed to anticipate should look unfamiliar, not vanish.
-LEADERBOARD_POS_ORDER = ("C", "1B", "2B", "3B", "SS", "LF", "CF", "RF",
-                         "OF", "DH", "TWP")
+# Fielding order, then the bat-only board. Anything StatsAPI reports that is
+# not listed lands after these in alphabetical order rather than being dropped:
+# a position we failed to anticipate should look unfamiliar, not vanish.
+LEADERBOARD_POS_ORDER = ("C", "1B", "2B", "3B", "SS", "LF", "CF", "RF", "DH")
+# StatsAPI lists some hitters under a generic `OF` rather than LF/CF/RF, and a
+# two-way player under `TWP`. Neither names a corner this page can rank against
+# its own kind: `OF` is the same job as the three specific boards but cannot be
+# assigned to one of them without inventing which, and `TWP` is one or two
+# players a season. Both pool into DH -- the bat-only board, where a hitter is
+# ranked on hitting and nothing else -- rather than standing as boards of nine
+# and two. Mapped BEFORE grouping, so a pooled player competes for the same 15
+# slots as everyone else on that board rather than being appended to it.
+LEADERBOARD_POS_POOL = {"OF": "DH", "TWP": "DH"}
 
 
 def shrunk_rate_board(cust, prior, k, keep_ids=None):
@@ -3115,7 +3123,9 @@ def leaderboard_boards(batter_cust, pitcher_cust, league_baseline, people,
         LEADERBOARD_SP_N).reset_index(drop=True)
 
     bat = shrunk_rate_board(batter_cust, prior_bat, k)
-    bat["pos"] = [(people.get(int(i)) or {}).get("pos") for i in bat["player_id"]]
+    bat["pos"] = [LEADERBOARD_POS_POOL.get(p, p) for p in
+                  ((people.get(int(i)) or {}).get("pos")
+                   for i in bat["player_id"])]
     # A pitcher who took a plate appearance is not on a batter leaderboard, and
     # a hitter with no bio is not filed under a position we did not read.
     bat = bat[bat["pos"].notna() & (bat["pos"] != "P")]
@@ -5824,10 +5834,18 @@ tr.gr-day .rec{float:right;color:var(--muted)}
    relabelling -- so a second table idiom never enters the site. Only the
    rank/name/value trio inside the first two cells is new. */
 .lb-head{margin-top:22px}
+/* The Batters divider is the one break between two boards that mean different
+   things -- one is "lowest allowed", the other "highest". Without it the first
+   position table reads as a continuation of the pitcher list. */
+.lb-split{margin-top:30px;padding-top:18px;border-top:1px solid var(--line)}
 .lb-rank{display:inline-block;min-width:2.4ch;margin-right:10px;
   font:600 13px/1 var(--mono);font-variant-numeric:tabular-nums;color:var(--faint)}
 .lb-name{font:650 14px/1.3 var(--sans);color:var(--ink)}
 .lb-val{font-weight:700;color:rgba(var(--lean-tx),1)}
+/* Row count, not the cap. Sits in the heading so a short board is legible as
+   short rather than looking like a truncated one. */
+.lb-n{margin-left:9px;font:600 12px/1 var(--mono);font-variant-numeric:tabular-nums;
+  color:var(--faint);vertical-align:.12em}
 
 /* ---------- badges ---------- */
 .wlt{display:inline-block;min-width:17px;text-align:center;font:700 12.5px/1 var(--mono);
@@ -7470,27 +7488,41 @@ def _leaderboard_table(rows, rank_start=1, invert=False):
 
 
 def _leaderboard_board_html(title, sub, rows, invert=False):
+    """One board. `title` is plain text and is escaped HERE, exactly once.
+
+    It used to arrive carrying an `&mdash;` and was escaped on the way in as
+    well, so every position header published the literal text `C &mdash; top
+    15`. One owner for the escaping, and no markup in a value that gets
+    escaped: the entity belongs in the template, never in the argument.
+    """
+    n = 0 if rows is None else len(rows)
     head = ("<tr><th>Player</th>"
             f"<th>Shrunk {_esc(MODEL_RATE_LABEL)}</th>"
             "<th>Raw</th>"
             f"<th>{'BF' if invert else 'PA'}</th></tr>")
-    if rows is None or rows.empty:
+    if not n:
         body = ("<tr class='gr-row'><td class='c-game' colspan='4'>"
                 "No rows available for this board.</td></tr>")
     else:
         body = _leaderboard_table(rows, invert=invert)
-    return (f"<div class='gr-head lb-head'><h2 class='gr-h1'>{_esc(title)}</h2>"
-            f"<div class='gr-lead'>{sub}</div></div>"
-            f"<div class='gr-tablewrap'><table class='gr'><thead>{head}</thead>"
+    # The count is the row count, never the cap: a board of nine must not be
+    # headed "top 15". Same rule as every other published denominator here.
+    return (f"<div class='gr-head lb-head'><h2 class='gr-h1'>{_esc(title)}"
+            f"<span class='lb-n'>{n}</span></h2>"
+            + (f"<div class='gr-lead'>{sub}</div>" if sub else "")
+            + f"<div class='gr-tablewrap'><table class='gr'><thead>{head}</thead>"
             f"<tbody>{body}</tbody></table></div>")
 
 
 def render_leaderboard_html(built_txt, boards):
     """Season xwOBA boards at the model's own shrinkage.
 
-    Display only. Renders whatever `leaderboard_boards` could build and states
-    what it could not -- an SP board with no role map says so instead of
-    printing a short rotation as though that were the league.
+    Display only. The copy here is deliberately short: the page's job is the
+    numbers, and the reasoning behind the shrinkage lives in MATCHUP_SITE.md
+    where it can be read once rather than restated above every table. What
+    survives the trim is the part a reader cannot infer from the rows -- the
+    constant, the fact that there is no playing-time cut, and the SP board's
+    own coverage, which is a provenance statement rather than a description.
     """
     nav = ("<div class='backlink ledger-nav'>"
            "<a href='index.html'>&larr; today's selections</a>"
@@ -7503,58 +7535,32 @@ def render_leaderboard_html(built_txt, boards):
         return html_document(body, built_txt,
                              title=f"{PUBLIC_MODEL_NAME} leaderboard")
     m = boards["meta"]
-    lead = (
-        f"Season {_esc(MODEL_RATE_LABEL)} regressed toward a population centre "
-        f"at <b>K = {m['k']:.0f}</b> &mdash; the same constant and the same "
-        "<code>shrink_xwoba</code> the model's own leans are built on. A rate "
-        "is shown beside its raw value and its sample so the reader can see "
-        "how much of it is the player. <b>There is no playing-time cut:</b> at "
-        f"K = {m['k']:.0f} a thin sample is pulled to within a hair of the "
-        "target and cannot reach the top of a board, so the regression does "
-        "the qualifying continuously instead of at a cliff. "
-        f"Built <span class='stamp'>{built_txt}</span>.")
+    label = _esc(MODEL_RATE_LABEL)
     head = (f"<div class='gr-head'><h1 class='gr-h1'>Season leaderboard</h1>"
-            f"<div class='gr-lead'>{lead}</div></div>")
+            f"<div class='gr-lead'>Season {label} shrunk at "
+            f"<b>K&nbsp;=&nbsp;{m['k']:.0f}</b>, the model's own. No "
+            "playing-time cut &mdash; a thin sample regresses to the target "
+            "instead. Raw rate and sample shown beside every number. Built "
+            f"<span class='stamp'>{built_txt}</span>.</div></div>")
 
-    sp_sub = (
-        f"Lowest {_esc(MODEL_RATE_LABEL)} allowed, best first. Starters are "
-        f"those whose season start share exceeds {RP_MAX_START_SHARE:.0%} "
-        "&mdash; the same rotation/relief predicate the bullpen pool uses, so "
-        "SP means one thing across this site. Regressed toward the "
-        f"<b>PA-weighted league rate {m['prior_pit']:.4f}</b>, which the "
-        "pitcher pool already sits on.")
     if not m["sp_roles_known"]:
-        sp_sub += (" <b>No role data was available on this build</b>, so no "
-                   "starter could be identified and the board is empty rather "
-                   "than guessed at.")
+        sp_sub = ("No role data on this build, so no starter could be "
+                  "identified.")
     else:
-        sp_sub += (f" Role lines were read for {m['n_role_lines']} pitchers "
-                   f"and {m['n_sp']} of the {m['n_pitchers']} on the season "
-                   "board qualified as starters; a club this build had no "
-                   "reason to call is not represented.")
-
-    bat_sub = (
-        f"Highest {_esc(MODEL_RATE_LABEL)}, best first, grouped by the primary "
-        "position StatsAPI lists for each player. Regressed toward the "
-        f"<b>batter pool's own unweighted centre {m['prior_bat']:.4f}</b> "
-        "rather than the league rate above. That difference is deliberate and "
-        "is the same target the percentile bars on a matchup card rank "
-        "against: a rank against a population has to regress toward that "
-        "population's centre, or a fringe bat is measured against a group he "
-        "is not drawn from. "
-        f"{m['n_bat_ranked']} of {m['n_batters']} batters on the season board "
-        "carry a position and are ranked.")
-
+        sp_sub = (f"Lowest {label} allowed. {m['n_sp']} of "
+                  f"{m['n_pitchers']} pitchers qualified as starters "
+                  f"(start share over {RP_MAX_START_SHARE:.0%}).")
     sections = [_leaderboard_board_html(
-        f"Top {LEADERBOARD_SP_N} starting pitchers", sp_sub,
-        boards["sp"], invert=True)]
+        "Starting pitchers", sp_sub, boards["sp"], invert=True)]
+
+    if boards["bat"]:
+        sections.append(
+            f"<div class='gr-head lb-split'><h2 class='gr-h1'>Batters</h2>"
+            f"<div class='gr-lead'>Highest {label}, by primary position. "
+            f"{m['n_bat_ranked']} of {m['n_batters']} batters ranked.</div>"
+            "</div>")
     for pos, rows in boards["bat"]:
-        sections.append(_leaderboard_board_html(
-            f"{_esc(pos)} &mdash; top {LEADERBOARD_BAT_N}",
-            bat_sub if pos == boards["bat"][0][0] else
-            f"Top {LEADERBOARD_BAT_N} by shrunk {_esc(MODEL_RATE_LABEL)} at "
-            f"{_esc(pos)}.",
-            rows))
+        sections.append(_leaderboard_board_html(pos, "", rows))
     body = nav + head + "".join(sections) + _legend_head(
         f"{PUBLIC_MODEL_NAME} leaderboard", built_txt)
     return html_document(body, built_txt,
