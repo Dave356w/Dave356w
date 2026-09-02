@@ -17,6 +17,7 @@ arithmetic is `shrink_xwoba` -- already covered where it lives:
     board, and its failure costs names rather than the page.
 """
 
+import re
 import unittest
 
 import numpy as np
@@ -314,26 +315,61 @@ class RenderTests(unittest.TestCase):
         self.assertIn("leaderboard.html", b.records_strip_html())
 
     def test_it_states_the_shrinkage_it_used(self):
-        self.assertIn("K = 100", self.html)
-        self.assertIn("shrink_xwoba", self.html)
+        """The copy is terse now; the constant is the one thing it must keep."""
+        self.assertIn("K&nbsp;=&nbsp;100", self.html)
 
     def test_it_states_that_there_is_no_qualifier(self):
-        self.assertIn("no playing-time cut", self.html)
-
-    def test_it_states_both_targets_and_that_they_differ(self):
-        self.assertIn("0.3150", self.html)
-        self.assertIn("0.3080", self.html)
-        self.assertIn("unweighted centre", self.html)
+        self.assertIn("No playing-time cut", self.html)
 
     def test_it_reports_role_coverage_rather_than_asserting_it(self):
-        """Report provenance, don't assert coverage."""
-        self.assertIn("Role lines were read for", self.html)
+        """Report provenance, don't assert coverage -- survives the trim."""
+        self.assertIn("qualified as starters", self.html)
+        self.assertIn("of the", self.html)
+
+    def test_it_reports_how_many_batters_were_ranked(self):
+        self.assertRegex(self.html, r"\d+ of \d+ batters ranked")
 
     def test_an_empty_role_map_says_so_instead_of_showing_a_short_rotation(self):
         boards = b.leaderboard_boards(self.bat, self.pit, LG, self.people, {})
         html = b.render_leaderboard_html("now", boards)
-        self.assertIn("No role data was available", html)
+        self.assertIn("No role data on this build", html)
         self.assertEqual(len(boards["sp"]), 0)
+
+    def test_the_copy_is_short(self):
+        """The trim is the requirement, so it needs a test that would notice.
+
+        Prose here means the lead paragraphs, not the rows: a board of 15
+        players is not verbose. Counted as characters of `gr-lead` text, which
+        is where every description on this page lives.
+        """
+        leads = re.findall(r"<div class='gr-lead'>(.*?)</div>", self.html)
+        prose = re.sub(r"<[^>]+>", "", " ".join(leads))
+        self.assertLess(len(prose), 500, f"lead copy grew back to {len(prose)}")
+        self.assertLessEqual(len(leads), 3, "one lead per section at most")
+
+    def test_the_copy_does_not_grow_with_the_number_of_boards(self):
+        """Nine tables each explaining themselves is what got trimmed.
+
+        Counting leads rather than grepping after a marker: the Batters
+        divider carries one legitimately, so the invariant is that adding
+        positions adds tables and not prose.
+        """
+        def n_leads(people_rows, bat_rows):
+            boards = b.leaderboard_boards(
+                _cust(bat_rows), _cust([(9000, 500, .25)]), LG,
+                _people(people_rows), _roles(**{"9000": .9}))
+            html = b.render_leaderboard_html("now", boards)
+            return len(re.findall(r"<div class='gr-lead'>", html)), len(boards["bat"])
+
+        few, n_few = n_leads([(1, "a", "C"), (2, "b", "SS")],
+                             [(1, 300, .40), (2, 300, .39)])
+        many, n_many = n_leads(
+            [(i, f"p{i}", p) for i, p in
+             enumerate(["C", "1B", "2B", "3B", "SS", "LF", "CF", "RF", "DH"], 1)],
+            [(i, 300, .40) for i in range(1, 10)])
+        self.assertGreater(n_many, n_few)
+        self.assertEqual(few, many, "lead copy scales with the board count")
+
 
     def test_no_boards_renders_a_page_rather_than_raising(self):
         for empty in (None, {}):
@@ -357,6 +393,101 @@ class RenderTests(unittest.TestCase):
             with self.subTest(cls=cls):
                 self.assertIn(cls, self.html)
 
+
+class HeadingTests(unittest.TestCase):
+    """A heading is plain text and is escaped exactly once.
+
+    Shipped once escaped twice: the title arrived carrying an `&mdash;` and
+    `_leaderboard_board_html` escaped it again, so every position header on the
+    live page read `C &mdash; top 15`. These pin the rule rather than the
+    instance -- any markup in an escaped value fails the second test.
+    """
+
+    def setUp(self):
+        bat, pit, people, roles = _demo()
+        self.boards = b.leaderboard_boards(bat, pit, LG, people, roles)
+        self.html = b.render_leaderboard_html("now", self.boards)
+        self.heads = re.findall(r"<h[12][^>]*>(.*?)</h[12]>", self.html)
+
+    def test_no_heading_contains_a_double_escaped_entity(self):
+        for h in self.heads:
+            with self.subTest(heading=h):
+                self.assertNotIn("&amp;", h)
+
+    def test_a_position_heading_is_just_the_position_and_its_count(self):
+        got = [h for h in self.heads if h.startswith("C<")]
+        self.assertEqual(len(got), 1)
+        self.assertRegex(got[0], r"^C<span class='lb-n'>\d+</span>$")
+
+    def test_the_heading_count_is_the_rows_shown_not_the_cap(self):
+        """A board of nine must not be headed 15."""
+        people = _people([(i, f"B{i}", "C") for i in range(1, 10)])
+        bat = _cust([(i, 300, 0.300 + 0.001 * i) for i in range(1, 10)])
+        boards = b.leaderboard_boards(bat, _cust([(9000, 500, .25)]), LG,
+                                      people, _roles(**{"9000": .9}))
+        html = b.render_leaderboard_html("now", boards)
+        self.assertIn("<span class='lb-n'>9</span>", html)
+        self.assertNotIn("<span class='lb-n'>15</span>", html)
+
+    def test_the_batter_boards_are_announced_once(self):
+        """One divider, not a description above each of nine tables."""
+        self.assertEqual(self.html.count(">Batters</h2>"), 1)
+
+
+class PositionPoolingTests(unittest.TestCase):
+    """`OF` and `TWP` pool into DH; nothing else pools.
+
+    Neither names a corner this page can rank against its own kind -- `OF` is
+    the same job as LF/CF/RF but cannot be assigned to one of them without
+    inventing which, and `TWP` is one or two players a season. DH is the
+    bat-only board, so that is where they land.
+    """
+
+    def _boards(self, people_rows):
+        bat = _cust([(p, 300, .300 + .001 * p) for p, _, _ in people_rows])
+        return b.leaderboard_boards(bat, _cust([(9000, 500, .25)]), LG,
+                                    _people(people_rows),
+                                    _roles(**{"9000": .9}))
+
+    def test_the_pool_map_is_exactly_of_and_twp_to_dh(self):
+        self.assertEqual(b.LEADERBOARD_POS_POOL, {"OF": "DH", "TWP": "DH"})
+
+    def test_neither_of_nor_twp_is_published_as_its_own_board(self):
+        boards = self._boards([(1, "a", "OF"), (2, "b", "TWP"), (3, "c", "DH")])
+        self.assertEqual([p for p, _ in boards["bat"]], ["DH"])
+
+    def test_a_pooled_player_is_ranked_on_the_dh_board(self):
+        boards = self._boards([(1, "of", "OF"), (2, "twp", "TWP"),
+                               (3, "dh", "DH")])
+        names = list(dict(boards["bat"])["DH"]["name"])
+        self.assertCountEqual(names, ["of", "twp", "dh"])
+
+    def test_pooling_happens_before_the_cut_so_slots_are_competed_for(self):
+        """A pooled player displaces a weaker DH rather than being appended."""
+        rows = ([(i, f"dh{i}", "DH") for i in range(1, 16)]
+                + [(99, "of", "OF")])
+        bat = _cust([(p, 300, .300) for p, _, _ in rows[:-1]]
+                    + [(99, 300, .900)])
+        boards = b.leaderboard_boards(bat, _cust([(9000, 500, .25)]), LG,
+                                      _people(rows), _roles(**{"9000": .9}))
+        dh = dict(boards["bat"])["DH"]
+        self.assertEqual(len(dh), b.LEADERBOARD_BAT_N)
+        self.assertEqual(dh["name"].iloc[0], "of")
+
+    def test_the_specific_outfield_boards_are_untouched(self):
+        boards = self._boards([(1, "a", "LF"), (2, "b", "CF"), (3, "c", "RF"),
+                               (4, "d", "OF")])
+        self.assertEqual([p for p, _ in boards["bat"]], ["LF", "CF", "RF", "DH"])
+
+    def test_an_unpooled_unknown_position_still_stands_alone(self):
+        """Pooling is a named map, not a catch-all for anything unfamiliar."""
+        boards = self._boards([(1, "a", "DH"), (2, "b", "PH")])
+        self.assertEqual([p for p, _ in boards["bat"]], ["DH", "PH"])
+
+    def test_of_and_twp_are_no_longer_in_the_display_order(self):
+        for pos in ("OF", "TWP"):
+            with self.subTest(pos=pos):
+                self.assertNotIn(pos, b.LEADERBOARD_POS_ORDER)
 
 class FailureIsolationTests(unittest.TestCase):
     def test_write_leaderboard_page_never_raises(self):

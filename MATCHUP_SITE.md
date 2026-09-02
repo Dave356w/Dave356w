@@ -1029,6 +1029,19 @@ Three things about it are decisions rather than defaults:
   map is read from the cache `build_pitching_plans` already populated, so the
   board adds no request to the critical path and states its own coverage
   instead of implying a full rotation.
+- **`OF` and `TWP` pool into DH** (`LEADERBOARD_POS_POOL`). StatsAPI lists
+  some hitters under a generic `OF` rather than LF/CF/RF, and a two-way player
+  under `TWP`; neither can be assigned to a specific corner without inventing
+  which, and both would otherwise stand as boards of a handful. Pooling
+  happens *before* the cut, so a pooled player competes for the same 15 DH
+  slots rather than being appended. Nothing else pools — an unfamiliar
+  position still gets its own board.
+
+Section headings carry the position and the **row count actually shown**,
+never the cap: a board of nine is headed nine. Heading text is plain and is
+escaped exactly once, inside `_leaderboard_board_html` — the first version
+passed an `&mdash;` through `_esc` twice and published `C &mdash; top 15`.
+Page copy is deliberately three short lines; the reasoning lives here.
 
 Display only: no lean, delta, dump or ledger row, and no `MODEL_TAG`
 implication. The whole step is failure-isolated — it runs after everything the
