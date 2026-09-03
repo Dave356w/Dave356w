@@ -743,6 +743,51 @@ precedent — they are how the fix is known to look.
   observed 0.88 switches a slate, roughly ten seasons. **Read nothing before
   the first, and do not read the second as reachable.**
 
+  **The |delta| conviction filter is the fourth registration, and the first
+  whose search test it FAILED rather than survived.** The proposal is the most
+  natural one left: low-conviction leans look worse than high-conviction ones,
+  so abstain below some |xw_net|. It reproduces on the ledger — over 252
+  decidable v12 rows, |d| >= 0.012 runs 109-61 for +7.3pp against price where
+  |d| < 0.012 runs 47-35 for +5.5pp. Registered rather than shipped, and
+  registered with a **NEGATIVE** prior, on three measurements:
+
+  * **The contrast is null at every threshold.** Kept-minus-dropped is
+    +1.77pp with an SE *of the difference* of 6.63 — z = +0.27. Swept
+    0.008/0.010/0.012/0.015/0.020/0.025, every z lands in [-0.18, +0.46], and
+    at 0.020 the sign flips. A filter whose benefit changes sign inside the
+    range you would plausibly pick from is not measuring conviction.
+  * **The null-max test comes back above one half.** Sweeping 0.006..0.030,
+    the best contrast the real rows offer is +4.01pp at 0.017; the best of
+    that sweep under "market correct, no edge" averages **+6.98pp**, giving
+    **P(null best >= observed) = 0.693**. The observed gap is *smaller* than
+    a search over pure noise typically returns. Set that beside the hybrid's
+    0.019 — the same test, the same code path, opposite verdicts, which is
+    what makes it worth running rather than a formality.
+  * **The always-chalk control inverts the finding, and that is the decisive
+    one.** On the games the filter DROPS the model beats chalk by +6.37pp; on
+    the games it KEEPS, by +3.14pp. The kept half only looks better because
+    it is favourite-heavy — chalk alone runs +4.17pp there against -0.84pp on
+    the dropped half. Low-|delta| games sit near pick'em (mean implied 51.8%
+    against 56.8%), which is precisely where a model has something to add
+    over backing the favourite. **The filter proposes to discard the games
+    where the model contributes most.** Bootstrapped, that +6.37pp is
+    [-7.8, +20.6] with P(<= 0) = 0.19 — not established either, but pointing
+    the wrong way for the rule.
+
+  So this is `Deleting controls as clutter` and the base-rate trap arriving
+  together on a new axis: the band looked like skill and was schedule. The
+  registered headline is therefore the **excess on the DROPPED games**, not a
+  filtered ROI — a filter's whole content is which rows it removes, so a
+  combined line could only restate the model — and the rule is vindicated only
+  if that number goes **negative**. `delta_filter_test.py` prints the chalk
+  control directly beneath it for the reason above, and its gate is ~393
+  dropped games (~91 slates) for the discovery-sized effect, ~1,090 for a
+  plausible 3pp one. Read nothing before the first.
+
+  One thing this does NOT contradict: `ledger_report.txt`'s |Δ| terciles stay
+  a standing monitor. Watching the distribution is not the same as betting on
+  it, and the monitor is what made the proposal checkable in an afternoon.
+
   **What it cannot do, and the one thing the protocol asks for that this repo
   cannot yet supply:** the rule is specified against the no-vig probability
   available *at decision time*, and the ledger carries only the close, because
@@ -1487,7 +1532,8 @@ that line would still be waiting.
 terciles, the per-family and per-slate predicted-vs-actual, the component error
 (SP / BP / lineup each against its own realised phase), the IP calibration
 slope, the SP-vs-lineup coefficients and their symmetry contrast, and the two
-pre-registered forward tests (`forward_test.py`, `hybrid_test.py`). The grades
+pre-registered forward tests (`forward_test.py`, `hybrid_test.py`,
+`delta_filter_test.py`). The grades
 page carries the baseline controls and the lock provenance. Read these before
 writing a new probe.
 
@@ -1498,6 +1544,7 @@ writing a new probe.
 | `value_probe.py` | is there a tradable relationship between `xw_net` and price? (incl. band grids) |
 | `forward_test.py` | pre-registered fade rule, frozen 2026-08-29 (also prints every build) |
 | `hybrid_test.py` | pre-registered hybrid market-direction rule, frozen 2026-09-01 (also prints every build) |
+| `delta_filter_test.py` | pre-registered |delta| conviction filter, frozen 2026-09-03; NEGATIVE prior (also prints every build) |
 | `hfa_probe.py` | does adding a home-field term to the lean improve it? (no) |
 | `interaction_probe.py` | do single signals or other combiners beat `B·P/L`? |
 | `dispersion_probe.py` | does a concentrated lineup beat the mean it is averaged into? |

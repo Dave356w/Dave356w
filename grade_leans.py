@@ -1034,6 +1034,20 @@ def report_text(led):
             say(_hl)
     except Exception as _exc:                      # noqa: BLE001 - see above
         say(f"pre-registered hybrid test unavailable ({type(_exc).__name__})")
+
+    # |delta| conviction filter (delta_filter_test.py), registered 2026-09-03.
+    # Third module rather than a third arm, for the same reason as above. Its
+    # prior is NEGATIVE where the hybrid's is null -- the always-chalk control
+    # on its discovery rows points against the rule -- so the two must not be
+    # read as one another, and printing them adjacently is what makes that
+    # visible rather than a fact you have to go and look up.
+    try:
+        import delta_filter_test
+        say("")
+        for _dl in delta_filter_test.report_lines(led):
+            say(_dl)
+    except Exception as _exc:                      # noqa: BLE001 - see above
+        say(f"pre-registered delta filter test unavailable ({type(_exc).__name__})")
     return "\n".join(lines)
 
 
