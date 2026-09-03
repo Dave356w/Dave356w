@@ -107,3 +107,18 @@ pre-registered hybrid market-direction test  (registered 2026-09-01; follow the 
     the fade branch backed the favourite in 4 of 4 switched games (construction says all of them)
     GATE: 4 of ~41 switches to test the discovery-sized effect, ~1420 for a plausible +0.10u one (~10 seasons at 0.88 switches a slate).
     The combined-hybrid line is mostly the model, not the rule: only the switched games are the hypothesis. See hybrid_test.py.
+
+pre-registered |delta| filter test  (registered 2026-09-03; abstain when |xw_net| < 0.012)
+    eligible rows since registration: 0 over 0 slates
+    nothing to score yet. Prior is NEGATIVE: on the discovery rows the model beat always-chalk by MORE on the games this filter drops than on the ones it keeps.
+    GATE: 0 of ~393 dropped games (~91 slates at 0.33 of a slate). Read nothing before then.
+
+pre-registered abstain-vs-fade test  (registered 2026-09-03; decline the lean below q = 0.45 instead of fading it)
+    eligible rows since registration: 0 over 0 slates
+    nothing to score yet. Prior is NULL: every faded bet is a favourite bet and the discovery window favoured favourites by +2.54pp, but the model picks which favourites (+6.45pp, z=+0.55). Both accounts fit.
+    GATE: 0 of ~82 declined games (~78 slates at 0.08 of a slate).
+
+pre-registered underdog sign-flip test  (registered 2026-09-03; dog leans split at q = 0.45)
+    dog leans since registration: 0 over 0 slates
+    nothing to score yet. Prior is NULL: found by slicing a price axis, and P(null >= observed) = 0.0707 against the split sweep.
+    GATE: 0 of ~88 dog leans (~25 slates). Read nothing before then.
