@@ -1048,6 +1048,19 @@ def report_text(led):
             say(_dl)
     except Exception as _exc:                      # noqa: BLE001 - see above
         say(f"pre-registered delta filter test unavailable ({type(_exc).__name__})")
+
+    # abstain-vs-fade (abstain_test.py), registered 2026-09-03. It shares the
+    # hybrid's threshold and declined set on purpose -- the two rules differ
+    # only in what happens on a declined game -- so it prints directly after
+    # the hybrid block, where the comparison is legible. Its own registration
+    # date is two days later than the hybrid's and is NOT delegated.
+    try:
+        import abstain_test
+        say("")
+        for _al in abstain_test.report_lines(led):
+            say(_al)
+    except Exception as _exc:                      # noqa: BLE001 - see above
+        say(f"pre-registered abstain test unavailable ({type(_exc).__name__})")
     return "\n".join(lines)
 
 

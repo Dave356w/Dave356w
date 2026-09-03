@@ -55,6 +55,59 @@ implementing it and are the ones that decide how it is registered.
      favourite-friendly stretch, is the trap CLAUDE.md names: a hot base rate
      making a derived rule look justified on the rows in front of you.
 
+WHAT THE RULE ACTUALLY IS, ADDED 2026-09-03 AFTER READING IT BACK. Point 4
+above is true and its scope is far too narrow, and the correction changes how
+every number on this page should be read.
+
+  THE CHALK IDENTITY COVERS 155 GAMES, NOT 15. Point 4 frames "backs the
+  favourite" as a property of the FADE branch. It is a property of the rule.
+  Work it with q as the leaned side's price: if the model leans the FAVOURITE
+  and that favourite is priced above 0.55, then q > 0.55 >= 0.45, so the rule
+  FOLLOWS and backs the favourite. If the model leans the DOG in the same
+  game, q < 0.45, so the rule FADES and backs the favourite. Both branches
+  converge. Whenever the favourite is priced above 0.55 -- above 1 minus the
+  threshold -- THE MODEL CANNOT CHANGE THE SELECTION.
+
+  Verified by counterfactual rather than by algebra: invert every lean in the
+  252 decidable v12 rows and re-run the rule, and 155 of 252 selections are
+  unchanged. The split is exact -- unchanged rows have a minimum favourite
+  price of 0.5511, changed rows a maximum of 0.5455. So on 61.5% of games the
+  published selection is a function of PRICE ALONE, and overall the rule
+  agrees with always-chalk on 81.3% of its selections.
+
+  SO THE HONEST DESCRIPTION IS "NO BIG UNDERDOGS", NOT CONVICTION. This rule
+  is easily mistaken for -- and was proposed as -- "when the xwOBA signal is
+  weak, lean on the market". It does not do that. It keys on q, the market's
+  price of the leaned side, never on |xw_net|, and the two correlate only
+  +0.42: of the 82 lowest-signal games the rule defers on 12, and of the 20
+  games it does fade, 8 are not low-signal at all. What it actually does is
+  decline to back the model's pick when the market prices it under 45%. The
+  lean went 6-14 on exactly those games, and that is the entire source of the
+  rule's +1.8pp over the plain lean.
+
+  THE CONVICTION VERSION WAS MEASURED AND LOSES MONOTONICALLY. Deferring to
+  the market favourite below a |xw_net| threshold scores +6.02 / +5.94 / +4.66
+  / +4.14 / +1.50 / +1.55 pp of excess at 0.008 / 0.010 / 0.012 / 0.015 /
+  0.020 / 0.025, against +6.73pp for never deferring and +2.54pp for
+  always-chalk. Every level of deferral is worse than none and the curve
+  slides straight to the baseline. Low-|delta| games are near-pick'em games,
+  which is where the model beats chalk by MOST (+6.37pp against +3.14pp on the
+  rest) -- so the premise is inverted on this data. `delta_filter_test.py`
+  holds the registered version of that question.
+
+  WHERE THE MODEL ACTUALLY ACTS, it does well: on the 97 games with a
+  favourite priced at or under 0.55, the rule runs 61-36 for +12.85pp +/- 5.07
+  against always-chalk's -2.76pp, disagreeing with chalk on 47 of them. The
+  published combined line pools that with 155 games of pure chalk, which is
+  the real reason it "mostly restates the model" rather than the fade branch's
+  smallness.
+
+None of this moves a registered constant, and none of it is a coding defect --
+the rule does what it says. What changed is the description. `abstain_test.py`
+registers the variant this reading argues for: decline those games rather than
+fade them, so the published record stops being a model rule and a market
+baseline added together.
+
 WHAT THE SEARCH TEST SAYS, since value_probe's standing rule is that a
 threshold found by searching is judged against the null maximum and never
 against zero. Sweeping the threshold 0.30..0.56 in 0.01 steps, 0.45 is the

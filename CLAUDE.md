@@ -788,6 +788,66 @@ precedent — they are how the fix is known to look.
   a standing monitor. Watching the distribution is not the same as betting on
   it, and the monitor is what made the proposal checkable in an afternoon.
 
+  **The hybrid has a DEAD ZONE covering 61.5% of games, and the registration
+  understated it by an order of magnitude.** `hybrid_test`'s point 4 says the
+  fade branch is always-chalk "exactly and by construction -- verified, 15 of
+  15". True, and far too narrow: it is a property of the RULE, not the branch.
+  With `q` the leaned side's price, a model leaning a favourite priced above
+  0.55 gives `q > 0.55 >= 0.45` → FOLLOW → favourite; the same game with the
+  model leaning the dog gives `q < 0.45` → FADE → favourite. Both branches
+  converge, so **whenever the favourite is priced above `1 - THRESHOLD` the
+  model cannot change the selection.**
+
+  Verified by counterfactual, not algebra: invert every lean over the 252
+  decidable v12 rows and 155 of 252 selections are unchanged, with an exact
+  split (unchanged rows' minimum favourite price 0.5511, changed rows' maximum
+  0.5455). The rule agrees with always-chalk on 81.3% of its selections. So
+  the chalk identity covers 155 games, not 15, and that — not the fade
+  branch's smallness — is why the combined line "mostly restates the model".
+
+  **The rule is also not the rule it was proposed as.** The stated intent was
+  "when the xwOBA signal is very low, use the market for additional signal".
+  It keys on `q`, never on `|xw_net|`, and the two correlate only +0.42: of
+  the 82 lowest-signal games it defers on 12, and 8 of the 20 it does fade are
+  not low-signal at all. What it does is decline to back the model's pick when
+  the market prices it under 45% — a **no-big-underdogs filter**. The lean ran
+  6-14 on exactly those games, which is the whole of its +1.8pp over the plain
+  lean.
+
+  **The conviction version was then measured directly and loses monotonically**
+  — deferring to the favourite below `|xw_net|` of 0.008/0.010/0.012/0.015/
+  0.020/0.025 scores +6.02/+5.94/+4.66/+4.14/+1.50/+1.55pp against +6.73pp for
+  never deferring and +2.54pp for always-chalk. Every level of deferral is
+  worse than none. The mechanism is the one `delta_filter_test.py` registers:
+  low-|Δ| games are near-pick'em games, which is where the model beats chalk by
+  MOST. **So the rule outperforms the idea behind it** — had it implemented the
+  stated intent it would have done worse than the plain lean. Two analyses
+  reaching the same structural fact from opposite directions is the useful
+  part: the model's contribution concentrates in near-pick'em games, the hybrid
+  dilutes them and the delta filter would discard them.
+
+  Where the model does act — the 97 games with a favourite at or under 0.55 —
+  it runs 61-36 for **+12.85pp ± 5.07** against always-chalk's −2.76pp,
+  disagreeing with chalk on 47. That is the number the dead zone is averaging
+  away.
+
+  Nothing here is a coding defect and no registered constant moved; the rule
+  does what it says. `abstain_test.py` registers the variant this argues for —
+  decline those games rather than fade them, so the published record stops
+  being a model rule and a market baseline added together. Its prior is NULL:
+  the two differ by 0.25pp (+8.55 vs +8.30) and the discovery headline is
+  +0.18u per declined game at z = +0.99. **The argument for it is readability,
+  not edge**, and if the forward reading cannot separate them that is itself
+  the case for the simpler rule.
+
+  One trap it hit on its first run, worth keeping: `abstain_test.scored_rows`
+  delegates eligibility and the follow/fade split to `hybrid_test` so the two
+  can never disagree about which games are declined — and delegating
+  *wholesale* inherited the hybrid's 2026-09-01 registration date, so it
+  scored two slates that are part of its own discovery sample. Both numbers
+  looked like forward rows. **When a registration borrows another's row
+  selector, the date bound is the one thing it must not borrow.**
+
   **What it cannot do, and the one thing the protocol asks for that this repo
   cannot yet supply:** the rule is specified against the no-vig probability
   available *at decision time*, and the ledger carries only the close, because
@@ -1533,7 +1593,7 @@ terciles, the per-family and per-slate predicted-vs-actual, the component error
 (SP / BP / lineup each against its own realised phase), the IP calibration
 slope, the SP-vs-lineup coefficients and their symmetry contrast, and the two
 pre-registered forward tests (`forward_test.py`, `hybrid_test.py`,
-`delta_filter_test.py`). The grades
+`delta_filter_test.py`, `abstain_test.py`). The grades
 page carries the baseline controls and the lock provenance. Read these before
 writing a new probe.
 
@@ -1545,6 +1605,7 @@ writing a new probe.
 | `forward_test.py` | pre-registered fade rule, frozen 2026-08-29 (also prints every build) |
 | `hybrid_test.py` | pre-registered hybrid market-direction rule, frozen 2026-09-01 (also prints every build) |
 | `delta_filter_test.py` | pre-registered |delta| conviction filter, frozen 2026-09-03; NEGATIVE prior (also prints every build) |
+| `abstain_test.py` | pre-registered abstain-vs-fade variant of the hybrid, frozen 2026-09-03 (also prints every build) |
 | `hfa_probe.py` | does adding a home-field term to the lean improve it? (no) |
 | `interaction_probe.py` | do single signals or other combiners beat `B·P/L`? |
 | `dispersion_probe.py` | does a concentrated lineup beat the mean it is averaged into? |
