@@ -55,6 +55,109 @@ implementing it and are the ones that decide how it is registered.
      favourite-friendly stretch, is the trap CLAUDE.md names: a hot base rate
      making a derived rule look justified on the rows in front of you.
 
+WHAT THE RULE ACTUALLY IS, ADDED 2026-09-03 AFTER READING IT BACK. Point 4
+above is true and its scope is far too narrow, and the correction changes how
+every number on this page should be read.
+
+  THE CHALK IDENTITY COVERS 155 GAMES, NOT 15. Point 4 frames "backs the
+  favourite" as a property of the FADE branch. It is a property of the rule.
+  Work it with q as the leaned side's price: if the model leans the FAVOURITE
+  and that favourite is priced above 0.55, then q > 0.55 >= 0.45, so the rule
+  FOLLOWS and backs the favourite. If the model leans the DOG in the same
+  game, q < 0.45, so the rule FADES and backs the favourite. Both branches
+  converge. Whenever the favourite is priced above 0.55 -- above 1 minus the
+  threshold -- THE MODEL CANNOT CHANGE THE SELECTION.
+
+  Verified by counterfactual rather than by algebra: invert every lean in the
+  252 decidable v12 rows and re-run the rule, and 155 of 252 selections are
+  unchanged. The split is exact -- unchanged rows have a minimum favourite
+  price of 0.5511, changed rows a maximum of 0.5455. So on 61.5% of games the
+  published selection is a function of PRICE ALONE.
+
+  THE 81.3% CHALK OVERLAP IS TRUE AND IT UNDERSTATES THE RULE. Read alone it
+  describes the rule by what it copies rather than by what it adds. On the
+  other 38.5% the rule takes positions always-chalk never takes: 47 of 252
+  selections (18.7%) are UNDERDOGS priced 0.450-0.500, backed because the
+  model likes them, and chalk takes none of those by definition. They run
+  30-17 for +16.11pp +/- 7.28 (z = +2.21) and +31.1% ROI -- the best segment
+  the rule has, 14.59u of its 34.29u from 19% of its bets, against +6.82pp on
+  the 205 favourite selections. Any description of this rule that leads with
+  the overlap and omits those 47 games is describing the wrong half.
+
+  THE FADE BRANCH IS NOT CONTENT-FREE EITHER, which point 4 above and the
+  first draft of this section both got wrong. Every faded bet IS a favourite
+  bet -- that part stands -- but the model chooses WHICH favourites. The 20 it
+  selects ran +11.48pp against +5.02pp for the 135 chalk bets priced above
+  0.55 that it does not select: a selection value of +6.45pp, z = +0.55, so
+  not established, but not nothing either. "Backs the favourite on every row"
+  is a true statement about the ticket, not about the information.
+
+  SO THE MECHANICAL DESCRIPTION IS "NO BIG UNDERDOGS". This rule
+  is easily mistaken for -- and was proposed as -- "when the xwOBA signal is
+  weak, lean on the market". It does not do that. It keys on q, the market's
+  price of the leaned side, never on |xw_net|, and the two correlate only
+  +0.42: of the 82 lowest-signal games the rule defers on 12, and of the 20
+  games it does fade, 8 are not low-signal at all. What it actually does is
+  decline to back the model's pick when the market prices it under 45%. The
+  lean went 6-14 on exactly those games, and that is the entire source of the
+  rule's +1.8pp over the plain lean.
+
+  THE CONVICTION VERSION WAS MEASURED AND LOSES MONOTONICALLY. Deferring to
+  the market favourite below a |xw_net| threshold scores +6.02 / +5.94 / +4.66
+  / +4.14 / +1.50 / +1.55 pp of excess at 0.008 / 0.010 / 0.012 / 0.015 /
+  0.020 / 0.025, against +6.73pp for never deferring and +2.54pp for
+  always-chalk. Every level of deferral is worse than none and the curve
+  slides straight to the baseline. Low-|delta| games are near-pick'em games,
+  which is where the model beats chalk by MOST (+6.37pp against +3.14pp on the
+  rest) -- so the premise is inverted on this data. `delta_filter_test.py`
+  holds the registered version of that question.
+
+  WHERE THE MODEL ACTUALLY ACTS, it does well: on the 97 games with a
+  favourite priced at or under 0.55, the rule runs 61-36 for +12.85pp +/- 5.07
+  against always-chalk's -2.76pp, disagreeing with chalk on 47 of them. The
+  published combined line pools that with 155 games of pure chalk, which is
+  the real reason it "mostly restates the model" rather than the fade branch's
+  smallness.
+
+  WHY THE CLIFF IS THERE AT ALL -- the market-overpricing account, which is a
+  better explanation than the mechanical one above. xwOBA and the market
+  normally agree: the lean is the market favourite on 73.4% of games. Where
+  they DIVERGE, the market has already priced whatever the model is reading,
+  and the model's continued insistence is anti-signal rather than new
+  information. Scored as selection value -- the model-leaned side against ALL
+  sides at the same price, over 1592 sides of every graded family:
+
+      band          model-leaned            all sides    selection value
+      0.00-0.45   n=20  -11.5pp +/-11.0   n=468  +0.2pp        -11.7pp
+      0.45-0.50   n=47  +16.1pp +/- 7.3   n=318  -1.1pp        +17.2pp
+      0.50-0.55   n=50   +9.8pp +/- 7.1   n=338  +1.0pp         +8.7pp
+      0.55-1.00  n=135   +5.0pp +/- 4.2   n=468  -0.2pp         +5.2pp
+
+  The model's backing makes a side BETTER than its price everywhere except the
+  strong-disagreement region, where it makes it WORSE than an average side at
+  the same price. And the market is calibrated in every band (within 1.2pp
+  over 1592 sides), so this cannot be the market-wide favourite-longshot bias
+  -- `value_probe` measured that separately and found none to harvest. That
+  calibration check is the one part of this NOT inside the search that chose
+  0.45; it constrains the explanation without adding power.
+
+  A mechanism that fits: the model reads xwOBA matchup inputs only, while the
+  market also sees injuries, bullpen availability, weather, travel and late
+  scratches. When a narrow model strongly contradicts a well-informed market,
+  a blind spot is likelier than an edge -- which predicts exactly this
+  asymmetry, informative where the market is indifferent and anti-informative
+  where it is confident against the model. It also explains why the model's
+  contribution concentrates near pick'em, which `delta_filter_test` reaches
+  from the other direction. NONE OF IT IS ESTABLISHED: n=20 below 0.45, the
+  -11.5pp is z = -1.05, and the table re-describes the rows that produced the
+  threshold.
+
+None of this moves a registered constant, and none of it is a coding defect --
+the rule does what it says. What changed is the description. `abstain_test.py`
+registers the variant this reading argues for: decline those games rather than
+fade them, so the published record stops being a model rule and a market
+baseline added together.
+
 WHAT THE SEARCH TEST SAYS, since value_probe's standing rule is that a
 threshold found by searching is judged against the null maximum and never
 against zero. Sweeping the threshold 0.30..0.56 in 0.01 steps, 0.45 is the

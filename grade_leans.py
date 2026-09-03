@@ -1034,6 +1034,46 @@ def report_text(led):
             say(_hl)
     except Exception as _exc:                      # noqa: BLE001 - see above
         say(f"pre-registered hybrid test unavailable ({type(_exc).__name__})")
+
+    # |delta| conviction filter (delta_filter_test.py), registered 2026-09-03.
+    # Third module rather than a third arm, for the same reason as above. Its
+    # prior is NEGATIVE where the hybrid's is null -- the always-chalk control
+    # on its discovery rows points against the rule -- so the two must not be
+    # read as one another, and printing them adjacently is what makes that
+    # visible rather than a fact you have to go and look up.
+    try:
+        import delta_filter_test
+        say("")
+        for _dl in delta_filter_test.report_lines(led):
+            say(_dl)
+    except Exception as _exc:                      # noqa: BLE001 - see above
+        say(f"pre-registered delta filter test unavailable ({type(_exc).__name__})")
+
+    # abstain-vs-fade (abstain_test.py), registered 2026-09-03. It shares the
+    # hybrid's threshold and declined set on purpose -- the two rules differ
+    # only in what happens on a declined game -- so it prints directly after
+    # the hybrid block, where the comparison is legible. Its own registration
+    # date is two days later than the hybrid's and is NOT delegated.
+    try:
+        import abstain_test
+        say("")
+        for _al in abstain_test.report_lines(led):
+            say(_al)
+    except Exception as _exc:                      # noqa: BLE001 - see above
+        say(f"pre-registered abstain test unavailable ({type(_exc).__name__})")
+
+    # underdog sign-flip (dog_contrast_test.py), registered 2026-09-03. Prints
+    # last of the five because it is the one that is explicitly NOT independent
+    # of the others -- its below-split half is the same 20 games arm 2 bets and
+    # abstain_test declines. Reading it beside them is the point; reading it as
+    # a fifth sample is the error it warns about in its own report line.
+    try:
+        import dog_contrast_test
+        say("")
+        for _cl in dog_contrast_test.report_lines(led):
+            say(_cl)
+    except Exception as _exc:                      # noqa: BLE001 - see above
+        say(f"pre-registered dog contrast test unavailable ({type(_exc).__name__})")
     return "\n".join(lines)
 
 

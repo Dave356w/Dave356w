@@ -224,7 +224,17 @@ class ScopeTests(unittest.TestCase):
         if not len(v12):
             self.skipTest("no v12 rows committed")
         g = ht.scored_rows(v12)
-        self.assertEqual(len(g), 0)
+        self.assertIsNotNone(g)
+        # The invariant is the docstring's, not "no forward rows exist yet".
+        # This asserted `len(g) == 0`, which was true only while the forward
+        # sample was empty and went red on main the morning after 09-02 graded
+        # -- the one gate this repo has, failing for arithmetic the Actions bot
+        # did overnight. That is CLAUDE.md's "freezing a measured number into a
+        # test", so the fix is to assert the rule instead of the count.
+        if len(g):
+            self.assertTrue((g["game_date"].astype(str) > ht.REGISTERED_ON).all())
+        discovery = v12[v12["game_date"].astype(str) <= ht.REGISTERED_ON]
+        self.assertFalse(set(discovery.index) & set(g.index))
 
     def test_report_lines_never_raise_and_always_name_the_gate(self):
         lines = ht.report_lines()
