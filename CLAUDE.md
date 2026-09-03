@@ -801,9 +801,27 @@ precedent — they are how the fix is known to look.
   Verified by counterfactual, not algebra: invert every lean over the 252
   decidable v12 rows and 155 of 252 selections are unchanged, with an exact
   split (unchanged rows' minimum favourite price 0.5511, changed rows' maximum
-  0.5455). The rule agrees with always-chalk on 81.3% of its selections. So
-  the chalk identity covers 155 games, not 15, and that — not the fade
-  branch's smallness — is why the combined line "mostly restates the model".
+  0.5455). So the chalk identity covers 155 games, not 15, and that — not the
+  fade branch's smallness — is why the combined line "mostly restates the
+  model".
+
+  **The 81.3% chalk overlap is true and quoting it alone is unfair to the
+  rule** — it describes what the rule copies rather than what it adds, and
+  this file said it that way first. On the other 38.5% the rule takes
+  positions always-chalk never takes: 47 of 252 selections (18.7%) are
+  **underdogs priced 0.450–0.500**, backed because the model likes them, which
+  chalk takes none of by definition. They run 30-17 for **+16.11pp ± 7.28**
+  (z = +2.21) and +31.1% ROI — the best segment the rule has, 14.59u of its
+  34.29u from 19% of its bets, against +6.82pp on the 205 favourite
+  selections. Lead with the overlap and omit those and you have described the
+  wrong half.
+
+  **The fade branch is not content-free either**, which the registration and
+  the first version of this entry both over-read. Every faded bet IS a
+  favourite bet — that stands — but the model chooses WHICH favourites: the 20
+  it selects ran +11.48pp against +5.02pp for the 135 chalk bets above 0.55 it
+  does not select, a selection value of +6.45pp at z = +0.55. A true statement
+  about the ticket is not a statement about the information.
 
   **The rule is also not the rule it was proposed as.** The stated intent was
   "when the xwOBA signal is very low, use the market for additional signal".
@@ -831,13 +849,46 @@ precedent — they are how the fix is known to look.
   disagreeing with chalk on 47. That is the number the dead zone is averaging
   away.
 
+  **Why the cliff is there at all — the market-overpricing account, which is a
+  better explanation than the mechanical one and came from the operator rather
+  than from this analysis.** xwOBA and the market normally agree (the lean is
+  the market favourite on 73.4% of games); where they diverge, the market has
+  already priced what the model is reading and the model's insistence is
+  anti-signal rather than news. As selection value — the model-leaned side
+  against ALL sides at the same price, over 1,592 sides of every graded family:
+
+  | band | model-leaned | all sides | selection value |
+  |---|---|---|---|
+  | 0.00–0.45 | n=20 −11.5pp ± 11.0 | n=468 +0.2pp | **−11.7pp** |
+  | 0.45–0.50 | n=47 +16.1pp ± 7.3 | n=318 −1.1pp | **+17.2pp** |
+  | 0.50–0.55 | n=50 +9.8pp ± 7.1 | n=338 +1.0pp | +8.7pp |
+  | 0.55–1.00 | n=135 +5.0pp ± 4.2 | n=468 −0.2pp | +5.2pp |
+
+  The model's backing makes a side better than its price everywhere except the
+  strong-disagreement region, where it makes it **worse than an average side at
+  the same price**. The market is calibrated in every band (within 1.2pp over
+  1,592 sides), so this is not the favourite-longshot bias — `value_probe`
+  looked for that separately and found none to harvest. **That calibration
+  check is the one part of this not inside the search that chose 0.45**; it
+  constrains the explanation without adding power.
+
+  A mechanism that fits: the model reads xwOBA matchup inputs only, while the
+  market also sees injuries, bullpen availability, weather, travel and late
+  scratches. When a narrow model strongly contradicts a well-informed market, a
+  blind spot is likelier than an edge — which predicts exactly this asymmetry,
+  and explains why the model's contribution concentrates near pick'em.
+  Established by none of it: n=20 below 0.45, the −11.5pp is z = −1.05, and the
+  table re-describes the rows that produced the threshold.
+
   Nothing here is a coding defect and no registered constant moved; the rule
   does what it says. `abstain_test.py` registers the variant this argues for —
   decline those games rather than fade them, so the published record stops
   being a model rule and a market baseline added together. Its prior is NULL:
   the two differ by 0.25pp (+8.55 vs +8.30) and the discovery headline is
-  +0.18u per declined game at z = +0.99. **The argument for it is readability,
-  not edge**, and if the forward reading cannot separate them that is itself
+  +0.18u per declined game at z = +0.99. It is the instrument that can separate
+  the two live accounts of those 20 games — favourite-backing in a
+  favourite-friendly window, or the model's opposition being genuinely
+  anti-signal — and if the forward reading cannot separate them that is itself
   the case for the simpler rule.
 
   One trap it hit on its first run, worth keeping: `abstain_test.scored_rows`

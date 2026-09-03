@@ -10,15 +10,19 @@ where the hybrid FADES onto the opposing side, this one makes NO BET. Flat one
 unit. It is the shipped rule with its only active branch replaced by an
 abstention.
 
-WHY IT EXISTS. `hybrid_test`'s own reading is that the fade branch is
-always-chalk exactly and by construction: fading a lean priced under 0.45
-means backing a side priced over 0.55, which is always the favourite. So the
-branch carries no model content, and the honest description of what the shipped
-rule adds over the plain lean is NOT "conviction-conditional deference to the
-market" but "do not back the model's pick when the market prices it under 45%"
--- a no-big-underdogs filter. Measured over the 252 decidable v12 rows, the
-lean went 6-14 on the games the rule fades, and declining them is where the
-whole improvement over the plain lean comes from:
+WHY IT EXISTS. Fading a lean priced under 0.45 means backing a side priced
+over 0.55, which is always the favourite -- so every faded bet is a favourite
+bet. That is a statement about the TICKET and, as first written here, it was
+over-read into "the branch carries no model content". It does carry some: the
+model chooses WHICH favourites, and the 20 it selects ran +11.48pp against
++5.02pp for the 135 chalk bets above 0.55 it does not select -- a selection
+value of +6.45pp at z = +0.55. Not established, not nothing.
+
+So the question this module exists to answer is not "is the branch decorative"
+but "is the model's OPPOSITION to a side informative enough to be worth betting
+against?" Measured over the 252 decidable v12 rows the lean went 6-14 on the
+faded games, and declining them is where the whole improvement over the plain
+lean comes from:
 
     rule                          n     record   excess    profit     ROI
     plain lean                  252   156- 96    +6.73pp   +25.08u   +10.0%
@@ -34,20 +38,31 @@ betting those games earns over not betting them. POSITIVE keeps the shipped
 rule; NEGATIVE says decline. Discovery: +0.1754u per declined game over 20,
 sd 0.7918, z = +0.99, bootstrap 95% CI [-0.168, +0.503] with P(<= 0) = 0.152.
 
-WHY THE PRIOR IS NULL RATHER THAN POSITIVE, despite that +0.18u. The branch is
-always-chalk, and its discovery window favoured chalk: over all 252 rows
-always-chalk beat its own price by +2.54pp. A branch whose entire content is
-"back the favourite", measured across 20 games in a favourite-friendly stretch,
-is the trap CLAUDE.md names by name. The 14-6 is the chalk record on those
-rows, to the unit, not a skill result.
+WHY THE PRIOR IS NULL RATHER THAN POSITIVE, despite that +0.18u. Every faded
+bet is a favourite bet and the discovery window favoured favourites: over all
+252 rows always-chalk beat its own price by +2.54pp. Twenty games of
+favourite-backing in a favourite-friendly stretch is the trap CLAUDE.md names
+by name, and the +6.45pp selection value that argues the branch is more than
+that is itself only z = +0.55.
 
-WHY IT IS WORTH REGISTERING AT ALL, given the two rules are within 0.25pp:
-because they are NOT equally readable. The fade branch is numerically identical
-to always-chalk, so the published record mixes a model rule with a market
-baseline and no reader can separate them by looking. Declining makes the record
-a statement about the model alone. If the forward reading cannot separate the
-two -- which the gate below says is the likely outcome -- that is itself the
-argument for the simpler rule, not a reason to shrug.
+WHAT A FORWARD READING WOULD SEPARATE. Two accounts of the same 20 games:
+
+  * the branch is favourite-backing dressed as a model rule, in which case its
+    edge is the window's chalk tailwind and fade-minus-abstain decays to zero;
+  * the model's strong disagreement with a well-priced market is ANTI-signal,
+    so opposing it is informative and fade-minus-abstain stays positive. This
+    is the account `hybrid_test`'s prose now carries: in the q < 0.45 band the
+    model-leaned side runs -11.5pp against a band that is calibrated at +0.2pp
+    over 468 sides, i.e. the model's endorsement makes a dog worse than an
+    average dog at the same price.
+
+The second is the more interesting hypothesis and this module is the instrument
+that can eventually tell them apart. Readability is a secondary argument, not
+the main one: the fade branch's ticket is always a favourite, so a published
+combined record mixes a model rule with a market baseline and no reader can
+separate them by looking. If the forward reading cannot separate the two --
+which the gate below says is the likely outcome -- that is itself the argument
+for the simpler rule.
 
 WHAT IT CANNOT DO.
   * It cannot make the discovery sample count. Rows on or before the
@@ -193,10 +208,11 @@ def report_lines(led=None):
     slates = g["game_date"].nunique() if len(g) else 0
     out.append(f"    eligible rows since registration: {len(g)} over {slates} slates")
     if not len(g):
-        out.append(f"    nothing to score yet. Prior is {PRIOR.upper()}: the branch "
-                   "under test is always-chalk by construction, and its "
-                   f"discovery window favoured chalk by "
-                   f"+{DISCOVERY_CHALK_EXCESS_PP:.2f}pp.")
+        out.append(f"    nothing to score yet. Prior is {PRIOR.upper()}: every "
+                   "faded bet is a favourite bet and the discovery window "
+                   f"favoured favourites by "
+                   f"+{DISCOVERY_CHALK_EXCESS_PP:.2f}pp, but the model picks "
+                   "which favourites (+6.45pp, z=+0.55). Both accounts fit.")
         out.append(f"    GATE: 0 of ~{GATE_DECLINED} declined games "
                    f"(~{GATE_DECLINED / 1.05:.0f} slates at "
                    f"{DISCOVERY_DECLINE_RATE:.2f} of a slate).")
@@ -226,8 +242,8 @@ def report_lines(led=None):
         same = int((d["bet_home"].values
                     == (d["pregame_p_home"].values >= 0.5)).sum())
         out.append(f"    the faded games backed the favourite in {same} of "
-                   f"{n_d} (construction says all of them, so the line above "
-                   "is chalk's record, not the model's)")
+                   f"{n_d} (construction says all of them -- read the line "
+                   "above against the always-chalk control, not instead of it)")
     out.append(f"    GATE: {n_d} of ~{GATE_DECLINED} declined games for the "
                f"discovery-sized effect, ~{GATE_DECLINED_REALISTIC} for a "
                "plausible +0.10u one. See abstain_test.py.")
