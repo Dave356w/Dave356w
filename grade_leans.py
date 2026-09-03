@@ -767,6 +767,99 @@ def _abstained(fam):
     return int(fam["xw_lean"].isna().sum()) if "xw_lean" in fam else 0
 
 
+def _registration_retrospective_lines(g):
+    """In-sample readings of the three registrations frozen 2026-09-03.
+
+    Answers the question a reader has the moment five forward blocks all say
+    "nothing to score yet": what do these rules say about the v12 data that
+    ALREADY exists? They can be computed over it -- that is where every frozen
+    discovery constant came from -- and printing them is the same choice the
+    hybrid retrospective above already makes for the shipped rule.
+
+    Two things keep it honest, and both matter more here than for the hybrid.
+
+    Each reading comes from the registering module's OWN pure function, never a
+    local copy, so a line here cannot drift from the forward block below it.
+
+    And the row count is split at the registration date. A retrospective over
+    "all v12" is a MIXTURE of the rows the rule was found on and the rows that
+    arrived afterwards, so watching it grow is NOT watching evidence
+    accumulate -- the forward blocks below score the second group alone, and
+    that is the only reading that is out of sample. The discovery figure is
+    printed beside each so drift is visible as drift rather than as news.
+    """
+    try:
+        import abstain_test
+        import delta_filter_test
+        import dog_contrast_test
+        import hybrid_test
+        d = hybrid_test.decidable(g)
+        if d is None or d.empty:
+            return []
+        h = hybrid_test.apply_rule(d)
+    except Exception as _exc:                      # noqa: BLE001
+        # Same load-bearing guard as every other block in this report: it runs
+        # inside the job that ingests pregame rows, and a diagnostic line must
+        # never be able to cost a slate.
+        return [f"registration retrospectives unavailable ({type(_exc).__name__})"]
+
+    reg = delta_filter_test.REGISTERED_ON
+    dates = h["game_date"].astype(str)
+    n_disc = int((dates <= reg).sum())
+    n_fwd = int(len(h) - n_disc)
+    out = [f"REGISTRATIONS (retrospective, n={len(h)}: {n_disc} discovery rows "
+           f"+ {n_fwd} since {reg}) — in sample, NOT the forward reading:"]
+
+    # |delta| filter -- registered headline is the DROPPED games' excess.
+    try:
+        fd = delta_filter_test.decidable(g)
+        f = delta_filter_test.apply_filter(fd) if fd is not None else None
+        if f is not None and len(f):
+            dr = f[~f["kept"]]
+            if len(dr):
+                e, se = delta_filter_test._excess(
+                    dr["lean_won"].astype(bool).to_numpy(),
+                    dr["p_lean"].to_numpy(dtype=float))
+                out.append(
+                    f"  |Δ| filter   dropped-game excess {100 * e:+6.2f}pp "
+                    f"+/- {100 * se:4.2f}  (n={len(dr)}; discovery "
+                    f"{delta_filter_test.DISCOVERY_DROPPED_EXCESS:+.2f}). "
+                    "NEGATIVE would vindicate the rule.")
+    except Exception as _exc:                      # noqa: BLE001
+        out.append(f"  |Δ| filter   unavailable ({type(_exc).__name__})")
+
+    # abstain vs fade -- registered headline is per declined game.
+    try:
+        m, se, n_d = abstain_test.fade_minus_abstain(h)
+        if n_d:
+            out.append(
+                f"  abstain      fade-minus-abstain {m:+.3f}u/declined game "
+                f"+/- {se:.3f}  (n={n_d}; discovery "
+                f"{abstain_test.DISCOVERY_FADE_MINUS_ABSTAIN:+.3f}). "
+                "POSITIVE keeps the shipped fade branch.")
+    except Exception as _exc:                      # noqa: BLE001
+        out.append(f"  abstain      unavailable ({type(_exc).__name__})")
+
+    # underdog sign flip -- registered headline is the contrast.
+    try:
+        dogs = h[h["model_side_p"].astype(float) < dog_contrast_test.DOG_MAX]
+        c, cse, na, nb = dog_contrast_test.contrast(dogs)
+        if na and nb:
+            out.append(
+                f"  dog contrast above-minus-below {100 * c:+6.2f}pp "
+                f"+/- {100 * cse:4.2f}  (n={na} above, {nb} below; discovery "
+                f"{dog_contrast_test.DISCOVERY_CONTRAST:+.2f}).")
+    except Exception as _exc:                      # noqa: BLE001
+        out.append(f"  dog contrast unavailable ({type(_exc).__name__})")
+
+    if len(out) == 1:
+        return []
+    out.append("  Each was FOUND on the discovery rows above, so none of these "
+               "is evidence for itself. The registered forward readings are "
+               "further down this report.")
+    return out
+
+
 def _hybrid_retrospective_lines(g):
     """The published rule's record over the CURRENT family's graded rows.
 
@@ -889,6 +982,8 @@ def report_text(led):
         say(f"{MODEL_METRIC_LABEL} lean   full: {_rec(g['xw_full'])}   F5: {_rec(g['xw_f5'])}")
         for _hl in _hybrid_retrospective_lines(g):
             say(_hl)
+        for _rl in _registration_retrospective_lines(g):
+            say(_rl)
         ov = g[g["ops_valid"] == True]                                # noqa: E712
         if len(ov):
             say(f"platoon lean full: {_rec(ov['ops_full'])}   F5: {_rec(ov['ops_f5'])}   (reliable-only, n={len(ov)})")

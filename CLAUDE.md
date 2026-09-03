@@ -1686,6 +1686,14 @@ instrument behind: the expected-IP fix landed at its stated gate only because
 that line would still be waiting.
 
 **Standing monitors** print on every build and need no one to remember them.
+`ledger_report.txt` also prints each registration's RETROSPECTIVE reading over
+the current family beside its forward block — the rules can be computed over
+the rows that already exist, and that is where every frozen discovery constant
+came from. Two things keep that honest: each line comes from the registering
+module's own pure function, so it cannot drift from the forward block; and the
+row count is split at the registration date, because a retrospective over "all
+v12" is a MIXTURE of the rows a rule was found on and the rows that arrived
+after. **Watching a retrospective grow is not watching evidence accumulate.**
 `data/ledger_report.txt` carries the current-family record and F5, the |Δ|
 terciles, the per-family and per-slate predicted-vs-actual, the component error
 (SP / BP / lineup each against its own realised phase), the IP calibration

@@ -3328,6 +3328,101 @@ class HybridRuleTests(unittest.TestCase):
         n = int(lines[0].split("n=")[1].split(",")[0])
         self.assertIn(f"same {n} rows", joined)
 
+    # ---- the three 2026-09-03 registrations, printed in sample -------------
+    # They CAN be computed over all of v12 -- that is where every frozen
+    # discovery constant came from -- and printing them is the same choice the
+    # hybrid retrospective above makes. What these pin is that doing so cannot
+    # be mistaken for the forward reading.
+
+    def _retro(self):
+        import grade_leans
+        led = build_site.load_ledger_df()
+        if led is None:
+            self.skipTest("ledger unavailable")
+        g = grade_leans._record_grades(led)
+        lines = grade_leans._registration_retrospective_lines(g)
+        if not lines:
+            self.skipTest("no decidable current-family rows")
+        return g, lines
+
+    def test_the_registration_retrospectives_print_all_three(self):
+        _, lines = self._retro()
+        joined = " ".join(lines)
+        for name in ("|Δ| filter", "abstain", "dog contrast"):
+            with self.subTest(rule=name):
+                self.assertIn(name, joined)
+
+    def test_each_retrospective_matches_its_own_modules_arithmetic(self):
+        """One rule, one implementation. A line here must not be a local copy.
+
+        This is the property that makes the retrospective safe to print at
+        all: if it could drift from the module, a reader comparing it against
+        the forward block below would be comparing two different rules.
+        """
+        import abstain_test
+        import dog_contrast_test
+        import hybrid_test
+        g, lines = self._retro()
+        joined = " ".join(lines)
+        h = hybrid_test.apply_rule(hybrid_test.decidable(g))
+
+        m, _, n_d = abstain_test.fade_minus_abstain(h)
+        if n_d:
+            self.assertIn(f"{m:+.3f}u/declined game", joined)
+
+        dogs = h[h["model_side_p"].astype(float) < dog_contrast_test.DOG_MAX]
+        c, _, na, nb = dog_contrast_test.contrast(dogs)
+        if na and nb:
+            self.assertIn(f"{100 * c:+6.2f}pp", joined)
+            self.assertIn(f"n={na} above, {nb} below", joined)
+
+    def test_the_retrospective_splits_discovery_from_later_rows(self):
+        """A retrospective over 'all v12' is a MIXTURE. Watching it grow is
+        not watching evidence accumulate, and the header has to say so."""
+        import delta_filter_test
+        _, lines = self._retro()
+        head = lines[0]
+        self.assertIn("discovery rows", head)
+        self.assertIn(delta_filter_test.REGISTERED_ON, head)
+        self.assertRegex(head, r"n=\d+: \d+ discovery rows \+ \d+ since")
+
+    def test_the_retrospective_says_it_is_not_evidence_for_itself(self):
+        _, lines = self._retro()
+        joined = " ".join(lines)
+        self.assertIn("in sample", joined.lower())
+        self.assertIn("none of these is evidence for itself", joined)
+        self.assertIn("forward", joined.lower())
+
+    def test_the_delta_filter_line_names_the_direction_that_vindicates_it(self):
+        """Its registered headline is positive today and NEGATIVE would mean
+        the rule works. Printed without that, the line reads backwards."""
+        _, lines = self._retro()
+        joined = " ".join(lines)
+        self.assertIn("NEGATIVE would vindicate", joined)
+
+    def test_each_line_carries_its_frozen_discovery_value(self):
+        """So drift shows up as drift rather than as news."""
+        import abstain_test
+        import delta_filter_test
+        import dog_contrast_test
+        _, lines = self._retro()
+        joined = " ".join(lines)
+        for v in (f"{delta_filter_test.DISCOVERY_DROPPED_EXCESS:+.2f}",
+                  f"{abstain_test.DISCOVERY_FADE_MINUS_ABSTAIN:+.3f}",
+                  f"{dog_contrast_test.DISCOVERY_CONTRAST:+.2f}"):
+            with self.subTest(discovery=v):
+                self.assertIn(v, joined)
+
+    def test_the_retrospective_never_raises_on_a_degenerate_frame(self):
+        """It runs inside the job that ingests pregame rows. A diagnostic line
+        must never be able to cost a slate."""
+        import grade_leans
+        import pandas as _pd
+        for bad in (_pd.DataFrame(), _pd.DataFrame({"status": ["graded"]})):
+            with self.subTest(frame=list(bad.columns)):
+                self.assertIsInstance(
+                    grade_leans._registration_retrospective_lines(bad), list)
+
     def test_the_locked_hybrid_has_separate_ledger_fields(self):
         """The public selection is stored without overwriting the raw lean."""
         import grade_leans
