@@ -899,6 +899,53 @@ precedent — they are how the fix is known to look.
   looked like forward rows. **When a registration borrows another's row
   selector, the date bound is the one thing it must not borrow.**
 
+  **The underdog segment is the fifth registration, and what it registers is
+  NOT the segment.** The obvious thing to freeze was the 0.45–0.50 band: the
+  model's leans there run 30-17 for **+16.11pp ± 7.28** and +31.1% ROI, the
+  best slice the rule has, 14.59u of its 34.29u from 19% of its bets. Two
+  measurements say don't register that:
+
+  * **It fails its own search test.** Over the 180 contiguous price bands
+    actually searched, noise returns +12.77pp on average and clears +16.11pp
+    28% of the time (**P = 0.2805**).
+  * **It is 72% an existing registration.** `forward_test` arm 2 decomposes
+    almost exactly along this boundary — all plus-money dog leans +5.02pp;
+    inside the band +14.72pp; outside it (q < 0.45) −11.48pp. **The band is
+    arm 2 with its losing tail removed**, and refining a registered rule after
+    seeing which part worked is what pre-registration prevents. This file
+    already recorded that call on 2026-08-29, when arm 2 was registered
+    *deliberately unbanded* for exactly this reason.
+
+  So `dog_contrast_test.py` registers the **contrast** instead: among dog
+  leans, above-minus-below the hybrid's own threshold, **+27.59pp ± 13.20,
+  z = +2.09**. It uses BOTH halves, so removing the losing half is what it
+  measures rather than what it does; and its split point is not searched —
+  0.45 is `hybrid_test`'s threshold, registered two days earlier for an
+  unrelated reason, and 0.50 is the definition of an underdog. Its own
+  search test (sweeping the split 0.40–0.48) gives **P = 0.0707** against a
+  null best of +10.54pp, and the sweep's argmax IS 0.45, so fixing it a priori
+  costs nothing. Better than the band's 0.2805 and `delta_filter_test`'s
+  0.6930, short of the hybrid's 0.0190, and it does not clear 0.05.
+
+  **The gate is the most reachable of the five** — ~88 dog leans (~25 slates)
+  for a 15pp contrast, ~198 for 10pp, at 3.53 dog leans a slate. Deliberately
+  NOT sized to the discovery effect, which would show at ~26: a selected
+  maximum reproducing itself over seven slates would prove nothing.
+
+  **It is registered as explicitly NOT independent, and the report says so
+  every build.** Its below-split half is the same 20 games arm 2 bets and
+  `abstain_test` declines. Three readings of one small set of games is three
+  readings, not three samples, and a reader tallying five registrations as
+  five pieces of evidence is the error this entry exists to prevent.
+
+  One inert thing found while pinning the boundary and left alone: the shipped
+  rule's split is exact for a HOME lean (`q = p_home`) and one ULP low for an
+  away lean, because `1 - (1 - 0.45)` is `0.44999999999999996`. A game priced
+  at exactly 0.55 with an away lean therefore lands BELOW a 0.45 threshold.
+  Not fixed — changing it would move a registered rule's branch assignment for
+  a case that cannot occur, since devigged prices come from integer money
+  lines. Pinned by a test that says so rather than left to be rediscovered.
+
   **What it cannot do, and the one thing the protocol asks for that this repo
   cannot yet supply:** the rule is specified against the no-vig probability
   available *at decision time*, and the ledger carries only the close, because
@@ -1644,7 +1691,7 @@ terciles, the per-family and per-slate predicted-vs-actual, the component error
 (SP / BP / lineup each against its own realised phase), the IP calibration
 slope, the SP-vs-lineup coefficients and their symmetry contrast, and the two
 pre-registered forward tests (`forward_test.py`, `hybrid_test.py`,
-`delta_filter_test.py`, `abstain_test.py`). The grades
+`delta_filter_test.py`, `abstain_test.py`, `dog_contrast_test.py`). The grades
 page carries the baseline controls and the lock provenance. Read these before
 writing a new probe.
 
@@ -1657,6 +1704,7 @@ writing a new probe.
 | `hybrid_test.py` | pre-registered hybrid market-direction rule, frozen 2026-09-01 (also prints every build) |
 | `delta_filter_test.py` | pre-registered |delta| conviction filter, frozen 2026-09-03; NEGATIVE prior (also prints every build) |
 | `abstain_test.py` | pre-registered abstain-vs-fade variant of the hybrid, frozen 2026-09-03 (also prints every build) |
+| `dog_contrast_test.py` | pre-registered underdog sign-flip contrast, frozen 2026-09-03; NOT independent of arm 2 (also prints every build) |
 | `hfa_probe.py` | does adding a home-field term to the lean improve it? (no) |
 | `interaction_probe.py` | do single signals or other combiners beat `B·P/L`? |
 | `dispersion_probe.py` | does a concentrated lineup beat the mean it is averaged into? |

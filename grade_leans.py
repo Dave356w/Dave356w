@@ -1061,6 +1061,19 @@ def report_text(led):
             say(_al)
     except Exception as _exc:                      # noqa: BLE001 - see above
         say(f"pre-registered abstain test unavailable ({type(_exc).__name__})")
+
+    # underdog sign-flip (dog_contrast_test.py), registered 2026-09-03. Prints
+    # last of the five because it is the one that is explicitly NOT independent
+    # of the others -- its below-split half is the same 20 games arm 2 bets and
+    # abstain_test declines. Reading it beside them is the point; reading it as
+    # a fifth sample is the error it warns about in its own report line.
+    try:
+        import dog_contrast_test
+        say("")
+        for _cl in dog_contrast_test.report_lines(led):
+            say(_cl)
+    except Exception as _exc:                      # noqa: BLE001 - see above
+        say(f"pre-registered dog contrast test unavailable ({type(_exc).__name__})")
     return "\n".join(lines)
 
 
