@@ -2022,7 +2022,7 @@ class GradesHeaderClaimsTests(unittest.TestCase):
         """
         head = self._header(pd.DataFrame([self._row(1), self._row(2, xw_full="L",
                                                     full_away=5, full_home=3)]))
-        self.assertIn("discovery", head)
+        self.assertIn("Discovery", head)
         self.assertIn("not a forward test", head)
         self.assertIn("data/ledger_report.txt", head,
                       "the caveat must point at the registered forward test")
@@ -2145,7 +2145,7 @@ class LockProvenanceTests(unittest.TestCase):
         being noticed on the live page.
         """
         page = self._page("pregame", "pregame_recovered")
-        self.assertIn("All 2 rows on this page carry", page)
+        self.assertIn("All 2 rows carry", page)
         self.assertEqual(page.count("pregame lock"), 1,
                          "the lock claim is made once, not restated")
         note = re.search(r"<div class='gr-note'>(.*?)</div>", page, re.S)
@@ -2625,7 +2625,7 @@ class MarketCalibrationTests(unittest.TestCase):
         for gone in ("Both sides", "Away"):
             self.assertNotIn(f"<div class='l'>{gone}</div>", html)
         # and the reader is told why, rather than left to wonder
-        self.assertIn("no both-sides total", html)
+        self.assertIn("No both-sides total", html)
 
     def test_rows_without_a_close_are_skipped_not_imputed(self):
         d = self._frame()
@@ -3235,17 +3235,23 @@ class LeanMarketValueTests(unittest.TestCase):
         """
         d = self._spread_frame()
         a = build_site._lean_market_value_analysis(d)
+        label = build_site.hybrid_public_label("FADE")
         fade = dict(a["branch_rows"])[
-            f"MARKET FAVORITE · XWOBA-side p < "
-            f"{100 * build_site.HYBRID_THRESHOLD:.0f}%"]
-        chalk = dict(a["control_rows"])["Always chalk · market-favorite rows only"]
+            f"{label} · XWOBA-side p "
+            f"< {100 * build_site.HYBRID_THRESHOLD:.0f}%"]
+        chalk = dict(a["control_rows"])[f"Always chalk · {label} rows only"]
         self.assertIsNotNone(fade, "fixture must populate the fade branch")
         self.assertEqual(fade, chalk,
                          "these are the same bet on the same rows; if they "
                          "differ the two were scored over different games")
         html = build_site._render_lean_market_value_panel(d)
         self.assertIn("three other ways", html)
-        self.assertIn("carries no model content", html)
+        # The clause that says WHY the two lines match, wherever its wording
+        # lands: the label comes from its one home and the identity is stated,
+        # not left to adjacency.
+        self.assertIn(f"must equal <b>{build_site.hybrid_public_label('FADE')}"
+                      "</b> above", html)
+        self.assertIn("the two are the same bet", html)
 
     def test_every_value_table_row_emits_four_cells(self):
         """Including the empty buckets, which render an em dash, not nothing."""
@@ -3324,10 +3330,14 @@ class HybridRuleTests(unittest.TestCase):
         game["odds"] = {"p_home": .48, "home_ml": 105, "away_ml": -125}
         self.assertEqual(build_site._summary_market_line(game, "H"),
                          "H +105 · XWOBA SIDE")
-        # Below the threshold the opposing side is necessarily the favorite.
+        # Below the threshold the opposing side is necessarily the
+        # favourite -- which is the ticket, not the decision, so the label
+        # names the decision and is read from its one home rather than
+        # restated here.
         game["odds"] = {"p_home": .30, "home_ml": 220, "away_ml": -260}
-        self.assertEqual(build_site._summary_market_line(game, "H"),
-                         "A -260 · MARKET FAVORITE")
+        self.assertEqual(
+            build_site._summary_market_line(game, "H"),
+            f"A -260 · {build_site.hybrid_public_label('FADE')}")
 
     def test_an_exact_pickem_follows_the_model(self):
         """A devigged .500 market has no favourite, and sits well above .45.
@@ -3362,7 +3372,7 @@ class HybridRuleTests(unittest.TestCase):
         fade = build_site._verdict_html(
             "A", {"home_ml": -260, "away_ml": 215}, "A", "H", {}, .02)
         self.assertIn("verdict edge", fade)
-        self.assertIn("MARKET FAVORITE → H", fade)
+        self.assertIn(f"{build_site.hybrid_public_label('FADE')} → H", fade)
 
     def test_unusable_prices_abstain_rather_than_defaulting_to_a_branch(self):
         """No price is not a fade. Defaulting either way invents a selection."""
@@ -3496,7 +3506,7 @@ class HybridRuleTests(unittest.TestCase):
         h = build_site._verdict_html(
             "LAD", dict(p_home=.70, away_ml=200, home_ml=-260), "LAD", "ARI",
             ctx, .005)
-        self.assertIn("Past V12 market-favorite selections · 15 completed games", h)
+        self.assertIn("Past V12 market-side selections · 15 completed games", h)
         self.assertIn("not a prediction for this game", h)
         # The bare rate must not appear as its own value; it is qualified by
         # the record it came from.
@@ -3533,7 +3543,7 @@ class HybridRuleTests(unittest.TestCase):
         self.assertIn("data-l='Selection'>A", faded)
         self.assertIn("data-l='ML'>+120", faded)
         self.assertIn("<span class='wlt L'>L</span>", faded)
-        self.assertIn("MARKET FAVORITE", faded)
+        self.assertIn(build_site.hybrid_public_label("FADE"), faded)
         noleaan = build_site._grades_row(
             row(build_site.MODEL_TAG, np.nan, .60, basis="starter_unmeasured_no_lean"),
             True)

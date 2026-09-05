@@ -530,6 +530,32 @@ precedent — they are how the fix is known to look.
   asserts the whole when a row is unverified, and it is never dropped on a
   mixed page, which would publish the claim exactly when it flatters.
 
+  **The fade branch is no longer published as `MARKET FAVORITE`, on the
+  operator's reading that the label names the ticket and hides the decision.**
+  It is `MARKET OVER LEAN`. Every such selection IS the favourite — that is a
+  property of the threshold and the control row measures it — but what the
+  rule did was prefer the market's read to the model's on a game the model
+  still chose, and the market-overpricing note above measures the difference:
+  the 20 favourites the branch takes beat their price by +11.5pp against
+  +5.0pp for the favourites it passes on. The rename was one line because the
+  label now has one home, `hybrid_public_label()`; it had been restated as a
+  literal at seven call sites and in six tests, which is the "one value, three
+  homes" defect in copy rather than in config. The tests read it from that
+  function now, so the next rename cannot leave a page disagreeing with
+  itself.
+
+  **The page copy was cut back at the same time, also on the operator's
+  call.** Every claim survives; the justification for each claim does not —
+  that belongs in the code comment beside it, where these entries have always
+  said it belongs, and a reader of a scoreboard does not need the argument
+  that produced the caveat. The ladder note went from 130 words to 70, the
+  controls lead lost the clause its own note already carried, and the grades
+  header states four things in four clauses. What must NOT be trimmed is a
+  claim itself: the discovery framing, the chalk identity, the ML basis and
+  the lock split are each load-bearing, each has an entry in this file behind
+  it, and each is pinned by a test asserting the CLAIM rather than its
+  wording — which is what made the trim safe to do in one pass.
+
   Display-only: no lean, delta, grade or ledger row moves, so no `MODEL_TAG`
   implication. Verified while auditing and NOT changed, because each was
   already right: the table's own Result column tallies to exactly the header
@@ -573,7 +599,7 @@ precedent — they are how the fix is known to look.
   it is now `+2.04 ± 0.25 pp` (t = 8.1 — a real effect, which is not the point:
   the reader could not have known that from the tile). And the Controls table
   said "the same rows scored two other ways" above four rows, with nothing
-  saying that the last of them must equal the MARKET FAVORITE branch exactly —
+  saying that the last of them must equal the fade branch exactly —
   the clause `_verdict_html` already carries in words on the per-game card,
   missing on the page where the two identical lines sit four rows apart.
 
