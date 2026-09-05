@@ -6325,13 +6325,19 @@ def _lean_market_observations(led):
     won = gv["xw_full"].eq("W").to_numpy(dtype=bool)
     dv = delta.loc[valid].to_numpy(dtype=float)
 
+    # Indexed by the LEDGER's own row labels, not a fresh RangeIndex. A
+    # surface that quotes a record over a subset has to be able to say which
+    # rows it dropped, and membership in this frame is the only honest way to
+    # ask that -- deriving the count by subtracting one denominator from
+    # another gives a number with no name on it, which is the defect
+    # `_lock_provenance` was written for one artifact out.
     obs = pd.DataFrame({
         "delta": dv,
         "market_p": market_p,
         "close_ml": close_ml,
         "opp_ml": opp_ml,
         "won": won.astype(float),
-    })
+    }, index=gv.index)
     obs = obs[np.isfinite(obs["delta"]) & np.isfinite(obs["market_p"])
               & np.isfinite(obs["close_ml"]) & np.isfinite(obs["opp_ml"])
               & obs["market_p"].between(0.0, 1.0, inclusive="neither")].copy()
@@ -7396,12 +7402,15 @@ def render_grades_html(built_txt):
             f"<span class='stamp'>{built_txt}"
             "</span>.</div></div>")
 
-    # Header stats score the current record family; the TABLE below still
-    # lists every row the ledger holds. That split is intentional -- the table
-    # is the archive, the header is a claim about this model -- and it is why
-    # _record_scope_note is printed rather than left implicit.
+    # Header stats and table are scored on the SAME row set: `led` was
+    # filtered to RECORD_TAGS above, so the archive below is the current
+    # family too. No scope note is printed for that reason -- there is no
+    # wider set on this page for the header to be a subset of, which is not
+    # true of the strip on index.html and is why `_record_scope_note` is
+    # called there and not here.
     g = _record_grades(led)
-    _, _, n_all = _record_scope_note(led, g)
+    show_ml = (("close_home_ml" in led.columns and led["close_home_ml"].notna().any())
+               or ("hybrid_ml" in led.columns and led["hybrid_ml"].notna().any()))
     stats, notes = [], []
 
     def stat(lab, val, sub=None, tone=""):
@@ -7413,12 +7422,15 @@ def render_grades_html(built_txt):
         # Same reasoning as the strip: no silent fall back to the pooled
         # record. The table below still renders every historical row, so the
         # history is on the page -- it is just not being called this model's.
+        # No fallback to the pooled record -- see the strip. The clause that
+        # used to sit here offered to count "rows graded under earlier
+        # families ... listed below": unreachable (its count came from the
+        # already-filtered frame, so it was 0 exactly when this branch runs)
+        # and false if it had ever fired, because the table below is filtered
+        # to the current family and lists no such row.
         summary = (f"<div class='gr-note'>No graded games yet under "
-                   f"{_esc(MODEL_TAG)}"
-                   + (f"; {n_all} rows graded under earlier families are "
-                      "listed below and scored per family in "
-                      "data/ledger_report.txt" if n_all else "")
-                   + ".</div>")
+                   f"{_esc(MODEL_TAG)}; earlier families are scored per "
+                   "family in data/ledger_report.txt.</div>")
     else:
         notes = [f"<b>XWOBA SIDE</b> at {100 * HYBRID_THRESHOLD:.0f}% or higher; "
                  "<b>MARKET FAVORITE</b> below"]
@@ -7433,10 +7445,35 @@ def render_grades_html(built_txt):
         obs = _lean_market_observations(led)
         decided = g[g["xw_lean"].notna()]
         n_abst = int(g["xw_lean"].isna().sum())
-        pend_sub = f"{n_pend} pending" + (f" · {n_void} void" if n_void else "")
+        # The tiles below are scored on `obs` -- decided AND settled AND
+        # two-sidedly priced -- which is stricter than `decided`. Say how many
+        # rows that is, and name the ones that fall out from their OWN
+        # columns. Leaving the reader to subtract 7 abstentions from 284 to
+        # arrive at the record's 277 works only while those are the only rows
+        # excluded; a tie or a missing close would move the denominator with
+        # nothing on the page saying so. Today the residual is empty, which is
+        # the point at which it is cheap to make it self-reporting.
+        scored = obs if not obs.empty else decided
+        missing = decided.loc[~decided.index.isin(scored.index)]
+        bits = [f"{len(scored)} scored"]
         if n_abst:
-            pend_sub += f" · {n_abst} abstained"
-        stat("Graded", str(len(g)), pend_sub)
+            bits.append(f"{n_abst} abstained")
+        if len(missing):
+            price_cols = [c for c in ("close_p_home", "close_home_ml",
+                                      "close_away_ml") if c in missing.columns]
+            no_close = (missing[price_cols].isna().any(axis=1) if price_cols
+                        else pd.Series(True, index=missing.index))
+            unsettled = ~no_close & ~missing["xw_full"].isin(["W", "L"])
+            for count, label in ((int(no_close.sum()), "unpriced"),
+                                 (int(unsettled.sum()), "unsettled"),
+                                 (int((~no_close & ~unsettled).sum()),
+                                  "unscored")):
+                if count:
+                    bits.append(f"{count} {label}")
+        bits.append(f"{n_pend} pending")
+        if n_void:
+            bits.append(f"{n_void} void")
+        stat("Graded", str(len(g)), " · ".join(bits))
 
         # Metric read off the graded rows, not the running build: MODEL_TAG
         # flips a slate before any row under it grades, so on that morning the
@@ -7494,11 +7531,30 @@ def render_grades_html(built_txt):
                 if ctl:
                     stat(lab, f"{ctl['w']}-{ctl['l']}",
                          f"{ctl['actual']:.3f}", tone="dim")
+        # The caveat the calibration panel and the per-game card both carry,
+        # missing on the page that publishes the LARGEST version of the
+        # number: this header leads with a z-score for a rule whose threshold
+        # was fitted on the very rows it is scored over.
+        if not obs.empty:
+            notes.append(
+                "Every figure above is a <b>discovery</b> result and not a "
+                f"forward test — the {100 * HYBRID_THRESHOLD:.0f}% threshold "
+                "was chosen on these same rows, and the registered "
+                "out-of-sample version is in data/ledger_report.txt")
+        if show_ml:
+            # One heading, two prices, and every aggregate above scored at the
+            # close. The gap is small (it flips no branch on the committed
+            # ledger) but a reader reconciling a row's price against the unit
+            # figures above cannot see which basis they are reading.
+            notes.append(
+                "<b>ML</b> is the selected side's price: the locked pregame "
+                "price where the row carries one — every pending row does, "
+                "since no-lookahead keeps a close off an ungraded row — and "
+                "the close otherwise. Records, ROI and the z above are "
+                "scored at the close throughout")
         summary = ("<div class='gr-summary'>" + "".join(stats) + "</div>"
                    + (f"<div class='gr-note'>{'. '.join(notes)}.</div>" if notes else ""))
 
-    show_ml = (("close_home_ml" in led.columns and led["close_home_ml"].notna().any())
-               or ("hybrid_ml" in led.columns and led["hybrid_ml"].notna().any()))
     # The public archive is v12-only. Pending and void rows remain visible so
     # every attempted publication in the family is accounted for.
     heads = (["Game", "Selection"]

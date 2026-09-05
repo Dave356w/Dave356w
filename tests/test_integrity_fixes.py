@@ -1987,6 +1987,109 @@ class RecordScopeTests(unittest.TestCase):
             "; 2 rows graded", "; 2 graded"))
         self.assertNotIn("xw+plat_consol_v2", pages["grades page"])
 
+class GradesHeaderClaimsTests(unittest.TestCase):
+    """What the ledger page says about the numbers it publishes.
+
+    Structural only: no record, rate or count is frozen here. Each test pins a
+    CLAIM the page has to make, not a value it has to print.
+    """
+
+    @staticmethod
+    def _row(pk, **kw):
+        row = dict(game_pk=pk, game_date="2026-08-07", away="A", home="B",
+                   away_sp="P1", home_sp="P2", status="graded",
+                   model_tag=build_site.MODEL_TAG, model_metric="xwOBA",
+                   xw_lean="B", xw_delta=.01, xw_full="W", xw_f5="W",
+                   full_away=2, full_home=4, close_p_home=.6,
+                   close_home_ml=-140, close_away_ml=120,
+                   lock_status="pregame")
+        row.update(kw)
+        return row
+
+    def _header(self, led):
+        with mock.patch.object(build_site, "load_ledger_df", return_value=led):
+            page = build_site.render_grades_html("test build")
+        return page.split("<div class='gr-tablewrap'>")[0]
+
+    def test_the_header_says_its_own_figures_are_a_discovery_result(self):
+        """This page leads with a z-score for a rule fitted on these rows.
+
+        The calibration panel says so in its lead and the per-game card stamps
+        "not a forward test" on every branch history. The page publishing the
+        largest version of the number said nothing at all, so a reader met
+        `z +2.86` with no way to know the threshold above it was chosen on the
+        same games it is scored over.
+        """
+        head = self._header(pd.DataFrame([self._row(1), self._row(2, xw_full="L",
+                                                    full_away=5, full_home=3)]))
+        self.assertIn("discovery", head)
+        self.assertIn("not a forward test", head)
+        self.assertIn("data/ledger_report.txt", head,
+                      "the caveat must point at the registered forward test")
+        self.assertIn(f"{100 * build_site.HYBRID_THRESHOLD:.0f}%", head)
+
+    def test_the_ml_column_says_which_price_it_shows(self):
+        """One heading, two bases, and every aggregate scored at the close.
+
+        A row carrying a locked pregame snapshot renders that price; every
+        other row renders the close. The gap is small and flips no branch on
+        the committed ledger, but a reader reconciling a row's price against
+        the unit figures in the header cannot see which basis they are on.
+        """
+        head = self._header(pd.DataFrame([self._row(1), self._row(2)]))
+        self.assertIn("locked pregame", head)
+        self.assertIn("scored at the close", head)
+
+    def test_a_decided_row_the_record_cannot_score_is_named_not_subtracted(self):
+        """The header's tiles are scored on a stricter set than "graded".
+
+        Today the only excluded rows are abstentions, so 284 graded minus 7
+        abstained happens to land exactly on the record's 277 and the page
+        reconciles by arithmetic the reader has to do. A decided row with no
+        close moves that denominator with nothing saying so -- the same defect
+        as a control whose n is never stated. Each excluded row is counted
+        from its own columns, never by subtracting one denominator from
+        another.
+        """
+        led = pd.DataFrame([
+            self._row(1),
+            self._row(2, xw_full="L", full_away=5, full_home=3),
+            self._row(3, close_p_home=np.nan, close_home_ml=np.nan,
+                      close_away_ml=np.nan),
+        ])
+        head = self._header(led)
+        self.assertIn("2 scored", head)
+        self.assertIn("1 unpriced", head)
+
+    def test_the_empty_family_message_claims_no_rows_the_table_omits(self):
+        """The clause deleted here offered to count rows "listed below".
+
+        It could not fire -- its count came from the already family-filtered
+        frame, so it was zero exactly when the branch ran -- and had it fired
+        it would have pointed at rows the table filters out.
+        """
+        old = self._row(1, model_tag="xw+plat_consol_v2")
+        with mock.patch.object(build_site, "load_ledger_df",
+                               return_value=pd.DataFrame([old])):
+            page = build_site.render_grades_html("test build")
+        self.assertIn(f"No graded games yet under {build_site.MODEL_TAG}", page)
+        self.assertNotIn("listed below", page)
+        self.assertNotIn("xw+plat_consol_v2", page)
+
+    def test_the_observation_frame_keeps_its_ledger_row_labels(self):
+        """Membership is what lets a surface NAME the rows it dropped.
+
+        With a fresh RangeIndex the only way to size the excluded set is to
+        subtract one denominator from another, which produces a count no label
+        can honestly be attached to.
+        """
+        led = pd.DataFrame([self._row(1), self._row(2, xw_full="L",
+                                                   full_away=5, full_home=3)],
+                           index=[41, 57])
+        obs = build_site._lean_market_observations(led)
+        self.assertEqual(list(obs.index), [41, 57])
+
+
 class LockProvenanceTests(unittest.TestCase):
     def _led(self, statuses):
         return pd.DataFrame({"lock_status": pd.Series(statuses, dtype="object")})

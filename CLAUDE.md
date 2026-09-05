@@ -461,6 +461,69 @@ precedent — they are how the fix is known to look.
 
 **Resolved — keep as precedent**
 
+- **The page that leads with the rule's z-score was the one page that never
+  said the threshold was fitted on its own rows.** `grades.html` headlines
+  `z +2.86 · +8.5 pp · +36.10u` over 277 decided v12 rows, under a rule whose
+  45% threshold was chosen on those same rows. The calibration panel says so in
+  its lead, the per-game card stamps `not a forward test` on every branch
+  history, and this file already claimed "each surface says so in its own copy
+  (… a note on the grades page)". There was no such note. The most prominent
+  copy of the number carried the least framing — which is the direction that
+  matters, since the strip and the ledger header are what a casual reader
+  meets first.
+
+  Fixed by putting the caveat where the number is, pointing at
+  `data/ledger_report.txt` for the registered forward version, and reading the
+  threshold off `HYBRID_THRESHOLD` rather than restating `45%` in prose.
+
+  Three smaller things found in the same audit, each verified against the
+  ledger rather than read off a comment:
+
+  * **A denominator the reader had to reach by subtraction.** The header tiles
+    are scored on decided AND settled AND two-sidedly priced rows (277), while
+    the Graded tile named only `284 graded · 15 pending · 7 abstained`. Today
+    284 − 7 lands exactly on 277 and nothing is wrong; a tie or a decided row
+    with no close would move the record's denominator with nothing on the page
+    saying so. The tile now states the scored count and names every excluded
+    row **from its own columns** — `unpriced`, `unsettled` — never by
+    subtracting one denominator from another. That required
+    `_lean_market_observations` to keep the ledger's row labels instead of a
+    fresh `RangeIndex`: membership is what lets a surface name what it dropped.
+  * **One `ML` heading, two prices.** 54 of the 284 graded family rows render
+    the locked pregame price and the rest render the close, while every record,
+    ROI and z on the page is scored at the close. Measured: mean |Δp| 0.0029,
+    max 0.0196, and it flips **no** branch — the locked action equals the one
+    the closing price implies on all 54. So it is a labelling gap and not a
+    scoring error, and the page now says which basis each column is on. Every
+    pending row is necessarily on the pregame basis, since no-lookahead keeps a
+    close off an ungraded row; that is the reason the mixture exists and the
+    reason it cannot simply be removed.
+  * **An unreachable clause that would have been false if it had fired.** The
+    empty-family message offered to count "N rows graded under earlier families
+    … listed below". `N` came from the already family-filtered frame, so it was
+    0 exactly when that branch ran; and the table below is filtered to the
+    current family, so no such row is listed. Deleted. Two comments in the same
+    function were stale in the same direction — "the TABLE below still lists
+    every row the ledger holds" (it does not) and "`_record_scope_note` is
+    printed rather than left implicit" (its scope string was discarded, and is
+    empty by construction on this page).
+
+  **The general lesson: a caveat belongs on the surface that carries the
+  number, and it does not travel with the statistic.** Three pages published
+  the same rule; the framing was written twice and the omission survived
+  because this file asserted the third one. Same failure mode as the
+  `_record_grades()` note recorded above: prose in CLAUDE.md is not evidence
+  about the code, and the way it was caught was rendering the page and reading
+  it.
+
+  Display-only: no lean, delta, grade or ledger row moves, so no `MODEL_TAG`
+  implication. Verified while auditing and NOT changed, because each was
+  already right: the table's own Result column tallies to exactly the header
+  record (180-97 over 277, row by row), the per-slate records score the
+  displayed grades so they cannot drift from the Result column, the controls
+  come from one aggregate over one row mask, and the z uses the
+  Poisson-binomial SE rather than one estimated from the outcomes under test.
+
 - **A headline that could not take another value, published with the tightest
   error bar on the page.** `market-calibration.html` led with three tiles —
   Both sides / Home / Away — over 1,642 side-observations. The pooled tile read
@@ -1749,7 +1812,10 @@ terciles, the per-family and per-slate predicted-vs-actual, the component error
 slope, the SP-vs-lineup coefficients and their symmetry contrast, and the two
 pre-registered forward tests (`forward_test.py`, `hybrid_test.py`,
 `delta_filter_test.py`, `abstain_test.py`, `dog_contrast_test.py`). The grades
-page carries the baseline controls and the lock provenance. Read these before
+page carries the baseline controls. It does NOT carry the lock provenance:
+`_lock_provenance()` still exists and is still tested, but the V12 redesign
+cut its call site, so nothing renders it and the page makes no lock claim at
+all — see the anti-pattern entry. Read these before
 writing a new probe.
 
 **Probes run on demand.** Seven read committed artifacts and run anywhere:
