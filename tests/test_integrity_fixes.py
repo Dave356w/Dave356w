@@ -1987,6 +1987,109 @@ class RecordScopeTests(unittest.TestCase):
             "; 2 rows graded", "; 2 graded"))
         self.assertNotIn("xw+plat_consol_v2", pages["grades page"])
 
+class GradesHeaderClaimsTests(unittest.TestCase):
+    """What the ledger page says about the numbers it publishes.
+
+    Structural only: no record, rate or count is frozen here. Each test pins a
+    CLAIM the page has to make, not a value it has to print.
+    """
+
+    @staticmethod
+    def _row(pk, **kw):
+        row = dict(game_pk=pk, game_date="2026-08-07", away="A", home="B",
+                   away_sp="P1", home_sp="P2", status="graded",
+                   model_tag=build_site.MODEL_TAG, model_metric="xwOBA",
+                   xw_lean="B", xw_delta=.01, xw_full="W", xw_f5="W",
+                   full_away=2, full_home=4, close_p_home=.6,
+                   close_home_ml=-140, close_away_ml=120,
+                   lock_status="pregame")
+        row.update(kw)
+        return row
+
+    def _header(self, led):
+        with mock.patch.object(build_site, "load_ledger_df", return_value=led):
+            page = build_site.render_grades_html("test build")
+        return page.split("<div class='gr-tablewrap'>")[0]
+
+    def test_the_header_says_its_own_figures_are_a_discovery_result(self):
+        """This page leads with a z-score for a rule fitted on these rows.
+
+        The calibration panel says so in its lead and the per-game card stamps
+        "not a forward test" on every branch history. The page publishing the
+        largest version of the number said nothing at all, so a reader met
+        `z +2.86` with no way to know the threshold above it was chosen on the
+        same games it is scored over.
+        """
+        head = self._header(pd.DataFrame([self._row(1), self._row(2, xw_full="L",
+                                                    full_away=5, full_home=3)]))
+        self.assertIn("Discovery", head)
+        self.assertIn("not a forward test", head)
+        self.assertIn("data/ledger_report.txt", head,
+                      "the caveat must point at the registered forward test")
+        self.assertIn(f"{100 * build_site.HYBRID_THRESHOLD:.0f}%", head)
+
+    def test_the_ml_column_says_which_price_it_shows(self):
+        """One heading, two bases, and every aggregate scored at the close.
+
+        A row carrying a locked pregame snapshot renders that price; every
+        other row renders the close. The gap is small and flips no branch on
+        the committed ledger, but a reader reconciling a row's price against
+        the unit figures in the header cannot see which basis they are on.
+        """
+        head = self._header(pd.DataFrame([self._row(1), self._row(2)]))
+        self.assertIn("locked pregame", head)
+        self.assertIn("scored at the close", head)
+
+    def test_a_decided_row_the_record_cannot_score_is_named_not_subtracted(self):
+        """The header's tiles are scored on a stricter set than "graded".
+
+        Today the only excluded rows are abstentions, so 284 graded minus 7
+        abstained happens to land exactly on the record's 277 and the page
+        reconciles by arithmetic the reader has to do. A decided row with no
+        close moves that denominator with nothing saying so -- the same defect
+        as a control whose n is never stated. Each excluded row is counted
+        from its own columns, never by subtracting one denominator from
+        another.
+        """
+        led = pd.DataFrame([
+            self._row(1),
+            self._row(2, xw_full="L", full_away=5, full_home=3),
+            self._row(3, close_p_home=np.nan, close_home_ml=np.nan,
+                      close_away_ml=np.nan),
+        ])
+        head = self._header(led)
+        self.assertIn("2 scored", head)
+        self.assertIn("1 unpriced", head)
+
+    def test_the_empty_family_message_claims_no_rows_the_table_omits(self):
+        """The clause deleted here offered to count rows "listed below".
+
+        It could not fire -- its count came from the already family-filtered
+        frame, so it was zero exactly when the branch ran -- and had it fired
+        it would have pointed at rows the table filters out.
+        """
+        old = self._row(1, model_tag="xw+plat_consol_v2")
+        with mock.patch.object(build_site, "load_ledger_df",
+                               return_value=pd.DataFrame([old])):
+            page = build_site.render_grades_html("test build")
+        self.assertIn(f"No graded games yet under {build_site.MODEL_TAG}", page)
+        self.assertNotIn("listed below", page)
+        self.assertNotIn("xw+plat_consol_v2", page)
+
+    def test_the_observation_frame_keeps_its_ledger_row_labels(self):
+        """Membership is what lets a surface NAME the rows it dropped.
+
+        With a fresh RangeIndex the only way to size the excluded set is to
+        subtract one denominator from another, which produces a count no label
+        can honestly be attached to.
+        """
+        led = pd.DataFrame([self._row(1), self._row(2, xw_full="L",
+                                                   full_away=5, full_home=3)],
+                           index=[41, 57])
+        obs = build_site._lean_market_observations(led)
+        self.assertEqual(list(obs.index), [41, 57])
+
+
 class LockProvenanceTests(unittest.TestCase):
     def _led(self, statuses):
         return pd.DataFrame({"lock_status": pd.Series(statuses, dtype="object")})
@@ -2000,21 +2103,67 @@ class LockProvenanceTests(unittest.TestCase):
         led = pd.DataFrame({"game_pk": [1, 2, 3]})
         self.assertEqual(build_site._lock_provenance(led), (0, 3, 0))
 
-    def test_page_omits_verbose_lock_provenance(self):
-        # MODEL_TAG so the row survives the header's RECORD_TAGS filter; the
-        # lock note itself is whole-ledger, but the page needs a non-empty
-        # family to render the summary block that carries it.
-        ledger = pd.DataFrame([
-            dict(game_pk=1, game_date="2026-07-20", away="A", home="B",
-                 away_sp="P1", home_sp="P2", status="graded",
-                 model_tag=build_site.MODEL_TAG, xw_lean="B", xw_delta=.01,
-                 xw_full="W", xw_f5="W", full_away=2, full_home=4,
-                 lock_status="late_snapshot"),
-        ])
-        with mock.patch.object(build_site, "load_ledger_df", return_value=ledger):
-            page = build_site.render_grades_html("test build")
-        self.assertNotIn("snapshotted after first pitch", page)
-        self.assertNotIn("legacy rows", page)
+    # MODEL_TAG so the row survives the header's RECORD_TAGS filter; the page
+    # needs a non-empty family to render the summary block that carries the
+    # note.
+    @staticmethod
+    def _page_row(pk, lock):
+        return dict(game_pk=pk, game_date="2026-07-20", away="A", home="B",
+                    away_sp="P1", home_sp="P2", status="graded",
+                    model_tag=build_site.MODEL_TAG, xw_lean="B", xw_delta=.01,
+                    xw_full="W", xw_f5="W", full_away=2, full_home=4,
+                    lock_status=lock)
+
+    def _page(self, *locks):
+        led = pd.DataFrame([self._page_row(i, l)
+                            for i, l in enumerate(locks, 1)])
+        with mock.patch.object(build_site, "load_ledger_df", return_value=led):
+            return build_site.render_grades_html("test build")
+
+    def test_the_page_reports_the_lock_split_never_asserts_the_whole(self):
+        """The claim came back; the verbose block it replaces did not.
+
+        This test used to assert the page said NOTHING about locking, pinning
+        a V12-redesign decision that left `_lock_provenance` with three tests
+        and no caller while the public ledger made no provenance claim at all.
+        What the redesign was right to remove is the three-clause block. The
+        claim itself belongs on this page, because the no-lookahead invariant
+        is the reason the ledger is worth reading -- and the one thing it may
+        never do is assert coverage it cannot substantiate, which is what the
+        split is for.
+        """
+        page = self._page("late_snapshot")
+        self.assertIn("0 of 1 rows carry", page)
+        self.assertIn("snapshotted after first pitch", page)
+        self.assertNotIn("All 1 rows", page)
+
+    def test_a_fully_locked_page_says_so_once_and_inline(self):
+        """Compact is the property the old test was really protecting.
+
+        One sentence inside the header note, never a section of its own -- so
+        a future edit that grows it back into a block fails here rather than
+        being noticed on the live page.
+        """
+        page = self._page("pregame", "pregame_recovered")
+        self.assertIn("All 2 rows carry", page)
+        self.assertEqual(page.count("pregame lock"), 1,
+                         "the lock claim is made once, not restated")
+        note = re.search(r"<div class='gr-note'>(.*?)</div>", page, re.S)
+        self.assertIsNotNone(note)
+        self.assertIn("pregame lock", note.group(1),
+                      "the claim rides in the header note, not its own block")
+
+    def test_the_claim_never_publishes_only_the_clean_case(self):
+        """Silence on a mixed page would be the anti-pattern inverted.
+
+        A page that states provenance when every row is verified and drops it
+        when some are not publishes a claim exactly when it flatters -- worse
+        than never making one.
+        """
+        for locks in (("pregame",), ("pregame", None),
+                      (None, "late_snapshot"), ("legacy_unverified",)):
+            with self.subTest(locks=locks):
+                self.assertIn("pregame lock", self._page(*locks))
 
 
 class ModelTagProvenanceTests(unittest.TestCase):
@@ -2476,7 +2625,7 @@ class MarketCalibrationTests(unittest.TestCase):
         for gone in ("Both sides", "Away"):
             self.assertNotIn(f"<div class='l'>{gone}</div>", html)
         # and the reader is told why, rather than left to wonder
-        self.assertIn("no both-sides total", html)
+        self.assertIn("No both-sides total", html)
 
     def test_rows_without_a_close_are_skipped_not_imputed(self):
         d = self._frame()
@@ -3086,17 +3235,23 @@ class LeanMarketValueTests(unittest.TestCase):
         """
         d = self._spread_frame()
         a = build_site._lean_market_value_analysis(d)
+        label = build_site.hybrid_public_label("FADE")
         fade = dict(a["branch_rows"])[
-            f"MARKET FAVORITE · XWOBA-side p < "
-            f"{100 * build_site.HYBRID_THRESHOLD:.0f}%"]
-        chalk = dict(a["control_rows"])["Always chalk · market-favorite rows only"]
+            f"{label} · XWOBA-side p "
+            f"< {100 * build_site.HYBRID_THRESHOLD:.0f}%"]
+        chalk = dict(a["control_rows"])[f"Always chalk · {label} rows only"]
         self.assertIsNotNone(fade, "fixture must populate the fade branch")
         self.assertEqual(fade, chalk,
                          "these are the same bet on the same rows; if they "
                          "differ the two were scored over different games")
         html = build_site._render_lean_market_value_panel(d)
         self.assertIn("three other ways", html)
-        self.assertIn("carries no model content", html)
+        # The clause that says WHY the two lines match, wherever its wording
+        # lands: the label comes from its one home and the identity is stated,
+        # not left to adjacency.
+        self.assertIn(f"must equal <b>{build_site.hybrid_public_label('FADE')}"
+                      "</b> above", html)
+        self.assertIn("the two are the same bet", html)
 
     def test_every_value_table_row_emits_four_cells(self):
         """Including the empty buckets, which render an em dash, not nothing."""
@@ -3175,10 +3330,14 @@ class HybridRuleTests(unittest.TestCase):
         game["odds"] = {"p_home": .48, "home_ml": 105, "away_ml": -125}
         self.assertEqual(build_site._summary_market_line(game, "H"),
                          "H +105 · XWOBA SIDE")
-        # Below the threshold the opposing side is necessarily the favorite.
+        # Below the threshold the opposing side is necessarily the
+        # favourite -- which is the ticket, not the decision, so the label
+        # names the decision and is read from its one home rather than
+        # restated here.
         game["odds"] = {"p_home": .30, "home_ml": 220, "away_ml": -260}
-        self.assertEqual(build_site._summary_market_line(game, "H"),
-                         "A -260 · MARKET FAVORITE")
+        self.assertEqual(
+            build_site._summary_market_line(game, "H"),
+            f"A -260 · {build_site.hybrid_public_label('FADE')}")
 
     def test_an_exact_pickem_follows_the_model(self):
         """A devigged .500 market has no favourite, and sits well above .45.
@@ -3213,7 +3372,7 @@ class HybridRuleTests(unittest.TestCase):
         fade = build_site._verdict_html(
             "A", {"home_ml": -260, "away_ml": 215}, "A", "H", {}, .02)
         self.assertIn("verdict edge", fade)
-        self.assertIn("MARKET FAVORITE → H", fade)
+        self.assertIn(f"{build_site.hybrid_public_label('FADE')} → H", fade)
 
     def test_unusable_prices_abstain_rather_than_defaulting_to_a_branch(self):
         """No price is not a fade. Defaulting either way invents a selection."""
@@ -3347,7 +3506,7 @@ class HybridRuleTests(unittest.TestCase):
         h = build_site._verdict_html(
             "LAD", dict(p_home=.70, away_ml=200, home_ml=-260), "LAD", "ARI",
             ctx, .005)
-        self.assertIn("Past V12 market-favorite selections · 15 completed games", h)
+        self.assertIn("Past V12 market-side selections · 15 completed games", h)
         self.assertIn("not a prediction for this game", h)
         # The bare rate must not appear as its own value; it is qualified by
         # the record it came from.
@@ -3384,7 +3543,7 @@ class HybridRuleTests(unittest.TestCase):
         self.assertIn("data-l='Selection'>A", faded)
         self.assertIn("data-l='ML'>+120", faded)
         self.assertIn("<span class='wlt L'>L</span>", faded)
-        self.assertIn("MARKET FAVORITE", faded)
+        self.assertIn(build_site.hybrid_public_label("FADE"), faded)
         noleaan = build_site._grades_row(
             row(build_site.MODEL_TAG, np.nan, .60, basis="starter_unmeasured_no_lean"),
             True)

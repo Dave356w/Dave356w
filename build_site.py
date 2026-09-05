@@ -4416,8 +4416,7 @@ def _branch_history(ctx, action):
         # The rule line already says the rule abstains and why; a second line
         # restating it is the redundancy this rewrite is removing.
         return ""
-    history_branch = ("model-side" if action == "FOLLOW"
-                      else "market-favorite")
+    history_branch = "model-side" if action == "FOLLOW" else "market-side"
     parts = (ctx or {}).get(("branch", action))
     if not parts:
         return ("<div class='vline hist'><span class='vk'>Track record:</span>"
@@ -4445,13 +4444,12 @@ def _branch_history(ctx, action):
                      f"({100 * chalk['actual']:.1f}%) · "
                      f"{100 * chalk['excess']:+.1f} pp"))
         if action == "FADE":
-            note = ("Identical by construction: backing the other side of a "
-                    "lean priced under "
-                    f"{100 * HYBRID_THRESHOLD:.0f}% always lands on the "
-                    "favourite, so this branch IS the chalk bet.")
+            note = ("Identical by construction: under "
+                    f"{100 * HYBRID_THRESHOLD:.0f}% the other side is always "
+                    "the favourite, so here the two are the same bet.")
         else:
-            note = ("Chalk is the yardstick: it backs the favourite on these "
-                    "same games, whatever the model said.")
+            note = ("Chalk is the yardstick: the favourite on these same "
+                    "games, whatever the model said.")
     body = "".join(
         f"<div class='vline'><span class='vk'>{k}</span><span>{v}</span></div>"
         for k, v in rows)
@@ -4525,8 +4523,8 @@ def _verdict_html(fav, odds, away_abbr, home_abbr, ctx=None, delta=None):
         public_branch = hybrid_public_label(action)
         why = (f"market gives {_esc(fav)} at least {thr}, so {_esc(fav)} "
                "remains the XWOBA side" if action == "FOLLOW" else
-               f"market gives {_esc(fav)} under {thr}, so the rule backs "
-               f"the market favorite, {_esc(pick)}, instead")
+               f"market gives {_esc(fav)} under {thr}, so the rule takes "
+               f"the market's side, {_esc(pick)}")
         rule_line = (
             f"<div class='vline'><span class='vk'>Rule</span>"
             f"<span><b>{public_branch} → {_esc(pick)}</b>"
@@ -6325,13 +6323,19 @@ def _lean_market_observations(led):
     won = gv["xw_full"].eq("W").to_numpy(dtype=bool)
     dv = delta.loc[valid].to_numpy(dtype=float)
 
+    # Indexed by the LEDGER's own row labels, not a fresh RangeIndex. A
+    # surface that quotes a record over a subset has to be able to say which
+    # rows it dropped, and membership in this frame is the only honest way to
+    # ask that -- deriving the count by subtracting one denominator from
+    # another gives a number with no name on it, which is the defect
+    # `_lock_provenance` was written for one artifact out.
     obs = pd.DataFrame({
         "delta": dv,
         "market_p": market_p,
         "close_ml": close_ml,
         "opp_ml": opp_ml,
         "won": won.astype(float),
-    })
+    }, index=gv.index)
     obs = obs[np.isfinite(obs["delta"]) & np.isfinite(obs["market_p"])
               & np.isfinite(obs["close_ml"]) & np.isfinite(obs["opp_ml"])
               & obs["market_p"].between(0.0, 1.0, inclusive="neither")].copy()
@@ -6476,8 +6480,22 @@ def hybrid_action(market_p):
 
 
 def hybrid_public_label(action):
-    """Plain-language public label for an internal Hybrid branch code."""
-    return {"FOLLOW": "XWOBA SIDE", "FADE": "MARKET FAVORITE"}.get(action, "")
+    """Plain-language public label for an internal Hybrid branch code.
+
+    The FADE branch was published as "MARKET FAVORITE", which names the ticket
+    and hides the decision. Every such selection IS the favourite -- that is a
+    property of the threshold, not of the rule -- but what the rule did was
+    prefer the market's read to the model's on a game the model still chose.
+    The market-overpricing note in CLAUDE.md measures the difference: the 20
+    favourites this branch takes beat their price by +11.5pp against +5.0pp
+    for the favourites it passes on, so "always chalk" is the control, not the
+    description.
+
+    Every surface reads the label from here. It used to be restated as a
+    literal at seven call sites, which is how a rename becomes a page that
+    disagrees with itself.
+    """
+    return {"FOLLOW": "XWOBA SIDE", "FADE": "MARKET OVER LEAN"}.get(action, "")
 
 
 def hybrid_selection(lean, away_abbr, home_abbr, market_p):
@@ -6628,7 +6646,8 @@ def _lean_market_value_analysis(led):
          _lean_market_agg(obs, follow, **hyb)),
         # Plain "<": the table escapes every label through `_esc`, so a
         # pre-escaped entity here would render as literal "&lt;".
-        (f"MARKET FAVORITE · XWOBA-side p < {100 * HYBRID_THRESHOLD:.0f}%",
+        (f"{hybrid_public_label('FADE')} · XWOBA-side p "
+         f"< {100 * HYBRID_THRESHOLD:.0f}%",
          _lean_market_agg(obs, ~follow, **hyb)),
         ("Hybrid, both branches", _lean_market_agg(obs, all_rows, **hyb)),
     ]
@@ -6641,7 +6660,7 @@ def _lean_market_value_analysis(led):
         # The row that makes the fade branch legible: it must match the FADE
         # line above EXACTLY. If it ever does not, the two were computed over
         # different rows and that is a bug rather than a discovery.
-        ("Always chalk · market-favorite rows only",
+        (f"Always chalk · {hybrid_public_label('FADE')} rows only",
          _lean_market_agg(obs, ~follow, **chalk)),
     ]
     return {
@@ -6714,50 +6733,46 @@ def _render_lean_market_value_panel(led):
 
     summary = (
         f"<div class='gr-head'><h2 class='gr-h1'>{PUBLIC_MODEL_NAME}</h2>"
-        "<div class='gr-lead'><b>XWOBA SIDE</b> at "
-        f"{100 * a['threshold']:.0f}% or higher; <b>MARKET FAVORITE</b> "
-        "below.</div></div>"
+        f"<div class='gr-lead'><b>{hybrid_public_label('FOLLOW')}</b> at "
+        f"{100 * a['threshold']:.0f}% or higher; "
+        f"<b>{hybrid_public_label('FADE')}</b> below.</div></div>"
         "<div class='gr-summary'>"
         f"<div class='gr-stat'><div class='l'>Priced decisions</div>"
         f"<div class='v'>{a['n']}</div>"
         "<div class='s'>settled full-game leans</div></div>"
         f"<div class='gr-stat'><div class='l'>Threshold</div>"
         f"<div class='v'>{100 * a['threshold']:.0f}%</div>"
-        "<div class='s'>XWOBA side at or above · market favorite below</div></div>"
+        "<div class='s'>XWOBA side at or above · market side below</div></div>"
         f"<div class='gr-stat'><div class='l'>Selections changed</div>"
         f"<div class='v'>{a['n_fade']}</div>"
-        f"<div class='s'>{100 * a['n_fade'] / a['n']:.1f}% became market-favorite selections</div></div>"
+        f"<div class='s'>{100 * a['n_fade'] / a['n']:.1f}% deferred to the market</div></div>"
         f"<div class='gr-stat'><div class='l'>Market response</div>"
         f"<div class='v'>{slope_txt}</div>"
         f"<div class='s'>{slope_sub}</div></div>"
         "</div>"
     )
-    note = ("<div class='gr-note'>Results use each selection's devigged "
-            "closing price. The 45% threshold was selected from these rows; "
-            "always chalk is shown on the same games.</div>")
+    note = ("<div class='gr-note'>Scored at each selection's devigged close. "
+            f"<b>Discovery</b>: the {100 * a['threshold']:.0f}% threshold was "
+            "chosen on these rows.</div>")
     branch_head = (
         "<div class='gr-head'><h2 class='gr-h1'>By branch</h2>"
-        "<div class='gr-lead'>What the published rule selected, and how those "
-        "selections settled against their own closing prices.</div></div>"
+        "<div class='gr-lead'>What the rule selected, and how it "
+        "settled.</div></div>"
     )
     control_head = (
         "<div class='gr-head' style='margin-top:18px'><h2 class='gr-h1'>"
-        "Controls</h2><div class='gr-lead'>The same rows scored three other "
-        "ways, and then the last of them restricted to the games the "
-        "MARKET FAVORITE branch acts on. A record is only a result relative "
-        "to these.</div></div>"
+        "Controls</h2><div class='gr-lead'>The same rows, three other "
+        "ways. A record is only a result against these.</div></div>"
     )
     # The card's per-game panel already says this in words; the page that
     # prints the two lines four rows apart did not. Adjacency is not enough
     # when two published records are identical to the decimal -- without a
     # sentence a reader sees duplicated data or a bug, rather than the point.
     control_note = (
-        "<div class='gr-note'>The last row must equal the "
-        "<b>MARKET FAVORITE</b> branch above, exactly. Backing the other side "
-        f"of a lean priced under {100 * a['threshold']:.0f}% always lands on "
-        "the favourite, so on those games that branch <i>is</i> the chalk bet "
-        "and carries no model content. If the two lines ever differ they were "
-        "scored over different rows, which is a bug and not a discovery.</div>"
+        f"<div class='gr-note'>The last row must equal <b>"
+        f"{hybrid_public_label('FADE')}</b> above: under "
+        f"{100 * a['threshold']:.0f}% the other side is always the favourite, "
+        "so the two are the same bet. A difference is a bug.</div>"
     )
     return (summary + note + branch_head
             + _lean_market_value_table(a["branch_rows"], first_head="Branch")
@@ -7291,14 +7306,15 @@ def _grades_row(r, show_ml=False):
         # is the opposite of what the number means.
         sel_cell = _lean_cell(pick, None)
         sel_cell += ("<span class='sp fade-mark' title='the model side was "
-                     "priced below the threshold, so this selection is the "
-                     "market favorite; Δ describes the declined model side, "
-                     "not this selection'>MARKET FAVORITE</span>")
+                     "priced under the threshold, so the rule took the "
+                     "market's side; Δ describes the declined model side'>"
+                     f"{hybrid_public_label('FADE')}</span>")
         res = rule_grade
     else:
         sel_cell = _lean_cell(pick, r["xw_delta"])
-        sel_cell += ("<span class='sp' title='the market gave the XWOBA side "
-                     "at least the threshold'>XWOBA SIDE</span>")
+        sel_cell += ("<span class='sp' title='the market gave the XWOBA "
+                     f"side at least the threshold'>"
+                     f"{hybrid_public_label('FOLLOW')}</span>")
         res = rule_grade
     cells = [("c-game", "Game", game),
              ("c-lean", "Selection", sel_cell)]
@@ -7367,6 +7383,40 @@ def _lock_provenance(led):
     return verified, legacy, n - verified - legacy
 
 
+def _lock_note(led):
+    """One sentence stating the pregame-lock split for the rows on this page.
+
+    `_lock_provenance` counts each outcome from its own label; this is its
+    only caller and the only surface that renders it.
+
+    It was rendered, then cut by the V12 redesign, and sat uncalled with three
+    tests behind it while the page made no lock claim at all. What the
+    redesign was right to cut is the three-clause block; what it should not
+    have cost is the claim, because the whole no-lookahead discipline in this
+    repo exists so that this page can make it. So: one sentence, inline in the
+    header note, never its own section -- and a test pins that shape rather
+    than the absence it used to pin.
+
+    NEVER asserts the whole. When any row is unverified the sentence reports
+    the split, which is the anti-pattern the function was written for: a page
+    that claims coverage it cannot substantiate, and its mirror image, a page
+    that publishes provenance only when the answer is clean.
+    """
+    n = len(led)
+    if not n:
+        return None
+    verified, legacy, late = _lock_provenance(led)
+    if verified == n:
+        return (f"All {n} rows carry a <b>pregame lock</b>, snapshotted "
+                "before first pitch")
+    parts = [f"{verified} of {n} rows carry a <b>pregame lock</b> timestamp"]
+    if legacy:
+        parts.append(f"{legacy} predate that instrumentation")
+    if late:
+        parts.append(f"{late} snapshotted after first pitch")
+    return "; ".join(parts)
+
+
 def render_grades_html(built_txt):
     back = ("<div class='backlink ledger-nav'>"
             "<a href='index.html'>← today's leans</a>"
@@ -7396,12 +7446,15 @@ def render_grades_html(built_txt):
             f"<span class='stamp'>{built_txt}"
             "</span>.</div></div>")
 
-    # Header stats score the current record family; the TABLE below still
-    # lists every row the ledger holds. That split is intentional -- the table
-    # is the archive, the header is a claim about this model -- and it is why
-    # _record_scope_note is printed rather than left implicit.
+    # Header stats and table are scored on the SAME row set: `led` was
+    # filtered to RECORD_TAGS above, so the archive below is the current
+    # family too. No scope note is printed for that reason -- there is no
+    # wider set on this page for the header to be a subset of, which is not
+    # true of the strip on index.html and is why `_record_scope_note` is
+    # called there and not here.
     g = _record_grades(led)
-    _, _, n_all = _record_scope_note(led, g)
+    show_ml = (("close_home_ml" in led.columns and led["close_home_ml"].notna().any())
+               or ("hybrid_ml" in led.columns and led["hybrid_ml"].notna().any()))
     stats, notes = [], []
 
     def stat(lab, val, sub=None, tone=""):
@@ -7413,15 +7466,19 @@ def render_grades_html(built_txt):
         # Same reasoning as the strip: no silent fall back to the pooled
         # record. The table below still renders every historical row, so the
         # history is on the page -- it is just not being called this model's.
+        # No fallback to the pooled record -- see the strip. The clause that
+        # used to sit here offered to count "rows graded under earlier
+        # families ... listed below": unreachable (its count came from the
+        # already-filtered frame, so it was 0 exactly when this branch runs)
+        # and false if it had ever fired, because the table below is filtered
+        # to the current family and lists no such row.
         summary = (f"<div class='gr-note'>No graded games yet under "
-                   f"{_esc(MODEL_TAG)}"
-                   + (f"; {n_all} rows graded under earlier families are "
-                      "listed below and scored per family in "
-                      "data/ledger_report.txt" if n_all else "")
-                   + ".</div>")
+                   f"{_esc(MODEL_TAG)}; earlier families are scored per "
+                   "family in data/ledger_report.txt.</div>")
     else:
-        notes = [f"<b>XWOBA SIDE</b> at {100 * HYBRID_THRESHOLD:.0f}% or higher; "
-                 "<b>MARKET FAVORITE</b> below"]
+        notes = [f"<b>{hybrid_public_label('FOLLOW')}</b> at "
+                 f"{100 * HYBRID_THRESHOLD:.0f}% or higher; "
+                 f"<b>{hybrid_public_label('FADE')}</b> below"]
         # EVERY TILE BELOW IS SCORED ON ONE ROW SET: current family, decided,
         # settled, and carrying a two-sided close. That is stricter than the
         # decided set this header used to score, and deliberately so -- the
@@ -7433,10 +7490,35 @@ def render_grades_html(built_txt):
         obs = _lean_market_observations(led)
         decided = g[g["xw_lean"].notna()]
         n_abst = int(g["xw_lean"].isna().sum())
-        pend_sub = f"{n_pend} pending" + (f" · {n_void} void" if n_void else "")
+        # The tiles below are scored on `obs` -- decided AND settled AND
+        # two-sidedly priced -- which is stricter than `decided`. Say how many
+        # rows that is, and name the ones that fall out from their OWN
+        # columns. Leaving the reader to subtract 7 abstentions from 284 to
+        # arrive at the record's 277 works only while those are the only rows
+        # excluded; a tie or a missing close would move the denominator with
+        # nothing on the page saying so. Today the residual is empty, which is
+        # the point at which it is cheap to make it self-reporting.
+        scored = obs if not obs.empty else decided
+        missing = decided.loc[~decided.index.isin(scored.index)]
+        bits = [f"{len(scored)} scored"]
         if n_abst:
-            pend_sub += f" · {n_abst} abstained"
-        stat("Graded", str(len(g)), pend_sub)
+            bits.append(f"{n_abst} abstained")
+        if len(missing):
+            price_cols = [c for c in ("close_p_home", "close_home_ml",
+                                      "close_away_ml") if c in missing.columns]
+            no_close = (missing[price_cols].isna().any(axis=1) if price_cols
+                        else pd.Series(True, index=missing.index))
+            unsettled = ~no_close & ~missing["xw_full"].isin(["W", "L"])
+            for count, label in ((int(no_close.sum()), "unpriced"),
+                                 (int(unsettled.sum()), "unsettled"),
+                                 (int((~no_close & ~unsettled).sum()),
+                                  "unscored")):
+                if count:
+                    bits.append(f"{count} {label}")
+        bits.append(f"{n_pend} pending")
+        if n_void:
+            bits.append(f"{n_void} void")
+        stat("Graded", str(len(g)), " · ".join(bits))
 
         # Metric read off the graded rows, not the running build: MODEL_TAG
         # flips a slate before any row under it grades, so on that morning the
@@ -7469,7 +7551,7 @@ def render_grades_html(built_txt):
             stat(f"V12 {label} Hybrid", f"{rule['w']}-{rule['l']}",
                  f"{rule['actual']:.3f} · lean alone "
                  f"{lean_only['w']}-{lean_only['l']} · "
-                 f"{n_fade} market-favorite selections")
+                 f"{n_fade} deferred to the market")
             # z leads. A raw rate in a price-selected sample is mostly base
             # rate -- the statistic this repo already retired from the per-game
             # panel for exactly that reason.
@@ -7494,11 +7576,29 @@ def render_grades_html(built_txt):
                 if ctl:
                     stat(lab, f"{ctl['w']}-{ctl['l']}",
                          f"{ctl['actual']:.3f}", tone="dim")
+        # The caveat the calibration panel and the per-game card both carry,
+        # missing on the page that publishes the LARGEST version of the
+        # number: this header leads with a z-score for a rule whose threshold
+        # was fitted on the very rows it is scored over.
+        if not obs.empty:
+            notes.append(
+                "<b>Discovery</b>, not a forward test: the "
+                f"{100 * HYBRID_THRESHOLD:.0f}% threshold was chosen on these "
+                "rows. Registered version: data/ledger_report.txt")
+        if show_ml:
+            # One heading, two prices, and every aggregate above scored at the
+            # close. The gap is small (it flips no branch on the committed
+            # ledger) but a reader reconciling a row's price against the unit
+            # figures above cannot see which basis they are reading.
+            notes.append(
+                "<b>ML</b> is the selection's price: locked pregame where the "
+                "row has one, else the close. Records are scored at the close")
+        lock = _lock_note(led)
+        if lock:
+            notes.append(lock)
         summary = ("<div class='gr-summary'>" + "".join(stats) + "</div>"
                    + (f"<div class='gr-note'>{'. '.join(notes)}.</div>" if notes else ""))
 
-    show_ml = (("close_home_ml" in led.columns and led["close_home_ml"].notna().any())
-               or ("hybrid_ml" in led.columns and led["hybrid_ml"].notna().any()))
     # The public archive is v12-only. Pending and void rows remain visible so
     # every attempted publication in the family is accounted for.
     heads = (["Game", "Selection"]
@@ -7618,9 +7718,9 @@ def render_market_calibration_html(built_txt):
            "<a href='grades.html'>← v12 ledger</a>"
            "<a href='index.html'>today's selections →</a></div>")
     head = ("<div class='gr-head'><h1 class='gr-h1'>Market calibration</h1>"
-            "<div class='gr-lead'>What the devigged DK close implied, against "
-            "what actually happened — split by side and by price rung. This "
-            "grades the <i>market</i>, not the model. Built "
+            "<div class='gr-lead'>What the devigged DK close implied against "
+            "what happened, by side and price rung. This grades the "
+            "<i>market</i>, not the model. Built "
             f"<span class='stamp'>{built_txt}</span>.</div></div>")
     led = load_ledger_df()
     rows, totals = _market_calibration_rows(led)
@@ -7650,25 +7750,12 @@ def render_market_calibration_html(built_txt):
     # every rung here is thin, and a calibration table invites reading a bias
     # into what is sampling noise. State the arithmetic that decides it.
     note = (
-        "<div class='gr-note'><b>Implied</b> is the DK closing moneyline "
-        "devigged to a fair probability, so it already excludes the hold; the "
-        "gap between it and the raw price is what you pay to bet. Each graded "
-        "game contributes two observations — the home side at its close and the "
-        "away side at its close — because a price is what is being graded, not "
-        "a game. <b>±</b> is one standard error on the realised rate. "
-        "There is no both-sides total, because there is none worth reading: "
-        "the two devigged sides of a game sum to 1 and exactly one of them "
-        "wins, so pooling every observation returns 50.0% against 50.0% "
-        "implied whatever the season did. <b>Favourites</b> asks the same "
-        "question once per game rather than twice — the side priced over "
-        "even, at its own close — and it is where a favourite-longshot bias "
-        "would show; pick'em games have no favourite and are not in it. The "
-        "away figure is one minus the home figure, so the table carries it "
-        "per rung and the strip does not repeat it. "
-        "A rung whose gap is smaller than about twice its ± is indistinguishable "
-        "from a fairly priced market; at these sample sizes most of them are, and "
-        "resolving a real favourite-longshot bias would take thousands of games "
-        "rather than hundreds.</div>")
+        "<div class='gr-note'><b>Implied</b> is the DK close devigged, so the "
+        "hold is out. Two observations per game, one per side. <b>±</b> is one "
+        "standard error; a gap under about 2± is indistinguishable from a fair "
+        "price. No both-sides total: the sides sum to 1 and one wins, so it is "
+        "always 50.0%. <b>Favourites</b> asks once per game instead, pick'ems "
+        "excluded; away is one minus home.</div>")
 
     body = []
     for r in rows:

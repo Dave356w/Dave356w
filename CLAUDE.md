@@ -461,6 +461,109 @@ precedent — they are how the fix is known to look.
 
 **Resolved — keep as precedent**
 
+- **The page that leads with the rule's z-score was the one page that never
+  said the threshold was fitted on its own rows.** `grades.html` headlines
+  `z +2.86 · +8.5 pp · +36.10u` over 277 decided v12 rows, under a rule whose
+  45% threshold was chosen on those same rows. The calibration panel says so in
+  its lead, the per-game card stamps `not a forward test` on every branch
+  history, and this file already claimed "each surface says so in its own copy
+  (… a note on the grades page)". There was no such note. The most prominent
+  copy of the number carried the least framing — which is the direction that
+  matters, since the strip and the ledger header are what a casual reader
+  meets first.
+
+  Fixed by putting the caveat where the number is, pointing at
+  `data/ledger_report.txt` for the registered forward version, and reading the
+  threshold off `HYBRID_THRESHOLD` rather than restating `45%` in prose.
+
+  Three smaller things found in the same audit, each verified against the
+  ledger rather than read off a comment:
+
+  * **A denominator the reader had to reach by subtraction.** The header tiles
+    are scored on decided AND settled AND two-sidedly priced rows (277), while
+    the Graded tile named only `284 graded · 15 pending · 7 abstained`. Today
+    284 − 7 lands exactly on 277 and nothing is wrong; a tie or a decided row
+    with no close would move the record's denominator with nothing on the page
+    saying so. The tile now states the scored count and names every excluded
+    row **from its own columns** — `unpriced`, `unsettled` — never by
+    subtracting one denominator from another. That required
+    `_lean_market_observations` to keep the ledger's row labels instead of a
+    fresh `RangeIndex`: membership is what lets a surface name what it dropped.
+  * **One `ML` heading, two prices.** 54 of the 284 graded family rows render
+    the locked pregame price and the rest render the close, while every record,
+    ROI and z on the page is scored at the close. Measured: mean |Δp| 0.0029,
+    max 0.0196, and it flips **no** branch — the locked action equals the one
+    the closing price implies on all 54. So it is a labelling gap and not a
+    scoring error, and the page now says which basis each column is on. Every
+    pending row is necessarily on the pregame basis, since no-lookahead keeps a
+    close off an ungraded row; that is the reason the mixture exists and the
+    reason it cannot simply be removed.
+  * **An unreachable clause that would have been false if it had fired.** The
+    empty-family message offered to count "N rows graded under earlier families
+    … listed below". `N` came from the already family-filtered frame, so it was
+    0 exactly when that branch ran; and the table below is filtered to the
+    current family, so no such row is listed. Deleted. Two comments in the same
+    function were stale in the same direction — "the TABLE below still lists
+    every row the ledger holds" (it does not) and "`_record_scope_note` is
+    printed rather than left implicit" (its scope string was discarded, and is
+    empty by construction on this page).
+
+  **The general lesson: a caveat belongs on the surface that carries the
+  number, and it does not travel with the statistic.** Three pages published
+  the same rule; the framing was written twice and the omission survived
+  because this file asserted the third one. Same failure mode as the
+  `_record_grades()` note recorded above: prose in CLAUDE.md is not evidence
+  about the code, and the way it was caught was rendering the page and reading
+  it.
+
+  **The lock claim came back, and the test that pinned its absence was
+  rewritten rather than worked around.** `_lock_provenance()` had no
+  production caller: the V12 redesign cut its call site and left three tests
+  behind it, one asserting the page omitted it, while this file went on
+  listing it as a standing monitor of that page. The redesign was right about
+  the three-clause block and wrong about the claim — the no-lookahead
+  invariant is the reason this ledger is worth reading, and the page said
+  nothing about it. It is now one sentence inside the header note, and what
+  the old test was really protecting is pinned directly instead: the claim
+  appears once, inline, never as a section. Two properties are pinned beside
+  it, because a provenance line can fail in both directions — it never
+  asserts the whole when a row is unverified, and it is never dropped on a
+  mixed page, which would publish the claim exactly when it flatters.
+
+  **The fade branch is no longer published as `MARKET FAVORITE`, on the
+  operator's reading that the label names the ticket and hides the decision.**
+  It is `MARKET OVER LEAN`. Every such selection IS the favourite — that is a
+  property of the threshold and the control row measures it — but what the
+  rule did was prefer the market's read to the model's on a game the model
+  still chose, and the market-overpricing note above measures the difference:
+  the 20 favourites the branch takes beat their price by +11.5pp against
+  +5.0pp for the favourites it passes on. The rename was one line because the
+  label now has one home, `hybrid_public_label()`; it had been restated as a
+  literal at seven call sites and in six tests, which is the "one value, three
+  homes" defect in copy rather than in config. The tests read it from that
+  function now, so the next rename cannot leave a page disagreeing with
+  itself.
+
+  **The page copy was cut back at the same time, also on the operator's
+  call.** Every claim survives; the justification for each claim does not —
+  that belongs in the code comment beside it, where these entries have always
+  said it belongs, and a reader of a scoreboard does not need the argument
+  that produced the caveat. The ladder note went from 130 words to 70, the
+  controls lead lost the clause its own note already carried, and the grades
+  header states four things in four clauses. What must NOT be trimmed is a
+  claim itself: the discovery framing, the chalk identity, the ML basis and
+  the lock split are each load-bearing, each has an entry in this file behind
+  it, and each is pinned by a test asserting the CLAIM rather than its
+  wording — which is what made the trim safe to do in one pass.
+
+  Display-only: no lean, delta, grade or ledger row moves, so no `MODEL_TAG`
+  implication. Verified while auditing and NOT changed, because each was
+  already right: the table's own Result column tallies to exactly the header
+  record (180-97 over 277, row by row), the per-slate records score the
+  displayed grades so they cannot drift from the Result column, the controls
+  come from one aggregate over one row mask, and the z uses the
+  Poisson-binomial SE rather than one estimated from the outcomes under test.
+
 - **A headline that could not take another value, published with the tightest
   error bar on the page.** `market-calibration.html` led with three tiles —
   Both sides / Home / Away — over 1,642 side-observations. The pooled tile read
@@ -496,7 +599,7 @@ precedent — they are how the fix is known to look.
   it is now `+2.04 ± 0.25 pp` (t = 8.1 — a real effect, which is not the point:
   the reader could not have known that from the tile). And the Controls table
   said "the same rows scored two other ways" above four rows, with nothing
-  saying that the last of them must equal the MARKET FAVORITE branch exactly —
+  saying that the last of them must equal the fade branch exactly —
   the clause `_verdict_html` already carries in words on the per-game card,
   missing on the page where the two identical lines sit four rows apart.
 

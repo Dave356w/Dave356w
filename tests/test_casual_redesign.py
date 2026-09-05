@@ -543,13 +543,13 @@ class RenderTests(unittest.TestCase):
             "LAD", dict(p_home=.70, away_ml=200, home_ml=-260), "LAD", "ARI",
             ctx, .005,
         )
-        self.assertIn("Past V12 market-favorite selections · 15 completed games", fade)
-        self.assertIn("MARKET FAVORITE → ARI", fade)
+        self.assertIn("Past V12 market-side selections · 15 completed games", fade)
+        self.assertIn(f"{b.hybrid_public_label('FADE')} → ARI", fade)
         self.assertIn("Won</span><span>11-4 (73.3%)", fade)
         self.assertIn("within noise", fade)
         # On a fade the selected club appears nowhere else on the panel, so
         # the reason line has to name it.
-        self.assertIn("market favorite, ARI, instead", fade)
+        self.assertIn("the market's side, ARI", fade)
 
         # A missing branch says so; it never substitutes the other branch or a
         # pooled family.
@@ -587,7 +587,7 @@ class RenderTests(unittest.TestCase):
         # equal to the decimal, so without this clause a reader sees duplicated
         # data or a bug rather than "this branch has no model content".
         self.assertIn("Identical by construction", h)
-        self.assertIn("IS the chalk bet", h)
+        self.assertIn("the two are the same bet", h)
 
     def test_verdict_panel_prints_its_own_error_bar(self):
         """A published excess must carry its sampling distribution.

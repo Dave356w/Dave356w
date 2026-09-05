@@ -1058,7 +1058,7 @@ into the public table.
 Each newly generated pregame dump locks the Hybrid rule tag, the current
 two-sided moneyline and devigged probability, the internal `FOLLOW`/`FADE`
 action, the selected club, its probability and its price. Public pages label
-those branches **XWOBA SIDE** and **MARKET FAVORITE**. Pending rows may refresh only
+those branches **XWOBA SIDE** and **MARKET OVER LEAN**. Pending rows may refresh only
 from another accepted pregame snapshot; graded rows stay immutable. The grader
 writes the selected side's result to `hybrid_full`, separately from the raw
 lean's `xw_full`. Collapsed matchup cards show that same Hybrid selection and
@@ -1066,7 +1066,7 @@ price, and daily records aggregate `hybrid_full`, not `xw_full`.
 
 Historical v12 rows predate selection locking. Their Hybrid selection is
 reconstructed from the devigged closing
-market, marked `XWOBA SIDE` or `MARKET FAVORITE`, and graded against the stored final. A row
+market, marked `XWOBA SIDE` or `MARKET OVER LEAN`, and graded against the stored final. A row
 with neither a locked pregame market nor a usable closing market is marked
 `awaiting market`; a v5-style model abstention is marked `no lean`.
 
