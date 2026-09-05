@@ -6155,6 +6155,10 @@ def _market_calibration_rows(led):
     question is asked per price, not per game. That is deliberate double
     counting of games, not of bets, and the note on the page says so.
 
+    `totals` therefore carries `home`, `away` and `favourite` -- and NOT a
+    pooled both-sides figure, which the double counting makes an identity.
+    See the comment beside its construction below.
+
     `close_p_home` is already devigged by market_backfill, so `implied` is a
     fair probability and the gap to the raw price is the vig. Rows without a
     close are skipped rather than imputed; ties/unplayed rows never enter.
@@ -6203,7 +6207,20 @@ def _market_calibration_rows(led):
             all=agg(at),
         ))
     totals = {s: agg([o for o in obs if o[1] == s]) for s in ("home", "away")}
-    totals["all"] = agg(obs)
+    # NOT a pooled both-sides total. Pooling every observation is forced to
+    # .500 on both columns -- the two devigged sides of a game sum to 1 and
+    # exactly one of them wins -- so it is an identity rather than a
+    # measurement, and it used to lead this page with the tightest error bar
+    # on it. The invariant is worth pinning and is, in
+    # `test_pooling_both_sides_is_an_identity_not_a_measurement`; it is not
+    # worth publishing.
+    #
+    # The favourite pool is the non-degenerate version of the same question,
+    # and it is the one the page's own note names: one observation per game
+    # rather than two, so nothing cancels. `p > .5` selects exactly one side
+    # of every priced game and drops both sides of a pick'em, which has no
+    # favourite to grade.
+    totals["favourite"] = agg([o for o in obs if o[2] > 0.5])
     return rows, totals
 
 
@@ -6588,8 +6605,17 @@ def _lean_market_value_analysis(led):
     spread = (len(obs) > 1 and float(np.std(x)) > 0 and float(np.std(y)) > 0)
     if spread:
         slope, intercept = np.polyfit(x, y, 1)
+        # And its spread. A slope published bare is a number the reader cannot
+        # judge, which is the rule every other statistic on this page already
+        # follows -- see `_excess_se`. OLS: se = sqrt(RSS / dof / Sxx), which
+        # needs two residual degrees of freedom to exist at all.
+        dof = len(x) - 2
+        resid = y - (slope * x + intercept)
+        sxx = float(((x - x.mean()) ** 2).sum())
+        slope_se = (math.sqrt(float((resid ** 2).sum()) / dof / sxx)
+                    if dof > 0 else np.nan)
     else:
-        slope = intercept = np.nan
+        slope = intercept = slope_se = np.nan
 
     follow = obs["hybrid_follow"]
     hyb = dict(won="hybrid_won", p="hybrid_p", resid="hybrid_resid",
@@ -6624,6 +6650,7 @@ def _lean_market_value_analysis(led):
         "n_fade": int((~follow).sum()),
         "threshold": HYBRID_THRESHOLD,
         "slope": float(slope),
+        "slope_se": float(slope_se),
         "intercept": float(intercept),
         "branch_rows": branch_rows,
         "control_rows": control_rows,
@@ -6681,6 +6708,9 @@ def _render_lean_market_value_panel(led):
     slope = a["slope"]
     slope_pp = slope * 0.010 * 100 if np.isfinite(slope) else np.nan
     slope_txt = f"{slope_pp:+.2f} pp" if np.isfinite(slope_pp) else "—"
+    se_pp = a["slope_se"] * 0.010 * 100 if np.isfinite(a["slope_se"]) else np.nan
+    slope_sub = (f"± {se_pp:.2f} · leaned-team p per +.010 Δ"
+                 if np.isfinite(se_pp) else "leaned-team p per +.010 Δ")
 
     summary = (
         f"<div class='gr-head'><h2 class='gr-h1'>{PUBLIC_MODEL_NAME}</h2>"
@@ -6699,7 +6729,7 @@ def _render_lean_market_value_panel(led):
         f"<div class='s'>{100 * a['n_fade'] / a['n']:.1f}% became market-favorite selections</div></div>"
         f"<div class='gr-stat'><div class='l'>Market response</div>"
         f"<div class='v'>{slope_txt}</div>"
-        "<div class='s'>leaned-team p per +.010 Δ</div></div>"
+        f"<div class='s'>{slope_sub}</div></div>"
         "</div>"
     )
     note = ("<div class='gr-note'>Results use each selection's devigged "
@@ -6712,13 +6742,28 @@ def _render_lean_market_value_panel(led):
     )
     control_head = (
         "<div class='gr-head' style='margin-top:18px'><h2 class='gr-h1'>"
-        "Controls</h2><div class='gr-lead'>The same rows scored two other "
-        "ways. A record is only a result relative to these.</div></div>"
+        "Controls</h2><div class='gr-lead'>The same rows scored three other "
+        "ways, and then the last of them restricted to the games the "
+        "MARKET FAVORITE branch acts on. A record is only a result relative "
+        "to these.</div></div>"
+    )
+    # The card's per-game panel already says this in words; the page that
+    # prints the two lines four rows apart did not. Adjacency is not enough
+    # when two published records are identical to the decimal -- without a
+    # sentence a reader sees duplicated data or a bug, rather than the point.
+    control_note = (
+        "<div class='gr-note'>The last row must equal the "
+        "<b>MARKET FAVORITE</b> branch above, exactly. Backing the other side "
+        f"of a lean priced under {100 * a['threshold']:.0f}% always lands on "
+        "the favourite, so on those games that branch <i>is</i> the chalk bet "
+        "and carries no model content. If the two lines ever differ they were "
+        "scored over different rows, which is a bug and not a discovery.</div>"
     )
     return (summary + note + branch_head
             + _lean_market_value_table(a["branch_rows"], first_head="Branch")
             + control_head
-            + _lean_market_value_table(a["control_rows"], first_head="Control"))
+            + _lean_market_value_table(a["control_rows"], first_head="Control")
+            + control_note)
 
 
 def _record_grades(led):
@@ -7585,8 +7630,13 @@ def render_market_calibration_html(built_txt):
         return html_document(nav + head + empty, built_txt,
                              title="MLB market calibration")
 
+    # Two tiles, two questions. There is deliberately no both-sides tile: it
+    # is 50.0% against 50.0% implied by construction, and it used to lead this
+    # page carrying the smallest error bar on it. And no away tile: the away
+    # figure is one minus the home figure, so the strip would be publishing
+    # one number twice. Both facts are stated in the note below.
     stats = []
-    for key, lab in (("all", "Both sides"), ("home", "Home"), ("away", "Away")):
+    for key, lab in (("favourite", "Favourites"), ("home", "Home sides")):
         t = totals.get(key)
         if not t:
             continue
@@ -7606,6 +7656,15 @@ def render_market_calibration_html(built_txt):
         "game contributes two observations — the home side at its close and the "
         "away side at its close — because a price is what is being graded, not "
         "a game. <b>±</b> is one standard error on the realised rate. "
+        "There is no both-sides total, because there is none worth reading: "
+        "the two devigged sides of a game sum to 1 and exactly one of them "
+        "wins, so pooling every observation returns 50.0% against 50.0% "
+        "implied whatever the season did. <b>Favourites</b> asks the same "
+        "question once per game rather than twice — the side priced over "
+        "even, at its own close — and it is where a favourite-longshot bias "
+        "would show; pick'em games have no favourite and are not in it. The "
+        "away figure is one minus the home figure, so the table carries it "
+        "per rung and the strip does not repeat it. "
         "A rung whose gap is smaller than about twice its ± is indistinguishable "
         "from a fairly priced market; at these sample sizes most of them are, and "
         "resolving a real favourite-longshot bias would take thousands of games "
