@@ -2103,21 +2103,67 @@ class LockProvenanceTests(unittest.TestCase):
         led = pd.DataFrame({"game_pk": [1, 2, 3]})
         self.assertEqual(build_site._lock_provenance(led), (0, 3, 0))
 
-    def test_page_omits_verbose_lock_provenance(self):
-        # MODEL_TAG so the row survives the header's RECORD_TAGS filter; the
-        # lock note itself is whole-ledger, but the page needs a non-empty
-        # family to render the summary block that carries it.
-        ledger = pd.DataFrame([
-            dict(game_pk=1, game_date="2026-07-20", away="A", home="B",
-                 away_sp="P1", home_sp="P2", status="graded",
-                 model_tag=build_site.MODEL_TAG, xw_lean="B", xw_delta=.01,
-                 xw_full="W", xw_f5="W", full_away=2, full_home=4,
-                 lock_status="late_snapshot"),
-        ])
-        with mock.patch.object(build_site, "load_ledger_df", return_value=ledger):
-            page = build_site.render_grades_html("test build")
-        self.assertNotIn("snapshotted after first pitch", page)
-        self.assertNotIn("legacy rows", page)
+    # MODEL_TAG so the row survives the header's RECORD_TAGS filter; the page
+    # needs a non-empty family to render the summary block that carries the
+    # note.
+    @staticmethod
+    def _page_row(pk, lock):
+        return dict(game_pk=pk, game_date="2026-07-20", away="A", home="B",
+                    away_sp="P1", home_sp="P2", status="graded",
+                    model_tag=build_site.MODEL_TAG, xw_lean="B", xw_delta=.01,
+                    xw_full="W", xw_f5="W", full_away=2, full_home=4,
+                    lock_status=lock)
+
+    def _page(self, *locks):
+        led = pd.DataFrame([self._page_row(i, l)
+                            for i, l in enumerate(locks, 1)])
+        with mock.patch.object(build_site, "load_ledger_df", return_value=led):
+            return build_site.render_grades_html("test build")
+
+    def test_the_page_reports_the_lock_split_never_asserts_the_whole(self):
+        """The claim came back; the verbose block it replaces did not.
+
+        This test used to assert the page said NOTHING about locking, pinning
+        a V12-redesign decision that left `_lock_provenance` with three tests
+        and no caller while the public ledger made no provenance claim at all.
+        What the redesign was right to remove is the three-clause block. The
+        claim itself belongs on this page, because the no-lookahead invariant
+        is the reason the ledger is worth reading -- and the one thing it may
+        never do is assert coverage it cannot substantiate, which is what the
+        split is for.
+        """
+        page = self._page("late_snapshot")
+        self.assertIn("0 of 1 rows carry", page)
+        self.assertIn("snapshotted after first pitch", page)
+        self.assertNotIn("All 1 rows", page)
+
+    def test_a_fully_locked_page_says_so_once_and_inline(self):
+        """Compact is the property the old test was really protecting.
+
+        One sentence inside the header note, never a section of its own -- so
+        a future edit that grows it back into a block fails here rather than
+        being noticed on the live page.
+        """
+        page = self._page("pregame", "pregame_recovered")
+        self.assertIn("All 2 rows on this page carry", page)
+        self.assertEqual(page.count("pregame lock"), 1,
+                         "the lock claim is made once, not restated")
+        note = re.search(r"<div class='gr-note'>(.*?)</div>", page, re.S)
+        self.assertIsNotNone(note)
+        self.assertIn("pregame lock", note.group(1),
+                      "the claim rides in the header note, not its own block")
+
+    def test_the_claim_never_publishes_only_the_clean_case(self):
+        """Silence on a mixed page would be the anti-pattern inverted.
+
+        A page that states provenance when every row is verified and drops it
+        when some are not publishes a claim exactly when it flatters -- worse
+        than never making one.
+        """
+        for locks in (("pregame",), ("pregame", None),
+                      (None, "late_snapshot"), ("legacy_unverified",)):
+            with self.subTest(locks=locks):
+                self.assertIn("pregame lock", self._page(*locks))
 
 
 class ModelTagProvenanceTests(unittest.TestCase):

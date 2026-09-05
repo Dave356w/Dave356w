@@ -7373,6 +7373,41 @@ def _lock_provenance(led):
     return verified, legacy, n - verified - legacy
 
 
+def _lock_note(led):
+    """One sentence stating the pregame-lock split for the rows on this page.
+
+    `_lock_provenance` counts each outcome from its own label; this is its
+    only caller and the only surface that renders it.
+
+    It was rendered, then cut by the V12 redesign, and sat uncalled with three
+    tests behind it while the page made no lock claim at all. What the
+    redesign was right to cut is the three-clause block; what it should not
+    have cost is the claim, because the whole no-lookahead discipline in this
+    repo exists so that this page can make it. So: one sentence, inline in the
+    header note, never its own section -- and a test pins that shape rather
+    than the absence it used to pin.
+
+    NEVER asserts the whole. When any row is unverified the sentence reports
+    the split, which is the anti-pattern the function was written for: a page
+    that claims coverage it cannot substantiate, and its mirror image, a page
+    that publishes provenance only when the answer is clean.
+    """
+    n = len(led)
+    if not n:
+        return None
+    verified, legacy, late = _lock_provenance(led)
+    if verified == n:
+        return (f"All {n} rows on this page carry a <b>pregame lock</b> "
+                "timestamp — the snapshot each lean was published from "
+                "predates its first pitch")
+    parts = [f"{verified} of {n} rows carry a <b>pregame lock</b> timestamp"]
+    if legacy:
+        parts.append(f"{legacy} predate that instrumentation")
+    if late:
+        parts.append(f"{late} snapshotted after first pitch")
+    return "; ".join(parts)
+
+
 def render_grades_html(built_txt):
     back = ("<div class='backlink ledger-nav'>"
             "<a href='index.html'>← today's leans</a>"
@@ -7552,6 +7587,9 @@ def render_grades_html(built_txt):
                 "since no-lookahead keeps a close off an ungraded row — and "
                 "the close otherwise. Records, ROI and the z above are "
                 "scored at the close throughout")
+        lock = _lock_note(led)
+        if lock:
+            notes.append(lock)
         summary = ("<div class='gr-summary'>" + "".join(stats) + "</div>"
                    + (f"<div class='gr-note'>{'. '.join(notes)}.</div>" if notes else ""))
 

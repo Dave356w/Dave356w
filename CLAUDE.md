@@ -516,6 +516,20 @@ precedent — they are how the fix is known to look.
   about the code, and the way it was caught was rendering the page and reading
   it.
 
+  **The lock claim came back, and the test that pinned its absence was
+  rewritten rather than worked around.** `_lock_provenance()` had no
+  production caller: the V12 redesign cut its call site and left three tests
+  behind it, one asserting the page omitted it, while this file went on
+  listing it as a standing monitor of that page. The redesign was right about
+  the three-clause block and wrong about the claim — the no-lookahead
+  invariant is the reason this ledger is worth reading, and the page said
+  nothing about it. It is now one sentence inside the header note, and what
+  the old test was really protecting is pinned directly instead: the claim
+  appears once, inline, never as a section. Two properties are pinned beside
+  it, because a provenance line can fail in both directions — it never
+  asserts the whole when a row is unverified, and it is never dropped on a
+  mixed page, which would publish the claim exactly when it flatters.
+
   Display-only: no lean, delta, grade or ledger row moves, so no `MODEL_TAG`
   implication. Verified while auditing and NOT changed, because each was
   already right: the table's own Result column tallies to exactly the header
@@ -1812,10 +1826,7 @@ terciles, the per-family and per-slate predicted-vs-actual, the component error
 slope, the SP-vs-lineup coefficients and their symmetry contrast, and the two
 pre-registered forward tests (`forward_test.py`, `hybrid_test.py`,
 `delta_filter_test.py`, `abstain_test.py`, `dog_contrast_test.py`). The grades
-page carries the baseline controls. It does NOT carry the lock provenance:
-`_lock_provenance()` still exists and is still tested, but the V12 redesign
-cut its call site, so nothing renders it and the page makes no lock claim at
-all — see the anti-pattern entry. Read these before
+page carries the baseline controls and the lock provenance. Read these before
 writing a new probe.
 
 **Probes run on demand.** Seven read committed artifacts and run anywhere:
