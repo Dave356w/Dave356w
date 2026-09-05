@@ -1,0 +1,84 @@
+name: Daily rankings
+
+on:
+  schedule:
+    # 13:00 UTC = 09:00 ET, after overnight prop lines have posted and well
+    # before a 13:00 ET Sunday kickoff. GitHub queues scheduled runs under
+    # load, so treat the time as approximate.
+    - cron: "0 13 * * *"
+  workflow_dispatch:
+    inputs:
+      top_n:
+        description: "Players published per position"
+        default: "25"
+        required: false
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - "pipeline/**"
+      - "run_daily.py"
+      - "requirements.txt"
+      - ".github/workflows/daily.yml"
+
+permissions:
+  contents: write   # commit the day's data back to the repo
+  pages: write
+  id-token: write
+
+# Never run two builds at once: both commit to data/ and both deploy Pages.
+# cancel-in-progress stays false so a slate in flight is not thrown away.
+concurrency:
+  group: daily-rankings
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Build rankings
+        run: python run_daily.py --top-n "${{ inputs.top_n || '25' }}"
+
+      - name: Commit today's data
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add site/data
+          if git diff --cached --quiet; then
+            echo "No data change to commit."
+            exit 0
+          fi
+          git commit -m "data: rankings for $(date -u +%Y-%m-%d)"
+          # Another run may have landed while this one was building.
+          for attempt in 1 2 3 4; do
+            git pull --rebase origin main && git push origin HEAD:main && exit 0
+            echo "push attempt $attempt failed; retrying"
+            sleep $((2 ** attempt))
+          done
+          exit 1
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

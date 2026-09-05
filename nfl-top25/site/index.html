@@ -1,0 +1,733 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NFL Top 25 by Position</title>
+<meta name="description" content="Daily Yahoo NFL fantasy top-25 rankings by position, built from market-implied projections, nflverse depth charts and Yahoo salary priors.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏈</text></svg>">
+<style>
+:root{
+  color-scheme: light dark;
+  --bg:#f6f7f9; --panel:#ffffff; --panel-2:#fbfbfd; --line:#e3e6ec; --line-soft:#eef0f4;
+  --ink:#12151c; --ink-2:#525a6b; --ink-3:#858d9e;
+  --accent:#1f5fd8; --accent-soft:#e8f0ff; --accent-ink:#1a4fb4;
+  --good:#0f7a4f; --good-soft:#e3f5ec;
+  --warn:#9a6207; --warn-soft:#fdf2dc;
+  --mute-soft:#eef0f4;
+  --bar:#c9d9f7; --bar-top:#1f5fd8;
+  --shadow:0 1px 2px rgba(18,21,28,.06), 0 8px 24px -12px rgba(18,21,28,.18);
+  --radius:14px;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,"Helvetica Neue",Arial,sans-serif;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0d1017; --panel:#151922; --panel-2:#1a1f2a; --line:#262c39; --line-soft:#1f2430;
+    --ink:#eef1f6; --ink-2:#a3acbd; --ink-3:#79839a;
+    --accent:#6d9bff; --accent-soft:#1b2740; --accent-ink:#9dbcff;
+    --good:#4ecb8f; --good-soft:#12301f;
+    --warn:#e6b662; --warn-soft:#332612;
+    --mute-soft:#1f2430;
+    --bar:#26355a; --bar-top:#6d9bff;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px -14px rgba(0,0,0,.7);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0d1017; --panel:#151922; --panel-2:#1a1f2a; --line:#262c39; --line-soft:#1f2430;
+  --ink:#eef1f6; --ink-2:#a3acbd; --ink-3:#79839a;
+  --accent:#6d9bff; --accent-soft:#1b2740; --accent-ink:#9dbcff;
+  --good:#4ecb8f; --good-soft:#12301f;
+  --warn:#e6b662; --warn-soft:#332612;
+  --mute-soft:#1f2430;
+  --bar:#26355a; --bar-top:#6d9bff;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px -14px rgba(0,0,0,.7);
+}
+
+*{box-sizing:border-box}
+/* A `display` rule on a class beats the user-agent [hidden] rule, so the
+   toolbar and stat grid would still lay out while empty. */
+[hidden]{display:none !important}
+html,body{margin:0}
+body{
+  background:var(--bg); color:var(--ink); font-family:var(--sans);
+  font-size:15px; line-height:1.5; -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1120px; margin:0 auto; padding:24px 20px 72px}
+a{color:var(--accent)}
+
+/* ---------- header ---------- */
+.top{display:flex; align-items:flex-start; gap:16px; flex-wrap:wrap; margin-bottom:20px}
+.brand{flex:1 1 320px; min-width:0}
+h1{
+  font-size:clamp(24px,3.4vw,34px); line-height:1.15; margin:0 0 6px;
+  letter-spacing:-.02em; font-weight:680;
+}
+.sub{color:var(--ink-2); font-size:14.5px; margin:0}
+.top-actions{display:flex; gap:8px; align-items:center; flex-wrap:wrap}
+
+.btn{
+  display:inline-flex; align-items:center; gap:7px; height:36px; padding:0 13px;
+  border:1px solid var(--line); border-radius:9px; background:var(--panel);
+  color:var(--ink); font:inherit; font-size:13.5px; font-weight:520;
+  cursor:pointer; text-decoration:none; white-space:nowrap;
+  transition:background .12s ease, border-color .12s ease, transform .06s ease;
+}
+.btn:hover{background:var(--panel-2); border-color:var(--ink-3)}
+.btn:active{transform:translateY(1px)}
+.btn[hidden]{display:none}
+.btn svg{width:15px; height:15px; flex:none}
+
+/* ---------- status bar ---------- */
+.status{
+  display:flex; align-items:baseline; gap:10px; flex-wrap:nowrap;
+  padding:11px 14px; margin-bottom:18px;
+  background:var(--panel); border:1px solid var(--line); border-radius:11px;
+  font-size:13.5px; color:var(--ink-2); box-shadow:var(--shadow);
+}
+.dot{width:8px; height:8px; border-radius:50%; background:var(--good);
+     flex:none; align-self:center; box-shadow:0 0 0 3px var(--good-soft)}
+#status-text{min-width:0}
+.status .sep{color:var(--ink-3)}
+.status strong{color:var(--ink); font-weight:600}
+
+/* ---------- stat cards ---------- */
+.stats{
+  display:grid; gap:10px; margin-bottom:22px;
+  grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+}
+.stat{
+  background:var(--panel); border:1px solid var(--line); border-radius:var(--radius);
+  padding:14px 16px; box-shadow:var(--shadow);
+}
+.stat .k{font-size:11.5px; text-transform:uppercase; letter-spacing:.07em;
+         color:var(--ink-3); font-weight:600; margin-bottom:5px}
+.stat .v{font-size:23px; font-weight:660; letter-spacing:-.02em; line-height:1.15}
+.stat .n{font-size:12.5px; color:var(--ink-2); margin-top:3px}
+
+/* ---------- tabs + toolbar ---------- */
+.controls{
+  display:flex; gap:12px; align-items:center; flex-wrap:wrap;
+  margin-bottom:14px;
+}
+.tabs{
+  display:flex; gap:3px; padding:3px; background:var(--mute-soft);
+  border-radius:11px; border:1px solid var(--line-soft); flex-wrap:wrap;
+}
+.tab{
+  appearance:none; border:0; background:transparent; color:var(--ink-2);
+  font:inherit; font-size:13.5px; font-weight:600; letter-spacing:.02em;
+  padding:7px 15px; border-radius:8px; cursor:pointer;
+  transition:background .12s ease, color .12s ease;
+}
+.tab:hover{color:var(--ink)}
+.tab[aria-selected="true"]{background:var(--panel); color:var(--ink); box-shadow:var(--shadow)}
+.tab .cnt{color:var(--ink-3); font-weight:500; margin-left:5px; font-size:12px}
+
+.search{position:relative; flex:1 1 220px; min-width:180px; max-width:320px}
+.search svg{
+  position:absolute; left:11px; top:50%; transform:translateY(-50%);
+  width:15px; height:15px; color:var(--ink-3); pointer-events:none;
+}
+.search input{
+  width:100%; height:38px; padding:0 32px 0 33px; font:inherit; font-size:14px;
+  color:var(--ink); background:var(--panel);
+  border:1px solid var(--line); border-radius:10px;
+}
+.search input:focus{outline:2px solid var(--accent); outline-offset:-1px; border-color:transparent}
+.search .clear{
+  position:absolute; right:6px; top:50%; transform:translateY(-50%);
+  border:0; background:transparent; color:var(--ink-3); cursor:pointer;
+  font-size:17px; line-height:1; padding:5px 7px; border-radius:6px;
+}
+.search .clear:hover{color:var(--ink); background:var(--mute-soft)}
+
+/* The table header is the sort control on desktop; it is display:none below
+   760px, so small screens need their own or they cannot sort at all. */
+.sortby{display:none; align-items:center; gap:7px; font-size:13px; color:var(--ink-2)}
+.sortby select{
+  height:38px; padding:0 8px; font:inherit; font-size:13.5px; color:var(--ink);
+  background:var(--panel); border:1px solid var(--line); border-radius:10px;
+}
+@media (max-width:760px){ .sortby{display:flex} .search{max-width:none} }
+
+/* ---------- table ---------- */
+.card{
+  background:var(--panel); border:1px solid var(--line); border-radius:var(--radius);
+  box-shadow:var(--shadow); overflow:hidden;
+}
+.scroll{overflow-x:auto}
+table{width:100%; border-collapse:collapse; font-size:14px}
+thead th{
+  position:sticky; top:0; z-index:2;
+  background:var(--panel-2); color:var(--ink-3);
+  font-size:11.5px; text-transform:uppercase; letter-spacing:.06em; font-weight:650;
+  text-align:left; padding:11px 14px; white-space:nowrap;
+  border-bottom:1px solid var(--line); cursor:pointer; user-select:none;
+}
+thead th:hover{color:var(--ink)}
+thead th[data-sort]::after{
+  content:""; display:inline-block; width:0; height:0; margin-left:6px;
+  vertical-align:middle; opacity:0;
+  border-left:4px solid transparent; border-right:4px solid transparent;
+}
+thead th[aria-sort="descending"]::after{opacity:1; border-top:5px solid currentColor}
+thead th[aria-sort="ascending"]::after{opacity:1; border-bottom:5px solid currentColor}
+th.num,td.num{text-align:right}
+
+tbody td{padding:11px 14px; border-bottom:1px solid var(--line-soft); vertical-align:middle}
+tbody tr:last-child td{border-bottom:0}
+tbody tr:hover{background:var(--panel-2)}
+
+.rank{
+  display:inline-flex; align-items:center; justify-content:center;
+  min-width:26px; height:24px; padding:0 6px; border-radius:7px;
+  background:var(--mute-soft); color:var(--ink-2);
+  font-family:var(--mono); font-size:12.5px; font-weight:600;
+}
+tr[data-rank="1"] .rank,tr[data-rank="2"] .rank,tr[data-rank="3"] .rank{
+  background:var(--accent-soft); color:var(--accent-ink);
+}
+.who{display:flex; flex-direction:column; gap:2px; min-width:150px}
+.who b{font-weight:600; letter-spacing:-.01em}
+.who span{font-size:12.5px; color:var(--ink-2)}
+.who mark{background:var(--accent-soft); color:var(--accent-ink); border-radius:3px; padding:0 1px}
+
+.fp{display:flex; flex-direction:column; align-items:flex-end; gap:5px; min-width:96px}
+.fp b{font-family:var(--mono); font-size:15px; font-weight:640; letter-spacing:-.02em}
+/* These are spans inside a flex column, so they need an explicit box:
+   width and height do nothing on an inline element. */
+.fp .track{display:block; width:82px; height:5px; border-radius:3px;
+           background:var(--bar); overflow:hidden}
+.fp .fill{display:block; height:100%; background:var(--bar-top); border-radius:3px}
+.mono{font-family:var(--mono); font-size:13px; color:var(--ink-2)}
+
+.badge{
+  display:inline-block; padding:3px 8px; border-radius:999px;
+  font-size:11.5px; font-weight:600; letter-spacing:.01em; white-space:nowrap;
+  background:var(--mute-soft); color:var(--ink-2);
+}
+.badge.market{background:var(--good-soft); color:var(--good)}
+.badge.override{background:var(--accent-soft); color:var(--accent-ink)}
+.badge.fallback{background:var(--warn-soft); color:var(--warn)}
+
+.empty{padding:44px 20px; text-align:center; color:var(--ink-2)}
+.empty h3{margin:0 0 6px; color:var(--ink); font-size:17px; font-weight:620}
+.empty p{margin:0 auto; max-width:44ch; font-size:14px}
+.empty code{
+  font-family:var(--mono); font-size:12.5px; background:var(--mute-soft);
+  padding:2px 6px; border-radius:5px;
+}
+
+/* ---------- details ---------- */
+details.panel{
+  margin-top:20px; background:var(--panel); border:1px solid var(--line);
+  border-radius:var(--radius); box-shadow:var(--shadow); overflow:hidden;
+}
+details.panel>summary{
+  padding:14px 18px; cursor:pointer; font-weight:600; font-size:14px;
+  list-style:none; display:flex; align-items:center; gap:9px;
+}
+details.panel>summary::-webkit-details-marker{display:none}
+details.panel>summary::before{
+  content:""; width:0; height:0; flex:none;
+  border-top:4.5px solid transparent; border-bottom:4.5px solid transparent;
+  border-left:6px solid var(--ink-3); transition:transform .15s ease;
+}
+details.panel[open]>summary::before{transform:rotate(90deg)}
+details.panel>summary:hover{background:var(--panel-2)}
+.panel-body{padding:2px 18px 18px; border-top:1px solid var(--line-soft)}
+.panel-body h4{
+  margin:16px 0 7px; font-size:11.5px; text-transform:uppercase;
+  letter-spacing:.07em; color:var(--ink-3); font-weight:650;
+}
+.panel-body p{margin:0 0 8px; font-size:13.5px; color:var(--ink-2)}
+.chips{display:flex; flex-wrap:wrap; gap:6px}
+.log{
+  margin:0; padding:12px 14px; background:var(--panel-2); border:1px solid var(--line-soft);
+  border-radius:9px; font-family:var(--mono); font-size:12px; line-height:1.65;
+  color:var(--ink-2); max-height:280px; overflow:auto; white-space:pre-wrap;
+}
+.legend{display:flex; flex-wrap:wrap; gap:14px; font-size:13px; color:var(--ink-2)}
+.legend div{display:flex; align-items:center; gap:7px}
+
+footer{
+  margin-top:28px; padding-top:18px; border-top:1px solid var(--line);
+  color:var(--ink-3); font-size:12.5px; display:flex; gap:8px;
+  flex-wrap:wrap; align-items:center;
+}
+
+/* ---------- mobile: table becomes cards ---------- */
+@media (max-width:760px){
+  .wrap{padding:18px 14px 56px}
+  thead{display:none}
+  tbody td{display:none; padding:0; border:0}
+  tbody tr{
+    display:grid; grid-template-columns:auto 1fr auto; gap:4px 12px;
+    align-items:center; padding:13px 14px; border-bottom:1px solid var(--line-soft);
+  }
+  tbody td[data-cell="rank"],tbody td[data-cell="player"],tbody td[data-cell="fp"]{display:block}
+  tbody td[data-cell="meta"]{display:block; grid-column:1 / -1; margin-top:4px}
+  .fp .track{width:70px}
+  .meta-line{display:flex; flex-wrap:wrap; align-items:center; gap:6px 12px;
+             font-size:12.5px; color:var(--ink-2)}
+  .meta-line span{white-space:nowrap}
+}
+@media (min-width:761px){ td[data-cell="meta"]{display:none} }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <div class="brand">
+      <h1>NFL Top 25 by Position</h1>
+      <p class="sub" id="sub">Loading the latest slate…</p>
+    </div>
+    <div class="top-actions">
+      <a class="btn" id="csv" href="data/latest.csv" download hidden>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+          <polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+        </svg>
+        CSV
+      </a>
+      <button class="btn" id="theme" type="button" aria-label="Switch colour theme">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>
+        </svg>
+        Theme
+      </button>
+    </div>
+  </header>
+
+  <div class="status" id="status">
+    <span class="dot" id="dot"></span>
+    <span id="status-text">Fetching data…</span>
+  </div>
+
+  <section class="stats" id="stats" hidden></section>
+
+  <div class="controls" id="controls" hidden>
+    <div class="tabs" id="tabs" role="tablist" aria-label="Position"></div>
+    <label class="sortby">
+      Sort
+      <select id="sortby" aria-label="Sort by">
+        <option value="rank">Rank</option>
+        <option value="fp">Projected FP</option>
+        <option value="fppg">Yahoo FPPG</option>
+        <option value="salary">Salary</option>
+        <option value="fp_per_salary">FP per $</option>
+        <option value="player">Player name</option>
+        <option value="kickoff_utc">Kickoff</option>
+      </select>
+    </label>
+    <div class="search">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+           stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.7" y2="16.7"/>
+      </svg>
+      <input id="q" type="search" placeholder="Search player or team" autocomplete="off"
+             aria-label="Search player or team">
+      <button class="clear" id="clear" type="button" aria-label="Clear search" hidden>&times;</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="scroll">
+      <table id="table">
+        <thead>
+          <tr>
+            <th data-sort="rank" class="num" style="width:64px">#</th>
+            <th data-sort="player">Player</th>
+            <th data-sort="fp" class="num">Proj FP</th>
+            <th data-sort="fppg" class="num">Yahoo FPPG</th>
+            <th data-sort="salary" class="num">Salary</th>
+            <th data-sort="fp_per_salary" class="num">FP / $</th>
+            <th data-sort="depth" class="num">Depth</th>
+            <th data-sort="kickoff_utc">Kickoff</th>
+            <th data-sort="method">Source</th>
+          </tr>
+        </thead>
+        <tbody id="body"></tbody>
+      </table>
+    </div>
+    <div class="empty" id="empty" hidden></div>
+  </div>
+
+  <details class="panel" id="detail" hidden>
+    <summary>Run details, data sources and caveats</summary>
+    <div class="panel-body">
+      <h4>What the numbers mean</h4>
+      <p><b>Proj FP</b> is the projection this pipeline settled on for the player, in
+         Yahoo half-PPR scoring. Priority is: manual override, then an accepted
+         market-implied mean from sportsbook props, then a Yahoo FPPG and
+         salary prior. Only the fallback estimates carry the historical depth haircut.</p>
+      <div class="legend">
+        <div><span class="badge market">market</span> de-vigged sportsbook props</div>
+        <div><span class="badge override">override</span> manual value</div>
+        <div><span class="badge fallback">fallback</span> Yahoo FPPG / salary prior</div>
+      </div>
+      <h4>Projection sources used on this slate</h4>
+      <div class="chips" id="methods"></div>
+      <h4>Feeds</h4>
+      <p id="feeds"></p>
+      <h4>Run log</h4>
+      <pre class="log" id="log"></pre>
+      <h4>Caveats</h4>
+      <p>These are market-derived estimates, not predictions with a guarantee.
+         The sportsbook and Yahoo feeds are public but undocumented and can change
+         shape without notice; when a feed is unavailable the run falls back to
+         Yahoo priors and says so in the log above. Kickoff times are shown in
+         your local timezone.</p>
+    </div>
+  </details>
+
+  <footer>
+    <span id="foot">Rebuilt daily by GitHub Actions.</span>
+    <span class="sep">·</span>
+    <a href="data/latest.json">latest.json</a>
+    <span class="sep">·</span>
+    <a href="data/index.json">run archive</a>
+  </footer>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var THEME_KEY = "nfl-top25-theme";
+  var state = { data: null, position: null, query: "", sort: "rank", dir: 1 };
+
+  /* ---------- theme ---------- */
+  var root = document.documentElement;
+  try {
+    var saved = localStorage.getItem(THEME_KEY);
+    if (saved === "light" || saved === "dark") root.setAttribute("data-theme", saved);
+  } catch (e) { /* private mode: keep the system theme */ }
+
+  document.getElementById("theme").addEventListener("click", function () {
+    var now = root.getAttribute("data-theme");
+    var dark = now === "dark" ||
+      (now !== "light" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+    var next = dark ? "light" : "dark";
+    root.setAttribute("data-theme", next);
+    try { localStorage.setItem(THEME_KEY, next); } catch (e) {}
+  });
+
+  /* ---------- helpers ---------- */
+  function el(id) { return document.getElementById(id); }
+
+  function num(v) { return typeof v === "number" && isFinite(v); }
+
+  function fmt(v, digits) {
+    return num(v) ? v.toFixed(digits === undefined ? 2 : digits) : "—";
+  }
+
+  function money(v) { return num(v) ? "$" + v.toLocaleString() : "—"; }
+
+  function escapeHtml(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
+  function highlight(text, query) {
+    var safe = escapeHtml(text);
+    if (!query) return safe;
+    var needle = escapeHtml(query).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return safe.replace(new RegExp("(" + needle + ")", "ig"), "<mark>$1</mark>");
+  }
+
+  // Stored kickoffs are "YYYY-MM-DD HH:MM" in UTC. Safari will not parse that
+  // form, so build the Date explicitly rather than handing it to the parser.
+  function parseUtc(text) {
+    var m = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/.exec(String(text || ""));
+    if (!m) return null;
+    return new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]));
+  }
+
+  function localKickoff(text) {
+    var d = parseUtc(text);
+    if (!d) return "—";
+    return d.toLocaleString(undefined, {
+      weekday: "short", hour: "numeric", minute: "2-digit"
+    });
+  }
+
+  function ago(text) {
+    var d = parseUtc(text);
+    if (!d) return "";
+    var mins = Math.round((Date.now() - d.getTime()) / 60000);
+    if (mins < 1) return "just now";
+    if (mins < 60) return mins + " min ago";
+    var hours = Math.round(mins / 60);
+    if (hours < 24) return hours + (hours === 1 ? " hour ago" : " hours ago");
+    var days = Math.round(hours / 24);
+    return days + (days === 1 ? " day ago" : " days ago");
+  }
+
+  function methodClass(method) {
+    var m = String(method || "").toLowerCase();
+    if (m.indexOf("override") >= 0) return "override";
+    if (m.indexOf("market") >= 0) return "market";
+    return "fallback";
+  }
+
+  function setStatus(text, tone) {
+    el("status-text").innerHTML = text;
+    el("dot").style.background = tone === "bad" ? "var(--warn)" : "var(--good)";
+    el("dot").style.boxShadow = "0 0 0 3px " +
+      (tone === "bad" ? "var(--warn-soft)" : "var(--good-soft)");
+  }
+
+  function showEmpty(title, body) {
+    var node = el("empty");
+    node.innerHTML = "<h3>" + title + "</h3><p>" + body + "</p>";
+    node.hidden = false;
+    el("body").innerHTML = "";
+    el("table").hidden = true;
+  }
+
+  /* ---------- rendering ---------- */
+  function rows() {
+    var all = (state.data.rankings[state.position] || []).slice();
+    var q = state.query.trim().toLowerCase();
+    if (q) {
+      all = all.filter(function (r) {
+        return (String(r.player || "") + " " + String(r.team || "") + " " +
+                String(r.opponent || "")).toLowerCase().indexOf(q) >= 0;
+      });
+    }
+    var key = state.sort, dir = state.dir;
+    all.sort(function (a, b) {
+      var x = a[key], y = b[key];
+      // Missing values sort last in either direction rather than pretending to be 0.
+      var xm = x === null || x === undefined || x === "";
+      var ym = y === null || y === undefined || y === "";
+      if (xm && ym) return a.rank - b.rank;
+      if (xm) return 1;
+      if (ym) return -1;
+      if (typeof x === "number" && typeof y === "number") return (x - y) * dir;
+      return String(x).localeCompare(String(y)) * dir;
+    });
+    return all;
+  }
+
+  function render() {
+    var list = rows();
+    var table = el("table");
+    var body = el("body");
+
+    if (!list.length) {
+      if (state.query) {
+        showEmpty("No matches",
+          "Nothing in " + escapeHtml(state.position) + " matches “" +
+          escapeHtml(state.query) + "”.");
+      } else {
+        showEmpty("No players ranked",
+          "This run published no " + escapeHtml(state.position) + " rows.");
+      }
+      return;
+    }
+    el("empty").hidden = true;
+    table.hidden = false;
+
+    var top = list.reduce(function (m, r) { return num(r.fp) && r.fp > m ? r.fp : m; }, 0);
+    var html = list.map(function (r) {
+      var pct = top > 0 && num(r.fp) ? Math.max(3, (r.fp / top) * 100) : 0;
+      var meta = [
+        '<span class="badge ' + methodClass(r.method) + '">' +
+          escapeHtml(r.method || "—") + "</span>",
+        "<span>" + fmt(r.fppg) + " FPPG</span>",
+        "<span>" + money(r.salary) + "</span>",
+        "<span>" + fmt(r.fp_per_salary, 3) + " FP/$</span>",
+        "<span>Depth " + (num(r.depth) ? r.depth : "—") + "</span>",
+        "<span>" + escapeHtml(localKickoff(r.kickoff_utc)) + "</span>"
+      ].join("");
+
+      return '<tr data-rank="' + escapeHtml(r.rank) + '">' +
+        '<td class="num" data-cell="rank"><span class="rank">' +
+          escapeHtml(r.rank) + "</span></td>" +
+        '<td data-cell="player"><span class="who"><b>' +
+          highlight(r.player, state.query) + "</b><span>" +
+          highlight(String(r.team || "") + " " + String(r.opponent || ""), state.query) +
+          "</span></span></td>" +
+        '<td class="num" data-cell="fp"><span class="fp"><b>' + fmt(r.fp) +
+          '</b><span class="track"><span class="fill" style="width:' +
+          pct.toFixed(1) + '%"></span></span></span></td>' +
+        '<td class="num mono">' + fmt(r.fppg) + "</td>" +
+        '<td class="num mono">' + money(r.salary) + "</td>" +
+        '<td class="num mono">' + fmt(r.fp_per_salary, 3) + "</td>" +
+        '<td class="num mono">' + (num(r.depth) ? r.depth : "—") + "</td>" +
+        '<td class="mono">' + escapeHtml(localKickoff(r.kickoff_utc)) + "</td>" +
+        '<td><span class="badge ' + methodClass(r.method) + '">' +
+          escapeHtml(r.method || "—") + "</span></td>" +
+        '<td data-cell="meta"><span class="meta-line">' + meta + "</span></td>" +
+        "</tr>";
+    }).join("");
+
+    body.innerHTML = html;
+
+    Array.prototype.forEach.call(
+      document.querySelectorAll("thead th[data-sort]"),
+      function (th) {
+        if (th.dataset.sort === state.sort) {
+          th.setAttribute("aria-sort", state.dir === 1 ? "ascending" : "descending");
+        } else {
+          th.removeAttribute("aria-sort");
+        }
+      }
+    );
+  }
+
+  function renderTabs() {
+    var tabs = el("tabs");
+    tabs.innerHTML = state.data.positions.map(function (p) {
+      var n = (state.data.rankings[p] || []).length;
+      return '<button class="tab" role="tab" type="button" data-pos="' + p + '"' +
+        ' aria-selected="' + (p === state.position) + '">' + p +
+        '<span class="cnt">' + n + "</span></button>";
+    }).join("");
+
+    Array.prototype.forEach.call(tabs.querySelectorAll(".tab"), function (b) {
+      b.addEventListener("click", function () {
+        state.position = b.dataset.pos;
+        state.sort = "rank";
+        state.dir = 1;
+        el("sortby").value = "rank";
+        renderTabs();
+        render();
+      });
+    });
+  }
+
+  function renderMeta(d) {
+    var games = d.slate.games || [];
+    var matchups = games.map(function (g) { return g.matchup; }).filter(Boolean);
+    el("sub").textContent =
+      d.slate.game_count + (d.slate.game_count === 1 ? " game" : " games") +
+      " · " + d.slate.player_count + " priced players · top " + d.top_n + " per position";
+
+    setStatus(
+      "Updated <strong>" + ago(d.generated_utc) + "</strong>" +
+      '<span class="sep"> · </span>' + escapeHtml(d.generated_utc) +
+      '<span class="sep"> · </span>next rebuild within 24h',
+      "ok"
+    );
+
+    var market = d.market || {};
+    var accepted = num(market.accepted) ? market.accepted : 0;
+    var skill = num(market.skill_rows) ? market.skill_rows : 0;
+    var coverage = skill > 0 ? Math.round((accepted / skill) * 100) + "%" : "—";
+
+    el("stats").innerHTML = [
+      ['<div class="k">Games on slate</div><div class="v">' + d.slate.game_count +
+       '</div><div class="n">' + escapeHtml(matchups.slice(0, 3).join(", ") ||
+       "—") + (matchups.length > 3 ? " +" + (matchups.length - 3) + " more" : "") +
+       "</div>"],
+      ['<div class="k">Players priced</div><div class="v">' + d.slate.player_count +
+       '</div><div class="n">' + escapeHtml((d.positions || []).join(" · ")) + "</div>"],
+      ['<div class="k">Market coverage</div><div class="v">' + coverage +
+       '</div><div class="n">' + accepted + " of " + skill +
+       " skill rows priced from props</div>"],
+      ['<div class="k">Feeds</div><div class="v">' +
+       ((market.feeds || []).length || "—") + '</div><div class="n">' +
+       escapeHtml((market.feeds || []).join(", ") || "Yahoo priors only") + "</div>"]
+    ].map(function (h) { return '<div class="stat">' + h + "</div>"; }).join("");
+    el("stats").hidden = false;
+
+    var methods = d.method_counts || {};
+    el("methods").innerHTML = Object.keys(methods).sort(function (a, b) {
+      return methods[b] - methods[a];
+    }).map(function (k) {
+      return '<span class="badge ' + methodClass(k) + '">' + escapeHtml(k) +
+        " · " + methods[k] + "</span>";
+    }).join("") || '<span class="badge">no breakdown recorded</span>';
+
+    var notes = (market.notes || []).join(" · ");
+    el("feeds").textContent =
+      "Market: " + ((market.feeds || []).join(", ") || "none") +
+      (notes ? " — " + notes : "") +
+      (d.availability_removed
+        ? ". Availability filter removed " + d.availability_removed + " player(s)."
+        : "");
+
+    el("log").textContent = (d.log || []).join("\n") || "No log recorded.";
+    el("detail").hidden = false;
+    el("csv").hidden = false;
+    el("foot").textContent =
+      "Rebuilt daily by GitHub Actions · run " + escapeHtml(d.run_date);
+  }
+
+  /* ---------- events ---------- */
+  el("q").addEventListener("input", function (e) {
+    state.query = e.target.value;
+    el("clear").hidden = !state.query;
+    render();
+  });
+  el("clear").addEventListener("click", function () {
+    state.query = "";
+    el("q").value = "";
+    el("clear").hidden = true;
+    el("q").focus();
+    render();
+  });
+  // Bigger is better for the value columns; ranks, names and times read forwards.
+  function defaultDir(key) {
+    return (key === "rank" || key === "player" || key === "method" ||
+            key === "kickoff_utc" || key === "depth") ? 1 : -1;
+  }
+
+  Array.prototype.forEach.call(
+    document.querySelectorAll("thead th[data-sort]"),
+    function (th) {
+      th.addEventListener("click", function () {
+        var key = th.dataset.sort;
+        if (state.sort === key) {
+          state.dir = -state.dir;
+        } else {
+          state.sort = key;
+          state.dir = defaultDir(key);
+        }
+        el("sortby").value = state.sort;
+        render();
+      });
+    }
+  );
+
+  el("sortby").addEventListener("change", function (e) {
+    state.sort = e.target.value;
+    state.dir = defaultDir(state.sort);
+    render();
+  });
+
+  /* ---------- load ---------- */
+  fetch("data/latest.json", { cache: "no-store" })
+    .then(function (r) {
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.json();
+    })
+    .then(function (d) {
+      state.data = d;
+      state.position = (d.positions && d.positions[0]) || "QB";
+      el("controls").hidden = false;
+      renderMeta(d);
+      renderTabs();
+      render();
+    })
+    .catch(function (err) {
+      el("sub").textContent = "No published slate yet.";
+      setStatus("Could not load <strong>data/latest.json</strong> (" +
+        escapeHtml(err.message) + ")", "bad");
+      showEmpty("Waiting for the first run",
+        "The daily workflow has not published rankings yet. Run the " +
+        "<code>Daily rankings</code> workflow from the Actions tab, or wait for " +
+        "the next scheduled build.");
+    });
+})();
+</script>
+</body>
+</html>

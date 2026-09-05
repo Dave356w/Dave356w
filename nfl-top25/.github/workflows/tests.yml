@@ -1,0 +1,24 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Deliberately NOT wired into the daily build. A red test would otherwise cost
+# that day's slate permanently: the pipeline reads live pregame markets, and a
+# slate cannot be rebuilt after kickoff without lookahead. Tests gate the
+# change; the daily build runs against a branch the change already passed on.
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Import the pipeline
+        run: python -c "import pipeline.notebook as nb; print(len(nb.VALID_POSITIONS), 'positions')"
+      - run: python -m unittest discover -s tests -v

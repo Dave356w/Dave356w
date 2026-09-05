@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.DS_Store
+
+# Feed caches written by the pipeline at run time.
+market_projection_cache/
+nflverse_cache/
+
+# Local scratch exports from the showdown runner.
+yahoo_showdown_export*/
+*.zip
