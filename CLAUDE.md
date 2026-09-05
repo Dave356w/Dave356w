@@ -461,6 +461,55 @@ precedent — they are how the fix is known to look.
 
 **Resolved — keep as precedent**
 
+- **A headline that could not take another value, published with the tightest
+  error bar on the page.** `market-calibration.html` led with three tiles —
+  Both sides / Home / Away — over 1,642 side-observations. The pooled tile read
+  `50.0% vs 50.0% implied (-0.0 ± 1.2) · n=1642` and always will: the two
+  devigged sides of a game sum to 1 and exactly one of them wins, so pooling
+  every observation is an identity, not a measurement. The other two were exact
+  mirrors — same n, same SE, `-0.5` against `+0.5` — so the strip showed one
+  number three times, and the copy of it that says nothing carried the smallest
+  `±` on the page.
+
+  The repository already knew. `test_both_sides_implied_and_actual_are_exactly
+  _one_half` pinned the identity, docstring reading "forced by construction, so
+  a deviation is a bug, not a result", while the page rendered the same quantity
+  as a result. **An invariant asserted in the suite and published as a finding
+  is the internal-and-public-artifacts-disagreeing entry with the disagreement
+  inside one commit.**
+
+  Fixed by deleting both degenerate tiles rather than annotating them — the
+  ratio precedent below, one surface out. What replaces the pooled tile is the
+  non-degenerate form of the same question and the one the page's own note
+  already named: the **favourite** side at its own close, one observation per
+  game instead of two, so nothing cancels. Measured at the fix, 57.7% against
+  57.1% implied (+0.6 ± 1.7) over 810 games — the favourite-longshot axis,
+  reading null, which is a null the data can actually produce. Pick'em games
+  (11 of 821) carry no favourite and are dropped rather than handed to the home
+  side, so a tie-break convention cannot move a published rate. `totals["all"]`
+  is gone from `_market_calibration_rows` entirely: the identity is still
+  asserted, now on the two totals that ARE rendered, because a value computed
+  and not rendered is how this one got published in the first place.
+
+  Two smaller things in the same commit, both the standing rules applied to the
+  one surface that had escaped them. The "Market response" slope printed bare;
+  it is now `+2.04 ± 0.25 pp` (t = 8.1 — a real effect, which is not the point:
+  the reader could not have known that from the tile). And the Controls table
+  said "the same rows scored two other ways" above four rows, with nothing
+  saying that the last of them must equal the MARKET FAVORITE branch exactly —
+  the clause `_verdict_html` already carries in words on the per-game card,
+  missing on the page where the two identical lines sit four rows apart.
+
+  **The general lesson: before publishing a pooled figure, ask what else it
+  could have been.** A statistic whose value is fixed by the partition rather
+  than by the data is not a weak result, it is not a result — and pooling
+  across a partition that sums to one is the common way to build one by
+  accident.
+
+  Display-only: no lean, delta, grade or ledger row moves, so no `MODEL_TAG`
+  implication. What changed is which figures the page publishes, not any
+  figure's value.
+
 - **A timeout that kills the step but not the process.** The walk-forward
   append was `continue-on-error` with `timeout-minutes: 8` precisely so a slow
   replay could never cost a slate. It cost one anyway. (The replay itself has

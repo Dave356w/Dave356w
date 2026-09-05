@@ -2402,23 +2402,81 @@ class MarketCalibrationTests(unittest.TestCase):
     def test_each_game_contributes_one_home_and_one_away_observation(self):
         rows, totals = build_site._market_calibration_rows(self._frame())
         self.assertEqual(totals["home"]["n"], totals["away"]["n"])
-        self.assertEqual(totals["all"]["n"],
-                         totals["home"]["n"] + totals["away"]["n"])
         per_rung = sum(r["all"]["n"] for r in rows)
-        self.assertEqual(per_rung, totals["all"]["n"],
+        self.assertEqual(per_rung, totals["home"]["n"] + totals["away"]["n"],
                          "rung counts must sum to the total; a dropped price "
                          "shows up here first")
 
-    def test_both_sides_implied_and_actual_are_exactly_one_half(self):
-        """Forced by construction, so a deviation is a bug, not a result.
+    def test_pooling_both_sides_is_an_identity_not_a_measurement(self):
+        """Which is why no such total is returned, and none is published.
 
-        Devigged probabilities sum to 1 across the two sides of a game, and
-        exactly one side wins. Pooling both sides must therefore give .500 on
-        both the implied and the realised column, whatever the season did.
+        Devigged probabilities sum to 1 across the two sides of a game and
+        exactly one side wins, so a pooled both-sides bucket is .500 against
+        .500 implied whatever the season did -- and it led this page for
+        weeks, carrying the smallest error bar on it. The invariant is real
+        and is asserted here, on the two totals that ARE rendered; what
+        changed is that the page no longer prints its own arithmetic back to
+        the reader as a result.
         """
         _rows, totals = build_site._market_calibration_rows(self._frame())
-        self.assertAlmostEqual(totals["all"]["implied"], 0.5, places=9)
-        self.assertAlmostEqual(totals["all"]["actual"], 0.5, places=9)
+        h, a = totals["home"], totals["away"]
+        self.assertAlmostEqual(h["implied"] + a["implied"], 1.0, places=9)
+        self.assertAlmostEqual(h["actual"] + a["actual"], 1.0, places=9)
+        self.assertEqual(h["se"], a["se"])
+        self.assertAlmostEqual(h["diff"], -a["diff"], places=12)
+        self.assertNotIn("all", totals,
+                         "a pooled both-sides total is forced to .500; "
+                         "computing one invites publishing it again")
+
+    def test_the_favourite_pool_is_one_observation_per_priced_game(self):
+        """The non-degenerate version of the pooled question.
+
+        Nothing cancels here because a game contributes ONE row, not two, so
+        the gap is free to be non-zero -- and it is the axis the page's own
+        note names as where a favourite-longshot bias would show.
+        """
+        d = self._frame()
+        _rows, totals = build_site._market_calibration_rows(d)
+        fav = totals["favourite"]
+        priced = int((pd.to_numeric(d["close_p_home"]) != .5).sum())
+        self.assertEqual(fav["n"], priced,
+                         "one favourite per game, not two sides")
+        self.assertLess(fav["n"], totals["home"]["n"],
+                        "this fixture holds a pick'em, which has no favourite")
+        self.assertGreater(fav["implied"], 0.5,
+                           "every observation in this pool is priced over even")
+
+    def test_a_pickem_game_has_no_favourite_to_grade(self):
+        """Both sides sit at .500, so neither is the favourite.
+
+        Handing the tie to the home side would let an arbitrary convention
+        move the realised rate of a published bucket. Dropping the game costs
+        one row and decides nothing.
+        """
+        d = self._frame()
+        d["close_p_home"] = .5
+        _rows, totals = build_site._market_calibration_rows(d)
+        self.assertIsNone(totals["favourite"])
+        self.assertEqual(totals["home"]["n"], len(d))
+
+    def test_the_strip_publishes_neither_a_forced_nor_a_mirrored_tile(self):
+        """Three tiles, one number, one of them identically zero.
+
+        The strip showed Both sides / Home / Away. The first cannot take any
+        other value and the third is one minus the second, so a reader saw a
+        single measurement three times over. Tiles are keyed by their own
+        label markup rather than by the words, which also appear in the
+        table's column headings.
+        """
+        html = build_site.render_market_calibration_html("built")
+        if "once the market backfill has run" in html:
+            self.skipTest("no priced rows in the committed ledger")
+        self.assertIn("<div class='l'>Favourites</div>", html)
+        self.assertIn("<div class='l'>Home sides</div>", html)
+        for gone in ("Both sides", "Away"):
+            self.assertNotIn(f"<div class='l'>{gone}</div>", html)
+        # and the reader is told why, rather than left to wonder
+        self.assertIn("no both-sides total", html)
 
     def test_rows_without_a_close_are_skipped_not_imputed(self):
         d = self._frame()
@@ -2976,6 +3034,69 @@ class LeanMarketValueTests(unittest.TestCase):
             html = build_site._render_lean_market_value_panel(d)
             self.assertIn(build_site.PUBLIC_MODEL_NAME, html)
             self.assertIn("once graded leans", html)
+
+    @classmethod
+    def _spread_frame(cls, n=8):
+        """Rows whose price and delta both vary, so a slope exists.
+
+        The default fixture prices every game identically, which is the
+        degenerate case the panel refuses to fit. Prices straddle the
+        threshold so the FADE branch is populated too.
+        """
+        d = cls._frame(n=n)
+        d["close_p_home"] = np.linspace(.36, .74, n)
+        return d
+
+    def test_the_market_response_slope_is_published_with_its_standard_error(self):
+        """A bare slope is a number the reader cannot judge.
+
+        Every other statistic on this page carries its spread -- the ladder,
+        both branch tables and both controls all go through `_excess_se`, and
+        this file already pins that an SE may never be estimated from the
+        outcomes under test. The slope tile was the one figure printed alone.
+        """
+        d = self._spread_frame()
+        a = build_site._lean_market_value_analysis(d)
+        x = a["obs"]["delta"].to_numpy(float)
+        y = a["obs"]["market_edge"].to_numpy(float)
+        resid = y - (a["slope"] * x + a["intercept"])
+        expected = math.sqrt(float((resid ** 2).sum()) / (len(x) - 2)
+                             / float(((x - x.mean()) ** 2).sum()))
+        self.assertAlmostEqual(a["slope_se"], expected, places=12)
+        self.assertGreater(a["slope_se"], 0.0)
+        # and it reaches the tile, in the same units as the value above it
+        html = build_site._render_lean_market_value_panel(d)
+        self.assertIn(f"± {a['slope_se'] * 0.010 * 100:.2f} · leaned-team p",
+                      html)
+
+    def test_a_slope_that_cannot_be_fitted_reports_no_standard_error(self):
+        """One distinct price: no slope, so nothing to put a spread on."""
+        a = build_site._lean_market_value_analysis(self._frame(n=6))
+        self.assertTrue(np.isnan(a["slope"]))
+        self.assertTrue(np.isnan(a["slope_se"]))
+
+    def test_the_chalk_identity_is_stated_in_words_not_by_adjacency(self):
+        """The FADE branch and the chalk control print the same numbers.
+
+        Backing the other side of a lean priced under the threshold always
+        lands on the favourite, so on those rows the branch IS the chalk bet.
+        The per-game card already says that in words; this page printed the
+        two lines four rows apart with nothing joining them, and told the
+        reader it was showing "two other ways" while listing four.
+        """
+        d = self._spread_frame()
+        a = build_site._lean_market_value_analysis(d)
+        fade = dict(a["branch_rows"])[
+            f"MARKET FAVORITE · XWOBA-side p < "
+            f"{100 * build_site.HYBRID_THRESHOLD:.0f}%"]
+        chalk = dict(a["control_rows"])["Always chalk · market-favorite rows only"]
+        self.assertIsNotNone(fade, "fixture must populate the fade branch")
+        self.assertEqual(fade, chalk,
+                         "these are the same bet on the same rows; if they "
+                         "differ the two were scored over different games")
+        html = build_site._render_lean_market_value_panel(d)
+        self.assertIn("three other ways", html)
+        self.assertIn("carries no model content", html)
 
     def test_every_value_table_row_emits_four_cells(self):
         """Including the empty buckets, which render an em dash, not nothing."""
