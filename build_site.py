@@ -6752,8 +6752,8 @@ def _render_lean_market_value_panel(led):
         "</div>"
     )
     note = ("<div class='gr-note'>Scored at each selection's devigged close. "
-            f"The {100 * a['threshold']:.0f}% threshold was chosen on these "
-            "rows, so this is a discovery result.</div>")
+            f"<b>Discovery</b>: the {100 * a['threshold']:.0f}% threshold was "
+            "chosen on these rows.</div>")
     branch_head = (
         "<div class='gr-head'><h2 class='gr-h1'>By branch</h2>"
         "<div class='gr-lead'>What the rule selected, and how it "
@@ -6761,9 +6761,8 @@ def _render_lean_market_value_panel(led):
     )
     control_head = (
         "<div class='gr-head' style='margin-top:18px'><h2 class='gr-h1'>"
-        "Controls</h2><div class='gr-lead'>The same rows, scored three "
-        "other ways. A record is only a result relative to these."
-        "</div></div>"
+        "Controls</h2><div class='gr-lead'>The same rows, three other "
+        "ways. A record is only a result against these.</div></div>"
     )
     # The card's per-game panel already says this in words; the page that
     # prints the two lines four rows apart did not. Adjacency is not enough
@@ -6773,7 +6772,7 @@ def _render_lean_market_value_panel(led):
         f"<div class='gr-note'>The last row must equal <b>"
         f"{hybrid_public_label('FADE')}</b> above: under "
         f"{100 * a['threshold']:.0f}% the other side is always the favourite, "
-        "so there the two are the same bet. A difference is a bug.</div>"
+        "so the two are the same bet. A difference is a bug.</div>"
     )
     return (summary + note + branch_head
             + _lean_market_value_table(a["branch_rows"], first_head="Branch")
@@ -7408,8 +7407,8 @@ def _lock_note(led):
         return None
     verified, legacy, late = _lock_provenance(led)
     if verified == n:
-        return (f"All {n} rows carry a <b>pregame lock</b>: each snapshot "
-                "predates its own first pitch")
+        return (f"All {n} rows carry a <b>pregame lock</b>, snapshotted "
+                "before first pitch")
     parts = [f"{verified} of {n} rows carry a <b>pregame lock</b> timestamp"]
     if legacy:
         parts.append(f"{legacy} predate that instrumentation")
@@ -7585,7 +7584,7 @@ def render_grades_html(built_txt):
             notes.append(
                 "<b>Discovery</b>, not a forward test: the "
                 f"{100 * HYBRID_THRESHOLD:.0f}% threshold was chosen on these "
-                "rows. The registered version is in data/ledger_report.txt")
+                "rows. Registered version: data/ledger_report.txt")
         if show_ml:
             # One heading, two prices, and every aggregate above scored at the
             # close. The gap is small (it flips no branch on the committed
@@ -7593,8 +7592,7 @@ def render_grades_html(built_txt):
             # figures above cannot see which basis they are reading.
             notes.append(
                 "<b>ML</b> is the selection's price: locked pregame where the "
-                "row has one, else the close. Every record and unit figure "
-                "above is scored at the close")
+                "row has one, else the close. Records are scored at the close")
         lock = _lock_note(led)
         if lock:
             notes.append(lock)
@@ -7753,14 +7751,11 @@ def render_market_calibration_html(built_txt):
     # into what is sampling noise. State the arithmetic that decides it.
     note = (
         "<div class='gr-note'><b>Implied</b> is the DK close devigged, so the "
-        "hold is already out. Each game contributes two observations, one per "
-        "side, because a price is what is graded. <b>±</b> is one standard "
-        "error on the realised rate; a gap under about 2± is indistinguishable "
-        "from a fair price, and most here are. No both-sides total: the two "
-        "sides sum to 1 and one of them wins, so pooling is 50.0% against "
-        "50.0% whatever the season did. <b>Favourites</b> asks it once per "
-        "game instead — pick'ems have no favourite and are excluded — and the "
-        "away figure is one minus the home figure.</div>")
+        "hold is out. Two observations per game, one per side. <b>±</b> is one "
+        "standard error; a gap under about 2± is indistinguishable from a fair "
+        "price. No both-sides total: the sides sum to 1 and one wins, so it is "
+        "always 50.0%. <b>Favourites</b> asks once per game instead, pick'ems "
+        "excluded; away is one minus home.</div>")
 
     body = []
     for r in rows:
