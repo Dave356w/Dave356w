@@ -78,6 +78,18 @@ class EventMapTests(unittest.TestCase):
                          {"1b", "2b", "3b", "hr", "bb", "ibb", "hbp",
                           "sf", "sh", "ci", "out"})
 
+    def test_other_out_is_not_a_plate_appearance(self):
+        """Pinned because the name argues the other way and the data settled
+        it. Over the 299-game v12 family exactly two side-games failed the
+        box-score reconciliation, each by exactly +1 PA and +1 AB, and
+        `other_out` occurred once on each of those two sides and on neither
+        passing side of the same games. It is a baserunning out that ends an
+        inning with the batter's PA incomplete."""
+        rows, unmapped = lw.plate_appearances(_feed([
+            _play("single"), _play("other_out")]))
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(unmapped, [])      # known non-PA, not an unknown event
+
     def test_the_two_event_sets_are_disjoint(self):
         """An event in both maps would be counted or dropped depending on
         which lookup ran first."""

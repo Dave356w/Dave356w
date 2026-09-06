@@ -143,7 +143,7 @@ _EVENT = {
     "triple_play": "out", "fielders_choice": "out",
     "fielders_choice_out": "out", "field_error": "out",
     "batter_interference": "out", "fan_interference": "out",
-    "sac_fly_error": "sf", "other_out": "out",
+    "sac_fly_error": "sf",
 }
 
 # Events that are NOT a plate appearance: base-running plays that StatsAPI
@@ -163,6 +163,14 @@ _NOT_A_PA = {
     "defensive_switch", "pitcher_switch", "injury", "stolen_base",
     "caught_stealing", "pickoff_error_1b", "pickoff_error_2b",
     "pickoff_error_3b", "error",
+    # `other_out` was mapped to a batter out and is NOT a plate appearance --
+    # established from the data rather than from the name. Over the 299-game
+    # v12 family exactly two side-games failed the box-score reconciliation,
+    # each by exactly +1 PA and +1 AB, and `other_out` occurred exactly once on
+    # each of those two sides and on neither of the two passing sides in the
+    # same games. It is a baserunning out that ends an inning with the batter's
+    # PA incomplete, which is precisely the shape of that error.
+    "other_out",
 }
 
 _COMPONENTS = ("ab", "h", "2b", "3b", "hr", "bb", "ibb", "hbp", "sf")
