@@ -1912,12 +1912,27 @@ them cannot be smoke-tested locally; run the workflow.
   already carries. And the window question is not closed in general: a
   fixed-window rescore (score the lineup over the first N batters faced
   regardless of when the starter left) is a different measurement, and it is
-  **not computable from committed artifacts** — the backfill stores box-score
-  aggregates only, so `act_sp_bf_<side>` is a per-start COUNT, enough to
-  condition on window length and not enough to redefine it. Play-by-play
-  ingestion would be a data-acquisition change (backfill, not lookahead — a
-  finished game's play-by-play is immutable the same way its box score is) and
-  is not proposed. The conditioning is also descriptive rather than causal:
+  **not computable from committed artifacts** — `act_sp_bf_<side>` is a
+  per-start COUNT, enough to condition on window length and not enough to
+  redefine it.
+
+  **The two halves of that rescore are blocked for different reasons, and the
+  batting order is not the missing piece.** The build DOES carry a
+  batting-order index — `hitter_rows` assigns it as `enumerate(lu, start=1)`
+  and `slot_pa_weights` is the v4 weighting — and then aggregates it away: the
+  dumps persist `opp_xwOBA_neutral`, `opp_xwOBA_sd` and `n_opp`, never a slot
+  or a per-hitter rate. So the PREDICTED half is blocked by aggregation only,
+  and 18 batters is the special case where it would be trivial in-build (two
+  turns through the order makes the slot weights uniform, so the fixed-window
+  prediction is the unweighted nine-hitter mean; it is NOT recoverable from a
+  dump, since weighted-minus-unweighted depends on the covariance of slot
+  weight with hitter rate). The ACTUAL half is blocked by the source and is
+  binding: a box score gives a whole-game total and a starter-allowed total,
+  neither a PREFIX of the game. Play-by-play ingestion is what settles it —
+  backfill, not lookahead, since a finished game's play-by-play is immutable
+  the same way its box score is — and is not proposed. **Persisting
+  `batting_order` would not make Task 3 computable**, which is the trap: the
+  available half is not the binding one. The conditioning is also descriptive rather than causal:
   starter BF is a post-treatment outcome of the same game.
 
   Diagnostic only; no lean, delta, grade or ledger row moves, so no

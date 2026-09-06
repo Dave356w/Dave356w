@@ -12,8 +12,14 @@ ledger row moves, and `MODEL_TAG` is unchanged.
 
 ## Task 1 — data granularity
 
-**Box-score aggregates only. No plate-appearance rows and no batting-order
-index exist anywhere in the repository.** Task 3 does not run.
+**Committed artifacts hold box-score aggregates only. Task 3 does not run.**
+
+Stated precisely, because the first version of this section was too broad. A
+batting-order index **does** exist — at build time, in memory. `hitter_rows`
+assigns `batting_order` as `enumerate(lu, start=1)` per lineup slot
+(`build_site.py:1811`), and `lineup_weight` / `slot_pa_weights` use it for the
+v4 slot-PA weighting (`build_site.py:2736`). It is aggregated away before
+anything is written: no committed artifact carries it.
 
 What was checked, not recalled:
 
@@ -32,6 +38,15 @@ What was checked, not recalled:
   `actuals_backfill.py:191`, `reliever_shrink_probe.py:267`) and a test fixture.
 * `data/lineup_resolution_audit.csv` is 15 rows of lineup-posting counts, not
   batter events.
+* The per-slate dumps are one row per side and carry the lineup only as
+  aggregates: `opp_xwOBA_neutral` (the slot-PA-weighted composite),
+  `opp_xwOBA_sd` (its dispersion) and `n_opp` (the hitter count). Across every
+  committed `leans_*`, `shadow_*` and `rebuild_*` dump the only lineup-ish
+  column names are `lineup_status_*`, `lineup_posted_*` and
+  `lineup_savant_backfill_*` — all per-side counts and statuses. No slot, no
+  player id, no per-hitter rate.
+* Per-hitter rows exist only in `.savant_cache/`, which is gitignored and
+  slate-keyed, so they are not recoverable for a past slate by design.
 
 The bullpen phase is not stored at all — `actuals_backfill.phase_lines`
 reconstructs it as the team line minus the starter line, validating that no
@@ -39,9 +54,30 @@ field goes negative before it will call the residual a bullpen line.
 
 **Consequence for the hypothesis.** `act_sp_bf_<side>` is a per-start *count*.
 That is enough to CONDITION on window length, which is Task 2, and not enough
-to REDEFINE it. A fixed 18-batter rescore would need to know which batters
-those were; nothing committed says. It is not computable, and no substitute
+to REDEFINE it. A fixed 18-batter rescore is not computable, and no substitute
 window was run.
+
+Both halves of that rescore fail, and they fail for different reasons — worth
+separating, because the order question only touches the easier half:
+
+* **Predicted side — blocked by aggregation, and the window is a special
+  case.** 18 batters faced is exactly two times through the order, so every
+  slot appears exactly twice and the slot-PA weights become uniform: the
+  fixed-window prediction is just the *unweighted* nine-hitter mean. That is a
+  one-line change to a build that still holds the per-hitter frame. It cannot
+  be reconstructed from committed artifacts, though — the dumps persist the
+  weighted composite and its sd, and the gap between weighted and unweighted
+  depends on the covariance between slot weight and hitter rate, which
+  `(mean, sd)` does not determine.
+* **Actual side — blocked by the data source, and this is the binding one.**
+  Scoring what the first 18 batters actually did needs per-batter outcomes in
+  sequence. The box score gives whole-game team totals and a starter-allowed
+  total; neither is a prefix of the game. No batting order, persisted or not,
+  supplies this — only play-by-play does.
+
+So persisting `batting_order` would make the fixed-window *prediction*
+available going forward and would still leave Task 3 uncomputable. The
+conclusion is unchanged; the reason is narrower than "no order index exists".
 
 ## Task 2 — results, all 598 side-games, no subsampling
 
@@ -113,7 +149,8 @@ causal — starter BF is a post-treatment outcome of the same game, so
 was registered, and not "what is the window-free lineup effect".
 
 What would settle it is play-by-play ingestion (`atBatIndex` ordering per
-game), which nothing in this repo fetches today. That is a data-acquisition
+game), which nothing in this repo fetches today — the actual side is the
+binding constraint, not the batting order. That is a data-acquisition
 change with its own no-lookahead question — a completed game's play-by-play is
 an immutable historical fact like its box score, so it is backfill rather than
 lookahead — and it is not proposed here.

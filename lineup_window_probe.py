@@ -20,15 +20,28 @@ than the absence of signal.
   CONTROL  the same two fits for SP, whose window is endogenous the same way.
            Lineup moving while SP does not WEAKENS the mechanism.
 
-WHAT THIS PROBE CANNOT ANSWER. The backfill stores box-score aggregates only
-(`actuals_backfill.parse_boxscore` reads `teams.<side>.teamStats.batting` and
-one pitcher object). There are no plate-appearance rows and no batting-order
-index anywhere in `data/`, so a FIXED-window rescore -- score the lineup over
+WHAT THIS PROBE CANNOT ANSWER. A FIXED-window rescore -- score the lineup over
 the first N batters faced regardless of when the starter left -- is not
-computable from committed artifacts. `act_sp_bf_<side>` is a per-start COUNT,
-which is enough to CONDITION on window length and not enough to REDEFINE it.
-So this probe can say whether the slope is sensitive to the window; it cannot
-produce the window-free slope that would settle it.
+computable from committed artifacts, and the two halves fail for different
+reasons. The PREDICTED side is blocked by aggregation: 18 batters faced is
+exactly two turns through the order, so slot-PA weights go uniform and the
+fixed-window prediction is the unweighted nine-hitter mean -- easy in a build
+that still holds the per-hitter frame, unrecoverable from a dump that persists
+only the weighted composite and its sd. The ACTUAL side is blocked by the data
+source and is the binding one: `actuals_backfill.parse_boxscore` reads
+`teams.<side>.teamStats.batting` and one pitcher object, so what is stored is
+a whole-game total and a starter-allowed total, neither of which is a PREFIX
+of the game. Only play-by-play supplies that.
+
+A batting-order index is NOT the missing piece, and it is not missing: the
+build assigns one (`build_site.hitter_rows`, `enumerate(lu, start=1)`) and
+weights by it, then aggregates it away before writing. Persisting it would
+serve the predicted side and leave the actual side exactly as blocked.
+
+`act_sp_bf_<side>` is a per-start COUNT -- enough to CONDITION on window length
+and not enough to REDEFINE it. So this probe can say whether the slope is
+sensitive to the window; it cannot produce the window-free slope that would
+settle it.
 
 Nor is the conditioning causal. Starter BF is a post-treatment outcome of the
 same game it is conditioning on -- a lineup that hits well shortens the start
