@@ -1866,6 +1866,7 @@ writing a new probe.
 | `abstain_test.py` | pre-registered abstain-vs-fade variant of the hybrid, frozen 2026-09-03 (also prints every build) |
 | `dog_contrast_test.py` | pre-registered underdog sign-flip contrast, frozen 2026-09-03; NOT independent of arm 2 (also prints every build) |
 | `hfa_probe.py` | does adding a home-field term to the lean improve it? (no) |
+| `lineup_window_probe.py` | is the negative lineup component slope an artifact of the SP/BP scoring window? (no) |
 | `interaction_probe.py` | do single signals or other combiners beat `B·P/L`? |
 | `dispersion_probe.py` | does a concentrated lineup beat the mean it is averaged into? |
 | `bp_ablation.py` | does removing the bullpen term change any decision? |
@@ -1880,6 +1881,62 @@ and StatsAPI are unreachable from the dev environment, so a probe that needs
 them cannot be smoke-tested locally; run the workflow.
 
 ### Measured and rejected
+
+- **The lineup component's negative slope as a window artifact.** The component
+  block scores each term "against its own realised phase", and the SP/BP
+  boundary is endogenous to lineup quality — a strong lineup chases the starter
+  early and is scored over a short window, a weak one gets a long window with
+  third-time-through PAs in it. That is a good story for why the lineup slope
+  (-0.83 +/- 0.51, corr -0.066) disagrees in SIGN with the weight fit
+  (b_lineup +0.158 +/- 0.130, symmetry z = +0.37) on the same family.
+  Pre-registered in `docs/lineup_window_registration.md` before any output was
+  computed, with the falsifier stated numerically. **It failed at the
+  falsifier.** Conditioning on starter batters faced moves the slope from
+  -0.828 to **-0.829** — 100x short of the registered ~0.1 bar — and the SP
+  control does not move either (+0.606 -> +0.610). Full read in
+  `docs/lineup_window_findings.md`.
+
+  **The mechanism fails at its first link, and that is the reusable part.** An
+  added covariate can only move a coefficient to the extent it correlates with
+  the regressor, and `corr(predicted lineup, starter BF)` is **-0.045** over
+  598 side-games. Predicted lineup quality does not predict how long the
+  opposing starter lasts, so no conditioning on the boundary could have
+  rescued the slope whatever the residual did. **Check the covariate's
+  correlation with the regressor before running a conditioning test**: where it
+  is ~0 the test is answered in advance, and reading its null as evidence about
+  the outcome variable would be reading the wrong thing.
+
+  What is NOT established: that the lineup term is worthless. -0.83 +/- 0.51
+  and +0.158 +/- 0.130 both contain zero, and "contributing noise" is what
+  both are consistent with — the same reading `interaction_probe`'s v12 block
+  already carries. And the window question is not closed in general: a
+  fixed-window rescore (score the lineup over the first N batters faced
+  regardless of when the starter left) is a different measurement, and it is
+  **not computable from committed artifacts** — `act_sp_bf_<side>` is a
+  per-start COUNT, enough to condition on window length and not enough to
+  redefine it.
+
+  **The two halves of that rescore are blocked for different reasons, and the
+  batting order is not the missing piece.** The build DOES carry a
+  batting-order index — `hitter_rows` assigns it as `enumerate(lu, start=1)`
+  and `slot_pa_weights` is the v4 weighting — and then aggregates it away: the
+  dumps persist `opp_xwOBA_neutral`, `opp_xwOBA_sd` and `n_opp`, never a slot
+  or a per-hitter rate. So the PREDICTED half is blocked by aggregation only,
+  and 18 batters is the special case where it would be trivial in-build (two
+  turns through the order makes the slot weights uniform, so the fixed-window
+  prediction is the unweighted nine-hitter mean; it is NOT recoverable from a
+  dump, since weighted-minus-unweighted depends on the covariance of slot
+  weight with hitter rate). The ACTUAL half is blocked by the source and is
+  binding: a box score gives a whole-game total and a starter-allowed total,
+  neither a PREFIX of the game. Play-by-play ingestion is what settles it —
+  backfill, not lookahead, since a finished game's play-by-play is immutable
+  the same way its box score is — and is not proposed. **Persisting
+  `batting_order` would not make Task 3 computable**, which is the trap: the
+  available half is not the binding one. The conditioning is also descriptive rather than causal:
+  starter BF is a post-treatment outcome of the same game.
+
+  Diagnostic only; no lean, delta, grade or ledger row moves, so no
+  `MODEL_TAG` implication.
 
 - **Home-field in the lean.** The model's lean is `net = home_off - away_off`
   with **no home-field term anywhere** — verified in the source, not recalled;
