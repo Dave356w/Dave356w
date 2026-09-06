@@ -36,13 +36,32 @@ WHAT IT PRODUCES, and why each piece exists rather than being a sweep:
 WHY THE VALIDATION IS THE POINT. Mapping StatsAPI `eventType` strings onto
 wOBA components is the step that fails silently: a mis-mapped event shifts a
 rate by a little on every game and looks like a finding. So this module never
-reports a rate it has not reconciled. Every game is checked twice -- against
-`parse_boxscore` on the SAME payload (catching the mapping) and against the
-committed ledger row (catching the join) -- and a game failing either is
-excluded from the output and named in the report. CLAUDE.md's rule that a count
-derived by subtraction cannot carry a name you did not measure is what forces
-this: `ab` here IS derived, as PA minus the non-AB outcomes, and it earns the
-name `ab` only because the box score's own `atBats` confirms it.
+reports a rate it has not reconciled. Every game is checked against TWO
+sources, and the two answer different questions, which is why their failures
+are reported separately rather than pooled:
+
+  vs `parse_boxscore` on the SAME payload   the event MAP. A disagreement here
+                                            means this module read the game
+                                            wrong, and the game is unusable.
+  vs the committed LEDGER row               the SOURCE. The map can be perfect
+                                            and this still disagree, because
+                                            `actuals_backfill._fill` is
+                                            write-once and StatsAPI revises
+                                            box scores after the fact.
+
+That second case is real and was hit on the first run: 2026-08-29 ARI@SF
+(823176) reconciles against its own box score and differs from the ledger by
+exactly one single reclassified out of the hit column -- an official scoring
+change, arriving after the row was backfilled and correctly never overwriting
+it. Calling that a "reconciliation failure" would name the instrument's own
+correctness after someone else's stat correction, so it is classified as a
+REVISION and the game is still used: its PBP is internally consistent, and both
+actuals in the comparison below come from that one consistent source.
+
+CLAUDE.md's rule that a count derived by subtraction cannot carry a name you
+did not measure is what forces all of this: `ab` here IS derived, as PA minus
+the non-AB outcomes, and it earns the name `ab` only because the box score's
+own `atBats` confirms it.
 
 WHAT IT CANNOT DO. It supplies the ACTUAL half of the fixed-window rescore and
 not the PREDICTED half. 18 batters faced is exactly two turns through the
@@ -263,14 +282,17 @@ def components(rows):
 
 
 def validate(game_pk, feed, rows, led_row):
-    """Reconcile the PA reconstruction twice. Returns a list of failures.
+    """Reconcile the PA reconstruction against two sources.
 
-    Against `parse_boxscore` on the SAME payload -- catches the event map.
-    Against the committed LEDGER row -- catches the join and the slate pick.
-    Two sources because they fail differently: a wrong map reconciles with
-    neither, a wrong gamePk reconciles with the box score and not the ledger.
+    Returns {"map": [...], "ledger": [...]} -- kept apart because they mean
+    different things. A `map` failure says this module read the game wrong and
+    the game is unusable. A `ledger` failure with an empty `map` says the two
+    agree about the game and the stored row is older than the box score, i.e.
+    an upstream scoring revision that `_fill`'s write-once rule correctly did
+    not absorb. Pooling them would let a stat correction read as a defect here,
+    and worse, would let a real defect hide inside a pile of them.
     """
-    fails = []
+    fails = {"map": [], "ledger": []}
     box = ((feed or {}).get("liveData") or {}).get("boxscore") or {}
     parsed = ab.parse_boxscore(box)
     for bat in ("away", "home"):
@@ -281,14 +303,14 @@ def validate(game_pk, feed, rows, led_row):
             if w is None:
                 continue
             if abs(got[f] - w) > 1e-9:
-                fails.append(f"{game_pk} {bat} {f}: pbp {got[f]:.0f} "
-                             f"!= boxscore {w:.0f}")
+                fails["map"].append(f"{game_pk} {bat} {f}: pbp {got[f]:.0f} "
+                                    f"!= boxscore {w:.0f}")
         if led_row is not None:
             lw = ab._f(led_row.get(f"act_woba_{bat}"))
             mine = ab.woba_from_components(got)
             if lw is not None and mine is not None and abs(mine - lw) > 1e-6:
-                fails.append(f"{game_pk} {bat} woba: pbp {mine:.6f} "
-                             f"!= ledger {lw:.6f}")
+                fails["ledger"].append(f"{game_pk} {bat} woba: pbp {mine:.6f} "
+                                       f"!= ledger {lw:.6f}")
         # The starter's window: length against act_sp_bf, components against
         # act_sp_*. This is the check that the ORDERING is right -- the totals
         # above would reconcile even if the sequence were shuffled.
@@ -298,13 +320,13 @@ def validate(game_pk, feed, rows, led_row):
         if led_row is not None:
             bf = ab._f(led_row.get(f"act_sp_bf_{pit}"))
             if bf is not None and abs(sp["pa"] - bf) > 1e-9:
-                fails.append(f"{game_pk} {pit} SP bf: pbp {sp['pa']:.0f} "
-                             f"!= ledger {bf:.0f}")
+                fails["ledger"].append(f"{game_pk} {pit} SP bf: pbp "
+                                       f"{sp['pa']:.0f} != ledger {bf:.0f}")
             for f in _COMPONENTS:
                 lv = ab._f(led_row.get(f"act_sp_{f}_{pit}"))
                 if lv is not None and abs(sp[f] - lv) > 1e-9:
-                    fails.append(f"{game_pk} {pit} SP {f}: pbp {sp[f]:.0f} "
-                                 f"!= ledger {lv:.0f}")
+                    fails["ledger"].append(f"{game_pk} {pit} SP {f}: pbp "
+                                           f"{sp[f]:.0f} != ledger {lv:.0f}")
     return fails
 
 
@@ -316,7 +338,8 @@ def collect(date, ledger_path=LEDGER, verbose=True):
     if d.empty:
         raise SystemExit(f"no ledger rows with a gamePk on {date}")
 
-    pa_rows, per_game, all_fails, all_unmapped = [], [], [], []
+    pa_rows, per_game, all_unmapped = [], [], []
+    all_fails = {"map": [], "ledger": []}
     for _, r in d.iterrows():
         gpk = int(r["gamePk"])
         try:
@@ -326,15 +349,21 @@ def collect(date, ledger_path=LEDGER, verbose=True):
             continue
         rows, unmapped = plate_appearances(feed)
         if rows is None:
-            all_fails.append(f"{gpk}: {unmapped[0]}")
+            all_fails["map"].append(f"{gpk}: {unmapped[0]}")
             continue
         if unmapped:
             all_unmapped.extend(unmapped)
         fails = validate(gpk, feed, rows, r)
-        ok = not fails and not unmapped
-        all_fails.extend(fails)
+        # Usable when THIS module read the game right. A ledger disagreement
+        # with a clean map is the source having moved under a write-once row,
+        # which says nothing about the reconstruction -- see the docstring.
+        ok = not fails["map"] and not unmapped
+        revised = ok and bool(fails["ledger"])
+        all_fails["map"].extend(fails["map"])
+        all_fails["ledger"].extend(fails["ledger"])
         for i, row in enumerate(rows):
-            row = dict(row, game_pk=gpk, game_date=str(date), reconciled=ok)
+            row = dict(row, game_pk=gpk, game_date=str(date), reconciled=ok,
+                       ledger_revised=revised)
             pa_rows.append(row)
         # Sequence position WITHIN each side's offense: this is what makes a
         # prefix definable, and it is why the CSV is worth keeping.
@@ -344,11 +373,15 @@ def collect(date, ledger_path=LEDGER, verbose=True):
                 if row["bat_side"] == bat:
                     k += 1
                     row["pa_seq"] = k
-        per_game.append({"game_pk": gpk, "reconciled": ok,
-                         "n_pa": len(rows), "n_fail": len(fails)})
+        per_game.append({"game_pk": gpk, "reconciled": ok, "revised": revised,
+                         "n_pa": len(rows),
+                         "n_map_fail": len(fails["map"]),
+                         "n_ledger_fail": len(fails["ledger"])})
         if verbose:
-            print(f"  {gpk}: {len(rows)} PA  "
-                  + ("OK" if ok else f"FAILED ({len(fails)} checks)"))
+            note = ("OK" if ok and not revised else
+                    "OK (ledger row predates a scoring revision)" if revised
+                    else f"MAP FAILURE ({len(fails['map'])} checks)")
+            print(f"  {gpk}: {len(rows)} PA  {note}")
         time.sleep(THROTTLE_S)
 
     pa = pd.DataFrame(pa_rows)
@@ -416,17 +449,30 @@ def main():
              ""]
     pg = summ["per_game"]
     ok = int(pg["reconciled"].sum()) if not pg.empty else 0
-    lines.append(f"RECONCILIATION  {ok}/{len(pg)} games reconcile against BOTH "
-                 f"the box score on the same payload and the committed ledger")
+    rev = int(pg["revised"].sum()) if not pg.empty else 0
+    lines.append(f"EVENT MAP       {ok}/{len(pg)} games reconcile against the "
+                 f"box score on the SAME payload")
     if summ["unmapped"]:
         lines.append(f"  UNMAPPED eventType values (map is wrong or incomplete): "
                      f"{', '.join(summ['unmapped'])}")
     else:
         lines.append("  no unmapped eventType values")
-    for f in summ["fails"][:40]:
-        lines.append(f"  FAIL {f}")
-    if len(summ["fails"]) > 40:
-        lines.append(f"  ... and {len(summ['fails']) - 40} more")
+    for f in summ["fails"]["map"][:40]:
+        lines.append(f"  MAP FAIL {f}")
+    lines.append("")
+    lines.append(f"SOURCE DRIFT    {rev} of those games carry a ledger row that "
+                 f"predates a scoring revision")
+    lines.append("  Not a defect here and not one there: StatsAPI revises box "
+                 "scores after the fact and")
+    lines.append("  `actuals_backfill._fill` is write-once by design, so the "
+                 "stored actual keeps the original.")
+    lines.append("  These games ARE used -- their PBP is internally consistent "
+                 "and both actuals below come")
+    lines.append("  from that one source -- but their whole-game column will "
+                 "differ from what the component")
+    lines.append("  block scores by exactly the revision.")
+    for f in summ["fails"]["ledger"][:40]:
+        lines.append(f"  DRIFT {f}")
     lines.append("")
 
     if not w.empty:

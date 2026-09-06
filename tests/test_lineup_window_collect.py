@@ -127,7 +127,8 @@ class ValidationTests(unittest.TestCase):
     def test_a_faithful_reconstruction_reconciles(self):
         feed = self._consistent_feed()
         rows, _ = lw.plate_appearances(feed)
-        self.assertEqual(lw.validate(1, feed, rows, None), [])
+        self.assertEqual(lw.validate(1, feed, rows, None),
+                         {"map": [], "ledger": []})
 
     def test_a_mismapped_event_is_caught_by_the_box_score(self):
         """The reconciliation is the safety net for exactly the thing a
@@ -136,7 +137,8 @@ class ValidationTests(unittest.TestCase):
         rows, _ = lw.plate_appearances(feed)
         rows[0]["cat"] = "out"          # pretend the map said out, not single
         fails = lw.validate(1, feed, rows, None)
-        self.assertTrue(any("hits" in f or " h:" in f for f in fails), fails)
+        self.assertTrue(fails["map"], fails)
+        self.assertFalse(fails["ledger"], fails)
 
     def test_starter_window_length_is_checked_against_the_ledger(self):
         """Totals reconcile even if the SEQUENCE is shuffled; the starter's
@@ -145,7 +147,20 @@ class ValidationTests(unittest.TestCase):
         rows, _ = lw.plate_appearances(feed)
         led = {"act_sp_bf_home": 5.0}   # pbp says 6
         fails = lw.validate(1, feed, rows, led)
-        self.assertTrue(any("SP bf" in f for f in fails), fails)
+        self.assertTrue(any("SP bf" in f for f in fails["ledger"]), fails)
+        self.assertFalse(fails["map"], fails)
+
+    def test_a_scoring_revision_is_a_ledger_failure_not_a_map_failure(self):
+        """The case that actually fired: the PBP agrees with its own box score
+        and the stored row is older. Naming that a map defect would blame this
+        module for someone else's stat correction -- and, worse, would let a
+        real map defect hide among them."""
+        feed = self._consistent_feed()
+        rows, _ = lw.plate_appearances(feed)
+        led = {"act_woba_away": 0.999}          # stale stored actual
+        fails = lw.validate(1, feed, rows, led)
+        self.assertFalse(fails["map"], fails)
+        self.assertTrue(any("woba" in f for f in fails["ledger"]), fails)
 
 
 class WindowTests(unittest.TestCase):
