@@ -136,31 +136,36 @@ over the entire family: **299 games, 22 slates, 22,760 plate appearances,
 
 Fidelity first, because the slopes are worthless without it:
 
-* **297 of 299 games reconcile** against `parse_boxscore` on the same payload.
-  **No unmapped `eventType` values** across 22,760 plate appearances.
-* **2 games fail the event map** (824070, 824795) with an identical signature:
-  the play-by-play counts exactly one more PA, and one more AB, than the box
-  score. Both games are excluded, which is why the count is 594 = 297 x 2.
-  Instrumented rather than guessed at — a map failure now prints that game's
-  event histogram, since the games cannot be refetched from the sandbox.
-* **13 games carry a ledger row older than a scoring revision.** Across 594
+* **299 of 299 games reconcile** against `parse_boxscore` on the same payload,
+  with **no unmapped `eventType` values** across 22,758 plate appearances.
+* Reaching that took one real fix. The first family run reconciled 297 of 299,
+  the two failures sharing a signature — the play-by-play counting exactly one
+  more PA, and one more AB, than the box score. Diagnosed from the data rather
+  than guessed: a map failure prints the game's event histogram, and
+  `other_out` occurred exactly once on each of the two failing sides and on
+  neither passing side of the same games. It is a baserunning out that ends an
+  inning with the batter's PA incomplete, so it moved to `_NOT_A_PA`. Two
+  independent confirmations followed: the reconciliation went to 299/299, and
+  the PA count fell by exactly 2.
+* **13 games carry a ledger row older than a scoring revision.** Across 598
   side-games the whole-game actual differs from the stored one on 12, by at
   most 0.027 wOBA. Not a defect at either end: `_fill` is write-once by design.
-* **594 of 594** usable side-games have a full 18-batter window; distinct
-  batters inside it run min 9, median 9, max 11.
+* **598 of 598** side-games have a full 18-batter window; distinct batters
+  inside it run min 9, median 9, max 11.
 
 | | n | slope | corr | MAE |
 |---|---|---|---|---|
 | report's own number (ledger actual) | 598 | -0.828 ± 0.510 | -0.0664 | 0.0733 |
-| whole game, from play-by-play | 594 | **-0.806 ± 0.514** | -0.0643 | 0.0736 |
-| **first 18 batters faced** | 594 | **-0.882 ± 0.672** | -0.0539 | 0.0963 |
+| whole game, from play-by-play | 598 | **-0.811 ± 0.511** | -0.0648 | 0.0734 |
+| **first 18 batters faced** | 598 | **-0.845 ± 0.671** | -0.0515 | 0.0963 |
 
-The first two lines differ by 0.022 on 4 fewer side-games with 12 revised
-actuals — the reconstruction reproduces the component block, which is what
-licenses reading the third line at all.
+Every row of the measurement set, with nothing dropped. The first two lines
+differ by 0.017 on identical rows, accounted for by the 12 revised actuals —
+the reconstruction reproduces the component block, which is what licenses
+reading the third line at all.
 
-**The registered fixed window does not move the slope: -0.806 → -0.882 on
-identical rows, a move of -0.076 against the same ~0.1 band R2 was judged on,
+**The registered fixed window does not move the slope: -0.811 → -0.845 on
+identical rows, a move of -0.034 against the same ~0.1 band R2 was judged on,
 and in the direction OPPOSITE to the hypothesis.** The artifact story predicts
 the slope should rise toward zero once the endogenous boundary is removed. It
 fell slightly.
@@ -172,17 +177,17 @@ fixed-window slope *toward zero*. That is the direction that would have
 flattered the hypothesis, and the slope moved away from zero instead. So the
 one bias big enough to worry about works against the finding rather than
 producing it. What the fixed window does buy is noise: 18 PAs is a thinner
-actual than ~74, so the SE grows 0.514 → 0.672 and MAE 0.0736 → 0.0963.
+actual than ~74, so the SE grows 0.511 → 0.671 and MAE 0.0734 → 0.0963.
 
 Two independent tests now agree. Conditioning on the window (R2) moved the
-slope by 0.001; replacing the window outright moved it by -0.076. Neither
+slope by 0.001; replacing the window outright moved it by -0.034. Neither
 clears the registered bar, and neither moves in the hypothesised direction.
 
 ## Verdict
 
 **The lineup slope is not an artifact of the scoring window.** Conditioning on
 starter batters faced moves it by 0.001, and rescoring over a fixed 18-batter
-window moves it by -0.076 — both inside the registered ~0.1 band, and the
+window moves it by -0.034 — both inside the registered ~0.1 band, and the
 second in the direction opposite to the hypothesis. The mechanism fails at its
 first link: predicted lineup quality and starter window length are essentially
 uncorrelated (-0.045) across the 598 graded side-games. Whatever explains the
