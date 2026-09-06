@@ -45,6 +45,7 @@ import numpy as np
 import pandas as pd
 import requests
 
+import hitter_frame
 import hybrid_test
 import pitch_arsenal
 import player_priors
@@ -3213,7 +3214,15 @@ def segment_pitcher_blocks(df, rate_cols):
     return P, H
 
 
-def aggregate_lineup(H, rate_cols, weighted=True, shrink_prior=None, shrink_k=None):
+def aggregate_lineup(H, rate_cols, weighted=True, shrink_prior=None, shrink_k=None,
+                     hitter_sink=None):
+    """Composite one lineup per (game, faced pitcher).
+
+    `hitter_sink`, when given a list, also receives the per-hitter vector this
+    function otherwise discards -- captured at the point the neutral composite
+    is formed, so what is stored IS what was consumed rather than a second
+    derivation of it. Default None makes it a strict no-op; see hitter_frame.
+    """
     if H is None or H.empty:
         return pd.DataFrame()
     out = []
@@ -3272,6 +3281,17 @@ def aggregate_lineup(H, rate_cols, weighted=True, shrink_prior=None, shrink_k=No
                 # diagnostic only, and computed on this same vector so the
                 # mean and its dispersion always describe one lineup.
                 rec["opp_xwOBA_sd"] = wsd(vals, w if weighted else None)
+
+                # The per-hitter vector, captured HERE and nowhere else: after
+                # shrinkage and the Savant-backfill substitution, before the
+                # platoon offset below. `opp_xwOBA_neutral` is the value the
+                # lineup component is scored on, so that is the value worth
+                # storing; taking it after the offset would persist a different
+                # quantity under the same name.
+                if hitter_sink is not None:
+                    hitter_sink.extend(hitter_frame.records(
+                        g, vals, w if weighted else None, gpk, fp,
+                        c, MODEL_RATE_TEAM_BACKFILL_COL))
 
                 # Platoon term last, on the shrunk (or backfilled) value: it is
                 # a matchup fact about tonight, not a season rate to regress.
@@ -3375,11 +3395,12 @@ def build_matchup(P, agg, rate_cols, league_baseline, shrink_prior=None, shrink_
     return df.sort_values(["game_pk", "side"]).reset_index(drop=True)
 
 
-def build_xwoba_matchup(pitchers_df, league_baseline):
+def build_xwoba_matchup(pitchers_df, league_baseline, hitter_sink=None):
     prior = league_baseline.get(XWOBA_SHRINK_COL) if USE_XWOBA_SHRINK else None
     pitcher_rows_df, opp_hitters_df = segment_pitcher_blocks(pitchers_df, STATCAST_RATE_COLS)
     opp_lineup_agg_df = aggregate_lineup(opp_hitters_df, STATCAST_RATE_COLS, weighted=USE_WEIGHTED,
-                                         shrink_prior=prior, shrink_k=XWOBA_SHRINK_K)
+                                         shrink_prior=prior, shrink_k=XWOBA_SHRINK_K,
+                                         hitter_sink=hitter_sink)
     matchup_df = build_matchup(pitcher_rows_df, opp_lineup_agg_df, STATCAST_RATE_COLS, league_baseline,
                                shrink_prior=prior, shrink_k=XWOBA_SHRINK_K)
     return matchup_df, pitcher_rows_df, opp_hitters_df
@@ -7911,8 +7932,12 @@ def main():
     write_leaderboard_page(built_txt, data.get("leaderboard"))
 
     log(f"Building {MODEL_RATE_LABEL} matchup ...")
+    # Named apart from the `hitter_rows` that `segment_pitcher_blocks` and the
+    # card renderer each use for something else -- different scopes, but one
+    # name for three things is how a reader conflates them.
+    hitter_sink_rows = []
     matchup_df, pitcher_rows_df, opp_hitters_df = build_xwoba_matchup(
-        data["pitchers_df"], data["league_baseline"])
+        data["pitchers_df"], data["league_baseline"], hitter_sink=hitter_sink_rows)
     matchup_df = apply_pitching_plans(
         matchup_df, data.get("pitching_plans"), data["league_baseline"]
     )
@@ -7999,6 +8024,23 @@ def main():
     if matchup_platoon_df is not None and not matchup_platoon_df.empty:
         matchup_platoon_df.to_csv(dump_path("leans", SLATE_DATE, "pl", post_hoc),
                                   index=False)
+
+    # The per-hitter frame, AFTER both dumps and unable to affect either.
+    # It is a diagnostic that makes the lineup term measurable per hitter
+    # rather than only as a nine-way average against a team total; it feeds no
+    # lean, delta or grade. So it is written best-effort, in the shape
+    # CLAUDE.md prescribes for enriching a slate: the irreplaceable pregame
+    # rows are already on disk, and a fault here costs a diagnostic file and
+    # never the slate. `hitters_`, never `leans_` -- see hitter_frame.
+    try:
+        n_h = hitter_frame.write(
+            hitter_sink_rows,
+            dump_path(hitter_frame.PREFIX, SLATE_DATE, DUMP_SUFFIX, post_hoc),
+            model_tag=MODEL_TAG, model_metric=MODEL_RATE_LABEL,
+            snapshot_utc=snapshot_utc)
+        log(f"hitter frame: {n_h} rows")
+    except Exception as e:  # noqa: BLE001
+        log(f"hitter frame skipped: {e!r}")
 
     log("Fetching current streaks (best-effort, display-only) ...")
     try:
