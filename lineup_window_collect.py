@@ -362,7 +362,7 @@ def collect(scope, verbose=True):
         raise SystemExit("no ledger rows in scope")
 
     pa_rows, per_game, all_unmapped = [], [], []
-    all_fails = {"map": [], "ledger": []}
+    all_fails = {"map": [], "ledger": [], "fetch": []}
     started = time.monotonic()
     consec = 0
     stopped = None
@@ -377,8 +377,16 @@ def collect(scope, verbose=True):
         try:
             feed = _get_json(FEED_URL.format(gamePk=gpk))
         except Exception as e:  # noqa: BLE001
-            all_fails.append(f"{gpk}: feed fetch failed ({type(e).__name__})")
+            # A fetch failure is not a map failure and not a revision: it is a
+            # game this run does not have. Counted so a short sample cannot
+            # pass for a complete one, and the consecutive-failure stop below
+            # treats an outage as one signal rather than 299.
+            all_fails["fetch"].append(f"{gpk}: feed fetch failed "
+                                      f"({type(e).__name__})")
+            consec += 1
+            time.sleep(THROTTLE_S)
             continue
+        consec = 0
         rows, unmapped = plate_appearances(feed)
         if rows is None:
             all_fails["map"].append(f"{gpk}: {unmapped[0]}")
@@ -394,8 +402,8 @@ def collect(scope, verbose=True):
         all_fails["map"].extend(fails["map"])
         all_fails["ledger"].extend(fails["ledger"])
         for i, row in enumerate(rows):
-            row = dict(row, game_pk=gpk, game_date=str(date), reconciled=ok,
-                       ledger_revised=revised)
+            row = dict(row, game_pk=gpk, game_date=str(r.get("game_date")),
+                       reconciled=ok, ledger_revised=revised)
             pa_rows.append(row)
         # Sequence position WITHIN each side's offense: this is what makes a
         # prefix definable, and it is why the CSV is worth keeping.
@@ -496,6 +504,12 @@ def main():
     if summ.get("stopped"):
         lines.append(f"  STOPPED EARLY: {summ['stopped']} — this is a partial "
                      f"sample, not a smaller population")
+    nf = len(summ["fails"].get("fetch", []))
+    if nf:
+        lines.append(f"  {nf} games could not be fetched at all — also a "
+                     f"partial sample; they are not map failures")
+        for f in summ["fails"]["fetch"][:10]:
+            lines.append(f"    FETCH {f}")
     lines.append("")
 
     pg = summ["per_game"]

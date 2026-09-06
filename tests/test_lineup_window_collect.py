@@ -9,6 +9,7 @@ the box score is what catches whatever a constructed payload could not
 anticipate.
 """
 import unittest
+from unittest import mock
 
 import pandas as pd
 
@@ -228,6 +229,80 @@ class ScopeTests(unittest.TestCase):
     def test_a_date_narrows_the_family_rather_than_replacing_it(self):
         got = lw.ledger_scope(self._led(), date="2026-08-29", tags=("v12",))
         self.assertEqual(got["gamePk"].tolist(), [1.0])
+
+
+class CollectAssemblyTests(unittest.TestCase):
+    """`collect()` itself, with the network stubbed.
+
+    Added because a refactor to family scope left a reference to a parameter
+    that no longer existed and every test still passed -- the whole assembly
+    path was reachable only through a live fetch, so CI found the NameError
+    instead of the suite. A function that cannot be run locally is exactly the
+    one that needs its seams tested.
+    """
+
+    def _scope(self):
+        return pd.DataFrame([{
+            "gamePk": 11.0, "game_date": "2026-08-29", "model_tag": "v12",
+            "act_woba_away": None, "act_woba_home": None,
+            "act_sp_bf_home": 3.0, "act_sp_bf_away": 0.0,
+        }])
+
+    def _feed(self):
+        plays = [_play("single", half="top", batter=1, pitcher=200),
+                 _play("field_out", half="top", batter=2, pitcher=200),
+                 _play("field_out", half="top", batter=3, pitcher=200)]
+        f = _feed(plays, home_sp=200)
+        for side, pa in (("away", 3), ("home", 0)):
+            f["liveData"]["boxscore"]["teams"][side]["teamStats"] = {
+                "batting": {"plateAppearances": pa, "atBats": pa,
+                            "hits": 1 if side == "away" else 0,
+                            "doubles": 0, "triples": 0, "homeRuns": 0,
+                            "baseOnBalls": 0, "intentionalWalks": 0,
+                            "hitByPitch": 0, "sacFlies": 0}}
+        return f
+
+    def test_every_pa_row_carries_the_columns_the_analysis_reads(self):
+        with mock.patch.object(lw, "_get_json", return_value=self._feed()), \
+             mock.patch.object(lw.time, "sleep"):
+            pa, summ = lw.collect(self._scope(), verbose=False)
+        self.assertEqual(len(pa), 3)
+        for col in ("game_pk", "game_date", "bat_side", "pa_seq",
+                    "reconciled", "ledger_revised", "batter_id", "cat"):
+            self.assertIn(col, pa.columns)
+        self.assertEqual(pa["game_date"].unique().tolist(), ["2026-08-29"])
+        self.assertEqual(summ["n_games"], 1)
+
+    def test_pa_seq_numbers_each_offense_from_one(self):
+        """The sequence is what makes a prefix definable; numbering it across
+        both offenses instead of within each would silently shift the window."""
+        with mock.patch.object(lw, "_get_json", return_value=self._feed()), \
+             mock.patch.object(lw.time, "sleep"):
+            pa, _ = lw.collect(self._scope(), verbose=False)
+        away = pa[pa.bat_side == "away"].sort_values("pa_seq")
+        self.assertEqual(away["pa_seq"].tolist(), [1, 2, 3])
+
+    def test_a_fetch_failure_is_its_own_bucket_not_a_map_failure(self):
+        """Three kinds of trouble, three buckets. A game that could not be
+        fetched says nothing about the event map -- filing it under `map`
+        would make the reader distrust a reconstruction that was never run,
+        and would let a real map defect hide among outages."""
+        with mock.patch.object(lw, "_get_json", side_effect=RuntimeError("boom")), \
+             mock.patch.object(lw.time, "sleep"):
+            pa, summ = lw.collect(self._scope(), verbose=False)
+        self.assertTrue(pa.empty)
+        self.assertFalse(summ["fails"]["map"], summ["fails"])
+        self.assertTrue(any("feed fetch failed" in f
+                            for f in summ["fails"]["fetch"]), summ["fails"])
+
+    def test_an_outage_stops_the_run_rather_than_asking_299_times(self):
+        scope = pd.concat([self._scope()] * 10, ignore_index=True)
+        scope["gamePk"] = range(1, 11)
+        with mock.patch.object(lw, "_get_json", side_effect=RuntimeError("boom")), \
+             mock.patch.object(lw.time, "sleep"):
+            _pa, summ = lw.collect(scope, verbose=False)
+        self.assertIn("consecutive fetch failures", summ["stopped"] or "")
+        self.assertEqual(len(summ["fails"]["fetch"]), lw.MAX_CONSEC_FAIL)
 
 
 class NoSweepTests(unittest.TestCase):
