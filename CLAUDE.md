@@ -1867,6 +1867,7 @@ writing a new probe.
 | `dog_contrast_test.py` | pre-registered underdog sign-flip contrast, frozen 2026-09-03; NOT independent of arm 2 (also prints every build) |
 | `hfa_probe.py` | does adding a home-field term to the lean improve it? (no) |
 | `lineup_window_probe.py` | is the negative lineup component slope an artifact of the SP/BP scoring window? (no) |
+| `hitter_level_probe.py` | does a hitter's predicted xwOBA predict his OWN plate appearances? (starts empty — forward only) |
 | `interaction_probe.py` | do single signals or other combiners beat `B·P/L`? |
 | `dispersion_probe.py` | does a concentrated lineup beat the mean it is averaged into? |
 | `bp_ablation.py` | does removing the bullpen term change any decision? |
@@ -2151,6 +2152,44 @@ Do not re-derive these by hand; they have readouts.
   term at all. **Prefer measuring a change against itself over measuring two
   families against each other.** Where a falsifier needs an ever-growing sample
   to say anything, check its power against the mechanism before banking on it.
+- **Whether the lineup term's fault is the RATE or the AGGREGATION** —
+  `hitter_frame.py` persists the per-hitter vector `aggregate_lineup` composites
+  and then discards, and `hitter_level_probe.py` scores it against the hitter's
+  own plate appearances from `lineup_window_collect.py`.
+
+  Why it exists: the team-level test cannot answer it. The composite's spread is
+  sd 0.0073 against a single-game actual of sd 0.0911, so an exactly correct
+  composite could only correlate ~0.08 — and the observed −0.066 with a 95% CI
+  of [−0.146, +0.014] already excludes that ceiling. Two hypotheses fit that
+  equally and imply opposite fixes: the per-hitter rate carries nothing, or the
+  rate is fine and the aggregation destroys it. Both are baked into the one
+  composite, so no statistic over team-game rows separates them.
+
+  **Do not reach for `XWOBA_SHRINK_K` as the fix.** For a lineup whose hitters
+  have equal PA the composite is
+  `(n/(n+k))·Σwᵢxᵢ + (k/(n+k))·p` — affine in the unshrunk weighted mean, so K
+  changes the composite's SPREAD (and the slope) and not its ORDER (and not the
+  correlation). Varying PA makes that only second-order untrue. What IS broken
+  is the correlation, so no K can fix it. Measured and also ruled out: Savant
+  backfilled hitters carry the team aggregate and sit at the mean by
+  construction, which would corrupt both — but only 23 of 598 side-games have
+  any, and the zero-backfill subset is slightly *worse* (corr −0.080 ± 0.042).
+
+  **Forward only, and that is structural rather than an oversight.** Rebuilding
+  a past slate's per-hitter frame needs that slate's Savant leaderboard, which
+  is exactly the lookahead `.savant_cache/` exists to forbid, so the 299 v12
+  games behind the current component block can never be scored this way. The
+  sample starts at zero. At roughly 270 hitter-games and 1,100 scoring PAs a
+  slate the nominal SE falls fast — 0.0066 at 22,758 rows against 0.0410 at the
+  598 side-games available today — but the rows are not independent, since one
+  hitter recurs, so the printed SE is optimistic. Read nothing from a slate or
+  two.
+
+  Read it against the component block: positive per-hitter beside the null
+  team-level line implicates the aggregation; null in both implicates the rate.
+  The probe prints the raw pre-shrinkage rate beside the shrunk one, which is
+  the comparison K cannot be tuned on at team level for the reason above.
+
 - **The metric question** — the shadow arm, running wOBA under an xwOBA
   primary. Needs roughly 18 paired slates for 80% power on a 0.09 gap.
 - **`LEAN_STRENGTH_FALLBACK`** — recompute from whatever `SCALE_TAGS` resolves
