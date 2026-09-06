@@ -175,12 +175,13 @@ class WindowTests(unittest.TestCase):
     def _led(self):
         return pd.DataFrame([{"game_date": "2026-08-29", "gamePk": 7,
                               "opp_xwoba_neutral_home": 0.320,
-                              "act_sp_bf_home": 20.0}])
+                              "act_sp_bf_home": 20.0,
+                              "act_woba_away": 0.250}])
 
     def test_the_window_is_exactly_two_turns_through_the_order(self):
         """18 is not an arbitrary number: it is why the fixed-window
         prediction would be the UNWEIGHTED nine-hitter mean."""
-        w = lw.windows(self._pa_frame(30), self._led(), "2026-08-29")
+        w = lw.windows(self._pa_frame(30), self._led())
         row = w[w.bat_side == "away"].iloc[0]
         self.assertEqual(row["distinct_batters_in_window"], 9)
         self.assertEqual(lw.FIXED_WINDOW, 18)
@@ -189,19 +190,44 @@ class WindowTests(unittest.TestCase):
         """A rain-shortened side with 15 PA must not be scored as though it had
         a full window -- that would silently reintroduce a variable window,
         which is the exact thing being tested against."""
-        w = lw.windows(self._pa_frame(15), self._led(), "2026-08-29")
+        w = lw.windows(self._pa_frame(15), self._led())
         self.assertTrue(pd.isna(w[w.bat_side == "away"].iloc[0]["act_fixed"]))
 
     def test_unreconciled_games_never_reach_the_windows(self):
         pa = self._pa_frame(30)
         pa["reconciled"] = False
-        self.assertTrue(lw.windows(pa, self._led(), "2026-08-29").empty)
+        self.assertTrue(lw.windows(pa, self._led()).empty)
 
     def test_the_prediction_takes_the_cross(self):
         """The away offense is predicted by `opp_xwoba_neutral_home` -- the
         column on the HOME pitcher's side, since that is who it faces."""
-        w = lw.windows(self._pa_frame(30), self._led(), "2026-08-29")
+        w = lw.windows(self._pa_frame(30), self._led())
         self.assertAlmostEqual(w[w.bat_side == "away"].iloc[0]["pred"], 0.320)
+
+
+class ScopeTests(unittest.TestCase):
+    def _led(self):
+        base = {"gamePk": 1, "model_tag": "v12", "game_date": "2026-08-29",
+                "act_woba_away": 0.3, "act_woba_home": 0.3}
+        return pd.DataFrame([
+            base,
+            dict(base, gamePk=2, model_tag="v11"),
+            dict(base, gamePk=3, act_woba_home=float("nan")),   # not backfilled
+            dict(base, gamePk=float("nan")),                    # no join key
+            dict(base, gamePk=5, game_date="2026-08-30"),
+        ])
+
+    def test_scope_is_the_population_the_component_block_scores(self):
+        """Backfilled on BOTH sides, with a gamePk, in the family. A pending
+        game has nothing to reconcile the play-by-play against, and including
+        one would make the run's n incomparable to the number it is read
+        against."""
+        got = lw.ledger_scope(self._led(), tags=("v12",))
+        self.assertEqual(sorted(got["gamePk"].tolist()), [1.0, 5.0])
+
+    def test_a_date_narrows_the_family_rather_than_replacing_it(self):
+        got = lw.ledger_scope(self._led(), date="2026-08-29", tags=("v12",))
+        self.assertEqual(got["gamePk"].tolist(), [1.0])
 
 
 class NoSweepTests(unittest.TestCase):
@@ -215,7 +241,7 @@ class NoSweepTests(unittest.TestCase):
         self.assertNotIn("add_argument(\"--fixed", src)
         # windows() must read the module constant, not take a parameter.
         self.assertEqual(list(inspect.signature(lw.windows).parameters),
-                         ["pa", "led", "date"])
+                         ["pa", "scope"])
 
 
 if __name__ == "__main__":

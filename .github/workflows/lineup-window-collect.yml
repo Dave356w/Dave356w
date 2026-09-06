@@ -1,6 +1,7 @@
 name: Lineup window collect
 
-# Collects per-plate-appearance rows for ONE slate from StatsAPI's play-by-play,
+# Collects per-plate-appearance rows from StatsAPI's play-by-play -- the whole
+# current model family by default, or one slate with the `date` input --
 # so the registered fixed-window lineup rescore has the half the committed
 # artifacts cannot supply: a PREFIX of the game. A box score gives a whole-game
 # total and a starter-allowed total, and neither is the first N batters faced.
@@ -30,9 +31,9 @@ on:
   workflow_dispatch:
     inputs:
       date:
-        description: 'Slate date (default: the largest complete v12 slate)'
+        description: 'One slate (leave empty to run the whole current family)'
         required: false
-        default: '2026-08-29'
+        default: ''
 
 permissions:
   contents: read
@@ -40,7 +41,8 @@ permissions:
 jobs:
   collect:
     runs-on: ubuntu-latest
-    timeout-minutes: 20        # ~17 feed/live payloads at 0.2s throttle plus latency
+    timeout-minutes: 40        # ~300 feed/live payloads; the collector's own
+                               # BUDGET_S stops it well before this fires
     steps:
       - uses: actions/checkout@v4
 
@@ -63,7 +65,7 @@ jobs:
       - name: Collect
         run: |
           python lineup_window_collect.py \
-            --date "${{ inputs.date || '2026-08-29' }}" \
+            ${{ inputs.date && format('--date {0}', inputs.date) || '' }} \
             --out lineup_window_pa.csv \
             --report lineup_window_collect_report.txt
 

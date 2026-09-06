@@ -106,6 +106,14 @@ THROTTLE_S = 0.20
 TIMEOUT = 20
 TRIES = 3
 
+# One `feed/live` per game, and the full v12 family is ~300 of them. Bounded
+# the way `actuals_backfill` bounds its box-score loop, and for the same
+# reason: an upstream hang would otherwise burn the job's whole budget. Neither
+# bound loses anything -- this module writes no ledger row, so a short run is
+# simply a smaller sample, named as such in the report.
+BUDGET_S = 1500.0
+MAX_CONSEC_FAIL = 5
+
 # The registered window. Fixed in advance; see the module docstring. Not a
 # parameter, deliberately -- exposing it as one is how a pre-registered window
 # becomes a swept one.
@@ -330,17 +338,41 @@ def validate(game_pk, feed, rows, led_row):
     return fails
 
 
-def collect(date, ledger_path=LEDGER, verbose=True):
-    """Fetch and reconcile every v12 game on `date`. Returns (pa_df, summary)."""
-    led = pd.read_csv(ledger_path)
-    d = led[led["game_date"].astype(str) == str(date)]
-    d = d[d["gamePk"].notna()]
+def ledger_scope(led, date=None, tags=None):
+    """The rows a run should collect: one slate, or a whole model family.
+
+    Restricted to games that are BACKFILLED -- a stored `act_woba` on both
+    sides. That is not a convenience filter: it is exactly the population the
+    component block scores, so a run over this scope is comparable to the
+    number it is meant to be read against, and every game has something to
+    reconcile the play-by-play against. A pending game would have neither.
+    """
+    d = led[led["gamePk"].notna()]
+    if date:
+        d = d[d["game_date"].astype(str) == str(date)]
+    if tags:
+        d = d[d["model_tag"].astype(str).isin(set(tags))]
+    return d[d["act_woba_away"].notna() & d["act_woba_home"].notna()]
+
+
+def collect(scope, verbose=True):
+    """Fetch and reconcile every game in `scope`. Returns (pa_df, summary)."""
+    d = scope
     if d.empty:
-        raise SystemExit(f"no ledger rows with a gamePk on {date}")
+        raise SystemExit("no ledger rows in scope")
 
     pa_rows, per_game, all_unmapped = [], [], []
     all_fails = {"map": [], "ledger": []}
-    for _, r in d.iterrows():
+    started = time.monotonic()
+    consec = 0
+    stopped = None
+    for n_done, (_, r) in enumerate(d.iterrows()):
+        if time.monotonic() - started > BUDGET_S:
+            stopped = f"time budget {BUDGET_S:.0f}s reached after {n_done} games"
+            break
+        if consec >= MAX_CONSEC_FAIL:
+            stopped = f"{consec} consecutive fetch failures"
+            break
         gpk = int(r["gamePk"])
         try:
             feed = _get_json(FEED_URL.format(gamePk=gpk))
@@ -377,20 +409,21 @@ def collect(date, ledger_path=LEDGER, verbose=True):
                          "n_pa": len(rows),
                          "n_map_fail": len(fails["map"]),
                          "n_ledger_fail": len(fails["ledger"])})
-        if verbose:
+        if verbose and (not ok or revised or len(per_game) % 25 == 0):
             note = ("OK" if ok and not revised else
                     "OK (ledger row predates a scoring revision)" if revised
                     else f"MAP FAILURE ({len(fails['map'])} checks)")
-            print(f"  {gpk}: {len(rows)} PA  {note}")
+            print(f"  [{len(per_game):3d}/{len(d)}] {gpk}: {len(rows)} PA  {note}")
         time.sleep(THROTTLE_S)
 
     pa = pd.DataFrame(pa_rows)
     return pa, {"per_game": pd.DataFrame(per_game), "fails": all_fails,
-                "unmapped": sorted(set(all_unmapped)), "date": str(date),
-                "n_games": len(d)}
+                "unmapped": sorted(set(all_unmapped)), "stopped": stopped,
+                "n_games": len(d),
+                "slates": int(d["game_date"].nunique())}
 
 
-def windows(pa, led, date):
+def windows(pa, scope):
     """Per side-game: the fixed-window actual beside the whole-game one.
 
     One row per (game, batting side), carrying the lineup component's stored
@@ -401,8 +434,7 @@ def windows(pa, led, date):
     module docstring on the predicted half).
     """
     out = []
-    d = led[led["game_date"].astype(str) == str(date)]
-    for _, r in d.iterrows():
+    for _, r in scope.iterrows():
         gpk = ab._f(r.get("gamePk"))
         if gpk is None:
             continue
@@ -420,47 +452,68 @@ def windows(pa, led, date):
                      if len(head) == FIXED_WINDOW else None)
             out.append({
                 "game_pk": int(gpk), "bat_side": bat,
+                "game_date": str(r.get("game_date")),
                 "pred": ab._f(r.get(f"opp_xwoba_neutral_{pit}")),
                 "act_full": full,
                 "act_fixed": fixed,
                 "n_pa": len(side),
                 "sp_bf": ab._f(r.get(f"act_sp_bf_{pit}")),
                 "distinct_batters_in_window": len({x["batter_id"] for x in head}),
+                # The ledger's own stored actual, carried so the report can say
+                # how far the play-by-play reconstruction sits from what the
+                # component block actually scores -- at scale, rather than
+                # game by game.
+                "act_ledger": ab._f(r.get(f"act_woba_{bat}")),
             })
     return pd.DataFrame(out)
 
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--date", default="2026-08-29",
-                   help="slate date (default: the largest complete v12 slate)")
+    p.add_argument("--date", default=None,
+                   help="one slate; omit to run the whole model family")
+    p.add_argument("--tags", default=None,
+                   help="comma-separated model tags (default: RECORD_TAGS)")
     p.add_argument("--out", default="lineup_window_pa.csv")
     p.add_argument("--report", default="lineup_window_collect_report.txt")
     a = p.parse_args()
 
-    print(f"collecting play-by-play for {a.date}")
-    pa, summ = collect(a.date)
+    from build_site import RECORD_TAGS
+    tags = tuple(a.tags.split(",")) if a.tags else RECORD_TAGS
     led = pd.read_csv(LEDGER)
-    w = windows(pa, led, a.date) if not pa.empty else pd.DataFrame()
+    scope = ledger_scope(led, date=a.date, tags=tags)
 
-    lines = [f"LINEUP WINDOW COLLECT — slate {summ['date']}",
-             f"ledger games on this slate: {summ['n_games']}",
-             f"plate appearances reconstructed: {len(pa)}",
-             ""]
+    label = a.date if a.date else f"family {', '.join(sorted(set(tags)))}"
+    print(f"collecting play-by-play for {label}: "
+          f"{len(scope)} games over {scope['game_date'].nunique()} slates")
+    pa, summ = collect(scope)
+    w = windows(pa, scope) if not pa.empty else pd.DataFrame()
+
+    lines = [f"LINEUP WINDOW COLLECT — {label}",
+             f"ledger games in scope: {summ['n_games']} "
+             f"over {summ['slates']} slates",
+             f"plate appearances reconstructed: {len(pa)}"]
+    if summ.get("stopped"):
+        lines.append(f"  STOPPED EARLY: {summ['stopped']} — this is a partial "
+                     f"sample, not a smaller population")
+    lines.append("")
+
     pg = summ["per_game"]
     ok = int(pg["reconciled"].sum()) if not pg.empty else 0
     rev = int(pg["revised"].sum()) if not pg.empty else 0
-    lines.append(f"EVENT MAP       {ok}/{len(pg)} games reconcile against the "
-                 f"box score on the SAME payload")
+    lines.append(f"EVENT MAP       {ok}/{len(pg)} fetched games reconcile "
+                 f"against the box score on the SAME payload")
     if summ["unmapped"]:
         lines.append(f"  UNMAPPED eventType values (map is wrong or incomplete): "
                      f"{', '.join(summ['unmapped'])}")
     else:
         lines.append("  no unmapped eventType values")
-    for f in summ["fails"]["map"][:40]:
+    for f in summ["fails"]["map"][:25]:
         lines.append(f"  MAP FAIL {f}")
+    if len(summ["fails"]["map"]) > 25:
+        lines.append(f"  ... and {len(summ['fails']['map']) - 25} more")
     lines.append("")
-    lines.append(f"SOURCE DRIFT    {rev} of those games carry a ledger row that "
+    lines.append(f"SOURCE DRIFT    {rev} of those carry a ledger row that "
                  f"predates a scoring revision")
     lines.append("  Not a defect here and not one there: StatsAPI revises box "
                  "scores after the fact and")
@@ -468,15 +521,11 @@ def main():
                  "stored actual keeps the original.")
     lines.append("  These games ARE used -- their PBP is internally consistent "
                  "and both actuals below come")
-    lines.append("  from that one source -- but their whole-game column will "
-                 "differ from what the component")
-    lines.append("  block scores by exactly the revision.")
-    for f in summ["fails"]["ledger"][:40]:
-        lines.append(f"  DRIFT {f}")
+    lines.append("  from that one source.")
     lines.append("")
 
     if not w.empty:
-        good = w[w.act_fixed.notna() & w.pred.notna()]
+        good = w[w.act_fixed.notna() & w.pred.notna() & w.act_full.notna()]
         lines.append(f"side-games with a stored prediction and a full "
                      f"{FIXED_WINDOW}-batter window: {len(good)} of {len(w)}")
         if not good.empty:
@@ -484,23 +533,58 @@ def main():
             lines.append(f"  distinct batters inside the window: "
                          f"min {db.min()} median {db.median():.0f} max {db.max()} "
                          f"(9 = exactly two turns through the order)")
-            for col, label in (("act_full", "whole game (scored today)"),
-                               ("act_fixed", f"first {FIXED_WINDOW} batters")):
+            drift = (good["act_full"] - good["act_ledger"]).abs()
+            lines.append(f"  |pbp whole-game − ledger actual|: "
+                         f"max {drift.max():.6f}, "
+                         f"{int((drift > 1e-9).sum())} of {len(good)} nonzero")
+            lines.append("")
+
+            # The number this is read against is computed here, not quoted:
+            # component slopes move every time the bot grades a slate, and a
+            # literal in a report is the constants-frozen-from-data defect.
+            comp = ab.paired_components(led[led["model_tag"].astype(str)
+                                            .isin(set(tags))])
+            comp = comp[comp.component == "lineup"]
+            base = ab.calibration(comp["pred"], comp["act"]) if not comp.empty else None
+            if base:
+                r = float(np.corrcoef(comp["pred"], comp["act"])[0, 1])
+                mae = float((comp["act"] - comp["pred"]).abs().mean())
+                lines.append(f"  {'REPORT (ledger actual, all rows)':<38s} "
+                             f"n={len(comp):<4d} slope {base['slope']:+.3f} "
+                             f"+/- {base['se_slope']:.3f}  corr {r:+.4f}  "
+                             f"MAE {mae:.4f}")
+
+            for col, label2 in (("act_full", "whole game (what is scored today)"),
+                                ("act_fixed", f"first {FIXED_WINDOW} batters faced")):
                 cal = ab.calibration(good["pred"], good[col])
                 if cal:
                     r = float(np.corrcoef(good["pred"], good[col])[0, 1])
                     mae = float((good[col] - good["pred"]).abs().mean())
-                    lines.append(f"  {label:<28s} slope {cal['slope']:+.3f} "
+                    lines.append(f"  {label2:<38s} n={len(good):<4d} "
+                                 f"slope {cal['slope']:+.3f} "
                                  f"+/- {cal['se_slope']:.3f}  corr {r:+.4f}  "
                                  f"MAE {mae:.4f}")
             lines.append("")
-            lines.append("  ONE SLATE. Read the reconciliation, not the slopes:")
-            lines.append(f"  {len(good)} side-games against the 598 the component "
-                         f"block scores, so these ses are ~4x the report's and")
-            lines.append("  separate nothing. The prediction is also the slot-PA "
-                         "WEIGHTED composite while the fixed")
-            lines.append("  window is two whole turns, i.e. unweighted -- a "
-                         "predictor mismatch that attenuates a slope.")
+            lines.append("  The first line is the component block's own number, "
+                         "recomputed here rather than quoted.")
+            lines.append("  The second is this collection reproducing it from "
+                         "play-by-play on the rows that")
+            lines.append("  survived; the two differing by more than the "
+                         "revisions above would be a defect.")
+            lines.append("  The third is the registered fixed window. Only the "
+                         "ACTUAL changes between them --")
+            lines.append("  the prediction is the same stored column throughout.")
+            lines.append("")
+            lines.append("  CAVEAT that does not shrink with n: the prediction "
+                         "is the slot-PA WEIGHTED")
+            lines.append("  composite, while 18 batters is two whole turns and "
+                         "so an unweighted mix. That")
+            lines.append("  mismatch is measurement error in the predictor and "
+                         "attenuates the third slope")
+            lines.append("  toward zero. It cannot be corrected from committed "
+                         "artifacts -- see the module")
+            lines.append("  docstring on why the predicted half is not "
+                         "recoverable for a past slate.")
 
     open(a.report, "w").write("\n".join(lines) + "\n")
     if not pa.empty:
