@@ -126,14 +126,68 @@ prediction error, rather than isolating a lineup-specific effect. Note the SP
 residual-on-BF coefficient is *negative* (z = -1.18), the opposite of R1's
 registered direction, on the component whose window story is strongest.
 
+## Task 3 — the fixed window, run over the whole v12 family
+
+Task 1 said the fixed-window rescore was uncomputable from committed
+artifacts. It is computable from StatsAPI play-by-play, which is backfill in
+the same sense a box score is, so `lineup_window_collect.py` was built and run
+over the entire family: **299 games, 22 slates, 22,760 plate appearances,
+594 of 598 side-games usable.**
+
+Fidelity first, because the slopes are worthless without it:
+
+* **297 of 299 games reconcile** against `parse_boxscore` on the same payload.
+  **No unmapped `eventType` values** across 22,760 plate appearances.
+* **2 games fail the event map** (824070, 824795) with an identical signature:
+  the play-by-play counts exactly one more PA, and one more AB, than the box
+  score. Both games are excluded, which is why the count is 594 = 297 x 2.
+  Instrumented rather than guessed at — a map failure now prints that game's
+  event histogram, since the games cannot be refetched from the sandbox.
+* **13 games carry a ledger row older than a scoring revision.** Across 594
+  side-games the whole-game actual differs from the stored one on 12, by at
+  most 0.027 wOBA. Not a defect at either end: `_fill` is write-once by design.
+* **594 of 594** usable side-games have a full 18-batter window; distinct
+  batters inside it run min 9, median 9, max 11.
+
+| | n | slope | corr | MAE |
+|---|---|---|---|---|
+| report's own number (ledger actual) | 598 | -0.828 ± 0.510 | -0.0664 | 0.0733 |
+| whole game, from play-by-play | 594 | **-0.806 ± 0.514** | -0.0643 | 0.0736 |
+| **first 18 batters faced** | 594 | **-0.882 ± 0.672** | -0.0539 | 0.0963 |
+
+The first two lines differ by 0.022 on 4 fewer side-games with 12 revised
+actuals — the reconstruction reproduces the component block, which is what
+licenses reading the third line at all.
+
+**The registered fixed window does not move the slope: -0.806 → -0.882 on
+identical rows, a move of -0.076 against the same ~0.1 band R2 was judged on,
+and in the direction OPPOSITE to the hypothesis.** The artifact story predicts
+the slope should rise toward zero once the endogenous boundary is removed. It
+fell slightly.
+
+**The pre-registered caveat cannot rescue it, and this is the part worth
+keeping.** The predictor mismatch — a slot-PA weighted composite scored against
+two unweighted turns — was registered in advance as attenuating the
+fixed-window slope *toward zero*. That is the direction that would have
+flattered the hypothesis, and the slope moved away from zero instead. So the
+one bias big enough to worry about works against the finding rather than
+producing it. What the fixed window does buy is noise: 18 PAs is a thinner
+actual than ~74, so the SE grows 0.514 → 0.672 and MAE 0.0736 → 0.0963.
+
+Two independent tests now agree. Conditioning on the window (R2) moved the
+slope by 0.001; replacing the window outright moved it by -0.076. Neither
+clears the registered bar, and neither moves in the hypothesised direction.
+
 ## Verdict
 
 **The lineup slope is not an artifact of the scoring window.** Conditioning on
-starter batters faced moves it by 0.001 against a registered falsification
-threshold of 0.1, because predicted lineup quality and starter window length
-are essentially uncorrelated (-0.045) in the 598 graded side-games. Whatever
-explains the sign disagreement between the component slope (-0.83 ± 0.51) and
-the weight fit (b_lineup = +0.158 ± 0.130), the SP/BP boundary is not it.
+starter batters faced moves it by 0.001, and rescoring over a fixed 18-batter
+window moves it by -0.076 — both inside the registered ~0.1 band, and the
+second in the direction opposite to the hypothesis. The mechanism fails at its
+first link: predicted lineup quality and starter window length are essentially
+uncorrelated (-0.045) across the 598 graded side-games. Whatever explains the
+sign disagreement between the component slope (-0.83 ± 0.51) and the weight fit
+(b_lineup = +0.158 ± 0.130), the SP/BP boundary is not it.
 
 Two things this does **not** establish, stated because the temptation to
 over-read a clean null runs the other way here. It does not show the lineup
@@ -148,9 +202,12 @@ causal — starter BF is a post-treatment outcome of the same game, so
 `act ~ pred + BF` answers "does the slope depend on the window", which is what
 was registered, and not "what is the window-free lineup effect".
 
-What would settle it is play-by-play ingestion (`atBatIndex` ordering per
-game), which nothing in this repo fetches today — the actual side is the
-binding constraint, not the batting order. That is a data-acquisition
+That is now done rather than proposed: `lineup_window_collect.py` ingests the
+play-by-play and the fixed window is reported above. What remains genuinely
+out of reach is the PREDICTED half — the unweighted nine-hitter mean for a past
+slate needs that slate's Savant leaderboard, which `.savant_cache/` is
+gitignored to forbid. A build that persisted the per-hitter frame would make
+the matched-prediction version available going forward. That is a data-acquisition
 change with its own no-lookahead question — a completed game's play-by-play is
 an immutable historical fact like its box score, so it is backfill rather than
 lookahead — and it is not proposed here.

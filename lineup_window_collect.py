@@ -401,6 +401,18 @@ def collect(scope, verbose=True):
         revised = ok and bool(fails["ledger"])
         all_fails["map"].extend(fails["map"])
         all_fails["ledger"].extend(fails["ledger"])
+        if fails["map"]:
+            # A map failure names a count, not a cause. The event histogram is
+            # what turns "one PA too many" into a culprit -- without it the
+            # next step is guessing at which eventType is miscategorised, and
+            # the games cannot be refetched from the dev sandbox to look.
+            from collections import Counter
+            for bat in ("away", "home"):
+                h = Counter(r2["event_type"] for r2 in rows
+                            if r2["bat_side"] == bat)
+                all_fails["map"].append(
+                    f"  {gpk} {bat} events: "
+                    + ", ".join(f"{k}={v}" for k, v in sorted(h.items())))
         for i, row in enumerate(rows):
             row = dict(row, game_pk=gpk, game_date=str(r.get("game_date")),
                        reconciled=ok, ledger_revised=revised)
@@ -522,10 +534,10 @@ def main():
                      f"{', '.join(summ['unmapped'])}")
     else:
         lines.append("  no unmapped eventType values")
-    for f in summ["fails"]["map"][:25]:
+    for f in summ["fails"]["map"][:60]:
         lines.append(f"  MAP FAIL {f}")
-    if len(summ["fails"]["map"]) > 25:
-        lines.append(f"  ... and {len(summ['fails']['map']) - 25} more")
+    if len(summ["fails"]["map"]) > 60:
+        lines.append(f"  ... and {len(summ['fails']['map']) - 60} more")
     lines.append("")
     lines.append(f"SOURCE DRIFT    {rev} of those carry a ledger row that "
                  f"predates a scoring revision")
