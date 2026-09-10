@@ -4971,9 +4971,37 @@ def _scoreboard_summary(g, ctx=None, lean=None):
     )
 
 
+def _pregame_lock_note(g):
+    """Provenance line for a game that has already started.
+
+    Two outcomes, each counted from its own state rather than one derived by
+    assuming the other -- `_lock_note`'s discipline, one surface out. A
+    started game either HAS a locked pregame ledger row, in which case this
+    card IS that row and says so, or it has none, in which case the card is a
+    post-first-pitch rebuild and must not be left to read as a pregame
+    publication.
+
+    Silent on a game that has not started: there the live build IS the pregame
+    view, so a note would be noise on every card of a normal slate.
+    """
+    if not g.get("post_hoc"):
+        return ""
+    if g.get("frozen"):
+        at = g.get("locked_at")
+        when = f" {_esc(at)}" if at else ""
+        return (f"<div class='detail-context lockline'>Locked{when}, before "
+                "first pitch — the lean, rates and price below are the "
+                "published pregame values, not a rebuild. The lineup list is "
+                "current.</div>")
+    return ("<div class='detail-context lockline warn'>No pregame lock for "
+            "this game — the figures below are a post-first-pitch rebuild, "
+            "not what was published.</div>")
+
+
 def _detail_context_html(g):
     when = " · ".join(x for x in (g.get("time_pt"), g.get("venue")) if x)
-    return f"<div class='detail-context'>{_esc(when)}</div>" if when else ""
+    ctx = f"<div class='detail-context'>{_esc(when)}</div>" if when else ""
+    return ctx + _pregame_lock_note(g)
 
 
 def cmb_card(g, strength_scale=None, ctx=None):
@@ -5045,11 +5073,190 @@ def build_combined(games, strength_scale=None, ctx=None):
             + "</div>")
 
 
+# ============================================================
+# PREGAME FREEZE -- what a started game's card is allowed to show
+# ============================================================
+# The card is the only surface on this site that recomputes its lean on every
+# build. That is right up to first pitch and wrong after it: from then on the
+# build re-derives the lean from a Savant leaderboard and a lineup the pregame
+# row never had, and on a thin lean that flips the published side. Measured
+# over 351 v12 side-comparisons between committed dumps and their ledger rows:
+# 0 of 77 disagree while a game is still pregame, 6 of 274 after it starts,
+# and the disagreements sit entirely in the thinnest leans -- 11.9% below
+# |net| 0.005, 1.2% in 0.005-0.015, 0% above 0.015. 2026-09-10 TEX@SEA is the
+# worked case: locked at +0.000191 -> SEA, rebuilt four hours later at
+# -0.004925 -> TEX, because Texas's batting order changed after the snapshot
+# and moved their lineup composite +0.0055.
+#
+# So a started game's card reads the ledger row instead. That row is a safe
+# source by construction and not by convention: `grade_leans.ingest` admits a
+# row only when `lock_status == "pregame"`, so whatever is in the ledger IS
+# the last view that predated first pitch, and no later build can overwrite
+# it.
+#
+# DISPLAY-ONLY. The dump keeps its live values and its honest `lock_status`,
+# the grader keeps rejecting it, and no lean, delta, grade or ledger row
+# moves. What changes is which of two existing artifacts the card reads. No
+# `MODEL_TAG` implication.
+
+# (dump column, ledger column stem) for every model quantity the card renders
+# that the ledger carries per side.
+#
+# `pit_xwOBA` and `opp_xwOBA` are in here because `mk()` reads them as
+# FALLBACKS when the two columns above them are missing. Freezing only the
+# primaries would leave a live value one `or` away from the card on any row
+# whose primary the ledger happened not to hold -- the mixed basis this whole
+# function exists to remove. The frozen row is a display-only copy consumed by
+# `mk()` alone, so redefining a fallback inside it reaches nothing else.
+_FROZEN_SIDE_COLS = (
+    ("edge_xwOBA", "edge_xwoba"),
+    ("starter_xwOBA", "starter_xwoba"),
+    ("pit_xwOBA", "starter_xwoba"),
+    ("opp_xwOBA_vs_sp", "opp_xwoba_vs_sp"),
+    ("opp_xwOBA", "opp_xwoba_vs_sp"),
+    ("opp_xwOBA_neutral", "opp_xwoba_neutral"),
+    ("bullpen_xwOBA", "bullpen_xwoba"),
+    ("expected_sp_ip", "expected_sp_ip"),
+    ("platoon_delta_sp", "platoon_delta_sp"),
+    ("starter_rate_basis", "sp_rate_basis"),
+    ("starter_rate_bf", "sp_rate_bf"),
+    ("pitching_basis", "pitching_basis"),
+    ("opener", "opener"),
+)
+
+
+def _lock_clock(iso_utc):
+    """Wall clock for a locked snapshot, in the page's one zone.
+
+    Not `_game_time_pt`: that parses ESPN's `...Z` schedule format, while
+    `snapshot_utc` is a full ISO stamp carrying microseconds and an offset,
+    which it silently returns None for. This uses the same `pd.to_datetime`
+    call `game_is_post_hoc` makes on the same column, so the note and the
+    freeze cannot come apart over what a stamp means.
+    """
+    ts = pd.to_datetime(iso_utc, utc=True, errors="coerce")
+    return None if pd.isna(ts) else _fmt_pt_clock(ts.tz_convert(PT))
+
+
+def locked_pregame_rows(led=None, slate_date=None):
+    """game_pk -> the immutable pregame ledger row for this slate.
+
+    Keyed on (game_pk, game_date), which is the ledger's own identity: a
+    postponed game keeps its gamePk, so the played make-up entry and the
+    original void entry coexist under one pk.
+
+    Filtered on `lock_status`, never on status: a row is useful here the
+    moment it is ingested, long before it grades.
+    """
+    led = load_ledger_df() if led is None else led
+    if led is None or "lock_status" not in getattr(led, "columns", ()):
+        return {}
+    day = led[
+        (led["game_date"].astype(str) == str(slate_date or SLATE_DATE))
+        & (led["lock_status"].astype("string").str.startswith("pregame", na=False))
+    ]
+    out = {}
+    for _, r in day.iterrows():
+        gpk = pd.to_numeric(r.get("game_pk"), errors="coerce")
+        if pd.notna(gpk):
+            out[int(gpk)] = r
+    return out
+
+
+def game_is_post_hoc(row):
+    """True when this game's card can no longer be published as pregame.
+
+    The per-game form of the comparison `grade_leans._lock_status` makes: this
+    build's snapshot against this game's scheduled start. Deliberately the
+    same rule rather than the schedule feed's `abstract_state`, so the card
+    freezes at exactly the instant the ledger would refuse the row the build
+    just computed. One rule, one meaning, two artifacts.
+
+    Read off the row, not the clock -- `dump_is_post_hoc`'s precedent -- and
+    False whenever the answer is not knowable, which keeps an unstamped row
+    rendering exactly as it does today.
+    """
+    snap = pd.to_datetime(row.get("snapshot_utc"), utc=True, errors="coerce")
+    start = pd.to_datetime(row.get("scheduled_start_utc"), utc=True, errors="coerce")
+    if pd.isna(snap) or pd.isna(start):
+        return False
+    return bool(start <= snap)
+
+
+def _frozen_side(row, lrow, side):
+    """One side's dump row with the locked ledger values written into it.
+
+    A copy: the caller's frame still holds the live values, and the dump is
+    written from that frame.
+    """
+    out = row.copy()
+    for dump_col, stem in _FROZEN_SIDE_COLS:
+        key = f"{stem}_{side}"
+        if key not in lrow.index:
+            continue
+        val = lrow[key]
+        if val is None or (not isinstance(val, str) and pd.isna(val)):
+            continue
+        out[dump_col] = val
+    return out
+
+
+def _frozen_odds(lrow, live):
+    """The locked pregame market, or None when the row carries none.
+
+    `total` is dropped rather than carried over from `live`: the ledger stores
+    no pregame counterpart, and a closing total sitting beside two locked
+    moneylines is the mixed basis this freeze removes. The two OPENS come from
+    the live feed and are not a mixture -- an opener is a pregame quantity
+    whichever build reads it, and the ledger's own `open_*` columns are
+    attached post-hoc by `market_backfill` and so are null on exactly the rows
+    that need them here.
+    """
+    # The live feed hands prices over as ints (`_amer_ml`) and `_fmt_ml`
+    # str()s whatever it gets, so a float off the ledger renders "-120.0"
+    # beside the live path's "-120". Rounded here rather than through
+    # `_amer_ml`, which parses the feed's STRINGS and returns None on "-120.0".
+    def _ml(v):
+        v = _f(v)
+        return None if v is None else int(round(v))
+
+    a, h = _ml(lrow.get("pregame_away_ml")), _ml(lrow.get("pregame_home_ml"))
+    p = _f(lrow.get("pregame_p_home"))
+    if a is None and h is None and p is None:
+        return None
+    live = live or {}
+    return dict(away_ml=a, home_ml=h, p_home=p, total=None,
+                open_away_ml=live.get("open_away_ml"),
+                open_home_ml=live.get("open_home_ml"))
+
+
+def freeze_to_lock(a, h, lrow, odds):
+    """(away row, home row, odds, locked-at clock) for a started game.
+
+    Returns ``None`` when the locked row cannot substantiate the freeze, and
+    the caller then renders live and SAYS the card is a rebuild rather than
+    borrowing a claim the ledger does not carry.
+
+    Both edges are required because they are what decides the lean; a card
+    frozen on one side and live on the other would publish a net neither
+    artifact ever computed.
+    """
+    if lrow is None:
+        return None
+    if any(pd.isna(pd.to_numeric(lrow.get(f"edge_xwoba_{s}"), errors="coerce"))
+           for s in ("away", "home")):
+        return None
+    return (_frozen_side(a, lrow, "away"), _frozen_side(h, lrow, "home"),
+            _frozen_odds(lrow, odds), _lock_clock(lrow.get("snapshot_utc")))
+
+
 def _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
                           opp_hitters_df=None, detail_df=None, lg_ops=None,
                           slate_df=None, lineup_df=None,
-                          league_baseline=None, odds=None, streaks=None):
+                          league_baseline=None, odds=None, streaks=None,
+                          locked=None):
     streaks = streaks or {}
+    locked = {} if locked is None else locked
 
     def _streak(team_id):
         try:
@@ -5107,6 +5314,20 @@ def _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
                 f"{matchup} (game_pk={gpk})")
             continue
         srow = slate_map.get(gpk)
+
+        # A started game shows the locked pregame row, not this build's
+        # recomputation of it. Substituted into the two side rows BEFORE
+        # `mk()` reads them, so the lean, the read sentence, the side panels
+        # and the percentile bars all derive from one basis and no renderer
+        # below needs a branch. See PREGAME FREEZE above.
+        game_odds = (odds or {}).get(gpk)
+        post_hoc = game_is_post_hoc(a)
+        locked_at, frozen = None, False
+        if post_hoc:
+            lock = freeze_to_lock(a, h, locked.get(int(gpk)), game_odds)
+            if lock is not None:
+                a, h, game_odds, locked_at = lock
+                frozen = True
 
         def mk(r):
             side = r["side"]
@@ -5194,7 +5415,8 @@ def _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
             game_datetime_utc=(srow.get("game_datetime_utc") if srow is not None else None),
             time_pt=_game_time_pt(srow.get("game_datetime_utc")) if srow is not None else "",
             venue=str(srow.get("venue") or "") if srow is not None else "",
-            odds=(odds or {}).get(gpk),
+            odds=game_odds, post_hoc=post_hoc, frozen=frozen,
+            locked_at=locked_at,
             league_baseline={**(league_baseline or {}), "OPS": lg_ops_f},
         ))
 
@@ -5506,6 +5728,11 @@ body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.45 var(--sans);
   border:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 .detail-context{padding:7px 16px;border-bottom:1px solid var(--line-2);
   color:var(--muted);font:500 13px/1.3 var(--sans)}
+/* Provenance for a started game. Recedes by default -- it qualifies the card
+   rather than competing with it -- and only the missing-lock case is warm,
+   because that is the one a reader must not skim past. */
+.lockline{font-weight:400;line-height:1.45}
+.lockline.warn{color:rgba(var(--warm-tx),1)}
 .card-note{display:flex;flex-direction:column;gap:4px;padding:14px 16px 16px;color:var(--muted)}
 .card-note b{color:var(--ink);font-size:14.5px}.card-note span{font-size:14px}
 
@@ -7803,10 +8030,14 @@ def render_combined_html(xw_df, pl_df, pitcher_rows_df, built_txt,
                          opp_hitters_df=None, detail_df=None, lg_ops=None,
                          slate_df=None, lineup_df=None,
                          league_baseline=None, odds=None, streaks=None):
+    # Locked pregame rows for this slate. Read once here rather than inside
+    # the loop: one ledger read per build, and the render path stays a pure
+    # function of what it is handed.
     games = _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
                                   opp_hitters_df=opp_hitters_df, detail_df=detail_df,
                                   lg_ops=lg_ops, slate_df=slate_df, lineup_df=lineup_df,
-                                  league_baseline=league_baseline, odds=odds, streaks=streaks)
+                                  league_baseline=league_baseline, odds=odds,
+                                  streaks=streaks, locked=locked_pregame_rows())
     # Cards lead. The record strip and the model/build stamp sit below them.
     footer = (records_strip_html()
               + _legend_head(f"{PUBLIC_MODEL_NAME} — Statcast {MODEL_RATE_LABEL}", built_txt))
