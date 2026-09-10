@@ -1,34 +1,34 @@
-LEAN LEDGER — 344 graded games (336 with a lean, 8 abstained)  [xw+plat_consol_v12]
-xwOBA lean   full: 205-131  (0.610)   F5: 157-132-47  (0.543)
-hybrid rule  full: 213-123  (0.634)   vs price z=+2.53  +32.21u   (n=336, 24 faded)
-  always chalk, same 336 rows: 198-138  (0.589)   vs price z=+0.58
+LEAN LEDGER — 346 graded games (338 with a lean, 8 abstained)  [xw+plat_consol_v12]
+xwOBA lean   full: 205-133  (0.607)   F5: 157-134-47  (0.540)
+hybrid rule  full: 213-125  (0.630)   vs price z=+2.39  +30.21u   (n=338, 24 faded)
+  always chalk, same 338 rows: 198-140  (0.586)   vs price z=+0.45
   RETROSPECTIVE: the 45% threshold was chosen on these rows. The registered forward test is below.
-REGISTRATIONS (retrospective, n=336: 261 discovery rows + 75 since 2026-09-03) — in sample, NOT the forward reading:
-  |Δ| filter   dropped-game excess  +2.98pp +/- 4.62  (n=115; discovery +5.53). NEGATIVE would vindicate the rule.
+REGISTRATIONS (retrospective, n=338: 261 discovery rows + 77 since 2026-09-03) — in sample, NOT the forward reading:
+  |Δ| filter   dropped-game excess  +2.51pp +/- 4.60  (n=116; discovery +5.53). NEGATIVE would vindicate the rule.
   abstain      fade-minus-abstain +0.111u/declined game +/- 0.164  (n=24; discovery +0.175). POSITIVE keeps the shipped fade branch.
   dog contrast above-minus-below +24.73pp +/- 12.06  (n=56 above, 24 below; discovery +27.59).
   Each was FOUND on the discovery rows above, so none of these is evidence for itself. The registered forward readings are further down this report.
-platoon lean full: 157-101  (0.609)   F5: 134-85-39  (0.612)   (reliable-only, n=258)
-xwOBA on same subset  full: 162-96  (0.628)   F5: 122-97-39  (0.557)
+platoon lean full: 157-103  (0.604)   F5: 134-87-39  (0.606)   (reliable-only, n=260)
+xwOBA on same subset  full: 162-98  (0.623)   F5: 122-99-39  (0.552)
 xwOBA F5 by |Δ| tercile:
-  low  50-49-13  (0.505)   (Δ 0.000–0.011, n=112)
+  low  50-50-13  (0.500)   (Δ 0.000–0.011, n=113)
   mid  45-47-20  (0.489)   (Δ 0.011–0.025, n=112)
-  hi   62-36-14  (0.633)   (Δ 0.025–0.101, n=112)
+  hi   62-37-14  (0.626)   (Δ 0.025–0.101, n=113)
 DIVERGE h2h (F5): xwOBA 20 — platoon 32  (n=65)
-home F5 baseline: 0.524  (n=296)
-weight fit: 296 usable F5 decisions (gate 30)
-  b_lineup=+0.167±0.121  b_sp=+0.351±0.124  HFA=+0.096  (per sd)
-  symmetry test  b_lineup - b_sp*(sd_lu/sd_sp) = +0.057 ± 0.131  z=+0.43  (no departure from equal weight)
+home F5 baseline: 0.523  (n=298)
+weight fit: 298 usable F5 decisions (gate 30)
+  b_lineup=+0.166±0.121  b_sp=+0.336±0.123  HFA=+0.096  (per sd)
+  symmetry test  b_lineup - b_sp*(sd_lu/sd_sp) = +0.061 ± 0.130  z=+0.47  (no departure from equal weight)
   (equal first-order weight is what the symmetric multiplicative matchup implies; z is the evidence against it. Diagnostic only -- nothing here feeds back into a lean, a delta or a grade.)
 predicted vs actual (backfilled box scores)
-  starter IP   n=1292 bias +0.00 IP  MAE 0.95 IP   (drives the phase weight q)
-    IP calibration slope +0.758 +/- 0.033 (1.00 = calibrated; < 1 = over-dispersed)
-  offense wOBA n=680  pred mean 0.3092  actual mean 0.3088  (-0.0004)
-    calibration slope +0.84 +/- 0.20 (1.00 = calibrated)
-    skill vs league-rate baseline +0.0295 (ceiling ~0.04; per-game noise dominates)
-  lineup dispersion n=680  residual slope -0.63 +/- 0.49 (> 0 = concentrated lineups beat their mean)
-  lean delta   n=336  calibration slope +0.81 +/- 0.27 (1.00 = calibrated; < 1 = over-dispersed)
-    corr +0.162  sign agreement 0.536  (the lean's own hit rate against its target)
+  starter IP   n=1296 bias +0.00 IP  MAE 0.95 IP   (drives the phase weight q)
+    IP calibration slope +0.757 +/- 0.033 (1.00 = calibrated; < 1 = over-dispersed)
+  offense wOBA n=684  pred mean 0.3092  actual mean 0.3092  (-0.0000)
+    calibration slope +0.81 +/- 0.20 (1.00 = calibrated)
+    skill vs league-rate baseline +0.0268 (ceiling ~0.04; per-game noise dominates)
+  lineup dispersion n=684  residual slope -0.60 +/- 0.49 (> 0 = concentrated lineups beat their mean)
+  lean delta   n=338  calibration slope +0.77 +/- 0.27 (1.00 = calibrated; < 1 = over-dispersed)
+    corr +0.153  sign agreement 0.533  (the lean's own hit rate against its target)
     UNDER-POWERED: se 0.27 cannot separate 1.00 from 0.50
   by prediction family (never pooled — different inputs, different scale against an observed-wOBA actual):
   v2/v3      net n=188 slope +0.51±0.17
@@ -43,15 +43,15 @@ predicted vs actual (backfilled box scores)
   wOBA v4    wOBA n= 22 pred 0.3084 act 0.2639 (-0.0445) slope -2.10±1.76  SP IP n= 22 bias +0.31  net n= 11 slope -4.82±2.53
   wOBA v5    wOBA n=236 pred 0.3077 act 0.3090 (+0.0013) slope +0.65±0.36  SP IP n=238 bias +0.00  net n=117 slope +0.01±0.50
   split v1   wOBA n= 14 pred 0.3221 act 0.3514 (+0.0294) slope -0.78±1.58  SP IP n= 14 bias +0.05  net n=  7 slope -1.18±0.89
-  v12        wOBA n=680 pred 0.3092 act 0.3088 (-0.0004) slope +0.84±0.20  SP IP n=688 bias -0.06  net n=336 slope +0.81±0.27
+  v12        wOBA n=684 pred 0.3092 act 0.3092 (-0.0000) slope +0.81±0.20  SP IP n=692 bias -0.06  net n=338 slope +0.77±0.27
   xw+plat_consol_v1  net n=  1
 component error (each scored against its own realised phase)
-  SP      n=688  pred 0.3123 act 0.3234 (+0.0111)  MAE 0.0947  slope +0.74±0.21  corr +0.135
-  BP      n=684  pred 0.2964 act 0.2883 (-0.0081)  MAE 0.1058  slope +1.19±0.40  corr +0.113
-  lineup  n=688  pred 0.3179 act 0.3083 (-0.0096)  MAE 0.0728  slope -0.59±0.47  corr -0.048
+  SP      n=692  pred 0.3123 act 0.3242 (+0.0118)  MAE 0.0950  slope +0.72±0.21  corr +0.131
+  BP      n=688  pred 0.2964 act 0.2881 (-0.0083)  MAE 0.1054  slope +1.18±0.40  corr +0.112
+  lineup  n=692  pred 0.3179 act 0.3087 (-0.0092)  MAE 0.0728  slope -0.67±0.47  corr -0.054
 by slate (most recent 14 of 50; monitoring, not trend)
-  scale: per-side rate error sd 0.0894 over 1186 paired side-games — read gross outliers, not drift
-  2026-09-09  xwOBA       15g  rate n= 10 pred 0.3091 act 0.2977 (-0.0114) MAE 0.0573  SP IP n= 10 bias -1.01 MAE 1.61
+  scale: per-side rate error sd 0.0894 over 1190 paired side-games — read gross outliers, not drift
+  2026-09-09  xwOBA       15g  rate n= 14 pred 0.3083 act 0.3173 (+0.0090) MAE 0.0630  SP IP n= 14 bias -0.92 MAE 1.47
   2026-09-08  xwOBA       15g  rate n= 29 pred 0.3082 act 0.3139 (+0.0057) MAE 0.0655  SP IP n= 30 bias -0.29 MAE 1.02
   2026-09-07  xwOBA       10g  rate n= 20 pred 0.3070 act 0.2895 (-0.0175) MAE 0.0555  SP IP n= 20 bias +0.18 MAE 1.10
   2026-09-06  xwOBA       15g  rate n= 30 pred 0.3103 act 0.2984 (-0.0119) MAE 0.0749  SP IP n= 30 bias -0.13 MAE 1.06
@@ -78,11 +78,11 @@ model-family history (never pooled into the current-family fit):
   wOBA v4 n= 11  wOBA full 5-6  (0.455)  F5 4-4-3  (0.500)
   wOBA v5 n=119  (2 abstained)  wOBA full 52-65  (0.444)  F5 46-50-21  (0.479)
   split v1 n=  7  wOBA/xwOBA full 4-3  (0.571)  F5 3-4  (0.429)
-  v12     n=344  (8 abstained)  xwOBA full 205-131  (0.610)  F5 157-132-47  (0.543)
+  v12     n=346  (8 abstained)  xwOBA full 205-133  (0.607)  F5 157-134-47  (0.540)
   xw+plat_consol_v1 n=  1  xwOBA full 0-1  (0.000)  F5 0-0-1
 
 pre-registered forward test  (registered 2026-08-29; fade the lean when gap > 0.06)
-    eligible rows since registration: 139 over 11 slates
+    eligible rows since registration: 141 over 11 slates
     PRIMARY         n=10   4-6    -3.58u  ROI  -35.8%   vs price z=-1.15
     secondary >0.00  n=48   22-26    -6.49u  ROI  -13.5%   vs price z=-0.67
     secondary >0.02  n=24   12-12    -2.24u  ROI   -9.4%   vs price z=-0.33
@@ -100,42 +100,42 @@ pre-registered forward test  (registered 2026-08-29; fade the lean when gap > 0.
     Bands are context only; the registered rule is unbanded, because the band was chosen after seeing it.
 
 pre-registered hybrid market-direction test  (registered 2026-09-01; follow the lean at q >= 0.45, fade below)
-    eligible rows since registration: 98 over 8 slates
+    eligible rows since registration: 100 over 8 slates
     SWITCH DELTA (registered)  n=7    -0.044u per switch  +/- 0.797   z=-0.06   total -0.31u
     discovery was +0.592u per switch over 15; paired ROI CI [-2.6, +10.4] pp. Read the forward number against that, not against zero.
 
-    follow  q>=0.45         n=91   54-37    +0.95u  ROI   +1.0%   vs price z=+0.54
+    follow  q>=0.45         n=93   54-39    -1.05u  ROI   -1.1%   vs price z=+0.29
     fade    q< 0.45         n=7    4-3    -0.42u  ROI   -6.0%   vs price z=-0.06
-    combined hybrid         n=98   58-40    +0.53u  ROI   +0.5%   vs price z=+0.51
-    plain xwOBA lean        n=98   57-41    +0.84u  ROI   +0.9%   vs price z=+0.54
-    control: always-chalk   n=98   52-46   -12.21u  ROI  -12.5%   vs price z=-0.86
+    combined hybrid         n=100  58-42    -1.47u  ROI   -1.5%   vs price z=+0.26
+    plain xwOBA lean        n=100  57-43    -1.16u  ROI   -1.2%   vs price z=+0.29
+    control: always-chalk   n=100  52-48   -14.21u  ROI  -14.2%   vs price z=-1.09
     the fade branch backed the favourite in 7 of 7 switched games (construction says all of them)
     GATE: 7 of ~41 switches to test the discovery-sized effect, ~1420 for a plausible +0.10u one (~10 seasons at 0.88 switches a slate).
     The combined-hybrid line is mostly the model, not the rule: only the switched games are the hypothesis. See hybrid_test.py.
 
 pre-registered |delta| filter test  (registered 2026-09-03; abstain when |xw_net| < 0.012)
-    eligible rows since registration: 75 over 6 slates
-    DROPPED-GAME EXCESS (registered)  n=31   -3.78pp +/- 8.91   z=-0.42
-      vs always-chalk on the same games: -6.37pp; model-minus-chalk +2.59pp (discovery +6.37)
+    eligible rows since registration: 77 over 6 slates
+    DROPPED-GAME EXCESS (registered)  n=32   -5.28pp +/- 8.78   z=-0.60
+      vs always-chalk on the same games: -7.79pp; model-minus-chalk +2.51pp (discovery +6.37)
     discovery was +5.53pp +/- 5.47 over 82. The rule is VINDICATED only if this goes NEGATIVE; positive means it is discarding winning bets.
 
-    kept    |d|>=0.012        n=44   29-15   +7.2pp +/-  7.4  z=+0.98    +3.59u  ROI   +8.2%
-    dropped |d|< 0.012        n=31   15-16   -3.8pp +/-  8.9  z=-0.42    -3.85u  ROI  -12.4%
-    unfiltered lean           n=75   44-31   +2.7pp +/-  5.7  z=+0.47    -0.26u  ROI   -0.3%
-    control: always-chalk     n=75   42-33   -1.3pp +/-  5.7  z=-0.23    -5.91u  ROI   -7.9%
-    contrast kept-minus-dropped +10.99pp +/- 11.56  z=+0.95   (discovery +1.77 +/- 6.63)
-    GATE: 31 of ~393 dropped games to test the discovery-sized effect, ~1090 for a plausible 3pp one (~253 slates at 0.33 of a slate).
+    kept    |d|>=0.012        n=45   29-16   +5.6pp +/-  7.3  z=+0.77    +2.59u  ROI   +5.8%
+    dropped |d|< 0.012        n=32   15-17   -5.3pp +/-  8.8  z=-0.60    -4.85u  ROI  -15.2%
+    unfiltered lean           n=77   44-33   +1.1pp +/-  5.6  z=+0.19    -2.26u  ROI   -2.9%
+    control: always-chalk     n=77   42-35   -2.8pp +/-  5.6  z=-0.50    -7.91u  ROI  -10.3%
+    contrast kept-minus-dropped +10.85pp +/- 11.40  z=+0.95   (discovery +1.77 +/- 6.63)
+    GATE: 32 of ~393 dropped games to test the discovery-sized effect, ~1090 for a plausible 3pp one (~253 slates at 0.33 of a slate).
     Search test at registration put P(null best >= observed) = 0.693 -- the discovery gap is SMALLER than a sweep over noise typically returns. See delta_filter_test.py.
 
 pre-registered abstain-vs-fade test  (registered 2026-09-03; decline the lean below q = 0.45 instead of fading it)
-    eligible rows since registration: 75 over 6 slates
+    eligible rows since registration: 77 over 6 slates
     FADE MINUS ABSTAIN (registered)  n=3    +0.062u per declined game +/- 0.532   z=+0.12
       positive keeps the shipped fade branch; negative says decline. Discovery +0.175u over 20, CI [-0.168, +0.503].
 
-    this rule (declined out)    n=72   43-29   +3.1pp +/-  5.8    +0.48u  ROI   +0.7%
-    shipped hybrid (fades)      n=75   45-30   +3.3pp +/-  5.7    +0.67u  ROI   +0.9%
+    this rule (declined out)    n=74   43-31   +1.5pp +/-  5.7    -1.52u  ROI   -2.0%
+    shipped hybrid (fades)      n=77   45-32   +1.7pp +/-  5.6    -1.33u  ROI   -1.7%
     the declined games only     n=3    2-1   +7.6pp +/- 28.4    +0.19u  ROI   +6.2%
-    control: always-chalk       n=75   42-33   -1.2pp +/-  5.7    -5.78u  ROI   -7.7%
+    control: always-chalk       n=77   42-35   -2.7pp +/-  5.6    -7.78u  ROI  -10.1%
     the faded games backed the favourite in 3 of 3 (construction says all of them -- read the line above against the always-chalk control, not instead of it)
     GATE: 3 of ~82 declined games for the discovery-sized effect, ~251 for a plausible +0.10u one. See abstain_test.py.
 
