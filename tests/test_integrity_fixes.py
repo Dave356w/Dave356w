@@ -3465,6 +3465,17 @@ class HybridRuleTests(unittest.TestCase):
         the check that the surface a reader sees and the instrument that will
         judge the rule cannot drift apart -- the failure mode that let the site
         publish a pooled record under a current-family label.
+
+        ROW BY ROW ON ITS OWN BASIS. `hybrid_test` derives the rule two ways:
+        `apply_locked_rule` scores the immutable pregame selection stored on
+        the row, `apply_rule` recomputes the branch from the close. The site
+        prefers the locked action wherever one exists, so holding every row
+        against the closing recomputation asserts that the two prices never
+        straddle the threshold -- which is not a property of the code, and is
+        not true: 2026-09-07 NYM@MIA locked at q=0.4576 (FOLLOW, and that IS
+        the bet the rule made) and closed at q=0.4406. The test asserted the
+        market cannot move; the market moved. So each row is now held against
+        the basis it was actually decided on.
         """
         import hybrid_test
         led = build_site.load_ledger_df()
@@ -3477,8 +3488,21 @@ class HybridRuleTests(unittest.TestCase):
             self.skipTest("no priced current-family rows")
         lean_home = (g["xw_lean"] == g["home"]).to_numpy()
         home_won = (g["full_home"] > g["full_away"]).to_numpy()
-        p_lean = np.where(lean_home, g["close_p_home"], 1 - g["close_p_home"])
+        # The row's own decision basis: the locked pregame probability where
+        # the row carries a locked selection, the close where it does not.
+        locked = (g["selection_rule_tag"].eq(build_site.HYBRID_RULE_TAG)
+                  & g["hybrid_action"].isin(("FOLLOW", "FADE"))
+                  & g["hybrid_selection"].notna()).to_numpy()
+        p_close = np.where(lean_home, g["close_p_home"], 1 - g["close_p_home"])
+        p_lock = np.where(lean_home, g["pregame_p_home"], 1 - g["pregame_p_home"])
+        p_lean = np.where(locked, p_lock, p_close)
         follow = p_lean >= hybrid_test.THRESHOLD
+        # A locked row's stored action must equal the branch its own locked
+        # price implies, or the two derivations have drifted after all.
+        self.assertTrue(
+            (follow[locked]
+             == g["hybrid_action"].eq("FOLLOW").to_numpy()[locked]).all(),
+            "a locked action disagrees with the locked price it was taken at")
         lean_won = np.where(lean_home, home_won, ~home_won)
         expected_won = np.where(follow, lean_won, ~lean_won)
         rows = [build_site._row_hybrid(r) for _, r in g.iterrows()]

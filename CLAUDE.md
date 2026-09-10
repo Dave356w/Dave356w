@@ -387,7 +387,8 @@ precedent — they are how the fix is known to look.
   instrumented ones are full rebuilds, and most of the rest are mixtures of
   exactly this kind — `shadow_2026-08-11_xw.csv` was written at 00:45Z with 12
   of its games not yet started. Each row is labelled honestly by `lock_status`,
-  the ledger takes only the pregame ones, and shrinking the window further
+  the ledger takes only the pregame ones, the CARD no longer reads the mixture
+  (see the pregame-freeze entry below), and shrinking the window further
   means merging dumps rather than naming them — a different change with a
   different risk. Do not read "not a rebuild" as "pregame throughout".
 
@@ -460,6 +461,74 @@ precedent — they are how the fix is known to look.
   the fidelity gap above rather than rebuilding the same reconstruction.
 
 **Resolved — keep as precedent**
+
+- **The one surface that recomputed its own published decision.** The lean
+  page card derives `net = a["xw_edge"] - h["xw_edge"]` from the live build on
+  every run. That is right up to first pitch and wrong after it: from then on
+  the build re-derives the lean from a Savant leaderboard and a lineup the
+  pregame row never had, so the page could publish a side nobody could have
+  taken while `grades.html` one click away published the locked one — the
+  artifacts-disagreeing entry below, with the disagreement inside a single
+  build and both halves public.
+
+  Measured before fixing, over 351 v12 side-comparisons between committed
+  `leans_*_xw` dumps and their ledger rows: **0 of 77 disagree while a game is
+  still pregame, 6 of 274 after it starts**, and the disagreements sit
+  entirely in the thinnest leans — 11.9% below |net| 0.005, 1.2% in
+  0.005–0.015, **0% above 0.015**. 2026-09-10 TEX@SEA is the worked case:
+  locked at +0.000191 (SEA, graded W), rebuilt four hours after first pitch at
+  −0.004925 (TEX). Both starters' rates were bit-identical between the two;
+  what moved was Texas's batting order, worth +0.0055 on their lineup
+  composite against a lean margin of 0.0002.
+
+  Fixed by having a started game's card read the ledger row instead. Four
+  things in it are the reusable part:
+
+  * **The freeze condition IS the grader's lock rule.** `game_is_post_hoc`
+    compares this build's snapshot against that game's scheduled start — the
+    per-game form of `grade_leans._lock_status` — so the card freezes at
+    exactly the instant the ledger would refuse the row the build just
+    computed. Deliberately not the schedule feed's `abstract_state`: a second
+    definition of "started" is a second thing to keep in sync. A test walks
+    both functions across the boundary rather than pinning either.
+  * **The substitution happens on the INPUT rows, before `mk()` reads them.**
+    The lean, the read sentence, the side panels and the percentile bars then
+    all derive from one basis, and no renderer below needs a branch. Freezing
+    the outputs instead would have meant a conditional at every site that
+    prints a number.
+  * **The card's fallback reads are frozen too.** `mk()` takes `pit_xwOBA` and
+    `opp_xwOBA` when the columns above them are absent, so freezing only the
+    primaries leaves a live value one `or` away from a card claiming to be
+    pregame.
+  * **What cannot be frozen is named on the card.** The ledger carries no
+    per-hitter rows, so the lineup list stays live and the note says so; the
+    total is dropped rather than carried over, because a closing total beside
+    two locked moneylines is the mixed basis the freeze exists to remove; and
+    a started game with NO locked row renders as a rebuild and says THAT,
+    counted from its own state rather than assumed from the other. That is
+    `_lock_note`'s rule one surface out: never assert coverage the artifact
+    cannot substantiate, and never publish provenance only when the answer is
+    clean.
+
+  Display-only: no lean, delta, grade or ledger row moves, the dump keeps its
+  live values and its honest `lock_status`, and the grader keeps rejecting it.
+  What changed is which of two existing artifacts the card reads. No
+  `MODEL_TAG` implication.
+
+  **A pre-existing defect on the same fault line, found by running the gate
+  and fixed with it.** `test_the_site_and_the_forward_test_decide_every_row_identically`
+  recomputed every row's branch from the CLOSE and held `_row_hybrid` against
+  it — while `_row_hybrid` prefers the locked pregame action, exactly as
+  `hybrid_test` itself does in `apply_locked_rule`. So what it really asserted
+  was that the pregame and closing prices never straddle 0.45, which is not a
+  property of the code. It went red on 2026-09-07 NYM@MIA: locked q=0.4576
+  (FOLLOW, and that IS the bet the rule made), closed q=0.4406. Each row is
+  now held against the basis it was decided on, and a locked row's stored
+  action is additionally checked against its own locked price. **A test that
+  recomputes a stored decision must recompute it from the inputs the decision
+  was stored from** — otherwise it pins the market as well as the code, and
+  the market moves.
+
 
 - **The page that leads with the rule's z-score was the one page that never
   said the threshold was fitted on its own rows.** `grades.html` headlines
