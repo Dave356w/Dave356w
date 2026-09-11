@@ -1950,7 +1950,8 @@ inputs, while relying on the market join to supply the paired moneylines.
 |---|---|
 | `value_probe.py` | is there a tradable relationship between `xw_net` and price? (incl. band grids) |
 | `forward_test.py` | pre-registered fade rule, frozen 2026-08-29 (also prints every build) |
-| `hybrid_test.py` | pre-registered hybrid market-direction rule, frozen 2026-09-01 (also prints every build) |
+| `hybrid_test.py` | retired v1 hybrid registration, frozen 2026-09-01; reads archived `hybrid_v1_*` saved-pregame decisions |
+| `hybrid_v2.py` | current hybrid rule, registered 2026-09-11; fade only at q < .45 AND |xw_net| < .012 |
 | `delta_filter_test.py` | pre-registered |delta| conviction filter, frozen 2026-09-03; NEGATIVE prior (also prints every build) |
 | `abstain_test.py` | pre-registered abstain-vs-fade variant of the hybrid, frozen 2026-09-03 (also prints every build) |
 | `dog_contrast_test.py` | pre-registered underdog sign-flip contrast, frozen 2026-09-03; NOT independent of arm 2 (also prints every build) |
@@ -2316,8 +2317,28 @@ them, and the no-lookahead invariant on pending rows. It asserts no counts or
 records — a violation there is a writer bug, not a stale expectation. Any new
 assertion added to it must hold that line.
 
-Do not commit `data/` by hand — the Actions bot owns it. Do not commit
-`public/`.
+### Hybrid v2 selection namespace (2026-09-11)
+
+The live rule is `hybrid_v2.py`: fade the model only when the leaned side's
+saved no-vig probability is strictly below .45 **and** `abs(xw_net)` is
+strictly below .012; follow on either boundary and everywhere else. This is a
+selection-layer change, not prediction math, so it does not bump `MODEL_TAG`.
+`build_site.hybrid_action` is the production entry point and takes both inputs.
+
+The all-v12 v2 record is retrospective discovery, scored uniformly at closing
+prices. The registered forward v2 record starts strictly after 2026-09-11 and
+has no close fallback. Stored v2 fields retain the row's available basis:
+`saved_pregame` when captured, `closing` only for migrated legacy history, as
+recorded in `hybrid_price_source`. Never substitute one basis for the other.
+
+`hybrid_test.py` remains the frozen v1 registration. Migration advances the
+live `hybrid_*` namespace to v2 but copies deterministic v1 saved-pregame
+decisions into `hybrid_v1_*`; the v1 scorer projects those archive columns back
+into its original schema. Do not remove them or retag them as v2 evidence.
+
+Do not commit routine bot-generated `data/` changes by hand. A deliberate,
+reviewed schema/rule migration such as `migrate_hybrid_v2.py` is the exception.
+Do not commit `public/`.
 
 ## Load-bearing, change with care
 

@@ -97,7 +97,7 @@ def _grade_leans_dump_globs():
     """
     import re
     src = open(os.path.join(os.path.dirname(os.path.dirname(
-        os.path.abspath(__file__))), "grade_leans.py")).read()
+        os.path.abspath(__file__))), "grade_leans.py"), encoding="utf-8").read()
     pats = re.findall(r'glob\.glob\(os\.path\.join\(DATA_DIR,\s*"([^"]+)"\)', src)
     assert pats, "could not find grade_leans' dump globs -- update this reader"
     return pats
@@ -222,7 +222,7 @@ def test_both_write_sites_go_through_dump_path():
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     for mod, call in (("build_site.py", 'dump_path("leans"'),
                       ("shadow_metric.py", "bs.dump_path(SHADOW_PREFIX")):
-        src = open(os.path.join(root, mod)).read()
+        src = open(os.path.join(root, mod), encoding="utf-8").read()
         assert call in src, f"{mod} no longer writes its dump via dump_path"
         assert f'to_csv(os.path.join(DATA_DIR, f"leans_' not in src, (
             f"{mod} writes a dump path by hand, bypassing the rebuild rename")

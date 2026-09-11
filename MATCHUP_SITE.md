@@ -1087,7 +1087,8 @@ The report prints these sources beside every historical and forward section.
 |---|---|---|---|
 | historical Hybrid and registration retrospectives | closing `close_p_home` (the delta filter selects on `xw_net`, then requires the close) | closing `close_p_home` | closing `close_home_ml` / `close_away_ml` |
 | `forward_test.py` | frozen model gap and dog rules using closing `close_p_home` | closing `close_p_home` | closing moneylines |
-| registered Hybrid (`hybrid_test.py`) | stored action and selection made from saved `pregame_p_home` | stored `hybrid_p` and saved `pregame_p_home` | stored `hybrid_ml` and saved pregame moneylines |
+| current registered Hybrid v2 (`hybrid_v2.py`) | stored action and selection made from saved `pregame_p_home` plus `xw_net` | stored `hybrid_p` and saved `pregame_p_home` | stored `hybrid_ml` and saved pregame moneylines |
+| retired registered Hybrid v1 (`hybrid_test.py`) | archived v1 action and selection made from saved `pregame_p_home` | archived v1 probability and saved `pregame_p_home` | archived v1 moneyline and saved pregame moneylines |
 | delta filter (`delta_filter_test.py`) | `xw_net` threshold; closing probability required for scoring | closing `close_p_home` | closing moneylines |
 | abstain versus fade and underdog sign flip | saved pregame fields delegated from the registered Hybrid scorer | saved pregame probability | saved pregame moneylines |
 
@@ -1125,13 +1126,22 @@ denominators cannot drift apart. The public page intentionally omits
 model-family history and per-row model labels; those remain available in the
 underlying ledger and Actions report.
 
-The full v12 record is a **discovery** figure: the threshold was
-chosen on these rows. The registered out-of-sample diagnostic still prints in
+The full v12 Hybrid v2 record is a **discovery** figure: the 45% price gate and
+0.012 absolute-delta gate were chosen after examining these rows. The v2 rule
+fades only when both conditions hold and follows otherwise. Its registered
+out-of-sample diagnostic begins strictly after 2026-09-11 and prints in
 `data/ledger_report.txt`; the page presents the v12 history without mixing in
 older model families. Both pages render purely from
 `data/mlb_lean_ledger.csv`; grading runs before the build in CI (with a second
 pass after it to ingest the day's fresh dumps), so the page reflects last
 night's results in the same run.
+
+The v2 ledger migration does not reprice captured decisions. Rows with a saved
+pregame two-sided market retain it; legacy rows that predate price locking use
+their existing closing market and are marked `hybrid_price_source=closing`.
+The original v1 saved-pregame action, selection, price, and grade remain in
+`hybrid_v1_*` archive fields so its registered forward report is reproducible.
+No model prediction, raw lean, score, date, or model grade is rewritten.
 
 The platoon-OPS lens and first-5-innings (F5) results are still computed and
 recorded in the ledger for auditing (`grade_leans.py` grades both), but the
@@ -1163,16 +1173,17 @@ Every CI run, `grade_leans.py`:
   accumulate — a pitching-vs-lineup logit weight fit), followed by immutable
   record lines for every historical model family. The hybrid line is
   a historical reconstruction; the registered forward test prints further down
-  the same file. Retrospective surfaces share `hybrid_test.apply_rule`; forward
-  scoring uses `apply_locked_rule` and refuses rows without a stored pregame
-  selection, so a closing move cannot rewrite a published pick.
+  the same file. Current retrospective surfaces share `hybrid_v2.apply_rule`;
+  registered v2 forward scoring uses `apply_locked_rule` and refuses rows
+  without a stored pregame selection, so a closing move cannot rewrite a
+  published pick. The frozen v1 report reads its `hybrid_v1_*` archive.
 
 The rule is stored in **separate** ledger fields; it never overwrites the raw
 model fields. `xw_full` stays the lean's grade — the control the Hybrid is read
 against and the input used by the existing ablation and weight-fit analyses —
-while `hybrid_full` grades the locked public selection. Legacy v12 selections
-remain a close-derived historical reconstruction because no pregame selection snapshot
-exists for them.
+while `hybrid_full` grades the current v2 selection. Legacy v12 selections are
+materialized from their closing market and labeled `hybrid_price_source=closing`
+because no pregame snapshot exists; captured rows remain `saved_pregame`.
 
 The ledger persists by being committed: the workflow's `Commit ledger` step
 pushes `data/` back to `main` on each run (the `contents: write` permission).
