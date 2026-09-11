@@ -248,7 +248,13 @@ def _line(f, label, won_col="lean_won", p_col="p_lean", profit_col="profit"):
 def report_lines(led=None):
     """Report body as a list of lines. Pure -- no printing, no file writes."""
     out = [f"pre-registered |delta| filter test  (registered {REGISTERED_ON}; "
-           f"abstain when |xw_net| < {DELTA_THRESHOLD:.3f})"]
+           f"abstain when |xw_net| < {DELTA_THRESHOLD:.3f})",
+           "    price source — selection: |xw_net| only; price eligibility and "
+           "market comparison: closing close_p_home;",
+           "                   returns: closing close_home_ml/close_away_ml. "
+           "No pregame fallback.",
+           "    missing prices — no close_p_home, lean, or delta: excluded. "
+           "Paired closing MLs are not a separate filter."]
     g = scored_rows(led)
     if g is None:
         out.append("    ledger unavailable or missing columns -- not scored")

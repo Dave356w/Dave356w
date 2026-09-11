@@ -201,7 +201,13 @@ def _dog_arm_lines(g):
 def report_lines(led=None):
     """Report body as a list of lines. Pure -- no printing, no file writes."""
     out = ["pre-registered forward test  (registered "
-           f"{REGISTERED_ON}; {DIRECTION} the lean when gap > {GAP_THRESHOLD:.2f})"]
+           f"{REGISTERED_ON}; {DIRECTION} the lean when gap > {GAP_THRESHOLD:.2f})",
+           "    price source — selection/eligibility: closing close_p_home; "
+           "market comparison: closing close_p_home;",
+           "                   returns: closing close_home_ml/close_away_ml. "
+           "No pregame fallback.",
+           "    missing prices — no close_p_home, lean, or delta: excluded. "
+           "Paired closing MLs are not a separate filter."]
     g = scored_rows(led)
     if g is None:
         out.append("    ledger unavailable or missing columns -- not scored")

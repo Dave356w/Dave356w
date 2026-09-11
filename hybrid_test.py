@@ -446,7 +446,13 @@ def report_lines(led=None):
     """Report body as a list of lines. Pure -- no printing, no file writes."""
     out = [f"pre-registered hybrid market-direction test  (registered "
            f"{REGISTERED_ON}; follow the lean at q >= {THRESHOLD:.2f}, "
-           f"fade below)"]
+           f"fade below)",
+           "    price source — selection/eligibility: saved pregame_p_home + "
+           "locked action/selection;",
+           "                   market comparison: hybrid_p/pregame_p_home; "
+           "returns: hybrid_ml/pregame MLs. No close fallback.",
+           "    missing prices — malformed locked selection, grade, probability, "
+           "or ML: excluded and counted as unscorable."]
     # Resolve the ledger ONCE. `scored_rows` and `unscorable` each read it from
     # disk when handed None, and `unscorable` calls `scored_rows` again, so the
     # default path otherwise parsed the same CSV three times per build.

@@ -561,7 +561,11 @@ def components_summary(df, tags=None):
     p = paired_components(df)
     if p.empty:
         return []
-    lines = ["component error (each scored against its own realised phase)"]
+    lines = ["component error (each scored against its own realised phase)",
+             "  pitching-side suffixes: Home offense vs away pitching; "
+             "Away offense vs home pitching.",
+             "  Starter and bullpen actuals, and starter IP, retain "
+             "same-team pairing."]
     for comp in ("SP", "BP", "lineup"):
         s = p[p.component == comp]
         if s.empty:
@@ -578,29 +582,30 @@ def components_summary(df, tags=None):
     return lines
 
 
-def paired_sp_ip(df):
-    """Long frame of (expected starter IP, actual starter IP). These pair on
-    the same side -- both describe that side's starter -- unlike the rates.
+def paired_sp_ip(df, estimate="raw_fallback"):
+    """Long frame of (expected starter IP, actual starter IP), same-team paired.
 
-    `pred` is the RAW estimate where the row carries one and the published
-    value where it does not, which is the same rule `build_site
-    .sp_ip_calibration` fits on and for the same reason. From v12 the published
-    column is already calibrated, so a monitor reading it measures the residual
-    of a correction rather than the estimator the correction was fitted to --
-    and it would do so on a MIXTURE, since pre-v12 rows are raw under the
-    published name. Measured on the ledger at the time this changed: 30 of 634
-    side-games were calibrated, enough to move the printed slope from +0.756 to
-    +0.762. Harmless at that share, and not harmless as the sample turns over:
-    calibrated preds are compressed by w*b + (1-w) = 0.774, so an all-v12
-    sample would print ~0.98 and retire a standing monitor whose subject had
-    not moved. Nothing is lost by reading raw -- the published value is a
-    deterministic function of it and the fit.
+    ``estimate`` is ``raw_fallback`` (raw where present, otherwise stored),
+    ``raw`` (raw only), or ``adjusted`` (published value only). Missing values
+    stay missing. The last mode must be family-scoped because pre-v12 published
+    values are raw while v12 published values are adjusted.
+
+    In every mode the suffix names the pitching team: away pairs with
+    ``act_sp_ip_away`` and home with ``act_sp_ip_home``. This differs from the
+    offense-rate fields, whose suffix names the pitching side faced.
     """
+    if estimate not in {"raw_fallback", "raw", "adjusted"}:
+        raise ValueError(f"unknown starter-IP estimate: {estimate}")
     rows = []
     for side in ("away", "home"):
         raw = _num(df, f"expected_sp_ip_raw_{side}")
         pub = _num(df, f"expected_sp_ip_{side}")
-        pred = raw.where(raw.notna(), pub)
+        if estimate == "raw_fallback":
+            pred = raw.where(raw.notna(), pub)
+        elif estimate == "raw":
+            pred = raw
+        else:
+            pred = pub
         act = _num(df, f"act_sp_ip_{side}")
         m = pred.notna() & act.notna()
         if not m.any():
@@ -609,6 +614,18 @@ def paired_sp_ip(df):
                                   "act": act[m].to_numpy()}))
     return (pd.concat(rows, ignore_index=True) if rows
             else pd.DataFrame(columns=["side", "pred", "act"]))
+
+
+def _sp_ip_diagnostic_line(label, pairs):
+    """One calibration line whose count and errors come from ``pairs``."""
+    if pairs.empty:
+        return f"  {label}: n=0  slope unavailable  MAE unavailable  bias unavailable"
+    err = pairs["act"] - pairs["pred"]
+    cal = calibration(pairs["pred"], pairs["act"])
+    slope = (f"{cal['slope']:.3f} ± {cal['se_slope']:.3f}"
+             if cal else "unavailable")
+    return (f"  {label}: n={len(pairs):<4d} slope {slope}  "
+            f"MAE {err.abs().mean():.3f} IP  bias {err.mean():+.3f} IP")
 
 
 def calibration(pred, act):
@@ -722,7 +739,13 @@ def actuals_summary(df, baseline=None, tags=None):
         d = df
     else:
         d = df[df["model_tag"].astype(str).isin(set(tags))]
-    ip = paired_sp_ip(df)          # pooled -- see above
+    ip = paired_sp_ip(df, "raw_fallback")  # pooled -- see above
+    # Exact raw/adjusted comparisons are meaningful only within one requested
+    # family. Without tags the published column mixes raw historical values
+    # with adjusted v12 values, so do not manufacture a blended diagnostic.
+    ip_raw = paired_sp_ip(d, "raw") if tags is not None else paired_sp_ip(d.iloc[0:0], "raw")
+    ip_adjusted = (paired_sp_ip(d, "adjusted") if tags is not None
+                   else paired_sp_ip(d.iloc[0:0], "adjusted"))
     rates = paired_rates(d)        # family-scoped
     # Unscoped means every scale family at once, which is the artifact
     # documented below. Refusing to print is deliberate: a missing line sends
@@ -732,28 +755,31 @@ def actuals_summary(df, baseline=None, tags=None):
         return []
 
     lines = ["predicted vs actual (backfilled box scores)"]
-    if not ip.empty:
-        bias = float((ip["act"] - ip["pred"]).mean())
-        mae = float((ip["act"] - ip["pred"]).abs().mean())
-        lines.append(f"  starter IP   n={len(ip):<4d} bias {bias:+.2f} IP  "
-                     f"MAE {mae:.2f} IP   (drives the phase weight q)")
-        # The slope is the finding, not the bias. On 2026-08-04 it measured
-        # 0.756 +/- 0.063 over 306 side-games -- 3.9 se below 1.0, i.e.
-        # expected_sp_ip is over-dispersed, pushing too far from the mean in
-        # both directions. Bias over the same rows was +0.10 IP (t=1.31): a
-        # spread problem, not a level one. Printing it every build is what
-        # makes the deferred re-fit surface on its own rather than depending
-        # on anyone remembering. See CLAUDE.md for the decision and its gate.
-        cal = calibration(ip["pred"], ip["act"])
-        if cal:
-            lines.append(f"    IP calibration slope {cal['slope']:+.3f} "
-                         f"+/- {cal['se_slope']:.3f} (1.00 = calibrated; "
-                         f"< 1 = over-dispersed)")
+    if not ip.empty or not ip_raw.empty or not ip_adjusted.empty:
+        family = " + ".join(tags) if tags else "requested family"
+        lines.append("  starter IP calibration (bias = actual - estimate; "
+                     "positive means the starter lasted longer than estimated)")
+        lines.append(_sp_ip_diagnostic_line(
+            "pooled raw-with-fallback, all historical model families", ip))
+        lines.append(_sp_ip_diagnostic_line(
+            f"current family raw [{family}; expected_sp_ip_raw_*]", ip_raw))
+        lines.append(_sp_ip_diagnostic_line(
+            f"current family adjusted [{family}; expected_sp_ip_*]", ip_adjusted))
+        lines.append("    slope 1.00 means calibrated dispersion; below 1.00 is "
+                     "over-dispersed and above 1.00 is compressed.")
+        lines.append("    Pooled uses raw estimates where available and otherwise "
+                     "stored estimates; it does not describe the current "
+                     "family's adjusted estimates. Missing values are excluded "
+                     "separately from each displayed n. (IP drives phase weight q.)")
     if not rates.empty:
         n = len(rates)
         lines.append(f"  offense wOBA n={n:<4d} pred mean {rates['pred'].mean():.4f}  "
                      f"actual mean {rates['act'].mean():.4f}  "
                      f"({rates['act'].mean() - rates['pred'].mean():+.4f})")
+        lines.append("    field pairing: Home offense vs away pitching "
+                     "(mx_xwoba_away -> act_woba_home);")
+        lines.append("                   Away offense vs home pitching "
+                     "(mx_xwoba_home -> act_woba_away).")
         cal = calibration(rates["pred"], rates["act"])
         if cal:
             # se is what says whether the slope means anything yet; a slope

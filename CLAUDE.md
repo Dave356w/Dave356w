@@ -1924,6 +1924,26 @@ pre-registered forward tests (`forward_test.py`, `hybrid_test.py`,
 page carries the baseline controls and the lock provenance. Read these before
 writing a new probe.
 
+**Ledger-report field and price conventions.** Matchup-rate suffixes identify
+the pitching side faced: `mx_xwoba_away` is Home offense vs away pitching and
+pairs with `act_woba_home`; `mx_xwoba_home` is Away offense vs home pitching
+and pairs with `act_woba_away`. The `mx_xwoba_sp/bp_*`, `edge_xwoba_*`,
+`opp_xwoba_neutral/vs_sp/sd_*`, and pitch-mix matchup families follow that
+offense cross. Pitcher talent/workload fields do not: `starter_xwoba_*`,
+`bullpen_xwoba_*`, `expected_sp_ip_*`, `expected_sp_ip_raw_*`, and `act_sp_*`
+remain same-team paired. Never reverse suffixes wholesale and never rename the
+stored CSV schema to make the display convention look simpler.
+
+The report also names each test's price columns. Historical Hybrid and all
+registration retrospectives use closing prices; `forward_test` and the delta
+filter also use closes. The registered Hybrid, abstain-versus-fade, and dog
+sign-flip tests use saved pregame decisions, probabilities, and moneylines with
+no close fallback. Do not standardize these snapshots: identical selections
+and results can earn different units at different American-odds payouts. The
+registered pregame scorer excludes and counts malformed locked commitments;
+close-scored sections exclude missing `close_p_home` and their rule-specific
+inputs, while relying on the market join to supply the paired moneylines.
+
 **Probes run on demand.** Seven read committed artifacts and run anywhere:
 
 | probe | question |

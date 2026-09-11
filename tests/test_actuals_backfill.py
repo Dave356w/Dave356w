@@ -284,6 +284,22 @@ class PairingTests(unittest.TestCase):
         led = pd.DataFrame([dict(expected_sp_ip_away=5.0, act_sp_ip_away=4.0)])
         self.assertAlmostEqual(ab.paired_sp_ip(led)["pred"].iloc[0], 5.0)
 
+    def test_exact_raw_and_adjusted_ip_populations_preserve_missing_values(self):
+        led = pd.DataFrame([
+            dict(expected_sp_ip_raw_away=7.0, expected_sp_ip_away=6.0,
+                 act_sp_ip_away=6.5),
+            dict(expected_sp_ip_raw_away=np.nan, expected_sp_ip_away=4.0,
+                 act_sp_ip_away=3.5),
+        ])
+        raw = ab.paired_sp_ip(led, "raw")
+        adjusted = ab.paired_sp_ip(led, "adjusted")
+        self.assertEqual(raw["pred"].tolist(), [7.0])
+        self.assertEqual(adjusted["pred"].tolist(), [6.0, 4.0])
+
+    def test_unknown_ip_estimate_is_rejected(self):
+        with self.assertRaises(ValueError):
+            ab.paired_sp_ip(pd.DataFrame(), "blended")
+
     def test_empty_inputs_give_empty_frames_not_exceptions(self):
         self.assertTrue(ab.paired_rates(pd.DataFrame()).empty)
         self.assertTrue(ab.paired_sp_ip(pd.DataFrame()).empty)
@@ -509,8 +525,46 @@ class SummaryTests(unittest.TestCase):
             "act_sp_ip_away": [4.0, 6.5], "act_sp_ip_home": [6.0, 4.0],
         })
         out = "\n".join(ab.actuals_summary(led, tags=["woba+plat_consol_v1"]))
-        self.assertIn("starter IP   n=4", out)      # both families
+        self.assertIn("pooled raw-with-fallback, all historical model families: n=4", out)
         self.assertIn("offense wOBA n=2", out)      # current family only
+
+    def test_ip_summary_separates_pooled_raw_and_current_adjusted(self):
+        rng = np.random.default_rng(31)
+        n = 20
+        raw = rng.normal(5.2, 0.8, n)
+        adjusted = 5.2 + 0.75 * (raw - 5.2)
+        actual = 5.2 + 0.80 * (raw - 5.2) + rng.normal(0, 0.2, n)
+        led = pd.DataFrame({
+            "model_tag": ["v12"] * n,
+            "expected_sp_ip_raw_away": raw,
+            "expected_sp_ip_away": adjusted,
+            "act_sp_ip_away": actual,
+        })
+        out = "\n".join(ab.actuals_summary(led, tags=["v12"]))
+        self.assertIn("pooled raw-with-fallback", out)
+        self.assertIn("current family raw [v12; expected_sp_ip_raw_*]: n=20", out)
+        self.assertIn("current family adjusted [v12; expected_sp_ip_*]: n=20", out)
+        self.assertIn("bias = actual - estimate", out)
+        self.assertIn("slope 1.00 means calibrated dispersion", out)
+        self.assertIn("does not describe the current family's adjusted estimates", out)
+
+    def test_report_names_the_crossed_rate_and_same_team_ip_conventions(self):
+        rng = np.random.default_rng(32)
+        n = 5
+        led = pd.DataFrame({
+            "model_tag": ["v12"] * n,
+            "mx_xwoba_away": rng.normal(.32, .01, n),
+            "mx_xwoba_home": rng.normal(.32, .01, n),
+            "act_woba_away": rng.normal(.32, .03, n),
+            "act_woba_home": rng.normal(.32, .03, n),
+            "act_pa_away": 38, "act_pa_home": 38,
+            "expected_sp_ip_raw_away": rng.normal(5, .5, n),
+            "expected_sp_ip_away": rng.normal(5, .5, n),
+            "act_sp_ip_away": rng.normal(5, .5, n),
+        })
+        out = "\n".join(ab.actuals_summary(led, tags=["v12"]))
+        self.assertIn("Home offense vs away pitching", out)
+        self.assertIn("mx_xwoba_away -> act_woba_home", out)
 
     def test_tag_filter_scopes_to_one_family(self):
         led = pd.DataFrame({
