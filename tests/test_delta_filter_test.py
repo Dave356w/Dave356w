@@ -87,7 +87,7 @@ class RegistrationFrozenTests(unittest.TestCase):
 
     def test_no_band_constants_exist(self):
         """One frozen number. Tiers on a z = +0.27 contrast are noise-mining."""
-        src = open(dft.__file__).read()
+        src = open(dft.__file__, encoding="utf-8").read()
         for banned in ("PRICE_BANDS", "DELTA_BANDS", "_BANDS = ", "TIERS"):
             with self.subTest(banned=banned):
                 self.assertNotIn(banned, src)
@@ -165,7 +165,8 @@ class PurityTests(unittest.TestCase):
             if os.path.basename(path) in ("delta_filter_test.py",
                                           "test_delta_filter_test.py"):
                 continue
-            for m in re.finditer(r"apply_filter\(([^)]*)\)", open(path).read()):
+            for m in re.finditer(r"apply_filter\(([^)]*)\)",
+                                 open(path, encoding="utf-8").read()):
                 if "threshold" in m.group(1):
                     bad.append(f"{path}: {m.group(0)}")
         self.assertEqual(bad, [])
@@ -297,5 +298,5 @@ class LedgerReportWiringTests(unittest.TestCase):
     def test_grade_leans_prints_this_registration(self):
         """All three registrations belong in one artifact, or a reader
         comparing them has to know a fourth place to look."""
-        src = open("grade_leans.py").read()
+        src = open("grade_leans.py", encoding="utf-8").read()
         self.assertIn("delta_filter_test", src)

@@ -46,7 +46,7 @@ import pandas as pd
 import requests
 
 import hitter_frame
-import hybrid_test
+import hybrid_v2
 import pitch_arsenal
 import player_priors
 
@@ -75,7 +75,7 @@ BATTING_ORDER_COL = "batting_order"
 MODEL_RATE_SOURCE_COL = "xwoba"
 MODEL_RATE_LABEL = "xwOBA"
 PUBLIC_MODEL_NAME = "XWOBA Market Hybrid"
-HYBRID_RULE_TAG = hybrid_test.RULE_TAG
+HYBRID_RULE_TAG = hybrid_v2.RULE_TAG
 MODEL_RATE_INTERNAL_COL = "xwOBA"  # stable dump/ledger schema, both metrics
 # True only for a posted hitter absent from the season Savant leaderboard, who
 # therefore carries the active team's PA-weighted rate. Purely an in-process
@@ -4516,8 +4516,8 @@ def _verdict_html(fav, odds, away_abbr, home_abbr, ctx=None, delta=None):
                 "<div class='vt'>No model lean — the rule abstains.</div></div>")
 
     p_lean = _lean_implied_p(odds, fav, away_abbr, home_abbr)
-    action = hybrid_action(p_lean)
-    pick = hybrid_selection(fav, away_abbr, home_abbr, p_lean)
+    action = hybrid_action(p_lean, delta)
+    pick = hybrid_selection(fav, away_abbr, home_abbr, p_lean, delta)
     d = _f(delta)
     delta_txt = f"{abs(d):.4f}".lstrip("0") if d is not None else "—"
     strength = _delta_label(delta) or "—"
@@ -4542,10 +4542,18 @@ def _verdict_html(fav, odds, away_abbr, home_abbr, ctx=None, delta=None):
         # numbers printed above -- and on a FADE the selected club appears
         # nowhere else on the panel.
         public_branch = hybrid_public_label(action)
-        why = (f"market gives {_esc(fav)} at least {thr}, so {_esc(fav)} "
-               "remains the XWOBA side" if action == "FOLLOW" else
-               f"market gives {_esc(fav)} under {thr}, so the rule takes "
-               f"the market's side, {_esc(pick)}")
+        weak = d is not None and abs(d) < HYBRID_DELTA_THRESHOLD
+        if action == "FADE":
+            why = (f"market gives {_esc(fav)} under {thr} and |Δ| is below "
+                   f"{HYBRID_DELTA_THRESHOLD:.3f}, so the rule takes the "
+                   f"market's side, {_esc(pick)}")
+        elif p_lean is not None and p_lean < HYBRID_THRESHOLD and not weak:
+            why = (f"market gives {_esc(fav)} under {thr}, but |Δ| is at least "
+                   f"{HYBRID_DELTA_THRESHOLD:.3f}, so the stronger XWOBA "
+                   "lean is retained")
+        else:
+            why = (f"market gives {_esc(fav)} at least {thr}, so {_esc(fav)} "
+                   "remains the XWOBA side")
         rule_line = (
             f"<div class='vline'><span class='vk'>Rule</span>"
             f"<span><b>{public_branch} → {_esc(pick)}</b>"
@@ -4917,13 +4925,15 @@ def _summary_team_label(g, side):
     return str(g.get(f"{side}_abbr") or "")
 
 
-def _summary_market_line(g, lean=None):
+def _summary_market_line(g, lean=None, delta=None):
     """Locked/current Hybrid selection for the compact row."""
     odds = g.get("odds") or {}
     away, home = g.get("away_abbr"), g.get("home_abbr")
     p_lean = _lean_implied_p(odds, lean, away, home)
-    action = hybrid_action(p_lean)
-    pick = hybrid_selection(lean, away, home, p_lean)
+    if delta is None:
+        delta = g.get("xw_net", g.get("xw_delta"))
+    action = hybrid_action(p_lean, delta)
+    pick = hybrid_selection(lean, away, home, p_lean, delta)
     if action is None or pick is None:
         return "Selection pending"
     ml = odds.get("home_ml") if pick == home else odds.get("away_ml")
@@ -4944,13 +4954,13 @@ def _summary_team_html(g, side, ctx):
     )
 
 
-def _scoreboard_summary(g, ctx=None, lean=None):
+def _scoreboard_summary(g, ctx=None, lean=None, delta=None):
     """Collapsed scoreboard row shared by modeled and pending games."""
     state = str(g.get("abstract_state") or "").lower()
     in_progress = state in ("live", "final")
     hide_pregame = " hidden" if in_progress else ""
     time_text = str(g.get("time_pt") or "Time TBD")
-    market_text = _summary_market_line(g, lean)
+    market_text = _summary_market_line(g, lean, delta)
     game_no = (f"<span class='game-no'>{_esc(g['game_label'])}</span>"
                if g.get("game_label") else "")
     away_label = _summary_team_label(g, "away")
@@ -5037,7 +5047,7 @@ def cmb_card(g, strength_scale=None, ctx=None):
     return (
         "<article class='card'>"
         "<details class='game-card'>"
-        + _scoreboard_summary(g, ctx, fav)
+        + _scoreboard_summary(g, ctx, fav, delta)
         + "<div class='game-detail'>"
         + _detail_context_html(g)
         + (read_html or "")
@@ -6531,8 +6541,7 @@ def _lean_market_observations(led):
 
     The ledger has no per-game SE/SD for xw_delta. Do not manufacture one from
     lineup dispersion or opponent-rate SD -- those are different quantities.
-    `delta` is retained as a reported quantity, but it is no longer a bucketing
-    axis: the hybrid reads a DIRECTION and a PRICE, never the delta's size.
+    The v2 rule uses the observed absolute delta only as a fixed weak-lean gate.
     """
     cols = {"close_p_home", "close_home_ml", "close_away_ml",
             "xw_lean", "xw_full", "home", "away"}
@@ -6597,10 +6606,8 @@ def _lean_market_observations(led):
     ]
 
     # --- the published rule, derived once ---------------------------------
-    # `>=` follows, so a game priced at exactly the threshold follows the
-    # model. That is the specification, and hybrid_test pins the same
-    # comparison on the forward-scoring side.
-    follow = obs["market_p"].to_numpy(dtype=float) >= HYBRID_THRESHOLD
+    # Fade only when BOTH gates are open. Boundary values follow.
+    follow = hybrid_v2.follows(obs["market_p"], obs["delta"])
     lean_won = obs["won"].to_numpy(dtype=float)
     obs["hybrid_follow"] = follow
     obs["hybrid_won"] = np.where(follow, lean_won, 1.0 - lean_won)
@@ -6681,40 +6688,37 @@ def _lean_market_agg(obs, mask, won="won", p="market_p",
 
 # --- the published selection rule ------------------------------------------
 # The site publishes ONE rule and every surface reads it from here. The
-# threshold is imported from `hybrid_test` rather than restated, because that
+# thresholds are imported from `hybrid_v2` rather than restated, because that
 # module is the registration and a second literal is the "one value, three
 # homes" defect this repo already paid for once: a config copy of a code
 # default drifted, and 14 ledger rows carry v10 math under a v9 tag as a
-# result. There must be exactly one 0.45 in this repository.
+# result. The production thresholds therefore live only in hybrid_v2.py.
 #
 # This replaces a 2x3 delta x direction discovery grid AND a 3x5 delta x price
 # profile grid -- 21 published cells, most of them thin. That was the surface
 # `value_probe` warns about in the sharpest terms: on this ledger any grid
 # search hands back a cell near +20% ROI whether or not anything is there,
 # because at 21-82 rows a cell's null sd is 8-21 percentage points of ROI. The
-# hybrid has two branches, so a reader is never shown a one-game headline, and
-# the delta's MAGNITUDE leaves the display axis entirely -- it never entered
-# the rule, and `value_probe`'s joint logit puts z(xw_net) at -0.13 against
-# price, so bucketing by it was showing a reader structure that is not there.
+# hybrid has two branches, so a reader is never shown a one-game headline.
+# V2 uses one predeclared weak-delta cutoff; it does not restore the exploratory
+# matrix or present the display bands as separately validated strategies.
 #
 # Display and monitoring only. The rule never enters a lean and does not bump
 # MODEL_TAG.
-HYBRID_THRESHOLD = hybrid_test.THRESHOLD
+HYBRID_THRESHOLD = hybrid_v2.THRESHOLD
+HYBRID_DELTA_THRESHOLD = hybrid_v2.DELTA_THRESHOLD
 
-# Reported alongside the action, never used to bucket a record. Kept because a
-# reader who has the delta on the card can see it is not what moved the
-# selection; dropping it would hide that the rule ignores it.
+# Display bands. Only the first boundary is also the v2 decision gate; the high
+# band remains descriptive and neither band receives its own performance claim.
 _DELTA_MEDIUM = 0.012
 _DELTA_HIGH = 0.025
 
 
-def hybrid_action(market_p):
-    """FOLLOW / FADE for the leaned side's no-vig price, or None when unusable.
+def hybrid_action(market_p, xw_net):
+    """FOLLOW / FADE for the leaned side's price and delta, else None.
 
-    `>=` follows: a game priced at exactly the threshold follows the model.
-    That is the registered specification and `hybrid_test` pins the identical
-    comparison, so a live card and the forward test can never disagree about a
-    boundary game.
+    Fade only when q is strictly below the price threshold AND absolute xw_net
+    is strictly below the delta threshold. Either boundary therefore follows.
     """
     if market_p is None:
         return None
@@ -6722,9 +6726,15 @@ def hybrid_action(market_p):
         market_p = float(market_p)
     except (TypeError, ValueError):
         return None
-    if not np.isfinite(market_p) or not (0.0 < market_p < 1.0):
+    try:
+        xw_net = float(xw_net)
+    except (TypeError, ValueError):
         return None
-    return "FOLLOW" if market_p >= HYBRID_THRESHOLD else "FADE"
+    if (not np.isfinite(market_p) or not (0.0 < market_p < 1.0)
+            or not np.isfinite(xw_net)):
+        return None
+    return ("FOLLOW" if bool(hybrid_v2.follows(market_p, xw_net))
+            else "FADE")
 
 
 def hybrid_public_label(action):
@@ -6746,7 +6756,7 @@ def hybrid_public_label(action):
     return {"FOLLOW": "XWOBA SIDE", "FADE": "MARKET OVER LEAN"}.get(action, "")
 
 
-def hybrid_selection(lean, away_abbr, home_abbr, market_p):
+def hybrid_selection(lean, away_abbr, home_abbr, market_p, xw_net):
     """The team the published rule selects, or None when it cannot decide.
 
     Returns the lean itself on FOLLOW and the opposing club on FADE. Abstains
@@ -6754,7 +6764,7 @@ def hybrid_selection(lean, away_abbr, home_abbr, market_p):
     publishes no direction, so there is nothing to fade, and inventing one
     would manufacture a selection the model declined to make.
     """
-    action = hybrid_action(market_p)
+    action = hybrid_action(market_p, xw_net)
     if action is None or not lean:
         return None
     if action == "FOLLOW":
@@ -6778,7 +6788,7 @@ def attach_hybrid_snapshot(frame, odds, snapshot_utc):
     if frame is None or frame.empty:
         return frame
     string_cols = ("selection_rule_tag", "hybrid_action", "hybrid_selection",
-                   "pregame_market_utc")
+                   "pregame_market_utc", "hybrid_price_source")
     number_cols = ("pregame_away_ml", "pregame_home_ml", "pregame_p_home",
                    "hybrid_p", "hybrid_ml")
     for col in string_cols:
@@ -6801,8 +6811,10 @@ def attach_hybrid_snapshot(frame, odds, snapshot_utc):
         p_home = _f(market.get("p_home"))
         p_lean = (p_home if lean == home else 1.0 - p_home
                   if lean == away and p_home is not None else None)
-        action = hybrid_action(p_lean)
-        pick = hybrid_selection(lean, away, home, p_lean)
+        xw_net = (home_off - away_off
+                  if home_off is not None and away_off is not None else None)
+        action = hybrid_action(p_lean, xw_net)
+        pick = hybrid_selection(lean, away, home, p_lean, xw_net)
         selected_ml = (market.get("home_ml") if pick == home else
                        market.get("away_ml") if pick == away else None)
         mask = frame["game_pk"].eq(game_pk)
@@ -6821,6 +6833,7 @@ def attach_hybrid_snapshot(frame, odds, snapshot_utc):
         frame.loc[mask, "hybrid_p"] = p_lean if action == "FOLLOW" else (
             1.0 - p_lean if action == "FADE" and p_lean is not None else np.nan)
         frame.loc[mask, "hybrid_ml"] = selected_ml
+        frame.loc[mask, "hybrid_price_source"] = "saved_pregame"
     return frame
 
 
@@ -6846,8 +6859,8 @@ def _lean_market_value_analysis(led):
 
     Returns the observation frame plus one row per published branch, the
     always-chalk control on the identical rows, and the model's own lean for
-    reference. Every figure is a DISCOVERY result: the threshold was chosen on
-    these rows, so nothing here is out-of-sample and the page says so.
+    reference. Every figure is a DISCOVERY result: both gates were chosen after
+    examining these rows, so nothing here is out-of-sample and the page says so.
 
     The 2x3 delta x direction matrix and the three direction-band totals this
     replaces are gone rather than relabelled. They cut the same rows nine ways
@@ -6890,12 +6903,11 @@ def _lean_market_value_analysis(led):
                  profit="chalk_profit")
     all_rows = obs["won"].notna()
     branch_rows = [
-        (f"XWOBA SIDE · XWOBA-side p ≥ {100 * HYBRID_THRESHOLD:.0f}%",
+        ("XWOBA SIDE · q ≥ 45% or |Δ| ≥ .012",
          _lean_market_agg(obs, follow, **hyb)),
         # Plain "<": the table escapes every label through `_esc`, so a
         # pre-escaped entity here would render as literal "&lt;".
-        (f"{hybrid_public_label('FADE')} · XWOBA-side p "
-         f"< {100 * HYBRID_THRESHOLD:.0f}%",
+        (f"{hybrid_public_label('FADE')} · q < 45% and |Δ| < .012",
          _lean_market_agg(obs, ~follow, **hyb)),
         ("Hybrid, both branches", _lean_market_agg(obs, all_rows, **hyb)),
     ]
@@ -6916,6 +6928,7 @@ def _lean_market_value_analysis(led):
         "n": int(len(obs)),
         "n_fade": int((~follow).sum()),
         "threshold": HYBRID_THRESHOLD,
+        "delta_threshold": HYBRID_DELTA_THRESHOLD,
         "slope": float(slope),
         "slope_se": float(slope_se),
         "intercept": float(intercept),
@@ -6981,16 +6994,17 @@ def _render_lean_market_value_panel(led):
 
     summary = (
         f"<div class='gr-head'><h2 class='gr-h1'>{PUBLIC_MODEL_NAME}</h2>"
-        f"<div class='gr-lead'><b>{hybrid_public_label('FOLLOW')}</b> at "
-        f"{100 * a['threshold']:.0f}% or higher; "
-        f"<b>{hybrid_public_label('FADE')}</b> below.</div></div>"
+        f"<div class='gr-lead'><b>{hybrid_public_label('FADE')}</b> only when "
+        f"q is below {100 * a['threshold']:.0f}% and |Δ| is below "
+        f"{a['delta_threshold']:.3f}; <b>{hybrid_public_label('FOLLOW')}</b> "
+        "otherwise.</div></div>"
         "<div class='gr-summary'>"
         f"<div class='gr-stat'><div class='l'>Priced decisions</div>"
         f"<div class='v'>{a['n']}</div>"
         "<div class='s'>settled full-game leans</div></div>"
-        f"<div class='gr-stat'><div class='l'>Threshold</div>"
-        f"<div class='v'>{100 * a['threshold']:.0f}%</div>"
-        "<div class='s'>XWOBA side at or above · market side below</div></div>"
+        f"<div class='gr-stat'><div class='l'>Fade gate</div>"
+        f"<div class='v'>&lt;{100 * a['threshold']:.0f}% + &lt;{a['delta_threshold']:.3f}</div>"
+        "<div class='s'>lean price q plus absolute model delta</div></div>"
         f"<div class='gr-stat'><div class='l'>Selections changed</div>"
         f"<div class='v'>{a['n_fade']}</div>"
         f"<div class='s'>{100 * a['n_fade'] / a['n']:.1f}% deferred to the market</div></div>"
@@ -7000,8 +7014,9 @@ def _render_lean_market_value_panel(led):
         "</div>"
     )
     note = ("<div class='gr-note'>Scored at each selection's devigged close. "
-            f"<b>Discovery</b>: the {100 * a['threshold']:.0f}% threshold was "
-            "chosen on these rows.</div>")
+            "<b>Retrospective</b>: both v2 gates were chosen after examining "
+            "these rows; the registered forward reading starts after "
+            f"{hybrid_v2.REGISTERED_ON}.</div>")
     branch_head = (
         "<div class='gr-head'><h2 class='gr-h1'>By branch</h2>"
         "<div class='gr-lead'>What the rule selected, and how it "
@@ -7018,8 +7033,8 @@ def _render_lean_market_value_panel(led):
     # sentence a reader sees duplicated data or a bug, rather than the point.
     control_note = (
         f"<div class='gr-note'>The last row must equal <b>"
-        f"{hybrid_public_label('FADE')}</b> above: under "
-        f"{100 * a['threshold']:.0f}% the other side is always the favourite, "
+        f"{hybrid_public_label('FADE')}</b> above: on rows below both gates "
+        "the other side is always the favourite, "
         "so the two are the same bet. A difference is a bug.</div>"
     )
     return (summary + note + branch_head
@@ -7135,8 +7150,8 @@ def hybrid_branch_records():
     for the whole family. Scored on `_record_grades`, because pooling older
     prediction math would answer a different question.
 
-    THESE ARE DISCOVERY ROWS. The threshold was chosen on this sample, so a
-    branch's excess here is not evidence the rule works -- `hybrid_test.py`
+    THESE ARE DISCOVERY ROWS. The v2 gates were chosen after this sample, so a
+    branch's excess here is not evidence the rule works -- `hybrid_v2.py`
     holds the forward registration and is the only thing that can answer that.
     Every surface rendering these says so; that is not decoration.
 
@@ -7481,8 +7496,9 @@ def _row_hybrid(r):
         return None, None, None
     home, away = r.get("home"), r.get("away")
     market_p = float(ph) if lean == home else 1.0 - float(ph)
-    action = hybrid_action(market_p)
-    pick = hybrid_selection(lean, away, home, market_p)
+    delta = pd.to_numeric(r.get("xw_net", r.get("xw_delta")), errors="coerce")
+    action = hybrid_action(market_p, delta)
+    pick = hybrid_selection(lean, away, home, market_p, delta)
     if action is None or pick is None:
         return None, None, None
     grade = r.get("xw_full")
@@ -7554,14 +7570,14 @@ def _grades_row(r, show_ml=False):
         # is the opposite of what the number means.
         sel_cell = _lean_cell(pick, None)
         sel_cell += ("<span class='sp fade-mark' title='the model side was "
-                     "priced under the threshold, so the rule took the "
-                     "market's side; Δ describes the declined model side'>"
+                     "priced below 45% and its |Δ| was below .012, so the rule "
+                     "took the market's side; Δ describes the declined model side'>"
                      f"{hybrid_public_label('FADE')}</span>")
         res = rule_grade
     else:
         sel_cell = _lean_cell(pick, r["xw_delta"])
-        sel_cell += ("<span class='sp' title='the market gave the XWOBA "
-                     f"side at least the threshold'>"
+        sel_cell += ("<span class='sp' title='the rule follows when q is at "
+                     "least 45% or |Δ| is at least .012'>"
                      f"{hybrid_public_label('FOLLOW')}</span>")
         res = rule_grade
     cells = [("c-game", "Game", game),
@@ -7724,9 +7740,10 @@ def render_grades_html(built_txt):
                    f"{_esc(MODEL_TAG)}; earlier families are scored per "
                    "family in data/ledger_report.txt.</div>")
     else:
-        notes = [f"<b>{hybrid_public_label('FOLLOW')}</b> at "
-                 f"{100 * HYBRID_THRESHOLD:.0f}% or higher; "
-                 f"<b>{hybrid_public_label('FADE')}</b> below"]
+        notes = [f"<b>{hybrid_public_label('FADE')}</b> only when q is below "
+                 f"{100 * HYBRID_THRESHOLD:.0f}% and |Δ| is below "
+                 f"{HYBRID_DELTA_THRESHOLD:.3f}; "
+                 f"<b>{hybrid_public_label('FOLLOW')}</b> otherwise"]
         # EVERY TILE BELOW IS SCORED ON ONE ROW SET: current family, decided,
         # settled, and carrying a two-sided close. That is stricter than the
         # decided set this header used to score, and deliberately so -- the
@@ -7830,9 +7847,9 @@ def render_grades_html(built_txt):
         # was fitted on the very rows it is scored over.
         if not obs.empty:
             notes.append(
-                "<b>Discovery</b>, not a forward test: the "
-                f"{100 * HYBRID_THRESHOLD:.0f}% threshold was chosen on these "
-                "rows. Registered version: data/ledger_report.txt")
+                "<b>Discovery</b>, not a forward test: the 45% price and "
+                ".012 |Δ| gates were chosen after examining these rows. "
+                "Registered v2: data/ledger_report.txt")
         if show_ml:
             # One heading, two prices, and every aggregate above scored at the
             # close. The gap is small (it flips no branch on the committed
