@@ -247,6 +247,10 @@ LOCKED_COLUMNS = (
 FORWARD_BASE_COLUMNS = (
     "status", "game_date", "xw_lean", "home", "full_home", "full_away",
 )
+V1_ARCHIVE_COLUMNS = (
+    "hybrid_v1_action", "hybrid_v1_selection", "hybrid_v1_p",
+    "hybrid_v1_ml", "hybrid_v1_full",
+)
 
 
 def decidable(led):
@@ -362,6 +366,20 @@ def _committed(led):
     decided, and this one is deliberately the looser of the two -- it is the
     denominator `scored_rows` is a subset of.
     """
+    if all(c in led.columns for c in V1_ARCHIVE_COLUMNS):
+        g = led[(led["status"] == "graded")
+                & (led["game_date"].astype(str) > REGISTERED_ON)
+                & led["xw_lean"].notna()
+                & led["hybrid_v1_action"].isin(["FOLLOW", "FADE"])].copy()
+        # Project the archived v1 decision into the original scorer's field
+        # names. The scorer and price basis are unchanged; only storage moved
+        # when the live namespace advanced to v2.
+        for old, current in zip(V1_ARCHIVE_COLUMNS,
+                                ("hybrid_action", "hybrid_selection",
+                                 "hybrid_p", "hybrid_ml", "hybrid_full")):
+            g[current] = g[old]
+        g["selection_rule_tag"] = RULE_TAG
+        return g
     return led[(led["status"] == "graded")
                & (led["game_date"].astype(str) > REGISTERED_ON)
                & led["xw_lean"].notna()

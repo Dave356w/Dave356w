@@ -1,11 +1,13 @@
 LEAN LEDGER — 359 graded games (351 with a lean, 8 abstained)  [xw+plat_consol_v12]
 xwOBA lean   full: 215-136  (0.613)   F5: 164-138-49  (0.543)
-hybrid rule  full: 223-128  (0.635)   vs price z=+2.63  +34.36u   (n=351, 24 faded)
+hybrid v2 rule  full: 224-127  (0.638)   vs price z=+2.90  +39.37u   (n=351, 15 faded)
   always chalk, same 351 rows: 205-146  (0.584)   vs price z=+0.38
   price source — selection/eligibility and market comparison: closing close_p_home;
                  returns: closing close_home_ml/close_away_ml. No saved-pregame fallback.
   missing prices — no close_p_home or lean: excluded. Paired close MLs are not a separate filter.
-  RETROSPECTIVE: the 45% threshold was chosen on these rows. The registered forward test is below.
+  RETROSPECTIVE: the q < 45% AND |xw_net| < .012 fade gate was chosen after examining these rows. Registered v2 starts after 2026-09-11 and is reported below.
+hybrid v2 ledger fields (row basis): 225-126  (0.641)   vs price z=+3.04  +41.70u   (n=351, 14 faded)
+  price source — 223 closing, 128 saved pregame; no cross-snapshot fallback. This mixed-basis reconciliation is not the uniform closing-price retrospective above.
 REGISTRATIONS (retrospective, n=351: 261 discovery rows + 90 since 2026-09-03) — in sample, NOT the forward reading:
   price source — all retrospectives: closing close_p_home for eligibility, selection, and implied probabilities;
                  closing close_home_ml/close_away_ml for returns. No saved-pregame fallback.
@@ -132,6 +134,13 @@ pre-registered hybrid market-direction test  (registered 2026-09-01; follow the 
     the fade branch backed the favourite in 7 of 7 switched games (construction says all of them)
     GATE: 7 of ~41 switches to test the discovery-sized effect, ~1420 for a plausible +0.10u one (~10 seasons at 0.88 switches a slate).
     The combined-hybrid line is mostly the model, not the rule: only the switched games are the hypothesis. See hybrid_test.py.
+
+pre-registered hybrid v2 test  (registered 2026-09-11; fade only when q < 0.45 AND |xw_net| < 0.012; follow otherwise)
+    price source — selection/eligibility: saved pregame_p_home + locked action/selection;
+                   market comparison: hybrid_p/pregame_p_home; returns: hybrid_ml/pregame MLs. No close fallback.
+    missing inputs — malformed locked selection, grade, probability, moneyline, or xw_net: excluded and counted as unscorable.
+    eligible rows since registration: 0 over 0 slates
+    nothing to score yet. Prior is NULL; all-v12 results above are retrospective and do not count toward this gate.
 
 pre-registered |delta| filter test  (registered 2026-09-03; abstain when |xw_net| < 0.012)
     price source — selection: |xw_net| only; price eligibility and market comparison: closing close_p_home;

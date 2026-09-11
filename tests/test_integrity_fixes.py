@@ -139,13 +139,15 @@ class LedgerLockTests(unittest.TestCase):
         self.assertEqual(xw.iloc[0]["selection_rule_tag"],
                          build_site.HYBRID_RULE_TAG)
         self.assertEqual(xw.iloc[0]["pregame_market_utc"], stamp)
-        self.assertEqual(xw.iloc[0]["hybrid_action"], "FADE")
-        self.assertEqual(xw.iloc[0]["hybrid_selection"], "AWA")
-        self.assertAlmostEqual(xw.iloc[0]["hybrid_p"], .70)
-        self.assertEqual(xw.iloc[0]["hybrid_ml"], -140)
+        # q=.30 but |xw_net|=.020: v2 keeps a strong model underdog.
+        self.assertEqual(xw.iloc[0]["hybrid_action"], "FOLLOW")
+        self.assertEqual(xw.iloc[0]["hybrid_selection"], "HOM")
+        self.assertAlmostEqual(xw.iloc[0]["hybrid_p"], .30)
+        self.assertEqual(xw.iloc[0]["hybrid_ml"], 125)
+        self.assertEqual(xw.iloc[0]["hybrid_price_source"], "saved_pregame")
 
         row = grade_leans.rows_from_dump(xw, None)[0]
-        self.assertEqual(row["hybrid_selection"], "AWA")
+        self.assertEqual(row["hybrid_selection"], "HOM")
         self.assertEqual(row["pregame_away_ml"], -140)
         self.assertIsNone(row["hybrid_full"])
 
@@ -1812,7 +1814,8 @@ class BaselineControlTests(unittest.TestCase):
             page = build_site.render_grades_html("test build")
         self.assertIn("Always home", page)
         self.assertIn("Always chalk", page)
-        self.assertIn("<b>XWOBA SIDE</b> at 45% or higher", page)
+        self.assertIn("<b>MARKET OVER LEAN</b> only when q is below 45%", page)
+        self.assertIn("<b>XWOBA SIDE</b> otherwise", page)
 
     def test_an_abstained_game_is_scored_by_neither_the_record_nor_a_control(self):
         """v5 abstains, so a graded row can carry no lean. A control needs no
@@ -3237,8 +3240,7 @@ class LeanMarketValueTests(unittest.TestCase):
         a = build_site._lean_market_value_analysis(d)
         label = build_site.hybrid_public_label("FADE")
         fade = dict(a["branch_rows"])[
-            f"{label} · XWOBA-side p "
-            f"< {100 * build_site.HYBRID_THRESHOLD:.0f}%"]
+            f"{label} · q < 45% and |Δ| < .012"]
         chalk = dict(a["control_rows"])[f"Always chalk · {label} rows only"]
         self.assertIsNotNone(fade, "fixture must populate the fade branch")
         self.assertEqual(fade, chalk,
@@ -3267,9 +3269,8 @@ class LeanMarketValueTests(unittest.TestCase):
 class HybridRuleTests(unittest.TestCase):
     """The published selection rule, shared by the leans and calibration pages.
 
-    Structural only: no branch record is frozen here. The one constant that IS
-    pinned is that there is exactly ONE threshold, imported from the
-    registration in `hybrid_test` rather than restated -- see
+    Structural only: no branch record is frozen here. The two constants that
+    ARE pinned are imported from the v2 registration rather than restated -- see
     `test_the_threshold_has_exactly_one_home`.
     """
 
@@ -3286,32 +3287,35 @@ class HybridRuleTests(unittest.TestCase):
         if not a:
             self.skipTest("no current-family rows to place")
         obs = a["obs"]
-        for mp, follow in zip(obs["market_p"], obs["hybrid_follow"]):
-            self.assertEqual(build_site.hybrid_action(mp),
+        for mp, delta, follow in zip(
+                obs["market_p"], obs["delta"], obs["hybrid_follow"]):
+            self.assertEqual(build_site.hybrid_action(mp, delta),
                              "FOLLOW" if follow else "FADE")
 
     def test_the_threshold_has_exactly_one_home(self):
-        """The display rule and the registered forward test are one constant.
+        """The display rule and the registered forward test share both gates.
 
         Two copies of a threshold is the "one value, three homes" defect that
         stamped 14 ledger rows with v10 math under a v9 tag. If this ever
         fails, someone has written a second 0.45 and the site can now publish
         a selection the forward test would not score.
         """
-        import hybrid_test
-        self.assertIs(build_site.HYBRID_THRESHOLD, hybrid_test.THRESHOLD)
-        src = open(build_site.__file__).read()
+        import hybrid_v2
+        self.assertIs(build_site.HYBRID_THRESHOLD, hybrid_v2.THRESHOLD)
+        self.assertIs(build_site.HYBRID_DELTA_THRESHOLD,
+                      hybrid_v2.DELTA_THRESHOLD)
+        src = open(build_site.__file__, encoding="utf-8").read()
         # The literal may appear in prose or a docstring, but never as a
         # standalone assignment that could drift from the registration.
         self.assertNotRegex(src, r"(?m)^_?[A-Z_]*THRESHOLD[A-Z_]*\s*=\s*0\.45")
 
     def test_branch_boundaries_are_closed_on_the_follow_side(self):
         """Exactly at the threshold FOLLOWS. `>` would reverse a boundary game."""
-        self.assertEqual(build_site.hybrid_action(.449999), "FADE")
-        self.assertEqual(build_site.hybrid_action(.45), "FOLLOW")
-        self.assertEqual(build_site.hybrid_action(.450001), "FOLLOW")
-        self.assertEqual(build_site.hybrid_action(.99), "FOLLOW")
-        self.assertEqual(build_site.hybrid_action(.01), "FADE")
+        self.assertEqual(build_site.hybrid_action(.449999, .011999), "FADE")
+        self.assertEqual(build_site.hybrid_action(.45, .011999), "FOLLOW")
+        self.assertEqual(build_site.hybrid_action(.450001, .011999), "FOLLOW")
+        self.assertEqual(build_site.hybrid_action(.01, .012), "FOLLOW")
+        self.assertEqual(build_site.hybrid_action(.01, .011999), "FADE")
 
     def test_daily_record_aggregates_the_hybrid_grade(self):
         day = pd.DataFrame([dict(
@@ -3324,7 +3328,7 @@ class HybridRuleTests(unittest.TestCase):
         self.assertNotIn("1-0", html)
 
     def test_public_labels_describe_the_selected_side_not_rule_jargon(self):
-        game = {"away_abbr": "A", "home_abbr": "H"}
+        game = {"away_abbr": "A", "home_abbr": "H", "xw_delta": .01}
         # The model can keep a slight underdog; calling this "follow" hid the
         # fact a user actually needs to understand.
         game["odds"] = {"p_home": .48, "home_ml": 105, "away_ml": -125}
@@ -3350,7 +3354,7 @@ class HybridRuleTests(unittest.TestCase):
         pk = build_site._lean_implied_p(
             {"home_ml": -110, "away_ml": -110}, "H", "A", "H")
         self.assertEqual(pk, 0.5)
-        self.assertEqual(build_site.hybrid_action(pk), "FOLLOW")
+        self.assertEqual(build_site.hybrid_action(pk, .001), "FOLLOW")
         html = build_site._verdict_html(
             "H", {"home_ml": -110, "away_ml": -110}, "A", "H", {}, .02)
         self.assertIn("XWOBA SIDE → H", html)
@@ -3370,26 +3374,28 @@ class HybridRuleTests(unittest.TestCase):
             "H", {"home_ml": -110, "away_ml": -110}, "A", "H", {}, .02)
         self.assertNotIn("verdict edge", follow)
         fade = build_site._verdict_html(
-            "A", {"home_ml": -260, "away_ml": 215}, "A", "H", {}, .02)
+            "A", {"home_ml": -260, "away_ml": 215}, "A", "H", {}, .005)
         self.assertIn("verdict edge", fade)
         self.assertIn(f"{build_site.hybrid_public_label('FADE')} → H", fade)
 
     def test_unusable_prices_abstain_rather_than_defaulting_to_a_branch(self):
         """No price is not a fade. Defaulting either way invents a selection."""
         for mp in (None, float("nan"), 0.0, 1.0, "x", -0.1, 1.5):
-            self.assertIsNone(build_site.hybrid_action(mp))
-            self.assertIsNone(build_site.hybrid_selection("H", "A", "H", mp))
+            self.assertIsNone(build_site.hybrid_action(mp, .005))
+            self.assertIsNone(build_site.hybrid_selection("H", "A", "H", mp, .005))
+        self.assertIsNone(build_site.hybrid_action(.40, None))
         # A usable price with no lean is also an abstention.
-        self.assertIsNone(build_site.hybrid_selection(None, "A", "H", .60))
-        self.assertIsNone(build_site.hybrid_selection("", "A", "H", .60))
+        self.assertIsNone(build_site.hybrid_selection(None, "A", "H", .60, .01))
+        self.assertIsNone(build_site.hybrid_selection("", "A", "H", .60, .01))
 
     def test_a_fade_selects_the_other_club_on_either_side(self):
         """The mirror has to work whichever side the model leaned."""
-        self.assertEqual(build_site.hybrid_selection("H", "A", "H", .30), "A")
-        self.assertEqual(build_site.hybrid_selection("A", "A", "H", .30), "H")
-        self.assertEqual(build_site.hybrid_selection("H", "A", "H", .60), "H")
+        self.assertEqual(build_site.hybrid_selection("H", "A", "H", .30, .005), "A")
+        self.assertEqual(build_site.hybrid_selection("A", "A", "H", .30, .005), "H")
+        self.assertEqual(build_site.hybrid_selection("H", "A", "H", .30, .02), "H")
+        self.assertEqual(build_site.hybrid_selection("H", "A", "H", .60, .005), "H")
         # A lean naming neither club cannot be mirrored, so it abstains.
-        self.assertIsNone(build_site.hybrid_selection("XXX", "A", "H", .30))
+        self.assertIsNone(build_site.hybrid_selection("XXX", "A", "H", .30, .005))
 
     def test_branch_panel_is_shown_with_market_adjusted_detail(self):
         ctx = {
@@ -3460,13 +3466,13 @@ class HybridRuleTests(unittest.TestCase):
         """Two implementations of one rule, held against each other.
 
         `build_site._row_hybrid` walks the ledger a row at a time for the
-        table; `hybrid_test` derives the same rule in bulk for the registered
-        forward test. They share the threshold but not the code, so this is
+        table; `hybrid_v2` derives the same rule in bulk for the registered
+        forward test. They share both thresholds, so this is
         the check that the surface a reader sees and the instrument that will
         judge the rule cannot drift apart -- the failure mode that let the site
         publish a pooled record under a current-family label.
 
-        ROW BY ROW ON ITS OWN BASIS. `hybrid_test` derives the rule two ways:
+        ROW BY ROW ON ITS OWN BASIS. `hybrid_v2` derives the rule two ways:
         `apply_locked_rule` scores the immutable pregame selection stored on
         the row, `apply_rule` recomputes the branch from the close. The site
         prefers the locked action wherever one exists, so holding every row
@@ -3477,7 +3483,7 @@ class HybridRuleTests(unittest.TestCase):
         market cannot move; the market moved. So each row is now held against
         the basis it was actually decided on.
         """
-        import hybrid_test
+        import hybrid_v2
         led = build_site.load_ledger_df()
         if led is None:
             self.skipTest("ledger unavailable")
@@ -3491,12 +3497,14 @@ class HybridRuleTests(unittest.TestCase):
         # The row's own decision basis: the locked pregame probability where
         # the row carries a locked selection, the close where it does not.
         locked = (g["selection_rule_tag"].eq(build_site.HYBRID_RULE_TAG)
+                  & g["hybrid_price_source"].eq("saved_pregame")
                   & g["hybrid_action"].isin(("FOLLOW", "FADE"))
                   & g["hybrid_selection"].notna()).to_numpy()
         p_close = np.where(lean_home, g["close_p_home"], 1 - g["close_p_home"])
         p_lock = np.where(lean_home, g["pregame_p_home"], 1 - g["pregame_p_home"])
         p_lean = np.where(locked, p_lock, p_close)
-        follow = p_lean >= hybrid_test.THRESHOLD
+        delta = pd.to_numeric(g["xw_net"], errors="coerce").abs().to_numpy()
+        follow = hybrid_v2.follows(p_lean, delta)
         # A locked row's stored action must equal the branch its own locked
         # price implies, or the two derivations have drifted after all.
         self.assertTrue(
@@ -3583,9 +3591,9 @@ class HybridRuleTests(unittest.TestCase):
     def test_the_report_and_the_site_publish_the_same_hybrid_record(self):
         """Third artifact in the chain, and the one that had drifted.
 
-        data/ledger_report.txt headlined the raw lean while the public pages
+        data/ledger_report.txt once headlined the raw lean while public pages
         headlined the rule's selection -- 139-84 against 146-77 on the same
-        games. Both now derive from `hybrid_test.apply_rule`, so this asserts
+        games. Both now derive from `hybrid_v2.apply_rule`, so this asserts
         the whole chain agrees: the report, the grades page and the forward
         test's own arithmetic.
         """
@@ -3753,7 +3761,7 @@ class HybridRuleTests(unittest.TestCase):
         def row(lean, ph, grade, tag=None):
             return pd.Series(dict(
                 xw_lean=lean, close_p_home=ph, home="H", away="A",
-                xw_full=grade,
+                xw_full=grade, xw_net=.005,
                 model_tag=build_site.MODEL_TAG if tag is None else tag))
         # Lean priced at .30 -> faded onto the home side, grade inverts.
         self.assertEqual(build_site._row_hybrid(row("A", .70, "L")),

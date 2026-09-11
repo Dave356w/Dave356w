@@ -225,6 +225,13 @@ AUDIT_COLS = [
     "selection_rule_tag", "pregame_market_utc",
     "pregame_away_ml", "pregame_home_ml", "pregame_p_home",
     "hybrid_action", "hybrid_selection", "hybrid_p", "hybrid_ml",
+    # Explicit because the v2 migration reconstructs legacy rows at their
+    # close while live rows retain their saved decision-time market.
+    "hybrid_price_source",
+    # Frozen v1 saved-pregame decisions retained when current fields migrated
+    # to v2. These keep the original registered forward test reproducible.
+    "hybrid_v1_action", "hybrid_v1_selection", "hybrid_v1_p",
+    "hybrid_v1_ml", "hybrid_v1_full",
     "lineup_status_away", "lineup_status_home",
     "lineup_posted_away", "lineup_posted_home",
     "lineup_savant_backfill_away", "lineup_savant_backfill_home",
@@ -290,6 +297,7 @@ MODEL_FIELDS = [
     "selection_rule_tag","pregame_market_utc",
     "pregame_away_ml","pregame_home_ml","pregame_p_home",
     "hybrid_action","hybrid_selection","hybrid_p","hybrid_ml",
+    "hybrid_price_source",
     "lineup_status_away","lineup_status_home",
     "lineup_posted_away","lineup_posted_home",
     "lineup_savant_backfill_away","lineup_savant_backfill_home",
@@ -346,7 +354,8 @@ def load_ledger():
         # no AGREE/DIVERGE row yet reloads it as float64).
         for c in ("xw_full", "xw_f5", "ops_full", "ops_f5", "hybrid_full", "consensus",
                   "selection_rule_tag", "pregame_market_utc",
-                  "hybrid_action", "hybrid_selection",
+                  "hybrid_action", "hybrid_selection", "hybrid_price_source",
+                  "hybrid_v1_action", "hybrid_v1_selection", "hybrid_v1_full",
                   "lineup_status_away", "lineup_status_home",
                   "opener_away", "opener_home",
                   "opener_reason_away", "opener_reason_home",
@@ -480,6 +489,12 @@ def rows_from_dump(xw_df, pl_df):
             hybrid_selection=a.get("hybrid_selection", np.nan),
             hybrid_p=a.get("hybrid_p", np.nan),
             hybrid_ml=a.get("hybrid_ml", np.nan),
+            hybrid_price_source=a.get("hybrid_price_source", np.nan),
+            hybrid_v1_action=np.nan,
+            hybrid_v1_selection=np.nan,
+            hybrid_v1_p=np.nan,
+            hybrid_v1_ml=np.nan,
+            hybrid_v1_full=np.nan,
             lineup_status_away=a.get("lineup_status_away", np.nan),
             lineup_status_home=a.get("lineup_status_home", np.nan),
             lineup_posted_away=a.get("lineup_posted_away", np.nan),
@@ -878,21 +893,20 @@ def _hybrid_retrospective_lines(g):
     against, and the chalk line is the control they BOTH have to be read
     against.
 
-    Retrospective, and labelled so. The threshold was chosen on these rows, so
-    nothing here is out-of-sample; the registered forward reading is the
-    `hybrid_test` block further down this same report, which scores only slates
-    after the rule was frozen.
+    Retrospective, and labelled so. Both v2 gates were chosen after examining
+    these rows, so nothing here is out-of-sample; the registered v2 forward
+    reading further down scores only later slates.
 
-    Arithmetic comes from `hybrid_test.apply_rule`, never a local copy -- one
+    Arithmetic comes from `hybrid_v2.apply_rule`, never a local copy -- one
     rule, one implementation, so this line and the forward block below cannot
     drift apart.
     """
     try:
-        import hybrid_test
-        d = hybrid_test.decidable(g)
+        import hybrid_v2
+        d = hybrid_v2.decidable(g)
         if d is None or d.empty:
             return []
-        h = hybrid_test.apply_rule(d)
+        h = hybrid_v2.apply_rule(d)
     except Exception as _exc:                      # noqa: BLE001
         # Same load-bearing guard as the forward-test block: this function runs
         # inside the job that ingests pregame rows, and a cosmetic line must
@@ -911,8 +925,8 @@ def _hybrid_retrospective_lines(g):
     cz = ((h["chalk_won"].astype(bool).mean() - h["chalk_p"].mean()) / cse
           if cse > 0 else float("nan"))
     out = [
-        f"hybrid rule  full: {w}-{l}  ({w / (w + l):.3f})"
-        if (w + l) else f"hybrid rule  full: {w}-{l}",
+        f"hybrid v2 rule  full: {w}-{l}  ({w / (w + l):.3f})"
+        if (w + l) else f"hybrid v2 rule  full: {w}-{l}",
     ]
     out[0] += (f"   vs price z={z:+.2f}  {units:+.2f}u   "
                f"(n={n}, {n_fade} faded)")
@@ -924,9 +938,54 @@ def _hybrid_retrospective_lines(g):
                "No saved-pregame fallback.")
     out.append("  missing prices — no close_p_home or lean: excluded. Paired "
                "close MLs are not a separate filter.")
-    out.append("  RETROSPECTIVE: the 45% threshold was chosen on these rows. "
-               "The registered forward test is below.")
+    out.append("  RETROSPECTIVE: the q < 45% AND |xw_net| < .012 fade gate "
+               "was chosen after examining these rows. Registered v2 starts "
+               "after 2026-09-11 and is reported below.")
     return out
+
+
+def _hybrid_materialized_lines(g):
+    """V2 ledger fields on each row's recorded basis, kept separate from close.
+
+    This is not the uniform historical comparison above: legacy rows use their
+    close, while rows captured after decision locking retain saved pregame
+    selections and prices. Printing it makes the CSV's recomputed fields
+    reconcilable without pretending the two snapshots are interchangeable.
+    """
+    try:
+        import hybrid_v2
+        needed = {"selection_rule_tag", "hybrid_action", "hybrid_selection",
+                  "hybrid_p", "hybrid_ml", "hybrid_full",
+                  "hybrid_price_source"}
+        if not needed.issubset(g.columns):
+            return []
+        s = g[(g["selection_rule_tag"] == hybrid_v2.RULE_TAG)
+              & g["hybrid_action"].isin(["FOLLOW", "FADE"])
+              & g["hybrid_full"].isin(["W", "L"])
+              & pd.to_numeric(g["hybrid_p"], errors="coerce").notna()
+              & pd.to_numeric(g["hybrid_ml"], errors="coerce").notna()].copy()
+        if s.empty:
+            return []
+        won = s["hybrid_full"].eq("W").to_numpy()
+        p = pd.to_numeric(s["hybrid_p"], errors="coerce").to_numpy(float)
+        ml = pd.to_numeric(s["hybrid_ml"], errors="coerce").to_numpy(float)
+        profit = np.where(won, np.where(ml > 0, ml / 100, 100 / np.abs(ml)), -1)
+        z = hybrid_v2._excess_z(won, p)
+        counts = s["hybrid_price_source"].value_counts()
+        basis = ", ".join(f"{int(counts[k])} {k.replace('_', ' ')}"
+                          for k in ("closing", "saved_pregame") if k in counts)
+        fades = int(s["hybrid_action"].eq("FADE").sum())
+        w = int(won.sum())
+        return [
+            f"hybrid v2 ledger fields (row basis): {w}-{len(s)-w}  "
+            f"({w / len(s):.3f})   vs price z={z:+.2f}  "
+            f"{profit.sum():+.2f}u   (n={len(s)}, {fades} faded)",
+            f"  price source — {basis}; no cross-snapshot fallback. This mixed-"
+            "basis reconciliation is not the uniform closing-price retrospective above.",
+        ]
+    except Exception as _exc:                      # noqa: BLE001
+        return [f"hybrid v2 ledger reconciliation unavailable "
+                f"({type(_exc).__name__})"]
 
 
 def _record_grades(led):
@@ -994,6 +1053,8 @@ def report_text(led):
         say(f"{MODEL_METRIC_LABEL} lean   full: {_rec(g['xw_full'])}   F5: {_rec(g['xw_f5'])}")
         for _hl in _hybrid_retrospective_lines(g):
             say(_hl)
+        for _ml in _hybrid_materialized_lines(g):
+            say(_ml)
         for _rl in _registration_retrospective_lines(g):
             say(_rl)
         ov = g[g["ops_valid"] == True]                                # noqa: E712
@@ -1140,7 +1201,17 @@ def report_text(led):
         for _hl in hybrid_test.report_lines(led):
             say(_hl)
     except Exception as _exc:                      # noqa: BLE001 - see above
-        say(f"pre-registered hybrid test unavailable ({type(_exc).__name__})")
+        say(f"pre-registered hybrid v1 test unavailable ({type(_exc).__name__})")
+
+    # Current production rule. Version 1 above remains frozen so its forward
+    # evidence is not rewritten by a later, data-informed rule change.
+    try:
+        import hybrid_v2
+        say("")
+        for _hl in hybrid_v2.report_lines(led):
+            say(_hl)
+    except Exception as _exc:                      # noqa: BLE001 - see above
+        say(f"pre-registered hybrid v2 test unavailable ({type(_exc).__name__})")
 
     # |delta| conviction filter (delta_filter_test.py), registered 2026-09-03.
     # Third module rather than a third arm, for the same reason as above. Its
@@ -1188,7 +1259,7 @@ def report(led):
     """Print the report and write it to REPORT_PATH. The only writer."""
     txt = report_text(led)
     print("=" * 60); print(txt); print("=" * 60)
-    with open(REPORT_PATH, "w") as f:
+    with open(REPORT_PATH, "w", encoding="utf-8") as f:
         f.write(txt + "\n")
     return txt
 
