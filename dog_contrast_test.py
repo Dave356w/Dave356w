@@ -201,7 +201,11 @@ def _line(g, label):
 def report_lines(led=None):
     """Report body as a list of lines. Pure -- no printing, no file writes."""
     out = [f"pre-registered underdog sign-flip test  (registered "
-           f"{REGISTERED_ON}; dog leans split at q = {SPLIT:.2f})"]
+           f"{REGISTERED_ON}; dog leans split at q = {SPLIT:.2f})",
+           "    price source — selection/market comparison: saved pregame_p_home "
+           "(model_side_p); returns: saved pregame MLs.",
+           "                   No closing fallback; missing locked fields are "
+           "excluded by hybrid_test and counted there as unscorable."]
     g = scored_rows(led)
     if g is None:
         out.append("    ledger unavailable or missing columns -- not scored")

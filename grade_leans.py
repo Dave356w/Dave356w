@@ -809,6 +809,12 @@ def _registration_retrospective_lines(g):
     n_fwd = int(len(h) - n_disc)
     out = [f"REGISTRATIONS (retrospective, n={len(h)}: {n_disc} discovery rows "
            f"+ {n_fwd} since {reg}) — in sample, NOT the forward reading:"]
+    out.append("  price source — all retrospectives: closing close_p_home for "
+               "eligibility, selection, and implied probabilities;")
+    out.append("                 closing close_home_ml/close_away_ml for returns. "
+               "No saved-pregame fallback.")
+    out.append("  missing prices — no close_p_home or lean: excluded; |Δ| also "
+               "requires xw_net. Paired close MLs are not a separate filter.")
 
     # |delta| filter -- registered headline is the DROPPED games' excess.
     try:
@@ -912,6 +918,12 @@ def _hybrid_retrospective_lines(g):
                f"(n={n}, {n_fade} faded)")
     out.append(f"  always chalk, same {n} rows: {cw}-{n - cw}  "
                f"({cw / n:.3f})   vs price z={cz:+.2f}")
+    out.append("  price source — selection/eligibility and market comparison: "
+               "closing close_p_home;")
+    out.append("                 returns: closing close_home_ml/close_away_ml. "
+               "No saved-pregame fallback.")
+    out.append("  missing prices — no close_p_home or lean: excluded. Paired "
+               "close MLs are not a separate filter.")
     out.append("  RETROSPECTIVE: the 45% threshold was chosen on these rows. "
                "The registered forward test is below.")
     return out

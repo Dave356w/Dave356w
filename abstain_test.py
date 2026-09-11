@@ -200,7 +200,11 @@ def _line(f, label, won_col="bet_won", p_col="p_bet", profit_col="profit"):
 def report_lines(led=None):
     """Report body as a list of lines. Pure -- no printing, no file writes."""
     out = [f"pre-registered abstain-vs-fade test  (registered {REGISTERED_ON}; "
-           f"decline the lean below q = {THRESHOLD:.2f} instead of fading it)"]
+           f"decline the lean below q = {THRESHOLD:.2f} instead of fading it)",
+           "    price source — saved pregame eligibility/selection, probability, "
+           "and return fields inherited from hybrid_test.",
+           "                   No closing fallback; missing locked fields are "
+           "excluded and counted there as unscorable."]
     g = scored_rows(led)
     if g is None:
         out.append("    ledger unavailable or missing columns -- not scored")
@@ -237,6 +241,26 @@ def report_lines(led=None):
     out.append(_line(declined(g), "the declined games only"))
     out.append(_line(g, "control: always-chalk", won_col="chalk_won",
                      p_col="chalk_p", profit_col="chalk_profit"))
+    # Reprice the exact saved-pregame chalk selections at the close. This is a
+    # reconciliation only: eligibility, selection, and W-L remain fixed, and
+    # the registered test continues to use its saved pregame price.
+    if {"close_home_ml", "close_away_ml"} <= set(g.columns):
+        chalk_home = (g["pregame_p_home"] >= 0.5).to_numpy()
+        close_ml = np.where(chalk_home, g["close_home_ml"], g["close_away_ml"])
+        comparable = np.isfinite(pd.to_numeric(close_ml, errors="coerce"))
+    else:
+        comparable = np.zeros(len(g), dtype=bool)
+    if comparable.any():
+        won = g["chalk_won"].astype(bool).to_numpy()[comparable]
+        saved_u = float(g.loc[g.index[comparable], "chalk_profit"].sum())
+        close_u = float(np.where(
+            won, STAKE * _payout(np.asarray(close_ml)[comparable]), -STAKE).sum())
+        out.append(f"    price-snapshot reconciliation — same saved-pregame "
+                   f"chalk selections: n={int(comparable.sum())}, "
+                   f"{int(won.sum())}-{int(comparable.sum() - won.sum())};")
+        out.append(f"      saved pregame {saved_u:+.4f}u; closing {close_u:+.4f}u. "
+                   "The record is identical but the ML payout changed;")
+        out.append("      selections are not recalculated at the close.")
     if n_d:
         d = declined(g)
         same = int((d["bet_home"].values

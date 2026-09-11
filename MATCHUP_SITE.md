@@ -274,6 +274,14 @@ without limit. The fit reads the raw column where it exists and falls back to
 the published one for pre-v12 rows, which are raw by definition and are the
 entire sample on the first build after the bump.
 
+The ledger report therefore shows three separately calculated diagnostics:
+the pooled historical raw-with-fallback series, v12 raw only, and v12 adjusted
+only. Each reports its own eligible count, slope with standard error, MAE, and
+`actual - estimate` bias; a positive bias means starters lasted longer than
+estimated. Slope 1.00 means calibrated dispersion. The pooled line remains the
+input-estimator monitor across historical families and does **not** describe
+v12's adjusted output. Null raw cells are not filled for the v12-only line.
+
 **Families.** New record family, and the argument is unusual: on decision
 equivalence it would have *shared* with v11 — 1 lean flips in 254, mean
 |Δ net| 0.00067 against a median |xw_net| of 0.01694 — but v11 had no graded
@@ -1069,6 +1077,43 @@ reconstructed from the devigged closing
 market, marked `XWOBA SIDE` or `MARKET OVER LEAN`, and graded against the stored final. A row
 with neither a locked pregame market nor a usable closing market is marked
 `awaiting market`; a v5-style model abstention is marked `no lean`.
+
+### Price sources in ledger tests
+
+Price snapshots are part of each test's definition and are not interchangeable.
+The report prints these sources beside every historical and forward section.
+
+| section | selection / eligibility | probability comparison | return |
+|---|---|---|---|
+| historical Hybrid and registration retrospectives | closing `close_p_home` (the delta filter selects on `xw_net`, then requires the close) | closing `close_p_home` | closing `close_home_ml` / `close_away_ml` |
+| `forward_test.py` | frozen model gap and dog rules using closing `close_p_home` | closing `close_p_home` | closing moneylines |
+| registered Hybrid (`hybrid_test.py`) | stored action and selection made from saved `pregame_p_home` | stored `hybrid_p` and saved `pregame_p_home` | stored `hybrid_ml` and saved pregame moneylines |
+| delta filter (`delta_filter_test.py`) | `xw_net` threshold; closing probability required for scoring | closing `close_p_home` | closing moneylines |
+| abstain versus fade and underdog sign flip | saved pregame fields delegated from the registered Hybrid scorer | saved pregame probability | saved pregame moneylines |
+
+There is no cross-snapshot fallback. Close-scored sections exclude rows without
+`close_p_home`, a lean, and any rule-specific input; their paired close
+moneylines come from the same market join but are not a second eligibility
+filter. Registered pregame sections require a valid stored action, selection,
+grade, probability, and both moneylines; malformed commitments are excluded and
+counted as unscorable. A fixed selection and W-L record can have different
+returns when repriced because American-odds payouts changed between snapshots.
+The report demonstrates that difference on the currently eligible same-ledger
+chalk control without recalculating its selection at the close.
+
+### Pitching-side field convention
+
+Rate/matchup suffixes name the **pitching side faced**, not the batting club:
+`mx_xwoba_away` is Home offense vs away pitching and pairs with
+`act_woba_home`; `mx_xwoba_home` is Away offense vs home pitching and pairs
+with `act_woba_away`. The same crossed offense convention is verified
+individually for the `mx_xwoba_sp_*`, `mx_xwoba_bp_*`, `edge_xwoba_*`,
+`opp_xwoba_neutral_*`, `opp_xwoba_vs_sp_*`, `opp_xwoba_sd_*`, and pitch-mix
+matchup families. By contrast, `starter_xwoba_*`, `bullpen_xwoba_*`,
+`expected_sp_ip_*`, `expected_sp_ip_raw_*`, and `act_sp_*` are keyed to the
+same pitching team. In particular, `expected_sp_ip_away` pairs with
+`act_sp_ip_away`, and home pairs with home. Stored CSV columns retain their
+historical names; this is a display/documentation convention, not a rename.
 
 Two trivial-strategy **controls** sit in the same summary strip as the record,
 scored on the *identical* rows: *always home* (the null hypothesis for any
