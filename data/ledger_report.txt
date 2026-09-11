@@ -67,7 +67,7 @@ component error (each scored against its own realised phase)
   lineup  n=720  pred 0.3180 act 0.3089 (-0.0090)  MAE 0.0731  slope -0.61±0.47  corr -0.048
 by slate (most recent 14 of 52; monitoring, not trend)
   scale: per-side rate error sd 0.0896 over 1218 paired side-games — read gross outliers, not drift
-  2026-09-11  xwOBA       14g  rate n=  2 pred 0.3084 act 0.3824 (+0.0740) MAE 0.1077  SP IP n=  2 bias +0.47 MAE 0.47
+  2026-09-11  xwOBA       15g  rate n=  2 pred 0.3084 act 0.3824 (+0.0740) MAE 0.1077  SP IP n=  2 bias +0.47 MAE 0.47
   2026-09-10  xwOBA        5g  rate n= 10 pred 0.3036 act 0.2469 (-0.0568) MAE 0.0836  SP IP n= 10 bias +0.86 MAE 1.28
   2026-09-09  xwOBA       15g  rate n= 30 pred 0.3112 act 0.3347 (+0.0234) MAE 0.0658  SP IP n= 30 bias -0.63 MAE 1.20
   2026-09-08  xwOBA       15g  rate n= 29 pred 0.3082 act 0.3139 (+0.0057) MAE 0.0655  SP IP n= 30 bias -0.29 MAE 1.02
