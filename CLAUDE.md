@@ -1128,6 +1128,79 @@ precedent — they are how the fix is known to look.
   disagreeing with chalk on 47. That is the number the dead zone is averaging
   away.
 
+  **The dead zone re-measured on the current family, and the sharper statement
+  is about information rather than tickets.** The magnitude × price grid's two
+  outer columns ARE the dead zone, exactly: a leaned side priced under .450
+  means the other side is over .550, so q < .450 (28 rows) and q ≥ .550 (211)
+  partition the games whose favourite is priced at or above .55 — **239, which
+  is precisely the count of all sides priced ≥ .55, and 60.4% of the 396
+  decidable rows**, confirming the 61.5% measured on 252 above.
+
+  Inside it the model's agreement carries **no information, not merely a chalk
+  ticket**: the 211 model-leaned sides beat their closes by +6.6 ± 3.3 pp while
+  all 239 sides at the same prices beat theirs by +6.5 ± 3.1 — **selection
+  value +0.1 pp, bootstrapped over games CI [−2.1, +2.4]**. That does NOT
+  retract the +6.45pp fade-branch selection figure recorded above: this is the
+  whole region on the current family, that is the 20 faded favourites against
+  the 135 chalk bets above .55 the rule declines, over every graded family, at
+  z = +0.55. Both can be true and the regional one is far better estimated.
+
+  **And v2's fade branch fires only inside the dead zone, by construction** —
+  `q < .45` means the favourite is above .55 — verified 16 of 16. The
+  consequence is measurable rather than rhetorical: skip the dead zone and the
+  hybrid and the plain lean return **identically +18.01u over the other 157
+  rows**. Outside the region where the model has selection value the rule has
+  no content, and inside it the model has none.
+
+  **Column stability is the diagnostic the grid was built for, and it separates
+  the four columns cleanly.** Each scored four ways — every closing row, the
+  saved-pregame subset, the rows that subset lacks, and split at 2026-09-03:
+
+  | q band | n (closes) | excess | selection value | sign stable? |
+  |---|---|---|---|---|
+  | < .450 | 28 | −5.7 ± 9.3 | +0.8, CI [−16.2, +17.7] | no (−14.7 / +8.6) |
+  | .450–.500 | 67 | +15.1 ± 6.1 | **+9.8, CI [+1.1, +18.1]** | **yes** (+13.2 / +15.6 / +13.8) |
+  | .500–.550 | 90 | +1.0 ± 5.3 | +6.2, CI [−0.6, +13.1] | no (+8.2 / −9.4) |
+  | .550+ | 211 | +6.6 ± 3.3 | +0.1, CI [−2.1, +2.4] | yes, and empty of content |
+
+  Only `.450–.500` is both sign-stable and carries selection value, and it is
+  the one region already registered — as `dog_contrast_test`'s contrast, not as
+  a band. `.500–.550`'s +1.0 is an average of +8.2 before 09-03 and −9.4 after,
+  which is what a noise cell looks like when you stop pooling it. The q < .450
+  discovery cut reproduces this file's own −11.5 ± 11.0 at n=20 exactly, which
+  is a useful check that the two derivations agree; its 8 rows since read
+  +8.6 ± 17.4, so the fade branch's discovery edge has not continued.
+
+  **Asked to update the shipped rule to maximize theoretical ROI, and
+  deliberately not done — the search is what argued against it.** Sweeping v2's
+  own parameter space (q threshold .30–.60 by .01 × |Δ| threshold 0–.05 by .002
+  plus never-fade-on-delta; 837 candidates) over the 396 decidable rows at
+  closes: plain lean **+7.32%**, shipped v2 **+10.06%**, and the maximum
+  `q < .44 & |Δ| < .012` at **+11.15%** — which differs from what ships by
+  **two games**. The null maximum under "market correct at its own devigged
+  closes" is +4.46%, P(null best ≥ observed) = 0.024, and most of the observed
+  is the plain lean, which is already +7.32% before any gate touches it.
+
+  Two things that came out of trying to state the objective, and both are the
+  reusable part. **ROI with no bet-count constraint is degenerate**: allowing
+  abstention, the maximum is "bet only q .450–.500" at **+28.02% over 67 bets**
+  — the band this file refuses to register at P = 0.2805. State the constraint
+  or the search returns the smallest cell that happened to win. And **the ROI
+  actually on the table comes from which games you decline, not from where the
+  fade gate sits**: the one variant with a mechanism rather than a fitted
+  threshold — abstain in the dead zone, bet the lean on the other 157 — scores
+  **+11.47%**, above the searched maximum over the whole parameter space.
+
+  It is not shipped, on the operator's call. A v3 would reset
+  `hybrid_v2.scored_rows`' forward window for a two-game difference, and that
+  window currently holds 30 rows over 2 slates with **zero** fades — the branch
+  carrying the rule's entire claim has not been exercised out of sample even
+  once. For a paper-traded study of market dynamics the informative region is
+  the 157 games outside the dead zone, which is where the selection can differ
+  from the price at all.
+
+  No code changed and no registered constant moved; `MODEL_TAG` is unchanged.
+
   **Why the cliff is there at all — the market-overpricing account, which is a
   better explanation than the mechanical one and came from the operator rather
   than from this analysis.** xwOBA and the market normally agree (the lean is
