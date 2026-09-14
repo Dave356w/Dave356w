@@ -192,7 +192,9 @@ def test_the_block_states_its_basis_and_refuses_the_probability_reading():
     head = text.split("|delta| [")[0]
     assert "pregame_p_home" in head and "NO close fallback" in head
     assert "not a win probability" in head
-    assert "never against zero" in text
+    # The search caveat belongs to a frame that HAS a search; it is pinned in
+    # test_the_search_correction_returns_once_there_is_a_maximum, because on
+    # this one-cell frame printing it would be the degenerate reference.
 
 
 def test_report_renders_the_grid_after_the_fixed_bands():
@@ -239,3 +241,42 @@ def test_the_band_label_has_one_home_so_a_cell_can_never_go_missing():
         row = lines[i + 1:i + 1 + columns]
         assert all(l.startswith("    q ") for l in row)
         assert lines[i + 1 + columns].strip().startswith("all q")
+
+
+def test_a_single_cell_is_not_reported_as_a_search():
+    """The null best of one cell is zero by construction.
+
+    Printed as a reference it would read "+40.0 against +0.0", which is the
+    compare-against-zero the line's own last clause forbids. With nothing
+    maximised over there is no correction to make, and the block says so
+    rather than publishing a flattering null.
+    """
+    text = _grid(_frame([0.005], "HOME", "W", 0.60))
+    assert "nothing was maximised over" in text
+    assert "non-empty cells averages" not in text
+    assert "A grid is a search" not in text
+
+
+def test_the_search_correction_returns_once_there_is_a_maximum():
+    g = _frame([0.005, 0.005], "HOME", ["W", "L"], [0.60, 0.47])
+    text = _grid(g)
+    assert "best of these 2 non-empty cells" in text
+    assert "never against zero" in text
+
+
+def test_a_one_column_band_names_the_margin_it_cannot_differ_from():
+    """Two identical lines need a clause, or they read as a bug.
+
+    The precedent is the chalk control on the per-game card: adjacency alone
+    failed there, because equality to the decimal looks like duplicated data
+    until something says why it is forced.
+    """
+    lines = grade_leans._magnitude_price_grid_lines(_frame([0.060], "HOME", "W", 0.70))
+    i = next(i for i, l in enumerate(lines) if l.startswith("  |delta| [0.050"))
+    band = lines[i:i + 7]
+    assert band[-2].strip().startswith("all q")
+    assert "can only repeat that cell" in band[-1]
+    # A band spread over two columns states nothing of the sort.
+    spread = grade_leans._magnitude_price_grid_lines(
+        _frame([0.060, 0.060], "HOME", ["W", "L"], [0.70, 0.47]))
+    assert not any("can only repeat" in l for l in spread)
