@@ -756,6 +756,64 @@ precedent — they are how the fix is known to look.
 
   Display-only; no lean, delta, grade or ledger row moves.
 
+  **Second instance, in the internal artifact rather than on a page, and this
+  one had a control beside it and was still unreadable.** The fixed |Δ| band
+  block in `ledger_report.txt` prints each magnitude band's record with the
+  closing favourite's record on the identical rows — controls done right — and
+  the top band came back .050+ **20-6 (.769) with the favourite also 20-6
+  (.769)**. A reader takes two things from that, and both are wrong: that a
+  band's historical rate is a probability for the next game in it, and that
+  the favourite tie means the model added nothing there. The first is wrong
+  because magnitude is an xwOBA difference and this repo has **no validated
+  mapping from it to a win probability**; the second because a favourite
+  control is one binary comparison, where the games' own prices are 26 of
+  them — scored that way the same band reads **+12.5 ± 9.3 pp** over its mean
+  close of .644, which is neither the null the tie implied nor a result.
+
+  The cause is that the two axes are not independent: over the current family
+  `corr(|xw_net|, q)` is **+0.485** at the close and **+0.574** on the
+  pregame-priced rows, where `q` is the market's probability of the leaned
+  side. Banding on magnitude alone therefore bands substantially on price, so
+  a band's rate moves with the schedule it drew. The .050+ band is the limit
+  case: **every** pregame-priced row in it is priced at or above .55 for the
+  model's side, so the cells that would show a strong disagreement at a large
+  delta are empty, and no amount of accumulation in that band answers the
+  question a reader is asking of it.
+
+  Fixed by crossing the bands with the market axis — `_magnitude_price_grid_lines`
+  in `grade_leans.py`, printed directly beneath the band block. Four things in
+  it are the reusable part, and none is new to this file:
+
+  * **The cell's comparison is its own games' prices, not another rule's
+    record.** Each cell prints n, record, mean `q`, excess, and the
+    Poisson-binomial SE at those prices — the same `excess_se` the calibration
+    surfaces use, now with one home in `market_backfill` because `grade_leans`
+    cannot import `build_site` (that module refuses a non-xwOBA `MODEL_TAG` at
+    import and this one supports wOBA tags).
+  * **Empty cells are rendered.** "The model never strongly disagrees with the
+    market at a large delta" is a finding about the model, and it is only
+    visible if the cell that would hold those games is printed as empty rather
+    than skipped.
+  * **A grid is a search, so it prints its own null maximum.** The best of the
+    non-empty cells is compared against what the best cell averages when every
+    game settles at its own price — the rule this file already states for band
+    grids, computed rather than asserted, at a fixed seed so a committed
+    artifact does not churn. At current cell sizes that reference is large,
+    which is the honest reading: thin cells cannot be read at all.
+  * **Saved pregame prices only.** `pregame_p_home` with no close fallback,
+    because that is the price the decision was locked against — so the grid
+    covers fewer rows than the band block above it and names its own earliest
+    date rather than leaving full coverage to be assumed.
+
+  What the grid does NOT do is turn magnitude into a probability, and its own
+  copy says so twice. Nothing here is a selection rule, no cell is registered,
+  and no constant was fitted on it: the magnitude edges are the block's own,
+  and the price edges are `.500` plus the shipped rule's gate and its mirror,
+  imported from the registration rather than restated.
+
+  Diagnostic only; no lean, delta, grade or ledger row moves, so no
+  `MODEL_TAG` implication.
+
 - **The value-bet signal that does not exist, and the measurement that says so.**
   Asked for a per-game "this is a value bet" badge, the honest answer turned
   out to be that no such badge is available in this data, and the naive version
@@ -1916,7 +1974,8 @@ row count is split at the registration date, because a retrospective over "all
 v12" is a MIXTURE of the rows a rule was found on and the rows that arrived
 after. **Watching a retrospective grow is not watching evidence accumulate.**
 `data/ledger_report.txt` carries the current-family record and F5, the |Δ|
-terciles, the per-family and per-slate predicted-vs-actual, the component error
+terciles, the fixed |Δ| bands and their crossing with the market's probability
+of the leaned side, the per-family and per-slate predicted-vs-actual, the component error
 (SP / BP / lineup each against its own realised phase), the IP calibration
 slope, the SP-vs-lineup coefficients and their symmetry contrast, and the two
 pre-registered forward tests (`forward_test.py`, `hybrid_test.py`,
@@ -1936,7 +1995,10 @@ stored CSV schema to make the display convention look simpler.
 
 The report also names each test's price columns. Historical Hybrid and all
 registration retrospectives use closing prices; `forward_test` and the delta
-filter also use closes. The registered Hybrid, abstain-versus-fade, and dog
+filter also use closes. The fixed |Δ| band block compares against the closing
+favourite; the magnitude × market grid beneath it uses saved `pregame_p_home`
+with no close fallback and therefore scores fewer rows, which is why each
+states its own denominator. The registered Hybrid, abstain-versus-fade, and dog
 sign-flip tests use saved pregame decisions, probabilities, and moneylines with
 no close fallback. Do not standardize these snapshots: identical selections
 and results can earn different units at different American-odds payouts. The
