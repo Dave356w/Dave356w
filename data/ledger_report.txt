@@ -18,6 +18,42 @@ REGISTRATIONS (retrospective, n=396: 261 discovery rows + 135 since 2026-09-03) 
   Each was FOUND on the discovery rows above, so none of these is evidence for itself. The registered forward readings are further down this report.
 platoon lean full: 185-121  (0.605)   F5: 156-107-43  (0.593)   (reliable-only, n=306)
 xwOBA on same subset  full: 191-115  (0.624)   F5: 145-118-43  (0.551)
+xwOBA fixed |delta| bands (current record family; descriptive)
+  Fixed cutoffs: .010 / .020 / .030 / .050; lower inclusive, upper exclusive.
+  Introduced after inspecting history; not a registered test or calibrated confidence scale.
+  Rates exclude ties; intervals are Wilson 95% CIs assuming independent games.
+  Included 396 of 404 graded rows; excluded 8 without a lean, full decision, or finite xw_net.
+  Favorite comparison: closing close_p_home; no pregame fallback. Both records use the same valid-price, non-tied full-score rows.
+  [0.000, 0.010) n=112
+    full 64-48  (0.571); decisions=112; 95% CI [0.479, 0.659]
+    F5   56-43-13  (0.566); decisions=99; 95% CI [0.467, 0.659]
+    closing-price paired n=112; excluded=0
+      xwOBA 64-48  (0.571); decisions=112; 95% CI [0.479, 0.659]
+      favorite 60-52  (0.536); decisions=112; 95% CI [0.444, 0.625]
+  [0.010, 0.020) n=103
+    full 59-44  (0.573); decisions=103; 95% CI [0.476, 0.664]
+    F5   39-50-14  (0.438); decisions=89; 95% CI [0.340, 0.542]
+    closing-price paired n=103; excluded=0
+      xwOBA 59-44  (0.573); decisions=103; 95% CI [0.476, 0.664]
+      favorite 54-49  (0.524); decisions=103; 95% CI [0.429, 0.618]
+  [0.020, 0.030) n=82
+    full 51-31  (0.622); decisions=82; 95% CI [0.514, 0.719]
+    F5   37-35-10  (0.514); decisions=72; 95% CI [0.401, 0.626]
+    closing-price paired n=82; excluded=0
+      xwOBA 51-31  (0.622); decisions=82; 95% CI [0.514, 0.719]
+      favorite 49-33  (0.598); decisions=82; 95% CI [0.489, 0.697]
+  [0.030, 0.050) n=73
+    full 49-24  (0.671); decisions=73; 95% CI [0.557, 0.768]
+    F5   36-23-14  (0.610); decisions=59; 95% CI [0.483, 0.724]
+    closing-price paired n=73; excluded=0
+      xwOBA 49-24  (0.671); decisions=73; 95% CI [0.557, 0.768]
+      favorite 52-21  (0.712); decisions=73; 95% CI [0.600, 0.803]
+  [0.050, inf) n=26
+    full 20-6  (0.769); decisions=26; 95% CI [0.579, 0.890]
+    F5   19-4-3  (0.826); decisions=23; 95% CI [0.629, 0.930]
+    closing-price paired n=26; excluded=0
+      xwOBA 20-6  (0.769); decisions=26; 95% CI [0.579, 0.890]
+      favorite 20-6  (0.769); decisions=26; 95% CI [0.579, 0.890]
 xwOBA F5 by |Δ| tercile:
   low  61-58-13  (0.513)   (Δ 0.000–0.012, n=132)
   mid  51-59-22  (0.464)   (Δ 0.012–0.025, n=132)
