@@ -153,6 +153,15 @@ component error (each scored against its own realised phase)
   SP      n=808  pred 0.3121 act 0.3239 (+0.0118)  MAE 0.0968  slope +0.76±0.19  corr +0.136
   BP      n=804  pred 0.2965 act 0.2944 (-0.0021)  MAE 0.1076  slope +1.05±0.38  corr +0.098
   lineup  n=808  pred 0.3180 act 0.3114 (-0.0066)  MAE 0.0730  slope -0.40±0.44  corr -0.031
+           within-starter slope -0.273±0.525  (n=762, 172 starters absorbed; a correctly scaled composite implies +1.000)
+           the line above ignores who was faced; this one holds the starter fixed. Read the difference, not either alone -- and neither is interpretable unless the lineup row of the target-reliability block clears F=1.
+target reliability (can the ACTUAL tell this component's units apart?)
+  Pools every family: the realised rate is metric-free, so the component block's tag scope cannot apply here.
+  One-way ANOVA on the actual, grouped by unit, min 8 observations per unit.
+  F is judged against its own null, not against 1.0: with 30 units the null sd of F is ~0.26, so a bare threshold calls noise a finding. Not separated => no attainable slope, and the component's fitted slope is undefined rather than null.
+  SP      by starter        units=106  n=945   F=1.350 (p=0.015)  ICC=+0.0378  true between-unit sd 0.02304  -> measurable
+  BP      by pitching club  units=30   n=1403  F=1.252 (p=0.168)  ICC=+0.0054  true between-unit sd 0.01021  -> UNMEASURABLE -- not separated from chance
+  lineup  by batting club   units=30   n=1316  F=0.872 (p=0.662)  ICC=-0.0029  true between-unit sd 0 (negative variance component)  -> UNMEASURABLE -- units differ less than chance
 by slate (most recent 14 of 54; monitoring, not trend)
   scale: per-side rate error sd 0.0900 over 1306 paired side-games — read gross outliers, not drift
   2026-09-13  xwOBA       15g  rate n= 30 pred 0.3082 act 0.3265 (+0.0183) MAE 0.0705  SP IP n= 30 bias -0.28 MAE 0.74
