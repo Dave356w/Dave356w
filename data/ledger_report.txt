@@ -98,6 +98,7 @@ xwOBA |delta| x saved-pregame market probability (current record family; descrip
     q .500-.550    n=  0   (no rows)
     q .550+        n= 12       8-4 (0.667)   mean q .657   excess   +0.9 +- 13.6 pp
     all q          n= 12       8-4 (0.667)   mean q .657   excess   +0.9 +- 13.6 pp
+      (this band occupies one column, so the margin above can only repeat that cell)
   all |delta| bands
     q <.450        n= 12       5-7 (0.417)   mean q .413   excess   +0.4 +- 14.2 pp
     q .450-.500    n= 27      18-9 (0.667)   mean q .474   excess  +19.3 +-  9.6 pp
