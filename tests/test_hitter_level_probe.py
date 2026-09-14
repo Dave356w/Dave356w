@@ -260,8 +260,19 @@ class TeamControlTests(unittest.TestCase):
         m = self._joined().drop(columns=["batting_side"])
         self.assertIsNone(hp.team_control(m))
 
-    def test_too_few_sides_returns_none(self):
-        self.assertIsNone(hp.team_control(self._joined(n_sides=5)))
+    def test_a_thin_control_is_printed_with_its_error_bar_not_suppressed(self):
+        """No sample-size gate. Suppressing the control is what made the first
+        clean run print none at all (28 sides against a floor of 30), which
+        invites the cross-row-set comparison it exists to replace."""
+        got = hp.team_control(self._joined(n_sides=5))
+        self.assertIsNotNone(got)
+        n, r, se = got
+        self.assertEqual(n, 5)
+        self.assertAlmostEqual(se, 1 / np.sqrt(2))     # wide, and honest
+
+    def test_it_still_refuses_when_the_error_bar_cannot_exist(self):
+        """Structural, not a judgement: 1/sqrt(n-3) needs four sides."""
+        self.assertIsNone(hp.team_control(self._joined(n_sides=3)))
 
     def test_a_constant_predictor_returns_none_rather_than_nan(self):
         """Every side the same lineup gives a zero-variance predictor. A

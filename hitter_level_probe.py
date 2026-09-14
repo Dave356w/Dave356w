@@ -255,7 +255,15 @@ def team_control(m):
                   aw=("aw", "sum"), npa=("n_pa", "sum"))
              .reset_index())
     agg = agg[(agg["w"] > 0) & (agg["npa"] > 0)]
-    if len(agg) < 30:
+    # No sample-size gate. A hard `>= N` here is the threshold cliff this repo
+    # has removed three times, and suppressing the number is worse than a wide
+    # one: on the first clean run this refused at 28 sides against a floor of
+    # 30, so the probe printed NO control at all -- inviting exactly the
+    # cross-row-set comparison the control exists to replace. The SE says what
+    # a thin control is worth. The only refusals left are structural: a
+    # correlation needs at least two points to exist and `1/sqrt(n-3)` needs
+    # four to be finite.
+    if len(agg) < 4:
         return None
     pred = agg["pw"] / agg["w"]
     act = agg["aw"] / agg["npa"]
