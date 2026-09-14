@@ -66,6 +66,7 @@ from market_backfill import (MARKET_COLS, attach_market, excess_se,
                              metric_label)
 from actuals_backfill import (ACTUAL_COLS, attach_actuals, actuals_summary,
                               actuals_family_line, components_summary,
+                              target_reliability,
                               slate_lines)
 
 DATA_DIR    = os.environ.get("DATA_DIR", "data")
@@ -1472,6 +1473,17 @@ def report_text(led):
     # state, not a gap to fill with the joint number.
     for _ln in components_summary(led, tags=RECORD_TAGS):
         say(_ln)
+
+    # Printed directly beneath the component block, and beneath rather than
+    # above on purpose: it is the thing that says whether the slopes above are
+    # readable at all. Guarded like every other diagnostic in this function --
+    # this runs in the job that ingests irreplaceable pregame rows, and a
+    # report line must never be able to cost a slate.
+    try:
+        for _ln in target_reliability(led):
+            say(_ln)
+    except Exception as _exc:                      # noqa: BLE001 - see above
+        say(f"target reliability unavailable ({type(_exc).__name__})")
 
     # Whole ledger, NOT RECORD_TAGS, and the exception is the point: every
     # block above scores one prediction family because a level is only

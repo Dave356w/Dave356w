@@ -22,6 +22,7 @@ score-verified, rather than repeating the date/team join. That verification
 correctly rejected an All-Star Game join once; riding it means this module
 cannot introduce a second, weaker version of the same check.
 """
+import math
 import time
 
 import numpy as np
@@ -512,6 +513,18 @@ def paired_components(df):
     Getting the lineup cross backwards yields a plausible near-zero slope
     rather than an error, which is why no caller does its own pairing.
 
+    Two identity columns ride along, because the frame could not previously
+    answer "whose rate is this?" from its own contents and both new diagnostics
+    below need it:
+
+      `unit`     the entity whose talent the PREDICTOR claims to measure -- the
+                 starter for SP, the pitching club for BP (a bullpen is a team
+                 unit, not a person), the batting club for lineup. This is what
+                 `target_reliability` groups the ACTUAL by.
+      `faced_sp` the starter the batting side actually faced. Equal to `unit`
+                 for SP and a NUISANCE covariate for lineup, which is the whole
+                 point of `lineup_within_pitcher_slope`.
+
     Read slopes, not intercepts. The lineup's predicted value is a neutral
     composite while its actual is a real game against real pitching, so the
     two sit on offset levels by construction; and the weights here may differ
@@ -524,12 +537,14 @@ def paired_components(df):
         for side in ("away", "home"):
             other = "home" if side == "away" else "away"
             sp, bp = phase_lines(r, side)
-            for comp, pred_col, act in (
+            faced_sp = r.get(f"{side}_sp")
+            for comp, pred_col, act, unit in (
                 ("SP", f"starter_xwoba_{side}",
-                 woba_from_components(sp) if sp else None),
+                 woba_from_components(sp) if sp else None, faced_sp),
                 ("BP", f"bullpen_xwoba_{side}",
-                 woba_from_components(bp) if bp else None),
-                ("lineup", f"opp_xwoba_neutral_{side}", _f(r.get(f"act_woba_{other}"))),
+                 woba_from_components(bp) if bp else None, r.get(side)),
+                ("lineup", f"opp_xwoba_neutral_{side}",
+                 _f(r.get(f"act_woba_{other}")), r.get(other)),
             ):
                 pred = _f(r.get(pred_col))
                 if pred is None or act is None:
@@ -542,10 +557,243 @@ def paired_components(df):
                 elif comp == "lineup":
                     den = _f(r.get(f"act_pa_{other}"))
                 rows.append({"game_pk": gpk, "model_tag": tag, "component": comp,
-                             "side": side, "pred": pred, "act": act, "den": den})
+                             "side": side, "pred": pred, "act": act, "den": den,
+                             "unit": unit, "faced_sp": faced_sp})
     return (pd.DataFrame(rows) if rows else
             pd.DataFrame(columns=["game_pk", "model_tag", "component", "side",
-                                  "pred", "act", "den"]))
+                                  "pred", "act", "den", "unit", "faced_sp"]))
+
+
+def _betacf(a, b, x, maxit=300, eps=3e-16, fpmin=1e-300):
+    """Continued fraction for the incomplete beta (Lentz). Numerical Recipes."""
+    qab, qap, qam = a + b, a + 1.0, a - 1.0
+    c, d = 1.0, 1.0 - qab * x / qap
+    if abs(d) < fpmin:
+        d = fpmin
+    d = 1.0 / d
+    h = d
+    for m in range(1, maxit + 1):
+        m2 = 2 * m
+        for aa in (m * (b - m) * x / ((qam + m2) * (a + m2)),
+                   -(a + m) * (qab + m) * x / ((a + m2) * (qap + m2))):
+            d = 1.0 + aa * d
+            if abs(d) < fpmin:
+                d = fpmin
+            c = 1.0 + aa / c
+            if abs(c) < fpmin:
+                c = fpmin
+            d = 1.0 / d
+            h *= d * c
+        if abs(d * c - 1.0) < eps:
+            break
+    return h
+
+
+def _betai(a, b, x):
+    """Regularized incomplete beta I_x(a, b)."""
+    if x <= 0.0:
+        return 0.0
+    if x >= 1.0:
+        return 1.0
+    bt = math.exp(math.lgamma(a + b) - math.lgamma(a) - math.lgamma(b)
+                  + a * math.log(x) + b * math.log1p(-x))
+    if x < (a + 1.0) / (a + b + 2.0):
+        return bt * _betacf(a, b, x) / a
+    return 1.0 - bt * _betacf(b, a, 1.0 - x) / b
+
+
+def f_upper_tail(f, d1, d2):
+    """P(F_{d1,d2} >= f). Hand-rolled because scipy is not a dependency here.
+
+    The monitor needs this and not a bare threshold on F. An F ratio built from
+    30 units has a standard deviation near sqrt(2/29) = 0.26 under the null, so
+    a pure-noise target returns F = 1.45 often enough to be labelled a finding
+    -- which it did, on the first constructed test written against this code.
+    Judging F against its own null distribution rather than against 1.0 is the
+    same rule this repo already applies to searched cells and band grids.
+    """
+    if not (f > 0) or d1 <= 0 or d2 <= 0:
+        return 1.0
+    return _betai(d2 / 2.0, d1 / 2.0, d2 / (d2 + d1 * f))
+
+
+# The entity each component's PREDICTOR claims to tell apart. `target_reliability`
+# groups the ACTUAL by this to ask whether the outcome data can tell those same
+# entities apart at all -- a question no diagnostic in this repo asked until a
+# lineup slope had been read as a finding for weeks.
+COMPONENT_UNIT_LABEL = {"SP": "starter", "BP": "pitching club",
+                        "lineup": "batting club"}
+
+# Minimum observations per unit before it enters the decomposition. Not a
+# credibility gate -- the F statistic is honest at any size and is printed
+# whatever it says. It exists because a unit seen once contributes a zero
+# within-group deviation and biases MSW downward, which would inflate F for a
+# reason that has nothing to do with reliability.
+RELIABILITY_MIN_PER_UNIT = 8
+
+# Significance bar for "the target can tell its units apart". Deliberately the
+# conventional 0.05 and not tuned: this gates a WARNING about whether another
+# number is readable, so the cost of a false positive (a slope read as real)
+# exceeds the cost of a false negative (a caveat printed one build early).
+RELIABILITY_ALPHA = 0.05
+
+
+def one_way_icc(labels, values, min_per_group=RELIABILITY_MIN_PER_UNIT):
+    """One-way random-effects decomposition of `values` grouped by `labels`.
+
+    Returns a dict with the groups/observations used, the F ratio MSB/MSW, the
+    intraclass correlation, and the implied true between-group sd -- or None
+    when fewer than two groups survive `min_per_group`.
+
+    Read F, not the ICC, when deciding whether a component is measurable at
+    all. F < 1 means the units differ LESS than chance, i.e. the estimated
+    between-unit variance is negative and clipped to zero; an ICC of -0.001
+    and an ICC of +0.001 are the same answer, while F carries the direction
+    and the magnitude of the miss. The between-group sd is clipped at zero for
+    the same reason and must not be read as "small but real".
+    """
+    ok = [(str(k), float(v)) for k, v in zip(labels, values)
+          if k is not None and str(k) not in ("", "nan") and _f(v) is not None]
+    groups = {}
+    for k, v in ok:
+        groups.setdefault(k, []).append(v)
+    groups = {k: v for k, v in groups.items() if len(v) >= min_per_group}
+    if len(groups) < 2:
+        return None
+    n_groups = len(groups)
+    n_obs = sum(len(v) for v in groups.values())
+    if n_obs <= n_groups:
+        return None
+    means = {k: sum(v) / len(v) for k, v in groups.items()}
+    grand = sum(sum(v) for v in groups.values()) / n_obs
+    msb = sum(len(v) * (means[k] - grand) ** 2
+              for k, v in groups.items()) / (n_groups - 1)
+    msw = sum(sum((x - means[k]) ** 2 for x in v)
+              for k, v in groups.items()) / (n_obs - n_groups)
+    if msw <= 0:
+        return None
+    # Harmonic-style effective group size: unbalanced groups make the naive
+    # n the wrong divisor for recovering the variance component.
+    n0 = (n_obs - sum(len(v) ** 2 for v in groups.values()) / n_obs) / (n_groups - 1)
+    var_between = (msb - msw) / n0 if n0 > 0 else float("nan")
+    denom = var_between + msw
+    f_stat = msb / msw
+    return {
+        "n_groups": n_groups, "n_obs": n_obs, "f": f_stat,
+        "p": f_upper_tail(f_stat, n_groups - 1, n_obs - n_groups),
+        "icc": (var_between / denom) if denom > 0 else 0.0,
+        "between_sd": math.sqrt(var_between) if var_between > 0 else 0.0,
+        "within_sd": math.sqrt(msw),
+        "negative_variance": var_between <= 0,
+    }
+
+
+def target_reliability(df, min_per_group=RELIABILITY_MIN_PER_UNIT):
+    """Can each component's ACTUAL tell its own units apart? Lines, or [].
+
+    This measures the TARGET and never the prediction, which is why it exists
+    and why it is not family-scoped: realised wOBA is realised wOBA whatever
+    tag produced the row beside it, so scoping it would discard rows for a
+    reason that cannot apply. The component block above IS family-scoped, so
+    the two print different denominators on purpose and each states its own.
+
+    Why it is worth printing every build: a correlation against a target is
+    bounded by the square root of that target's reliability. A component whose
+    target cannot distinguish its units has NO attainable slope, and reading
+    its fitted slope as "the term contributes nothing" confuses an undefined
+    measurement with a measured null. Measured on the committed ledger at the
+    time this shipped, realised team offence grouped by batting club gives
+    F = 0.941 over 1,882 team-games -- below chance -- while the same plate
+    appearances grouped by the starter who threw them give F = 1.503. The
+    lineup term's target carries no club-level signal; the starter's does.
+    """
+    p = paired_components(df)
+    if p.empty or "unit" not in p.columns:
+        return []
+    lines = [
+        "target reliability (can the ACTUAL tell this component's units apart?)",
+        "  Pools every family: the realised rate is metric-free, so the "
+        "component block's tag scope cannot apply here.",
+        f"  One-way ANOVA on the actual, grouped by unit, "
+        f"min {min_per_group} observations per unit.",
+        "  F is judged against its own null, not against 1.0: with 30 "
+        "units the null sd of F is ~0.26, so a bare threshold calls noise a "
+        "finding. Not separated => no attainable slope, and the component's "
+        "fitted slope is undefined rather than null.",
+    ]
+    any_row = False
+    for comp in ("SP", "BP", "lineup"):
+        s = p[p.component == comp]
+        if s.empty:
+            continue
+        r = one_way_icc(s["unit"], s["act"], min_per_group)
+        label = COMPONENT_UNIT_LABEL.get(comp, "unit")
+        if r is None:
+            lines.append(f"  {comp:<7s} by {label:<14s} too few units with "
+                         f"{min_per_group}+ observations")
+            any_row = True
+            continue
+        if r["f"] <= 1.0:
+            verdict = "UNMEASURABLE -- units differ less than chance"
+        elif r["p"] >= RELIABILITY_ALPHA:
+            verdict = "UNMEASURABLE -- not separated from chance"
+        else:
+            verdict = "measurable"
+        sd = ("0 (negative variance component)" if r["negative_variance"]
+              else f"{r['between_sd']:.5f}")
+        lines.append(
+            f"  {comp:<7s} by {label:<14s} units={r['n_groups']:<4d} "
+            f"n={r['n_obs']:<5d} F={r['f']:.3f} (p={r['p']:.3f})  "
+            f"ICC={r['icc']:+.4f}  true between-unit sd {sd}  -> {verdict}")
+        any_row = True
+    return lines if any_row else []
+
+
+def lineup_within_pitcher_slope(p):
+    """Within-starter slope of realised offence on the lineup composite.
+
+    The pooled component slope regresses a batting club's realised wOBA on its
+    predicted composite while ignoring WHO IT FACED, so opposing-starter talent
+    -- the one thing this ledger's outcomes demonstrably do carry (see
+    `target_reliability`) -- lands in the residual. Demeaning both sides within
+    the faced starter removes it and leaves the comparison the lineup term is
+    actually making: the same pitcher, different opponents.
+
+    Applied to the LINEUP component only, and that restriction is the point. For
+    SP the starter IS the subject, so demeaning by him would remove exactly the
+    variance under test and return a slope of zero by construction. A caller
+    passing the SP rows here would get a confident null about nothing.
+
+    Returns (slope, se, n_obs, n_pitchers) or None. The standard error charges
+    one degree of freedom per absorbed pitcher, so a design with two starts per
+    pitcher is penalised for the fixed effects it spent rather than flattered
+    by them.
+    """
+    if p is None or getattr(p, "empty", True) or "faced_sp" not in p.columns:
+        return None
+    s = p[p.component == "lineup"].dropna(subset=["pred", "act", "faced_sp"])
+    if s.empty:
+        return None
+    xs, ys, n_groups = [], [], 0
+    for _, grp in s.groupby(s["faced_sp"].astype(str), sort=False):
+        if len(grp) < 2:          # a singleton demeans to exactly zero
+            continue
+        n_groups += 1
+        px = pd.to_numeric(grp["pred"], errors="coerce")
+        ay = pd.to_numeric(grp["act"], errors="coerce")
+        xs.extend((px - px.mean()).tolist())
+        ys.extend((ay - ay.mean()).tolist())
+    n = len(xs)
+    dof = n - n_groups - 1
+    if n < 3 or dof <= 0:
+        return None
+    sxx = float(np.dot(xs, xs))
+    if sxx <= 0:
+        return None
+    slope = float(np.dot(xs, ys)) / sxx
+    resid = np.asarray(ys) - slope * np.asarray(xs)
+    se = math.sqrt(float(np.dot(resid, resid)) / dof / sxx)
+    return slope, se, n, n_groups
 
 
 def components_summary(df, tags=None):
@@ -579,6 +827,19 @@ def components_summary(df, tags=None):
             r = float(np.corrcoef(s["pred"], s["act"])[0, 1])
             bit += f"  slope {cal['slope']:+.2f}±{cal['se_slope']:.2f}  corr {r:+.3f}"
         lines.append(bit)
+        if comp == "lineup":
+            fe = lineup_within_pitcher_slope(p)
+            if fe:
+                slope, se, n_obs, n_pit = fe
+                lines.append(
+                    f"           within-starter slope {slope:+.3f}±{se:.3f}  "
+                    f"(n={n_obs}, {n_pit} starters absorbed; a correctly "
+                    f"scaled composite implies +1.000)")
+                lines.append(
+                    "           the line above ignores who was faced; this one "
+                    "holds the starter fixed. Read the difference, not either "
+                    "alone -- and neither is interpretable unless the lineup "
+                    "row of the target-reliability block clears F=1.")
     return lines
 
 
