@@ -710,6 +710,72 @@ def _rec(s):
     base = f"{w}-{l}" + (f"-{t}" if t else "")
     return f"{base}  ({w/(w+l):.3f})" if (w + l) else base
 
+# Fixed reporting bands in the current family's primary-rate units. These are
+# descriptive round cutoffs, introduced after inspecting historical results;
+# they are not fitted thresholds, a forward registration, or selection rules.
+FIXED_MAGNITUDE_EDGES = (0.0, 0.010, 0.020, 0.030, 0.050, float("inf"))
+
+
+def _magnitude_record(grades):
+    """Record and Wilson 95% interval; ties do not enter the rate."""
+    w = int(grades.eq("W").sum())
+    l = int(grades.eq("L").sum())
+    n = w + l
+    if not n:
+        return f"{_rec(grades)}; decisions=0; 95% CI unavailable"
+    p = w / n
+    z = 1.959963984540054
+    den = 1 + z * z / n
+    center = (p + z * z / (2 * n)) / den
+    half = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / den
+    return (f"{_rec(grades)}; decisions={n}; "
+            f"95% CI [{center - half:.3f}, {center + half:.3f}]")
+
+
+def _fixed_magnitude_lines(g):
+    """Pure descriptive summary; caller supplies current-family graded rows."""
+    required = {"xw_net", "xw_lean", "xw_full", "xw_f5"}
+    if not required.issubset(g.columns):
+        return ["fixed |delta| bands: unavailable (missing report inputs)"]
+    magnitude = pd.to_numeric(g["xw_net"], errors="coerce").abs()
+    has_lean = g["xw_lean"].notna() & g["xw_lean"].astype(str).str.strip().ne("")
+    eligible = has_lean & g["xw_full"].isin(["W", "L"]) & np.isfinite(magnitude)
+    out = [
+        f"{MODEL_METRIC_LABEL} fixed |delta| bands (current record family; descriptive)",
+        "  Fixed cutoffs: .010 / .020 / .030 / .050; lower inclusive, upper exclusive.",
+        "  Introduced after inspecting history; not a registered test or calibrated confidence scale.",
+        "  Rates exclude ties; intervals are Wilson 95% CIs assuming independent games.",
+        f"  Included {int(eligible.sum())} of {len(g)} graded rows; "
+        f"excluded {int((~eligible).sum())} without a lean, full decision, or finite xw_net.",
+        "  Favorite comparison: closing close_p_home; no pregame fallback. "
+        "Both records use the same valid-price, non-tied full-score rows.",
+    ]
+    price_columns = {"close_p_home", "full_home", "full_away"}
+    for lower, upper in zip(FIXED_MAGNITUDE_EDGES, FIXED_MAGNITUDE_EDGES[1:]):
+        band = g[eligible & magnitude.ge(lower) & magnitude.lt(upper)]
+        label = f"[{lower:.3f}, {upper:.3f})" if np.isfinite(upper) else f"[{lower:.3f}, inf)"
+        out.append(f"  {label} n={len(band)}")
+        out.append(f"    full {_magnitude_record(band['xw_full'])}")
+        out.append(f"    F5   {_magnitude_record(band['xw_f5'])}")
+        if not price_columns.issubset(band.columns):
+            out.append("    closing-price comparison unavailable (missing columns)")
+            continue
+        p = pd.to_numeric(band["close_p_home"], errors="coerce")
+        home = pd.to_numeric(band["full_home"], errors="coerce")
+        away = pd.to_numeric(band["full_away"], errors="coerce")
+        valid = (np.isfinite(p) & p.gt(0) & p.lt(1)
+                 & np.isfinite(home) & np.isfinite(away) & home.ne(away))
+        paired = band[valid]
+        favorite = pd.Series(
+            np.where(p[valid].ge(0.5).eq(home[valid].gt(away[valid])), "W", "L"),
+            index=paired.index,
+        )
+        out.append(f"    closing-price paired n={len(paired)}; excluded={len(band) - len(paired)}")
+        out.append(f"      {MODEL_METRIC_LABEL} {_magnitude_record(paired['xw_full'])}")
+        out.append(f"      favorite {_magnitude_record(favorite)}")
+    return out
+
+
 def _logit_fit(X, y, iters=60):
     b = np.zeros(X.shape[1])
     for _ in range(iters):
@@ -1061,6 +1127,8 @@ def report_text(led):
         if len(ov):
             say(f"platoon lean full: {_rec(ov['ops_full'])}   F5: {_rec(ov['ops_f5'])}   (reliable-only, n={len(ov)})")
             say(f"{MODEL_METRIC_LABEL} on same subset  full: {_rec(ov['xw_full'])}   F5: {_rec(ov['xw_f5'])}")
+        for line in _fixed_magnitude_lines(g):
+            say(line)
         if len(g) >= 9:
             g["_terc"] = pd.qcut(g["xw_delta"], 3, labels=["low", "mid", "hi"], duplicates="drop")
             say(f"{MODEL_METRIC_LABEL} F5 by |Δ| tercile:")
