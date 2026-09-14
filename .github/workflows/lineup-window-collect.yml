@@ -6,6 +6,15 @@ name: Lineup window collect
 # artifacts cannot supply: a PREFIX of the game. A box score gives a whole-game
 # total and a starter-allowed total, and neither is the first N batters faced.
 #
+# It then runs `hitter_level_probe` on the same rows, which is the ONLY place
+# that probe can run: it needs the collector's `batter_id` beside the committed
+# per-hitter frames, and StatsAPI is unreachable from the dev sandbox. Until
+# this step existed the probe had no caller anywhere -- a fully-tested module
+# whose sample could never start accumulating. It answers the question the
+# team-level component line cannot: whether the fault in the lineup term is the
+# per-hitter RATE or the AGGREGATION that averages nine of them into one
+# number. Both are diagnostic; neither feeds a lean, a delta or a grade.
+#
 # Backfill, not lookahead. A finished game's play-by-play is immutable in the
 # same sense `actuals_backfill`'s box scores are; nothing here touches the
 # prediction side, which is what `.savant_cache/` being gitignored forbids
@@ -27,6 +36,7 @@ on:
   pull_request:
     paths:
       - 'lineup_window_collect.py'
+      - 'hitter_level_probe.py'
       - '.github/workflows/lineup-window-collect.yml'
   workflow_dispatch:
     inputs:
@@ -59,8 +69,10 @@ jobs:
       # The event map and the prefix logic are checked before the collector is
       # allowed near real games. A wrong cross or a mis-mapped event yields a
       # plausible rate rather than an error, so this gate is not a formality.
-      - name: Verify the event map and the window logic
-        run: python -m pytest tests/test_lineup_window_collect.py -q
+      - name: Verify the event map, the window logic and the hitter join
+        run: |
+          python -m pytest tests/test_lineup_window_collect.py \
+                           tests/test_hitter_level_probe.py -q
 
       - name: Collect
         run: |
@@ -68,6 +80,25 @@ jobs:
             ${{ inputs.date && format('--date {0}', inputs.date) || '' }} \
             --out lineup_window_pa.csv \
             --report lineup_window_collect_report.txt
+
+      # Reads the collector's output and the committed data/hitters_*.csv. The
+      # prediction half is whatever the build froze pregame, so this never
+      # reconstructs a prediction and the no-lookahead invariant is untouched:
+      # only the OUTCOME half is fetched, and a finished game's play-by-play is
+      # immutable in the same sense actuals_backfill's box scores are.
+      # Not `if: always()` -- with no PA rows the probe prints its own "nothing
+      # supplied" message, which would read as a result rather than a failed
+      # collect.
+      - name: Score each hitter against his own plate appearances
+        run: |
+          # pipefail explicitly: the runner's default shell is `bash -e`, so a
+          # crash in the probe would exit through tee's status and this step
+          # would pass while uploading a truncated report.
+          set -o pipefail
+          python hitter_level_probe.py \
+            --pa lineup_window_pa.csv \
+            --hitters data \
+            | tee hitter_level_probe_report.txt
 
       - name: Confirm nothing was written to data/
         run: |
@@ -86,4 +117,5 @@ jobs:
           path: |
             lineup_window_collect_report.txt
             lineup_window_pa.csv
+            hitter_level_probe_report.txt
           if-no-files-found: warn
