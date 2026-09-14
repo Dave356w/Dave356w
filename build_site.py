@@ -8271,11 +8271,23 @@ def main():
     # rows are already on disk, and a fault here costs a diagnostic file and
     # never the slate. `hitters_`, never `leans_` -- see hitter_frame.
     try:
+        # Start times so each hitter row carries its own lock_status, and so
+        # the write can refuse to replace a pregame lineup with a post-hoc one.
+        # `dump_is_post_hoc` alone does not protect this file: it diverts only
+        # when EVERY game has started, and one straggler on the slate is enough
+        # to keep the live name and clobber the pregame copy. That is fine for
+        # the dumps, whose rows the ledger filters by lock_status; this frame
+        # has no ledger behind it.
+        starts = {}
+        if (matchup_df is not None and not matchup_df.empty
+                and "scheduled_start_utc" in matchup_df.columns):
+            starts = dict(zip(matchup_df["game_pk"],
+                              matchup_df["scheduled_start_utc"]))
         n_h = hitter_frame.write(
             hitter_sink_rows,
             dump_path(hitter_frame.PREFIX, SLATE_DATE, DUMP_SUFFIX, post_hoc),
             model_tag=MODEL_TAG, model_metric=MODEL_RATE_LABEL,
-            snapshot_utc=snapshot_utc)
+            snapshot_utc=snapshot_utc, starts=starts)
         log(f"hitter frame: {n_h} rows")
     except Exception as e:  # noqa: BLE001
         log(f"hitter frame skipped: {e!r}")

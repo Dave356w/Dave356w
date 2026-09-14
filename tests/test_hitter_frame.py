@@ -6,6 +6,9 @@ home for it and the two would drift, the way v10 math drifted under a v9 tag.
 And the write must be unable to cost a slate: it happens after the irreplaceable
 pregame dumps, by a caller that swallows its failures.
 """
+import os
+import shutil
+import tempfile
 import unittest
 from unittest import mock
 
@@ -173,17 +176,153 @@ class WriteTests(unittest.TestCase):
         """The property the whole placement exists for. The pregame dumps are
         already on disk when this runs, and the caller swallows its failures --
         so a fault here costs a diagnostic file and never irreplaceable rows."""
+        import ast
         import inspect
+        import textwrap
         src = inspect.getsource(bs.main) if hasattr(bs, "main") else None
         if src is None:
             self.skipTest("no main() to inspect")
-        i_leans = src.index('dump_path("leans"')
-        i_hit = src.index("hitter_frame.write")
-        self.assertLess(i_leans, i_hit, "hitter frame must be written AFTER "
-                                        "the pregame dumps")
-        tail = src[i_hit - 400:i_hit + 400]
-        self.assertIn("try:", tail)
-        self.assertIn("except Exception", tail)
+        tree = ast.parse(textwrap.dedent(src))
+
+        def _calls(node, name):
+            """Line numbers of `<mod>.<name>(...)` calls inside `node`."""
+            return [n.lineno for n in ast.walk(node)
+                    if isinstance(n, ast.Call)
+                    and isinstance(n.func, ast.Attribute)
+                    and n.func.attr == name]
+
+        hit = _calls(tree, "write")
+        hit = [ln for ln in hit
+               if "hitter_frame.write" in textwrap.dedent(src).splitlines()[ln - 1]
+               or "hitter_frame.write" in "".join(
+                   textwrap.dedent(src).splitlines()[ln - 1:ln + 2])]
+        self.assertTrue(hit, "no hitter_frame.write call found in main()")
+        i_hit = min(hit)
+
+        leans = [n.lineno for n in ast.walk(tree)
+                 if isinstance(n, ast.Call)
+                 and isinstance(n.func, ast.Name) and n.func.id == "dump_path"
+                 and n.args and isinstance(n.args[0], ast.Constant)
+                 and n.args[0].value == "leans"]
+        self.assertTrue(leans, "no leans dump_path call found in main()")
+        self.assertLess(min(leans), i_hit,
+                        "hitter frame must be written AFTER the pregame dumps")
+
+        # Structural, not a character window: the previous form sliced 400
+        # chars around the call and went red the moment a comment was added
+        # beside it, which is a false failure about formatting rather than
+        # about the property. Find the Try that actually encloses the call.
+        guarded = False
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Try):
+                continue
+            body_lines = [n.lineno for b in node.body for n in ast.walk(b)
+                          if hasattr(n, "lineno")]
+            if i_hit not in body_lines:
+                continue
+            for h in node.handlers:
+                t = h.type
+                if t is None or (isinstance(t, ast.Name) and t.id == "Exception"):
+                    guarded = True
+        self.assertTrue(guarded, "hitter_frame.write must sit inside a "
+                                 "try/except Exception so a fault here cannot "
+                                 "cost the slate")
+
+
+class PregamePreservationTests(unittest.TestCase):
+    """The defect: `dump_is_post_hoc` diverts only when EVERY game on the slate
+    has started, and every slate has a straggler -- so the live file was
+    rewritten by the post-rollover build. 1728 of 2178 committed rows (79.3%)
+    were written after their game started, median 172 minutes late."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.path = os.path.join(self.tmp, "hitters_2026-09-06_xw.csv")
+        self.start = "2026-09-06T23:00:00+00:00"
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _rows(self, rate, side="home", game_pk=1):
+        return [{"game_pk": game_pk, "faced_pitcher": 7, "pitcher_side": "away",
+                 "batting_side": side, "player_id": 100 + i, "batting_order": i + 1,
+                 "PA": 400, "xwoba_raw": rate, "xwoba_shrunk": rate,
+                 "slot_weight": 1.0, "savant_backfill": False} for i in range(9)]
+
+    def _write(self, rate, snap, side="home", game_pk=1):
+        return hitter_frame.write(self._rows(rate, side, game_pk), self.path,
+                        model_tag="t", model_metric="xwOBA", snapshot_utc=snap,
+                        starts={game_pk: self.start})
+
+    def test_a_post_hoc_build_cannot_overwrite_the_pregame_lineup(self):
+        self._write(0.310, "2026-09-06T22:00:00+00:00")           # pregame
+        self._write(0.999, "2026-09-07T01:31:00+00:00")           # post-rollover
+        got = pd.read_csv(self.path)
+        self.assertEqual(sorted(got["xwoba_shrunk"].unique()), [0.310])
+        self.assertEqual(sorted(got["lock_status"].unique()), ["pregame"])
+
+    def test_a_later_pregame_poll_still_refreshes_the_lineup(self):
+        """Preserving pregame must not freeze the FIRST one -- the stored row
+        should be the last snapshot taken before first pitch."""
+        self._write(0.310, "2026-09-06T18:00:00+00:00")
+        self._write(0.320, "2026-09-06T22:30:00+00:00")
+        got = pd.read_csv(self.path)
+        self.assertEqual(sorted(got["xwoba_shrunk"].unique()), [0.320])
+
+    def test_a_game_side_with_no_pregame_frame_still_gets_the_post_hoc_one(self):
+        """Protecting a pregame row is not a reason to store nothing for a
+        game that never had one."""
+        self._write(0.310, "2026-09-06T22:00:00+00:00", side="home")
+        self._write(0.999, "2026-09-07T01:31:00+00:00", side="away")
+        got = pd.read_csv(self.path)
+        self.assertEqual(len(got), 18)
+        by = got.groupby("batting_side").xwoba_shrunk.first().to_dict()
+        self.assertEqual(by["home"], 0.310)
+        self.assertEqual(by["away"], 0.999)
+
+    def test_one_straggler_does_not_expose_the_started_games(self):
+        """The real shape: most games done, one not. Each game-side is decided
+        on its OWN start time, so the finished ones keep their pregame rows."""
+        snap_late = "2026-09-07T01:31:00+00:00"
+        hitter_frame.write(self._rows(0.310, game_pk=1), self.path, model_tag="t",
+                 model_metric="xwOBA", snapshot_utc="2026-09-06T22:00:00+00:00",
+                 starts={1: self.start})
+        hitter_frame.write(self._rows(0.999, game_pk=1) + self._rows(0.400, game_pk=2),
+                 self.path, model_tag="t", model_metric="xwOBA",
+                 snapshot_utc=snap_late,
+                 starts={1: self.start, 2: "2026-09-07T02:00:00+00:00"})
+        got = pd.read_csv(self.path)
+        self.assertEqual(got[got.game_pk == 1].xwoba_shrunk.iloc[0], 0.310)
+        self.assertEqual(got[got.game_pk == 2].xwoba_shrunk.iloc[0], 0.400)
+        self.assertEqual(got[got.game_pk == 2].lock_status.iloc[0], "pregame")
+
+    def test_an_empty_build_leaves_the_existing_file_alone(self):
+        self._write(0.310, "2026-09-06T22:00:00+00:00")
+        self.assertEqual(hitter_frame.write([], self.path, snapshot_utc="x"), 0)
+        self.assertEqual(len(pd.read_csv(self.path)), 9)
+
+    def test_an_unreadable_existing_file_is_treated_as_absent_not_fatal(self):
+        with open(self.path, "w") as fh:
+            fh.write("\x00\x00 not,a,csv\n\"unterminated\n")
+        n = self._write(0.310, "2026-09-06T22:00:00+00:00")
+        self.assertEqual(n, 9)
+
+    def test_lock_status_matches_the_graders_rule_including_the_boundary(self):
+        self.assertEqual(hitter_frame.lock_status("2026-09-06T22:59:59+00:00", self.start),
+                         "pregame")
+        self.assertEqual(hitter_frame.lock_status(self.start, self.start), "late_snapshot")
+        self.assertEqual(hitter_frame.lock_status(None, self.start), "legacy_unverified")
+        self.assertEqual(hitter_frame.lock_status("2026-09-06T22:00:00+00:00", None),
+                         "legacy_unverified")
+
+    def test_a_legacy_file_without_lock_status_is_not_treated_as_pregame(self):
+        """Absent provenance must not be read as a pregame claim."""
+        old = hitter_frame.frame(self._rows(0.310), "t", "xwOBA",
+                       "2026-09-06T22:00:00+00:00").drop(columns=["lock_status"])
+        new = hitter_frame.frame(self._rows(0.999), "t", "xwOBA",
+                       "2026-09-07T01:31:00+00:00", starts={1: self.start})
+        got = hitter_frame.merge_preserving_pregame(old, new)
+        self.assertEqual(sorted(got["xwoba_shrunk"].unique()), [0.999])
 
 
 if __name__ == "__main__":

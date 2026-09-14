@@ -63,7 +63,79 @@ COLUMNS = [
     "player_id", "batting_order", "PA",
     "xwoba_raw", "xwoba_shrunk", "slot_weight", "savant_backfill",
     "model_tag", "model_metric", "snapshot_utc",
+    # Per-row provenance, appended so existing readers keep working. Without
+    # these the frame could not answer "was I pregame?" from its own contents
+    # and every consumer had to re-join the ledger to find out -- which is how
+    # a post-hoc frame got scored as a prediction in the first place.
+    "scheduled_start_utc", "lock_status",
 ]
+
+
+def lock_status(snapshot_utc, scheduled_start_utc):
+    """`grade_leans._lock_status`'s rule, applied per hitter row.
+
+    Deliberately the same comparison, including the strict `<`: a second
+    definition of "started" is a second thing to keep in sync, and this file
+    is now the record of whether its own rows were pregame.
+    """
+    snap = pd.to_datetime(snapshot_utc, utc=True, errors="coerce")
+    start = pd.to_datetime(scheduled_start_utc, utc=True, errors="coerce")
+    if pd.isna(snap) or pd.isna(start):
+        return "legacy_unverified"
+    return "pregame" if snap < start else "late_snapshot"
+
+
+def merge_preserving_pregame(old, new):
+    """Never let a post-hoc lineup replace a pregame one.
+
+    THE DEFECT THIS FIXES. `dump_path` already gives this frame the
+    `rebuild_` diversion, and it almost never fires: `dump_is_post_hoc`
+    requires EVERY game on the slate to have started, and every slate has a
+    straggler -- measured 14 of 15 started, 9 of 10, 12 of 15, so `.all()` was
+    False and the file was rewritten as live. For `leans_*` that is correct and
+    harmless: each row carries `lock_status` and the ledger admits only the
+    pregame ones, so the mixture is labelled and filtered downstream. This
+    frame has no ledger behind it -- the file IS the record -- so the same rule
+    destroyed the pregame copy every night. Measured before this fix: 1728 of
+    2178 committed rows (79.3%) were written after their game started, median
+    172 minutes late.
+
+    The merge is per (game_pk, batting_side), not per hitter, because a lineup
+    is a unit: mixing a pregame hitter with a post-hoc one would produce a
+    nine-man frame that never existed, and the composite built from it would
+    be a number no build ever computed.
+
+    An older group is kept ONLY when it is wholly pregame and the incoming one
+    is not. Everything else takes the new rows, so a later pregame poll still
+    refreshes a lineup that has not started -- which is the behaviour that
+    makes the last pregame snapshot the stored one.
+    """
+    if old is None or getattr(old, "empty", True):
+        return new
+    old = old.copy()
+    if "lock_status" not in old.columns:
+        old["lock_status"] = "legacy_unverified"
+    key = ["game_pk", "batting_side"]
+    og = {k: g for k, g in old.groupby(key, dropna=False)}
+    ng = {k: g for k, g in new.groupby(key, dropna=False)}
+    out = []
+    for k in sorted(set(og) | set(ng), key=lambda t: (str(t[0]), str(t[1]))):
+        o, n = og.get(k), ng.get(k)
+        if n is None:
+            out.append(o)
+        elif o is None:
+            out.append(n)
+        else:
+            o_pre = bool((o["lock_status"] == "pregame").all())
+            n_pre = bool((n["lock_status"] == "pregame").all())
+            out.append(o if (o_pre and not n_pre) else n)
+    merged = pd.concat(out, ignore_index=True)
+    for c in COLUMNS:
+        if c not in merged.columns:
+            merged[c] = np.nan
+    return merged[COLUMNS].sort_values(
+        ["game_pk", "batting_side", "batting_order"],
+        kind="stable", na_position="last").reset_index(drop=True)
 
 
 def _f(x):
@@ -117,7 +189,8 @@ def records(g, vals, w, game_pk, faced_pitcher, rate_col, backfill_col):
     return out
 
 
-def frame(rows, model_tag=None, model_metric=None, snapshot_utc=None):
+def frame(rows, model_tag=None, model_metric=None, snapshot_utc=None,
+          starts=None):
     """Stamped DataFrame in the declared column order, or an empty one.
 
     Provenance is stamped here rather than at each record so a row cannot carry
@@ -132,22 +205,44 @@ def frame(rows, model_tag=None, model_metric=None, snapshot_utc=None):
     df["model_tag"] = model_tag
     df["model_metric"] = model_metric
     df["snapshot_utc"] = snapshot_utc
+    # Stamped here for the same reason the tag is: one place, so a row cannot
+    # carry a start time that disagrees with the build that produced it.
+    sm = dict(starts or {})
+    df["scheduled_start_utc"] = df["game_pk"].map(sm) if sm else None
+    df["lock_status"] = [lock_status(snapshot_utc, st)
+                         for st in df["scheduled_start_utc"]]
     for c in COLUMNS:
         if c not in df.columns:
             df[c] = np.nan
     return df[COLUMNS]
 
 
-def write(rows, path, model_tag=None, model_metric=None, snapshot_utc=None):
-    """Write the frame; return the number of rows written (0 when empty).
+def write(rows, path, model_tag=None, model_metric=None, snapshot_utc=None,
+          starts=None):
+    """Merge into `path` and write; return the number of rows in the result.
 
     An empty frame writes NOTHING rather than a header-only file: a slate whose
     lineups never posted has no per-hitter truth to record, and an empty file
-    would read as one that did and found nine missing bats.
+    would read as one that did and found nine missing bats. It also leaves any
+    existing file alone -- the pregame copy is the thing being protected, and
+    clearing it on an empty build would be the defect this merge exists to fix,
+    reached from the other side.
+
+    A file that cannot be read is treated as absent rather than fatal. This
+    module is best-effort and off the critical path by design, so a corrupt
+    artifact must not cost the caller its slate; the cost of being wrong here
+    is one diagnostic file.
     """
-    df = frame(rows, model_tag, model_metric, snapshot_utc)
+    df = frame(rows, model_tag, model_metric, snapshot_utc, starts)
     if df.empty:
         return 0
+    old = None
+    if os.path.exists(path):
+        try:
+            old = pd.read_csv(path)
+        except (OSError, ValueError, pd.errors.ParserError):
+            old = None
+    df = merge_preserving_pregame(old, df)
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     df.to_csv(path, index=False)
     return len(df)
