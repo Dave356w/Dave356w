@@ -210,18 +210,17 @@ pre-registered hybrid market-direction test  (registered 2026-09-01; follow the 
     price source — selection/eligibility: saved pregame_p_home + locked action/selection;
                    market comparison: hybrid_p/pregame_p_home; returns: hybrid_ml/pregame MLs. No close fallback.
     missing prices — malformed locked selection, grade, probability, or ML: excluded and counted as unscorable.
-    eligible rows since registration: 113 over 9 slates
-    WARNING: 13 committed row(s) in the window carry a FOLLOW/FADE but no scorable selection, price or grade. They are excluded above -- see hybrid_test.unscorable.
-    SWITCH DELTA (registered)  n=7    -0.044u per switch  +/- 0.797   z=-0.06   total -0.31u
+    eligible rows since registration: 126 over 10 slates
+    SWITCH DELTA (registered)  n=9    -0.103u per switch  +/- 0.681   z=-0.15   total -0.93u
     discovery was +0.592u per switch over 15; paired ROI CI [-2.6, +10.4] pp. Read the forward number against that, not against zero.
 
-    follow  q>=0.45         n=106  64-42    +3.16u  ROI   +3.0%   vs price z=+0.79
-    fade    q< 0.45         n=7    4-3    -0.42u  ROI   -6.0%   vs price z=-0.06
-    combined hybrid         n=113  68-45    +2.74u  ROI   +2.4%   vs price z=+0.75
-    plain xwOBA lean        n=113  67-46    +3.05u  ROI   +2.7%   vs price z=+0.78
-    control: always-chalk   n=113  59-54   -16.12u  ROI  -14.3%   vs price z=-1.14
-    the fade branch backed the favourite in 7 of 7 switched games (construction says all of them)
-    GATE: 7 of ~41 switches to test the discovery-sized effect, ~1420 for a plausible +0.10u one (~10 seasons at 0.88 switches a slate).
+    follow  q>=0.45         n=117  73-44    +6.90u  ROI   +5.9%   vs price z=+1.21
+    fade    q< 0.45         n=9    5-4    -0.91u  ROI  -10.1%   vs price z=-0.18
+    combined hybrid         n=126  78-48    +6.00u  ROI   +4.8%   vs price z=+1.12
+    plain xwOBA lean        n=126  77-49    +6.92u  ROI   +5.5%   vs price z=+1.22
+    control: always-chalk   n=126  69-57   -12.87u  ROI  -10.2%   vs price z=-0.66
+    the fade branch backed the favourite in 9 of 9 switched games (construction says all of them)
+    GATE: 9 of ~41 switches to test the discovery-sized effect, ~1420 for a plausible +0.10u one (~10 seasons at 0.88 switches a slate).
     The combined-hybrid line is mostly the model, not the rule: only the switched games are the hypothesis. See hybrid_test.py.
 
 pre-registered hybrid v2 test  (registered 2026-09-11; fade only when q < 0.45 AND |xw_net| < 0.012; follow otherwise)
@@ -255,29 +254,29 @@ pre-registered |delta| filter test  (registered 2026-09-03; abstain when |xw_net
 pre-registered abstain-vs-fade test  (registered 2026-09-03; decline the lean below q = 0.45 instead of fading it)
     price source — saved pregame eligibility/selection, probability, and return fields inherited from hybrid_test.
                    No closing fallback; missing locked fields are excluded and counted there as unscorable.
-    eligible rows since registration: 90 over 7 slates
-    FADE MINUS ABSTAIN (registered)  n=3    +0.062u per declined game +/- 0.532   z=+0.12
+    eligible rows since registration: 103 over 8 slates
+    FADE MINUS ABSTAIN (registered)  n=5    -0.060u per declined game +/- 0.384   z=-0.16
       positive keeps the shipped fade branch; negative says decline. Discovery +0.175u over 20, CI [-0.168, +0.503].
 
-    this rule (declined out)    n=87   53-34   +4.2pp +/-  5.3    +2.70u  ROI   +3.1%
-    shipped hybrid (fades)      n=90   55-35   +4.4pp +/-  5.2    +2.88u  ROI   +3.2%
-    the declined games only     n=3    2-1   +7.6pp +/- 28.4    +0.19u  ROI   +6.2%
-    control: always-chalk       n=90   49-41   -2.9pp +/-  5.2    -9.69u  ROI  -10.8%
-    price-snapshot reconciliation — same saved-pregame chalk selections: n=90, 49-41;
-      saved pregame -9.6935u; closing -9.8749u. The record is identical but the ML payout changed;
+    this rule (declined out)    n=98   62-36   +6.3pp +/-  5.0    +6.44u  ROI   +6.6%
+    shipped hybrid (fades)      n=103  65-38   +6.0pp +/-  4.8    +6.14u  ROI   +6.0%
+    the declined games only     n=5    3-2   +0.9pp +/- 21.9    -0.30u  ROI   -6.0%
+    control: always-chalk       n=103  59-44   -0.3pp +/-  4.8    -6.44u  ROI   -6.3%
+    price-snapshot reconciliation — same saved-pregame chalk selections: n=103, 59-44;
+      saved pregame -6.4395u; closing -6.5540u. The record is identical but the ML payout changed;
       selections are not recalculated at the close.
-    the faded games backed the favourite in 3 of 3 (construction says all of them -- read the line above against the always-chalk control, not instead of it)
-    GATE: 3 of ~82 declined games for the discovery-sized effect, ~251 for a plausible +0.10u one. See abstain_test.py.
+    the faded games backed the favourite in 5 of 5 (construction says all of them -- read the line above against the always-chalk control, not instead of it)
+    GATE: 5 of ~82 declined games for the discovery-sized effect, ~251 for a plausible +0.10u one. See abstain_test.py.
 
 pre-registered underdog sign-flip test  (registered 2026-09-03; dog leans split at q = 0.45)
     price source — selection/market comparison: saved pregame_p_home (model_side_p); returns: saved pregame MLs.
                    No closing fallback; missing locked fields are excluded by hybrid_test and counted there as unscorable.
-    dog leans since registration: 14 over 6 slates
-    CONTRAST above-minus-below (registered)  +41.90pp +/- 32.11   z=+1.31   (n=11 above, 3 below)
+    dog leans since registration: 16 over 7 slates
+    CONTRAST above-minus-below (registered)  +35.22pp +/- 26.61   z=+1.32   (n=11 above, 5 below)
     discovery +27.59pp +/- 13.20. Read the forward number against that, not against zero.
 
     above  q>=0.45              n=11   9-2  +34.34pp +/- 15.05    +7.10u  ROI  +64.6%
-    below  q< 0.45              n=3    1-2   -7.56pp +/- 28.36    -0.77u  ROI  -25.7%
-    all dog leans               n=14   10-4  +25.36pp +/- 13.30    +6.33u  ROI  +45.2%
+    below  q< 0.45              n=5    2-3   -0.88pp +/- 21.95    -0.64u  ROI  -12.8%
+    all dog leans               n=16   11-5  +23.33pp +/- 12.41    +6.46u  ROI  +40.4%
     NOT independent of forward_test arm 2 (34 of 47 discovery rows shared) or of abstain_test, which touches the same below-split games.
-    GATE: 14 of ~88 dog leans, ~198 for a 10pp contrast. The band alone scored P=0.2805 on its own search test and is deliberately NOT the registered quantity.
+    GATE: 16 of ~88 dog leans, ~198 for a 10pp contrast. The band alone scored P=0.2805 on its own search test and is deliberately NOT the registered quantity.

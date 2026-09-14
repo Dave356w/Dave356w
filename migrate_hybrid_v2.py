@@ -49,6 +49,29 @@ def migrate(led):
     hybrid_cols += V1_ARCHIVE
     before = out[hybrid_cols].copy()
 
+    # A re-run REFRESHES the v1 archive it already wrote; it never MINTS a new
+    # one. Both halves matter and they fix opposite failures.
+    #
+    # Refreshing, because the archive describes a row and `grade_leans`
+    # rebuilds a pending row's model and market fields on every pregame poll
+    # (MODEL_FIELDS carries xw_lean and pregame_p_home) while carrying no
+    # hybrid_v1_* entry. A row pending when this migration ran therefore froze
+    # its archive at a state the final lock superseded. Measured on the
+    # 2026-09-11 slate: 12 of 13 rows kept a stale probability and 2 kept a
+    # stale LEAN (CWS@STL at xw_net +0.0043, BAL@TOR at -0.0027 -- both thin
+    # enough to flip on a lineup refresh), so the archive named a selection
+    # nobody locked. Deriving from the row's final state is the same rule the
+    # first migration applied to rows that were already graded, hence already
+    # final; it just could not hold for the ones that were not.
+    #
+    # Minting nothing new, because v1 is a RETIRED registration. Every row
+    # after the migration is v2-only by construction, and this loop would
+    # happily compute the v1 counterfactual for each of them -- widening a
+    # frozen test's row set as a side effect of a repair. Whether hybrid_test
+    # should score post-retirement slates is a scope decision about a
+    # registration, not a migration's business.
+    minting = not out["hybrid_v1_action"].notna().any()
+
     current = out["model_tag"].astype(str).eq(grade_leans.MODEL_TAG)
     for idx, row in out[current].iterrows():
         lean, home, away = row.get("xw_lean"), row.get("home"), row.get("away")
@@ -70,19 +93,26 @@ def migrate(led):
                                       "saved_pregame")
             # Preserve the rule that was actually registered and live when
             # these snapshots were captured. It remains saved-pregame only.
-            old_q = ph if lean == home else 1.0 - ph
-            old_action = "FOLLOW" if old_q >= hybrid_test.THRESHOLD else "FADE"
-            old_pick = (lean if old_action == "FOLLOW"
-                        else (away if lean == home else home))
-            out.at[idx, "hybrid_v1_action"] = old_action
-            out.at[idx, "hybrid_v1_selection"] = old_pick
-            out.at[idx, "hybrid_v1_p"] = (old_q if old_action == "FOLLOW"
-                                            else 1.0 - old_q)
-            out.at[idx, "hybrid_v1_ml"] = hml if old_pick == home else aml
-            out.at[idx, "hybrid_v1_full"] = (
-                grade_leans._wlt(old_pick, away, home, row.get("full_away"),
-                                 row.get("full_home"), False)
-                if row.get("status") == "graded" else np.nan)
+            if minting or isinstance(row.get("hybrid_v1_action"), str):
+                old_q = ph if lean == home else 1.0 - ph
+                old_action = ("FOLLOW" if old_q >= hybrid_test.THRESHOLD
+                              else "FADE")
+                old_pick = (lean if old_action == "FOLLOW"
+                            else (away if lean == home else home))
+                out.at[idx, "hybrid_v1_action"] = old_action
+                out.at[idx, "hybrid_v1_selection"] = old_pick
+                out.at[idx, "hybrid_v1_p"] = (old_q if old_action == "FOLLOW"
+                                                else 1.0 - old_q)
+                out.at[idx, "hybrid_v1_ml"] = hml if old_pick == home else aml
+                # Ungraded stays NaN here, but no longer permanently: the
+                # grader now writes hybrid_v1_full from this selection when
+                # the row grades, so a row pending at a migration keeps its
+                # archive instead of losing it.
+                out.at[idx, "hybrid_v1_full"] = (
+                    grade_leans._wlt(old_pick, away, home,
+                                     row.get("full_away"),
+                                     row.get("full_home"), False)
+                    if row.get("status") == "graded" else np.nan)
         else:
             for col in V1_ARCHIVE:
                 out.at[idx, col] = np.nan

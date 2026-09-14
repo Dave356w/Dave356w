@@ -693,6 +693,18 @@ def grade(led):
             led.at[idx, "xw_full"] = _wlt(led.at[idx, "xw_lean"], aw, hm, fa, fh, False)
             led.at[idx, "hybrid_full"] = _wlt(
                 led.at[idx, "hybrid_selection"], aw, hm, fa, fh, False)
+            # The v1 archive is graded here too, from its own stored selection.
+            # migrate_hybrid_v2 writes hybrid_v1_full once, gated on the row
+            # already being graded, and nothing else ever wrote it -- so every
+            # row still pending when that migration ran lost its v1 grade
+            # permanently while keeping a perfectly good v1 selection. That hit
+            # the whole 2026-09-11 slate: 13 rows dropped out of hybrid_test,
+            # and with it out of abstain_test and dog_contrast_test, which
+            # delegate row selection to it. `_wlt` returns None for a NaN
+            # selection, so rows carrying no archive stay ungraded rather than
+            # graded a loss.
+            led.at[idx, "hybrid_v1_full"] = _wlt(
+                led.at[idx, "hybrid_v1_selection"], aw, hm, fa, fh, False)
             if f5a is not None:
                 led.at[idx, "xw_f5"] = _wlt(led.at[idx, "xw_lean"], aw, hm, f5a, f5h, True)
             if bool(led.at[idx, "ops_valid"]):
