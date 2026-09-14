@@ -1169,8 +1169,10 @@ Every CI run, `grade_leans.py`:
 - **Reports** the current `RECORD_TAGS` family to the Actions log and
   `data/ledger_report.txt` (overall, the published hybrid rule's record with
   its always-chalk control beside it, reliable-only platoon subset, |Δ|
-  terciles, DIVERGE head-to-head, and — once 120 graded F5 decisions
-  accumulate — a pitching-vs-lineup logit weight fit), followed by immutable
+  terciles, the fixed |Δ| bands against the closing favourite, those same
+  bands crossed with the market's own probability of the leaned side at the
+  saved pregame price, DIVERGE head-to-head, and — once 120 graded F5
+  decisions accumulate — a pitching-vs-lineup logit weight fit), followed by immutable
   record lines for every historical model family. The hybrid line is
   a historical reconstruction; the registered forward test prints further down
   the same file. Current retrospective surfaces share `hybrid_v2.apply_rule`;

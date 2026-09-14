@@ -6382,25 +6382,15 @@ def _excess_se(probs):
 
     Both surfaces on market-calibration.html ask the same question -- did this
     bucket beat its own price -- so the standard error beside them has one
-    derivation rather than two that can drift.
-
-    Each observation is an independent Bernoulli at its own devigged price, so
-    the win count is Poisson-binomial: Var(Σ wins) = Σ p(1−p), and the SE of
-    the mean is sqrt(Σ p(1−p))/n.
-
-    It deliberately does NOT estimate the spread from the outcomes. The
-    obvious sqrt(p̂(1−p̂)/n) does, and therefore returns exactly 0.0 on any
-    bucket that went all-W or all-L -- rendering the least certain buckets on
-    the page as the most certain, which is the direction that makes noise look
-    like signal. The sample sd of the residuals fails the same way for the
-    same reason. Here the p_i are fixed by the market rather than estimated
-    from the outcomes under test, so this is defined at n=1 and cannot
-    degenerate.
+    derivation rather than two that can drift. The ledger report's magnitude ×
+    price grid asks it a third time, and `grade_leans` cannot import this
+    module (it refuses a non-xwOBA MODEL_TAG at import), so the derivation
+    itself now lives in `market_backfill.excess_se` and this is the alias the
+    surfaces here were already written against. See that docstring for why the
+    spread is taken from the prices and never from the outcomes under test.
     """
-    p = np.asarray(list(probs), dtype=float)
-    if not p.size:
-        return np.nan
-    return float(math.sqrt(float((p * (1.0 - p)).sum())) / p.size)
+    from market_backfill import excess_se
+    return excess_se(probs)
 
 
 def _market_calibration_rows(led):

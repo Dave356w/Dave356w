@@ -356,6 +356,35 @@ def metric_label(df, mixed="Model"):
     return uniq[0] if len(uniq) == 1 else mixed
 
 
+def excess_se(probs):
+    """SE of (realised rate - mean implied) under correctly priced games.
+
+    One home for a derivation three callers need -- build_site's calibration
+    surfaces, value_probe, and the ledger report's magnitude x price grid --
+    for the same reason `metric_label` above has one: two copies of a
+    statistic drift, and a reader cannot see which one they are looking at.
+    It lives here rather than in build_site because grade_leans cannot import
+    that module (it refuses a non-xwOBA MODEL_TAG at import time) and because
+    this is a statement about market prices.
+
+    Each observation is an independent Bernoulli at its own devigged price, so
+    the win count is Poisson-binomial: Var(sum wins) = sum p(1-p), and the SE
+    of the mean is sqrt(sum p(1-p))/n.
+
+    It deliberately does NOT estimate the spread from the outcomes. The
+    obvious sqrt(p_hat(1-p_hat)/n) does, and therefore returns exactly 0.0 on
+    any bucket that went all-W or all-L -- rendering the least certain buckets
+    as the most certain, which is the direction that makes noise look like
+    signal. The sample sd of the residuals fails the same way for the same
+    reason. Here the p_i are fixed by the market rather than estimated from
+    the outcomes under test, so this is defined at n=1 and cannot degenerate.
+    """
+    p = np.asarray(list(probs), dtype=float)
+    if not p.size:
+        return np.nan
+    return float(np.sqrt(float((p * (1.0 - p)).sum())) / p.size)
+
+
 def vs_market_summary(df, col=COL, verbose=True):
     """Vs-market scoreboard for both models. Returns dict for grades.html chips."""
     d = df[df["close_p_home"].notna()].copy()

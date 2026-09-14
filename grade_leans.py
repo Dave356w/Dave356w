@@ -62,7 +62,8 @@ import numpy as np
 import pandas as pd
 import requests
 
-from market_backfill import MARKET_COLS, attach_market, metric_label
+from market_backfill import (MARKET_COLS, attach_market, excess_se,
+                             metric_label)
 from actuals_backfill import (ACTUAL_COLS, attach_actuals, actuals_summary,
                               actuals_family_line, components_summary,
                               slate_lines)
@@ -716,6 +717,16 @@ def _rec(s):
 FIXED_MAGNITUDE_EDGES = (0.0, 0.010, 0.020, 0.030, 0.050, float("inf"))
 
 
+def _band_label(lo, hi):
+    """One home for a band's printed name.
+
+    Three sites format this -- the band block, the grid's cell index and the
+    grid's renderer -- and the last two MATCH on the string, so two copies
+    drifting would not raise, it would silently print a band with no cells.
+    """
+    return f"[{lo:.3f}, {hi:.3f})" if np.isfinite(hi) else f"[{lo:.3f}, inf)"
+
+
 def _magnitude_record(grades):
     """Record and Wilson 95% interval; ties do not enter the rate."""
     w = int(grades.eq("W").sum())
@@ -753,7 +764,7 @@ def _fixed_magnitude_lines(g):
     price_columns = {"close_p_home", "full_home", "full_away"}
     for lower, upper in zip(FIXED_MAGNITUDE_EDGES, FIXED_MAGNITUDE_EDGES[1:]):
         band = g[eligible & magnitude.ge(lower) & magnitude.lt(upper)]
-        label = f"[{lower:.3f}, {upper:.3f})" if np.isfinite(upper) else f"[{lower:.3f}, inf)"
+        label = _band_label(lower, upper)
         out.append(f"  {label} n={len(band)}")
         out.append(f"    full {_magnitude_record(band['xw_full'])}")
         out.append(f"    F5   {_magnitude_record(band['xw_f5'])}")
@@ -773,6 +784,213 @@ def _fixed_magnitude_lines(g):
         out.append(f"    closing-price paired n={len(paired)}; excluded={len(band) - len(paired)}")
         out.append(f"      {MODEL_METRIC_LABEL} {_magnitude_record(paired['xw_full'])}")
         out.append(f"      favorite {_magnitude_record(favorite)}")
+    return out
+
+
+# ---- magnitude x market-price grid ----------------------------------------
+# The market axis of the grid below is the LEANED side's own no-vig
+# probability. .500 is the definition of a favourite; the outer two edges are
+# the shipped rule's fade gate and its mirror, taken from the registration
+# rather than restated, so a reader comparing this grid against the rule is
+# never comparing two thresholds that have drifted apart. Neither edge was
+# fitted here and neither selects anything -- they cut a display.
+#
+# The mirror is rounded because `1 - 0.45` is 0.55000000000000004 in binary
+# floating point. That one-ULP asymmetry is real and inert inside the
+# registered rule, where it is pinned rather than fixed (see
+# tests/test_dog_contrast_test.py); it has no business deciding which column a
+# displayed row lands in.
+def _fixed_price_edges():
+    import hybrid_v2
+    thr = float(hybrid_v2.THRESHOLD)
+    return (0.0, thr, 0.50, round(1.0 - thr, 10), 1.0)
+
+
+def _p3(x):
+    """.417 rather than 0.417 -- every number in this grid is a probability."""
+    return f"{x:.3f}".lstrip("0")
+
+
+def _price_column_labels(edges):
+    out = []
+    for lo, hi in zip(edges, edges[1:]):
+        if lo <= 0.0:
+            out.append(f"q <{_p3(hi)}")
+        elif hi >= 1.0:
+            out.append(f"q {_p3(lo)}+")
+        else:
+            out.append(f"q {_p3(lo)}-{_p3(hi)}")
+    return out
+
+
+def _grid_cell_line(label, won, q, width=14):
+    """One cell: size, record, its own mean price, the gap, and the gap's SE.
+
+    The SE is never suppressed and the cell is never gated on n. A one-game
+    cell prints sqrt(p(1-p)) -- up to 50 points, at a coin-flip price -- which
+    is exactly what it should say; gating it would leave a reader to recompute
+    the rate without the caveat, and grading it THIN/DEVELOPING/LARGER would be
+    the credibility-tier cliff this repo has already removed twice.
+    """
+    n = int(np.asarray(q).size)
+    if not n:
+        return f"    {label:<{width}} n=  0   (no rows)"
+    w = int(np.asarray(won).sum())
+    rate = w / n
+    mkt = float(np.asarray(q).mean())
+    return (f"    {label:<{width}} n={n:>3}   {f'{w}-{n - w}':>7} ({rate:.3f})   "
+            f"mean q {_p3(mkt)}   excess {100 * (rate - mkt):+6.1f}"
+            f" +- {100 * excess_se(q):4.1f} pp")
+
+
+def _grid_null_best_excess(cells, draws=2000, seed=0):
+    """Mean best-CELL excess when every game settles at its own price.
+
+    A grid is a search. The largest of twenty cells is a maximum, and at these
+    cell sizes a maximum is large whether or not anything is there -- the same
+    arithmetic that hands back a +20% ROI cell from pure noise on this ledger.
+    So the grid prints what its own best cell would read under "the market is
+    right and the model adds nothing", which is the reference a cell has to
+    beat. Never zero.
+
+    Fixed seed: this report is a committed artifact, and a reference line that
+    moves every build is a diff nobody can read.
+    """
+    cells = [np.asarray(c, dtype=float) for c in cells]
+    cells = [c for c in cells if c.size]
+    if not cells:
+        return float("nan")
+    rng = np.random.default_rng(seed)
+    best = None
+    for q in cells:
+        exc = (rng.random((draws, q.size)) < q).mean(axis=1) - q.mean()
+        best = exc if best is None else np.maximum(best, exc)
+    return float(best.mean())
+
+
+def _magnitude_price_cells(mag, q, edges):
+    """(band label, column label, boolean mask) for every interior cell."""
+    out = []
+    for lo, hi in zip(FIXED_MAGNITUDE_EDGES, FIXED_MAGNITUDE_EDGES[1:]):
+        band = _band_label(lo, hi)
+        row = (mag >= lo) & (mag < hi)
+        for name, (clo, chi) in zip(_price_column_labels(edges),
+                                    zip(edges, edges[1:])):
+            out.append((band, name, row & (q >= clo) & (q < chi)))
+    return out
+
+
+def _magnitude_price_grid_lines(g):
+    """|xw_net| bands x the leaned side's saved pregame price. Descriptive.
+
+    There is no validated mapping from magnitude to a win probability in this
+    repo: `xw_net` is an xwOBA difference, and the only thing the ledger can
+    say about it is what past leans of that size did against the prices those
+    games actually carried. So a cell reports its size, its record, the market
+    probability of the side the model took, the gap between the two, and the
+    SE of that gap -- and none of that is a probability for the next game to
+    land in the cell.
+
+    The market axis is what makes the magnitude axis readable at all, because
+    the two are not independent: the model leans the market's favourite more
+    often as |xw_net| grows, so a band's own rate moves with the schedule that
+    band drew, and it cannot separate "the model is right" from "the model
+    leaned expensive favourites". The favourite control in the block above is
+    one binary comparison where the games' own prices are n of them, and it
+    can read as a tie while the price-relative gap is not one. The measurement
+    behind that is in CLAUDE.md; the gap against each game's own price is the
+    only column here that is a statement about the model rather than about the
+    schedule.
+
+    Saved pregame prices only (`pregame_p_home`), no close fallback: that is
+    the price the decision was locked against, and the two snapshots are not
+    interchangeable. Rows predating the pregame instrumentation carry no such
+    price and are counted out rather than filled from their close -- which is
+    why this block's n is smaller than the one above, and why it names its own
+    earliest date instead of leaving the reader to assume full coverage.
+    """
+    label = f"{MODEL_METRIC_LABEL} |delta| x saved-pregame market probability"
+    required = {"xw_net", "xw_lean", "xw_full", "home", "away", "pregame_p_home"}
+    if not required.issubset(g.columns):
+        return [f"{label}: unavailable (missing report inputs)"]
+    mag = pd.to_numeric(g["xw_net"], errors="coerce").abs()
+    p_home = pd.to_numeric(g["pregame_p_home"], errors="coerce")
+    lean = g["xw_lean"].astype(str).str.strip()
+    # An unrecognised lean is not a side. `_wlt` learned that the hard way: its
+    # else-branch graded a selection matching neither club a LOSS, so a
+    # namespace mismatch invented a result rather than raising one.
+    sided = lean.eq(g["home"].astype(str).str.strip()) | lean.eq(
+        g["away"].astype(str).str.strip())
+    decided = g["xw_full"].isin(["W", "L"])
+    priced = p_home.gt(0) & p_home.lt(1)
+    finite = np.isfinite(mag)
+    keep = sided & decided & priced & finite
+    out = [
+        f"{label} (current record family; descriptive)",
+        "  Rows: the fixed |delta| bands above. Columns: q, the market's own probability "
+        "of the side the model leaned,",
+        "    taken from the pregame snapshot the decision was locked against "
+        "(pregame_p_home; NO close fallback).",
+        "  Cell: n; record; mean q; excess = realised rate - mean q, in points; "
+        "+- Poisson-binomial SE at the cell's own prices.",
+        "  Magnitude is an xwOBA difference, not a win probability, and this repo has "
+        "no validated mapping between the two.",
+        "    A cell's rate is what past leans in it did; it is not this model's "
+        "probability for the next game in that cell.",
+        "  The q column is what makes the rate readable: a band can win 77% because the "
+        "model is right or because it leaned",
+        "    expensive favourites, and only the gap against each game's own price "
+        "separates those. Full-game only; ties excluded.",
+    ]
+    excluded = [(int((~sided).sum()), "no lean, or a lean naming neither club"),
+                (int((~decided).sum()), "no W/L full-game decision"),
+                (int((~priced).sum()), "no usable saved pregame price"),
+                (int((~finite).sum()), "no finite xw_net")]
+    kept = g[keep]
+    first = (str(kept["game_date"].astype(str).min())
+             if len(kept) and "game_date" in kept.columns else "")
+    out.append(f"  Included {len(kept)} of {len(g)} graded rows"
+               + (f"; earliest saved pregame price {first}." if first else "."))
+    out.append("    Excluded, each counted from its own column rather than by "
+               "subtraction, so a row failing two conditions appears twice:")
+    for n_ex, why in excluded:
+        out.append(f"      {n_ex:>4}  {why}")
+    if not len(kept):
+        out.append("    no pregame-priced rows yet -- no cells to show.")
+        return out
+    mag_k = mag[keep].to_numpy(float)
+    lean_home_k = lean[keep].eq(kept["home"].astype(str).str.strip()).to_numpy(bool)
+    ph_k = p_home[keep].to_numpy(float)
+    q = np.where(lean_home_k, ph_k, 1.0 - ph_k)
+    won = kept["xw_full"].eq("W").to_numpy(bool)
+    edges = _fixed_price_edges()
+    cells = _magnitude_price_cells(mag_k, q, edges)
+    cols = _price_column_labels(edges)
+    for lo, hi in zip(FIXED_MAGNITUDE_EDGES, FIXED_MAGNITUDE_EDGES[1:]):
+        band = _band_label(lo, hi)
+        row = (mag_k >= lo) & (mag_k < hi)
+        out.append(f"  |delta| {band}  n={int(row.sum())}")
+        for band_label, name, mask in cells:
+            if band_label == band:
+                out.append(_grid_cell_line(name, won[mask], q[mask]))
+        out.append(_grid_cell_line("all q", won[row], q[row]))
+    out.append("  all |delta| bands")
+    for name, (clo, chi) in zip(cols, zip(edges, edges[1:])):
+        col = (q >= clo) & (q < chi)
+        out.append(_grid_cell_line(name, won[col], q[col]))
+    out.append(_grid_cell_line("all q", won, q))
+    filled = [(b, c, m) for b, c, m in cells if m.any()]
+    if filled:
+        null_best = _grid_null_best_excess([q[m] for _, _, m in filled])
+        band, name, mask = max(
+            filled, key=lambda t: won[t[2]].mean() - q[t[2]].mean())
+        observed = won[mask].mean() - q[mask].mean()
+        out.append(f"  best-cell reference: the best of these {len(filled)} non-empty "
+                   f"cells averages {100 * null_best:+.1f} pp of excess under "
+                   "'every game settles at its own price';")
+        out.append(f"    the observed best is {100 * observed:+.1f} pp, |delta| {band} "
+                   f"{name} (n={int(mask.sum())}). A grid is a search, so a cell is "
+                   "read against that reference, never against zero.")
     return out
 
 
@@ -1129,6 +1347,16 @@ def report_text(led):
             say(f"{MODEL_METRIC_LABEL} on same subset  full: {_rec(ov['xw_full'])}   F5: {_rec(ov['xw_f5'])}")
         for line in _fixed_magnitude_lines(g):
             say(line)
+        # The grid the block above cannot express: the same bands crossed with
+        # the market's own probability of the leaned side. Guarded like every
+        # other diagnostic here -- this runs in the job that ingests pregame
+        # rows, and a report line must never be able to cost a slate.
+        try:
+            for line in _magnitude_price_grid_lines(g):
+                say(line)
+        except Exception as _exc:                  # noqa: BLE001 - see above
+            say(f"{MODEL_METRIC_LABEL} |delta| x saved-pregame market "
+                f"probability unavailable ({type(_exc).__name__})")
         if len(g) >= 9:
             g["_terc"] = pd.qcut(g["xw_delta"], 3, labels=["low", "mid", "hi"], duplicates="drop")
             say(f"{MODEL_METRIC_LABEL} F5 by |Δ| tercile:")
