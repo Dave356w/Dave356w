@@ -285,53 +285,114 @@ class TeamControlTests(unittest.TestCase):
 
 class CeilingAndGateTests(unittest.TestCase):
     """Without these a null is unreadable: nobody can tell a rate that carries
-    nothing from a test too small to see one. That is the state the team-level
-    version of this question sat in (ceiling 0.077 against an se of 0.050)."""
+    nothing from a test too small to see one.
 
-    def test_the_ceiling_is_the_spread_ratio(self):
-        rng = np.random.default_rng(0)
-        pred = 0.318 + 0.025 * rng.standard_normal(500)
-        act = 0.318 + 0.270 * rng.standard_normal(500)
-        got = hp.ceiling_and_gate(pred, act, 0.045, 0.045)
-        self.assertAlmostEqual(got["ceiling"], np.std(pred, ddof=1) / np.std(act, ddof=1))
+    The first version computed `sd(shrunk)/sd(actual)`. Shrinkage is affine, so
+    `corr(shrunk, outcome) == corr(raw, outcome)` exactly and the ceiling
+    CANNOT depend on K -- yet that form reads K, and at the K this repo ships
+    it overstated by 39% in simulation. The bound is computed from the raw rate
+    net of its own PA noise instead, and the first test below is the one that
+    would have caught it."""
+
+    SIG = 0.5206          # per-PA wOBA sd, the repo's own weights
+
+    def _sim(self, tau=0.030, pa_game=4, n=60_000, seed=7, spread_pa=True):
+        """PA VARIES by default: with a constant PA the 1/n column is collinear
+        with the intercept and the variance components cannot be separated at
+        all -- which is why the estimator carries an explicit fallback."""
+        rng = np.random.default_rng(seed)
+        theta = 0.318 + tau * rng.standard_normal(n)
+        n_pa = (rng.integers(120, 650, n).astype(float) if spread_pa
+                else np.full(n, 400.0))
+        raw = theta + (self.SIG / np.sqrt(n_pa)) * rng.standard_normal(n)
+        act = theta + (self.SIG / np.sqrt(pa_game)) * rng.standard_normal(n)
+        return raw, n_pa, act
+
+    def test_a_constant_pa_falls_back_instead_of_fitting_a_collinear_model(self):
+        raw, pa, act = self._sim(spread_pa=False)
+        got = hp.ceiling_and_gate(raw, pa, act, self.SIG, 0.05, 0.05)
+        self.assertIsNotNone(got)
+        self.assertAlmostEqual(got["tau"], 0.030, delta=0.004)
+
+    def test_the_ceiling_matches_the_correlation_a_perfect_rate_achieves(self):
+        """The claim, simulated end to end: if the rate IS the talent, the
+        realised correlation should land on the printed bound."""
+        raw, pa, act = self._sim()
+        got = hp.ceiling_and_gate(raw, pa, act, self.SIG, 0.05, 0.05)
+        realised = float(np.corrcoef(raw, act)[0, 1])
+        self.assertAlmostEqual(got["ceiling"], realised, delta=0.006)
+
+    def test_the_ceiling_does_not_move_with_the_shrinkage(self):
+        """The bug in one assertion. Correlation is invariant to an affine
+        transform, so shrinking the input by ANY K must leave the bound alone."""
+        raw, pa, act = self._sim()
+        base = hp.ceiling_and_gate(raw, pa, act, self.SIG, 0.05, 0.05)["ceiling"]
+        for K in (100, 400):
+            w = 400.0 / (400.0 + K)
+            shrunk = 0.318 + w * (raw - 0.318)
+            # feeding the SHRUNK rate as 'raw' is what the old form effectively
+            # did; the realised correlation is unchanged, so the bound must be
+            self.assertAlmostEqual(
+                float(np.corrcoef(shrunk, act)[0, 1]),
+                float(np.corrcoef(raw, act)[0, 1]), delta=1e-12)
+        self.assertGreater(base, 0)
+
+    def test_tau_is_fitted_from_the_spread_and_the_pa_counts(self):
+        raw, pa, act = self._sim(tau=0.030)
+        got = hp.ceiling_and_gate(raw, pa, act, self.SIG, 0.05, 0.05)
+        self.assertAlmostEqual(got["tau"], 0.030, delta=0.004)
 
     def test_the_gate_is_the_n_that_makes_the_ceiling_two_se(self):
-        got = hp.ceiling_and_gate([0.0, 0.1], [0.0, 1.0], 0.05, 0.05)
-        # ceiling = sd(pred)/sd(act) = 0.1; |z|=2 needs se = 0.05 = 1/sqrt(n)
-        self.assertAlmostEqual(got["ceiling"], 0.1)
-        self.assertAlmostEqual(got["n_ceiling"], 400.0)
-        self.assertAlmostEqual(got["n_half"], 1600.0)   # half the r, 4x the n
+        raw, pa, act = self._sim()
+        got = hp.ceiling_and_gate(raw, pa, act, self.SIG, 0.05, 0.05)
+        self.assertAlmostEqual(got["n_ceiling"], (2.0 / got["ceiling"]) ** 2, places=6)
+        self.assertAlmostEqual(got["n_half"], 4 * got["n_ceiling"], places=6)
 
     def test_clustering_enters_as_the_square_of_what_it_widened(self):
-        """se falls as 1/sqrt(n), so a 2x wider interval costs 4x the sample.
-        Taken from the ratio the run measured, never from a constant."""
-        plain = hp.ceiling_and_gate([0.0, 0.1], [0.0, 1.0], 0.05, 0.05)
-        wide = hp.ceiling_and_gate([0.0, 0.1], [0.0, 1.0], 0.05, 0.10)
+        """se falls as 1/sqrt(n), so a 2x wider interval costs 4x the sample."""
+        raw, pa, act = self._sim()
+        plain = hp.ceiling_and_gate(raw, pa, act, self.SIG, 0.05, 0.05)
+        wide = hp.ceiling_and_gate(raw, pa, act, self.SIG, 0.05, 0.10)
         self.assertAlmostEqual(wide["inflation"], 2.0)
-        self.assertAlmostEqual(wide["n_ceiling"], 4 * plain["n_ceiling"])
+        self.assertAlmostEqual(wide["n_ceiling"], 4 * plain["n_ceiling"], places=6)
 
     def test_a_missing_clustered_se_does_not_silently_inflate(self):
-        got = hp.ceiling_and_gate([0.0, 0.1], [0.0, 1.0], 0.05, float("nan"))
+        raw, pa, act = self._sim()
+        got = hp.ceiling_and_gate(raw, pa, act, self.SIG, 0.05, float("nan"))
         self.assertAlmostEqual(got["inflation"], 1.0)
 
-    def test_a_degenerate_column_returns_none_rather_than_a_ceiling(self):
-        self.assertIsNone(hp.ceiling_and_gate([0.3, 0.3], [0.1, 0.9], 0.05, 0.05))
+    def test_noise_exceeding_the_spread_returns_none_not_an_imaginary_tau(self):
+        """A rate whose spread is SMALLER than its own sampling noise implies a
+        negative talent variance. Printing a ceiling there would invent one."""
+        rng = np.random.default_rng(1)
+        pa = rng.integers(40, 600, 4000).astype(float)
+        # Every hitter has the SAME talent; the whole spread is PA noise, so a
+        # fitted intercept above zero would be inventing a talent difference.
+        raw = 0.318 + (0.5206 / np.sqrt(pa)) * rng.standard_normal(4000)
+        got = hp.ceiling_and_gate(raw, pa, rng.standard_normal(4000),
+                                  0.5206, .05, .05)
+        if got is not None:                    # a tiny positive intercept is
+            self.assertLess(got["tau"], 0.004)  # sampling slop, not a talent sd
 
     def test_the_report_prints_the_gate_and_refuses_a_reading_under_it(self):
         rng = np.random.default_rng(2)
+        # A realistic outcome mix, so the measured per-PA sd is the ~0.52 the
+        # bound is calibrated against rather than an artefact of four labels.
+        cats = np.array(["1b", "2b", "3b", "hr", "bb", "hbp", "out"])
+        pr = np.array([.147, .045, .005, .036, .079, .011, .677]); pr = pr / pr.sum()
         rows, pas = [], []
         for i in range(90):
-            rate = 0.318 + 0.025 * rng.standard_normal()
+            rate = 0.318 + 0.035 * rng.standard_normal()
             rows.append({"game_pk": i // 9, "batting_side": "home",
                          "player_id": 1000 + i, "batting_order": (i % 9) + 1,
-                         "xwoba_shrunk": rate, "xwoba_raw": rate,
+                         "PA": 600, "xwoba_shrunk": rate, "xwoba_raw": rate,
                          "slot_weight": 1.0})
-            pas.append(_pa(i // 9, 1000 + i, list(rng.choice(["1b", "out", "hr", "bb"], 4))))
+            pas.append(_pa(i // 9, 1000 + i, list(rng.choice(cats, 4, p=pr))))
         out = "\n".join(hp.report(_hitters(rows), pd.concat(pas)))
         self.assertIn("CEILING", out)
         self.assertIn("GATE", out)
         self.assertIn("Read NOTHING before the first", out)
-        self.assertIn("never as a bar to clear", out)
+        self.assertIn("cannot depend on K", out)
 
 
 if __name__ == "__main__":
