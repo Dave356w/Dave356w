@@ -273,6 +273,102 @@ def team_control(m):
     return len(agg), r, 1.0 / np.sqrt(len(agg) - 3)
 
 
+def ceiling_and_gate(raw, pa, act, sd_pa, se_naive, se_clustered):
+    """The largest correlation this test could produce, and the n it needs.
+
+    WHY A PROBE MUST PRINT THIS. Without it a null is unreadable: the reader
+    cannot tell a per-hitter rate that carries nothing from a test too small to
+    see one. The team-level version of this question spent weeks in that state
+    -- its ceiling is 0.077 against an se of 0.050 at n=396, so it could not
+    separate a PERFECT composite from a worthless one, and every null it
+    produced was compatible with both.
+
+    THE BOUND, and why it is computed from the RAW rate rather than the shrunk
+    one. Shrinkage is affine, so `corr(shrunk, outcome) == corr(raw, outcome)`
+    exactly -- the ceiling cannot depend on K, and a formula that reads K is
+    measuring the wrong thing. The first version of this function used
+    `sd(shrunk)/sd(actual)`. That is exact only when K is the well-calibrated
+    `sigma^2/tau^2`; at the K this repo ships it OVERSTATED the ceiling by 39%
+    in simulation (0.1214 printed against a true 0.0875), because under-
+    shrinking inflates the predictor's spread with noise that cannot correlate
+    with anything.
+
+    The K-free form: with `x` the raw season rate, `x = theta + e` where
+    `Var(e) = sigma^2/PA`, so the talent spread is `tau^2 = Var(x) -
+    mean(sigma^2/PA)`, and against an outcome `A = theta + eps`,
+
+        corr(x, A) = tau^2 / (sd(x) * sd(A))
+
+    `sigma` is the per-PA wOBA sd, measured from the very plate appearances
+    being scored rather than assumed -- ~0.52, against a per-hitter talent
+    spread near 0.03, which is why a few PA of chance dwarf the whole signal
+    and the bound lands near 0.09 however good the rate is.
+
+    It remains an APPROXIMATION: it assumes the game noise is independent of
+    talent and that the season rate's noise is binomial in PA. A measured
+    correlation can still exceed it -- the team-level bullpen line does, at
+    105% of its own. Read it as the order of magnitude a null is judged
+    against, never as a threshold something can "beat".
+
+    The gate is stated at the ceiling AND at half of it, because a rate that is
+    real but partial is the likelier outcome and costs four times the sample.
+    Clustering is folded in from the ratio the run itself measured rather than
+    from a constant: `se` falls as `1/sqrt(n)`, so the n needed scales with the
+    square of however much dependence widened the interval.
+    """
+    x = np.asarray(raw, float)
+    n = np.asarray(pa, float)
+    a = np.asarray(act, float)
+    ok = np.isfinite(x) & np.isfinite(n) & np.isfinite(a) & (n > 0)
+    if ok.sum() < 30:
+        return None
+    x, n, a = x[ok], n[ok], a[ok]
+    sx = float(np.std(x, ddof=1))
+    sa = float(np.std(a, ddof=1))
+    if not (sx > 0 and sa > 0):
+        return None
+    # tau^2 is FITTED, not subtracted. Var(x_i) = tau^2 + sigma^2/n_i, so
+    # regressing squared deviations on 1/n gives tau^2 as the intercept and
+    # sigma^2 as the slope. Subtracting a flat mean(sigma^2/n) instead -- the
+    # first thing tried -- is dominated by the low-PA tail: PA runs down to 4
+    # here, the harmonic mean is 143 against an arithmetic 382, and tau^2 came
+    # out NEGATIVE. Those rows are not PA-sized samples either; a Savant
+    # backfilled hitter carries the team aggregate and sits at the mean by
+    # construction, so his rate has neither the spread nor the noise the model
+    # assumes. The fit is robust to them because they land at one end of 1/n
+    # and move the slope rather than the intercept.
+    inv = 1.0 / n
+    d2 = (x - x.mean()) ** 2
+    if float(np.std(inv)) <= 1e-12 * max(float(np.mean(inv)), 1e-12):
+        # Every hitter carries the same PA, so 1/n cannot separate the two
+        # components and the fit is collinear. There the subtraction IS exact,
+        # given sigma: Var(x) = tau^2 + sigma^2/n with one known n.
+        if not (sd_pa and sd_pa > 0):
+            return None
+        tau2 = sx ** 2 - float(sd_pa) ** 2 * float(np.mean(inv))
+        sig2_fit = float(sd_pa) ** 2
+    else:
+        A = np.column_stack([np.ones(len(n)), inv])
+        try:
+            coef, *_ = np.linalg.lstsq(A, d2, rcond=None)
+        except np.linalg.LinAlgError:
+            return None
+        tau2, sig2_fit = float(coef[0]), float(coef[1])
+    if tau2 <= 0:
+        return None
+    ceil = tau2 / (sx * sa)
+    infl = 1.0
+    if (se_naive and se_naive > 0 and se_clustered is not None
+            and np.isfinite(se_clustered) and se_clustered > 0):
+        infl = se_clustered / se_naive
+    return {"sd_raw": sx, "sd_act": sa, "tau": float(np.sqrt(tau2)),
+            "sigma_fit": float(np.sqrt(sig2_fit)) if sig2_fit > 0 else float("nan"),
+            "sigma_obs": float(sd_pa) if sd_pa else float("nan"),
+            "ceiling": ceil, "inflation": infl,
+            "n_ceiling": (2.0 * infl / ceil) ** 2,
+            "n_half": (2.0 * infl / (ceil / 2.0)) ** 2}
+
+
 def report(hitters, pa, min_pa=1, ledger=LEDGER):
     out = []
 
@@ -326,6 +422,21 @@ def report(hitters, pa, min_pa=1, ledger=LEDGER):
     say(f"  with >= {min_pa} scoring PA: {len(m)}   "
         f"total scoring PAs: {int(m['n_pa'].sum())}")
     say()
+    cg = None
+    # The per-PA wOBA sd, from the very plate appearances being scored rather
+    # than a constant: it is what converts a season rate's PA count into the
+    # noise that has to be netted out of its spread.
+    _v = pa_values(pa)
+    _v = _v[_v["in_denom"]]["woba_value"].astype(float)
+    sd_pa = float(_v.std(ddof=1)) if len(_v) > 2 else 0.0
+    # Slates are counted from the rows themselves so the gate's "how long" is
+    # this sample's own accrual rate, not a figure frozen from a good week.
+    rate = None
+    if "snapshot_utc" in m.columns:
+        slates = m["snapshot_utc"].astype(str).str[:10]
+        n_sl = int(slates.nunique())
+        if n_sl:
+            rate = (len(m) / n_sl, n_sl)
 
     for label, col in (("shrunk (what the composite used)", "xwoba_shrunk"),
                        ("raw (pre-shrinkage)", "xwoba_raw")):
@@ -349,6 +460,43 @@ def report(hitters, pa, min_pa=1, ledger=LEDGER):
             say(line + f"±{cse:.4f} clustered  (±{se:.4f} if rows were independent)")
         else:
             say(line + f"±{se:.4f}")
+        if col == "xwoba_shrunk":
+            cg = ceiling_and_gate(s.get("xwoba_raw"), s.get("PA"), s["act"],
+                                  sd_pa, se, cse)
+
+    say()
+    if cg:
+        say(f"  CEILING  fitted talent sd {cg['tau']:.4f}  (raw spread "
+            f"{cg['sd_raw']:.4f}; per-PA sigma fitted {cg['sigma_fit']:.3f} "
+            f"vs {cg['sigma_obs']:.3f} measured)")
+        say(f"           / sd(own-PA actual) {cg['sd_act']:.4f}"
+            f"  ->  r <= {cg['ceiling']:.4f}")
+        say("    The two sigmas are a CHECK, not decoration: they disagree when")
+        say("    the raw rates are not PA-sized samples, which is when the")
+        say("    fitted talent spread -- and so this whole bound -- is soft.")
+        say("    An exactly correct per-hitter rate could not beat this: a few")
+        say("    plate appearances of wOBA carry an order of magnitude more")
+        say("    noise than the entire spread of hitter talent. Computed from")
+        say("    the RAW rate because shrinkage is affine -- the correlation,")
+        say("    and so the ceiling, cannot depend on K. Approximate, and a real")
+        say("    correlation CAN exceed it: read it as the scale a null is")
+        say("    judged against, never as a bar to clear.")
+        say(f"  GATE  {cg['n_ceiling']:,.0f} hitter-games for |z| = 2 if the rate "
+            f"is perfect,")
+        say(f"        {cg['n_half']:,.0f} if it is half that strong"
+            + (f"  (x{cg['inflation']:.2f} for the clustering measured here)"
+               if abs(cg['inflation'] - 1.0) > 0.005 else ""))
+        have = len(m)
+        if rate:
+            say(f"        have {have:,} over {rate[1]} slates "
+                f"({rate[0]:,.0f} a slate) -> "
+                f"{max(0.0,(cg['n_ceiling']-have)/rate[0]):,.0f} more slates to the "
+                f"first, {max(0.0,(cg['n_half']-have)/rate[0]):,.0f} to the second")
+        else:
+            say(f"        have {have:,}")
+        say("    Read NOTHING before the first. A null under it is an")
+        say("    underpowered test, not a fact about the rate -- which is the")
+        say("    state the team-level version of this question sat in for weeks.")
 
     say()
     tc = team_control(m)
