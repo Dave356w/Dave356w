@@ -54,6 +54,58 @@ xwOBA fixed |delta| bands (current record family; descriptive)
     closing-price paired n=26; excluded=0
       xwOBA 20-6  (0.769); decisions=26; 95% CI [0.579, 0.890]
       favorite 20-6  (0.769); decisions=26; 95% CI [0.579, 0.890]
+xwOBA |delta| x saved-pregame market probability (current record family; descriptive)
+  Rows: the fixed |delta| bands above. Columns: q, the market's own probability of the side the model leaned,
+    taken from the pregame snapshot the decision was locked against (pregame_p_home; NO close fallback).
+  Cell: n; record; mean q; excess = realised rate - mean q, in points; +- Poisson-binomial SE at the cell's own prices.
+  Magnitude is an xwOBA difference, not a win probability, and this repo has no validated mapping between the two.
+    A cell's rate is what past leans in it did; it is not this model's probability for the next game in that cell.
+  The q column is what makes the rate readable: a band can win 77% because the model is right or because it leaned
+    expensive favourites, and only the gap against each game's own price separates those. Full-game only; ties excluded.
+  Included 173 of 404 graded rows; earliest saved pregame price 2026-09-01.
+    Excluded, each counted from its own column rather than by subtraction, so a row failing two conditions appears twice:
+         8  no lean, or a lean naming neither club
+         8  no W/L full-game decision
+       229  no usable saved pregame price
+         8  no finite xw_net
+  |delta| [0.000, 0.010)  n=51
+    q <.450        n=  7       2-5 (0.286)   mean q .416   excess  -13.0 +- 18.6 pp
+    q .450-.500    n= 14      11-3 (0.786)   mean q .470   excess  +31.6 +- 13.3 pp
+    q .500-.550    n= 17      6-11 (0.353)   mean q .520   excess  -16.7 +- 12.1 pp
+    q .550+        n= 13       9-4 (0.692)   mean q .587   excess  +10.5 +- 13.6 pp
+    all q          n= 51     28-23 (0.549)   mean q .509   excess   +4.0 +-  6.9 pp
+  |delta| [0.010, 0.020)  n=41
+    q <.450        n=  2       0-2 (0.000)   mean q .402   excess  -40.2 +- 34.6 pp
+    q .450-.500    n=  7       3-4 (0.429)   mean q .481   excess   -5.2 +- 18.9 pp
+    q .500-.550    n= 13       5-8 (0.385)   mean q .527   excess  -14.3 +- 13.8 pp
+    q .550+        n= 19      13-6 (0.684)   mean q .586   excess   +9.8 +- 11.3 pp
+    all q          n= 41     21-20 (0.512)   mean q .541   excess   -2.8 +-  7.7 pp
+  |delta| [0.020, 0.030)  n=32
+    q <.450        n=  2       2-0 (1.000)   mean q .413   excess  +58.7 +- 34.8 pp
+    q .450-.500    n=  5       4-1 (0.800)   mean q .471   excess  +32.9 +- 22.3 pp
+    q .500-.550    n=  8       7-1 (0.875)   mean q .530   excess  +34.5 +- 17.6 pp
+    q .550+        n= 17       9-8 (0.529)   mean q .613   excess   -8.4 +- 11.8 pp
+    all q          n= 32     22-10 (0.688)   mean q .558   excess  +13.0 +-  8.7 pp
+  |delta| [0.030, 0.050)  n=37
+    q <.450        n=  1       1-0 (1.000)   mean q .417   excess  +58.3 +- 49.3 pp
+    q .450-.500    n=  1       0-1 (0.000)   mean q .483   excess  -48.3 +- 50.0 pp
+    q .500-.550    n=  4       2-2 (0.500)   mean q .511   excess   -1.1 +- 25.0 pp
+    q .550+        n= 31      22-9 (0.710)   mean q .621   excess   +8.8 +-  8.7 pp
+    all q          n= 37     25-12 (0.676)   mean q .600   excess   +7.5 +-  8.0 pp
+  |delta| [0.050, inf)  n=12
+    q <.450        n=  0   (no rows)
+    q .450-.500    n=  0   (no rows)
+    q .500-.550    n=  0   (no rows)
+    q .550+        n= 12       8-4 (0.667)   mean q .657   excess   +0.9 +- 13.6 pp
+    all q          n= 12       8-4 (0.667)   mean q .657   excess   +0.9 +- 13.6 pp
+  all |delta| bands
+    q <.450        n= 12       5-7 (0.417)   mean q .413   excess   +0.4 +- 14.2 pp
+    q .450-.500    n= 27      18-9 (0.667)   mean q .474   excess  +19.3 +-  9.6 pp
+    q .500-.550    n= 42     20-22 (0.476)   mean q .523   excess   -4.7 +-  7.7 pp
+    q .550+        n= 92     61-31 (0.663)   mean q .612   excess   +5.1 +-  5.1 pp
+    all q          n=173    104-69 (0.601)   mean q .555   excess   +4.6 +-  3.7 pp
+  best-cell reference: the best of these 17 non-empty cells averages +51.1 pp of excess under 'every game settles at its own price';
+    the observed best is +58.7 pp, |delta| [0.020, 0.030) q <.450 (n=2). A grid is a search, so a cell is read against that reference, never against zero.
 xwOBA F5 by |Δ| tercile:
   low  61-58-13  (0.513)   (Δ 0.000–0.012, n=132)
   mid  51-59-22  (0.464)   (Δ 0.012–0.025, n=132)
