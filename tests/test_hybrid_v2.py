@@ -89,3 +89,97 @@ def test_materialized_report_identifies_each_rows_price_basis():
     assert "row basis" in text
     assert "1 closing, 1 saved pregame" in text
     assert "no cross-snapshot fallback" in text
+
+
+def _linescore(game_pk, away_runs, home_runs):
+    return {int(game_pk): {
+        "status": {"detailedState": "Final"},
+        "linescore": {
+            "teams": {"away": {"runs": away_runs}, "home": {"runs": home_runs}},
+            "innings": [{"away": {"runs": 0}, "home": {"runs": 0}}] * 5,
+        },
+    }}
+
+
+def test_grading_a_pending_row_grades_its_v1_archive_too(monkeypatch):
+    """A row pending when the v2 migration ran must not lose its v1 grade.
+
+    migrate_hybrid_v2 writes hybrid_v1_full once, gated on the row already
+    being graded, and nothing else wrote it -- so the 13 rows still pending on
+    2026-09-11 kept a valid v1 selection and no grade, and dropped out of
+    hybrid_test, abstain_test and dog_contrast_test alike. This pins the
+    grader's counterpart, and pins that a row with NO archive stays ungraded
+    rather than being handed a fabricated result.
+    """
+    led = _rows(.40, .020)
+    led["status"] = "pending"
+    led[["full_away", "full_home", "xw_full", "hybrid_full"]] = np.nan
+    # The columns grade() touches beyond the hybrid pair.
+    led[["f5_away", "f5_home", "xw_f5", "ops_full", "ops_f5"]] = np.nan
+    led["ops_valid"] = False
+    led["ops_lean"] = np.nan
+    led["hybrid_v1_action"] = "FOLLOW"
+    led["hybrid_v1_selection"] = "H"
+    led["hybrid_v1_full"] = np.nan
+    bare = led.copy()
+    bare["game_pk"] = 2
+    bare[["hybrid_v1_action", "hybrid_v1_selection"]] = np.nan
+    led = pd.concat([led, bare], ignore_index=True)
+    # grade_leans.load() forces the W/L/T columns to object dtype before
+    # grading, because an all-NaN grade column reads back from CSV as float64
+    # and pandas >=3 refuses a string assignment into it. hybrid_v1_full is
+    # already in that list; this mirrors it so the test frame matches what
+    # production hands grade(), rather than the grader learning to cast.
+    for col in ("xw_full", "xw_f5", "ops_full", "ops_f5",
+                "hybrid_full", "hybrid_v1_full"):
+        led[col] = led[col].astype(object)
+
+    monkeypatch.setattr(grade_leans, "_linescores_for",
+                        lambda day: {**_linescore(1, 1, 4), **_linescore(2, 1, 4)})
+    got = grade_leans.grade(led)
+
+    assert got.at[0, "hybrid_v1_full"] == "W"      # H won, and H was archived
+    assert got.at[0, "hybrid_full"] == "W"
+    assert got.at[1, "hybrid_v1_full"] is None     # no archive, so no grade
+    assert (got["status"] == "graded").all()
+
+
+def test_a_migration_rerun_refreshes_its_archive_and_mints_no_new_one():
+    """The archive describes the row, so a re-run re-derives it from the row.
+
+    A pending row's lean and pregame price are rebuilt by every pregame poll
+    (grade_leans.MODEL_FIELDS), which carries no hybrid_v1_* entry -- so an
+    archive written mid-slate can name a side the final lock never chose. A
+    re-run must fix that. It must equally NOT mint an archive for a row that
+    has none: v1 is retired, and widening a frozen registration's row set is
+    not a repair.
+    """
+    stale = _rows(.60, .020, date="2026-09-11")
+    stale["hybrid_v1_action"] = "FOLLOW"
+    stale["hybrid_v1_selection"] = "A"     # superseded: the lock reads H
+    stale["hybrid_v1_p"] = .48
+    stale["hybrid_v1_ml"] = 130
+    stale["hybrid_v1_full"] = np.nan
+    fresh = _rows(.60, .020, date="2026-09-13")
+    fresh["game_pk"] = 2
+    for col in migrate_hybrid_v2.V1_ARCHIVE:
+        fresh[col] = np.nan
+
+    got, changed = migrate_hybrid_v2.migrate(
+        pd.concat([stale, fresh], ignore_index=True))
+
+    assert got.at[0, "hybrid_v1_selection"] == "H"   # re-derived from the lock
+    assert got.at[0, "hybrid_v1_p"] == .60
+    assert got.at[0, "hybrid_v1_full"] == "W"        # graded, no longer orphaned
+    assert got.loc[1, migrate_hybrid_v2.V1_ARCHIVE].isna().all()
+    assert changed == 1
+
+
+def test_a_first_migration_still_mints_the_archive():
+    """The no-minting rule must not disable the initial migration."""
+    src = _rows(.60, .020, date="2026-09-11")
+    for col in migrate_hybrid_v2.V1_ARCHIVE:
+        src[col] = np.nan
+    got, _ = migrate_hybrid_v2.migrate(src)
+    assert got.at[0, "hybrid_v1_selection"] == "H"
+    assert got.at[0, "hybrid_v1_full"] == "W"
