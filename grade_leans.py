@@ -974,13 +974,30 @@ def _magnitude_price_grid_lines(g):
             if band_label == band:
                 out.append(_grid_cell_line(name, won[mask], q[mask]))
         out.append(_grid_cell_line("all q", won[row], q[row]))
+        # A band confined to one column has a margin that CANNOT differ from
+        # that column -- two identical lines with nothing saying why, which is
+        # how a reader gets duplicated data or a suspected bug instead of a
+        # fact. The fact is worth having (it is what the .050+ band looks
+        # like), so the equality is named rather than the margin dropped.
+        if sum(1 for bl, _, m in cells if bl == band and m.any()) == 1:
+            out.append("      (this band occupies one column, so the margin "
+                       "above can only repeat that cell)")
     out.append("  all |delta| bands")
     for name, (clo, chi) in zip(cols, zip(edges, edges[1:])):
         col = (q >= clo) & (q < chi)
         out.append(_grid_cell_line(name, won[col], q[col]))
     out.append(_grid_cell_line("all q", won, q))
     filled = [(b, c, m) for b, c, m in cells if m.any()]
-    if filled:
+    # With one non-empty cell there is no maximum to correct for: the null best
+    # of a single cell is its own null mean, which is zero by construction, so
+    # the reference line would reduce to "compare against zero" -- exactly what
+    # its own last clause forbids. Say that instead of printing a +0.0 that
+    # flatters whatever the one cell did.
+    if len(filled) == 1:
+        out.append("  best-cell reference: one non-empty cell, so nothing was "
+                   "maximised over and there is no search to correct for. Read "
+                   "it against its own SE above.")
+    elif filled:
         null_best = _grid_null_best_excess([q[m] for _, _, m in filled])
         band, name, mask = max(
             filled, key=lambda t: won[t[2]].mean() - q[t[2]].mean())
