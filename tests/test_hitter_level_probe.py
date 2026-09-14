@@ -283,5 +283,56 @@ class TeamControlTests(unittest.TestCase):
         self.assertIsNone(hp.team_control(m))
 
 
+class CeilingAndGateTests(unittest.TestCase):
+    """Without these a null is unreadable: nobody can tell a rate that carries
+    nothing from a test too small to see one. That is the state the team-level
+    version of this question sat in (ceiling 0.077 against an se of 0.050)."""
+
+    def test_the_ceiling_is_the_spread_ratio(self):
+        rng = np.random.default_rng(0)
+        pred = 0.318 + 0.025 * rng.standard_normal(500)
+        act = 0.318 + 0.270 * rng.standard_normal(500)
+        got = hp.ceiling_and_gate(pred, act, 0.045, 0.045)
+        self.assertAlmostEqual(got["ceiling"], np.std(pred, ddof=1) / np.std(act, ddof=1))
+
+    def test_the_gate_is_the_n_that_makes_the_ceiling_two_se(self):
+        got = hp.ceiling_and_gate([0.0, 0.1], [0.0, 1.0], 0.05, 0.05)
+        # ceiling = sd(pred)/sd(act) = 0.1; |z|=2 needs se = 0.05 = 1/sqrt(n)
+        self.assertAlmostEqual(got["ceiling"], 0.1)
+        self.assertAlmostEqual(got["n_ceiling"], 400.0)
+        self.assertAlmostEqual(got["n_half"], 1600.0)   # half the r, 4x the n
+
+    def test_clustering_enters_as_the_square_of_what_it_widened(self):
+        """se falls as 1/sqrt(n), so a 2x wider interval costs 4x the sample.
+        Taken from the ratio the run measured, never from a constant."""
+        plain = hp.ceiling_and_gate([0.0, 0.1], [0.0, 1.0], 0.05, 0.05)
+        wide = hp.ceiling_and_gate([0.0, 0.1], [0.0, 1.0], 0.05, 0.10)
+        self.assertAlmostEqual(wide["inflation"], 2.0)
+        self.assertAlmostEqual(wide["n_ceiling"], 4 * plain["n_ceiling"])
+
+    def test_a_missing_clustered_se_does_not_silently_inflate(self):
+        got = hp.ceiling_and_gate([0.0, 0.1], [0.0, 1.0], 0.05, float("nan"))
+        self.assertAlmostEqual(got["inflation"], 1.0)
+
+    def test_a_degenerate_column_returns_none_rather_than_a_ceiling(self):
+        self.assertIsNone(hp.ceiling_and_gate([0.3, 0.3], [0.1, 0.9], 0.05, 0.05))
+
+    def test_the_report_prints_the_gate_and_refuses_a_reading_under_it(self):
+        rng = np.random.default_rng(2)
+        rows, pas = [], []
+        for i in range(90):
+            rate = 0.318 + 0.025 * rng.standard_normal()
+            rows.append({"game_pk": i // 9, "batting_side": "home",
+                         "player_id": 1000 + i, "batting_order": (i % 9) + 1,
+                         "xwoba_shrunk": rate, "xwoba_raw": rate,
+                         "slot_weight": 1.0})
+            pas.append(_pa(i // 9, 1000 + i, list(rng.choice(["1b", "out", "hr", "bb"], 4))))
+        out = "\n".join(hp.report(_hitters(rows), pd.concat(pas)))
+        self.assertIn("CEILING", out)
+        self.assertIn("GATE", out)
+        self.assertIn("Read NOTHING before the first", out)
+        self.assertIn("never as a bar to clear", out)
+
+
 if __name__ == "__main__":
     unittest.main()

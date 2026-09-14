@@ -273,6 +273,51 @@ def team_control(m):
     return len(agg), r, 1.0 / np.sqrt(len(agg) - 3)
 
 
+def ceiling_and_gate(pred, act, se_naive, se_clustered):
+    """The largest correlation this test could produce, and the n it needs.
+
+    WHY A PROBE MUST PRINT THIS. Without it a null is unreadable: the reader
+    cannot tell a per-hitter rate that carries nothing from a test too small to
+    see one. The team-level version of this question spent weeks in that state
+    -- its ceiling is 0.077 against an se of 0.050 at n=396, so it could not
+    separate a PERFECT composite from a worthless one, and every null it
+    produced was compatible with both.
+
+    THE BOUND. If the prediction were exactly a hitter's true talent and his
+    game were that talent plus independent noise, the correlation between them
+    is `sd(talent) / sd(outcome)` -- the predictor's whole spread divided by a
+    target that also carries a few plate appearances of chance. Per-PA wOBA has
+    sd ~0.52 against a per-hitter spread of ~0.025, so four PA of noise is an
+    order of magnitude larger than the entire signal and the bound lands near
+    0.10 however good the rate is.
+
+    It is an APPROXIMATION, not an identity: it assumes the prediction is the
+    talent rather than an estimate of it, and that the noise is independent of
+    it. Both fail a little, which is why a measured correlation can exceed its
+    own ceiling -- the team-level bullpen line already does, at 105%. Read it
+    as the order of magnitude a null has to be judged against, never as a
+    threshold something can "beat".
+
+    The gate is stated at the ceiling AND at half of it, because a rate that is
+    real but partial is the likelier outcome and costs four times the sample.
+    Clustering is folded in from the ratio the run itself measured rather than
+    from a constant: `se` falls as `1/sqrt(n)`, so the n needed scales with the
+    square of however much dependence widened the interval.
+    """
+    sp = float(np.std(np.asarray(pred, float), ddof=1))
+    sa = float(np.std(np.asarray(act, float), ddof=1))
+    if not (sp > 0 and sa > 0):
+        return None
+    ceil = sp / sa
+    infl = 1.0
+    if (se_naive and se_naive > 0 and se_clustered is not None
+            and np.isfinite(se_clustered) and se_clustered > 0):
+        infl = se_clustered / se_naive
+    return {"sd_pred": sp, "sd_act": sa, "ceiling": ceil, "inflation": infl,
+            "n_ceiling": (2.0 * infl / ceil) ** 2,
+            "n_half": (2.0 * infl / (ceil / 2.0)) ** 2}
+
+
 def report(hitters, pa, min_pa=1, ledger=LEDGER):
     out = []
 
@@ -326,6 +371,15 @@ def report(hitters, pa, min_pa=1, ledger=LEDGER):
     say(f"  with >= {min_pa} scoring PA: {len(m)}   "
         f"total scoring PAs: {int(m['n_pa'].sum())}")
     say()
+    cg = None
+    # Slates are counted from the rows themselves so the gate's "how long" is
+    # this sample's own accrual rate, not a figure frozen from a good week.
+    rate = None
+    if "snapshot_utc" in m.columns:
+        slates = m["snapshot_utc"].astype(str).str[:10]
+        n_sl = int(slates.nunique())
+        if n_sl:
+            rate = (len(m) / n_sl, n_sl)
 
     for label, col in (("shrunk (what the composite used)", "xwoba_shrunk"),
                        ("raw (pre-shrinkage)", "xwoba_raw")):
@@ -349,6 +403,34 @@ def report(hitters, pa, min_pa=1, ledger=LEDGER):
             say(line + f"±{cse:.4f} clustered  (±{se:.4f} if rows were independent)")
         else:
             say(line + f"±{se:.4f}")
+        if col == "xwoba_shrunk":
+            cg = ceiling_and_gate(s[col], s["act"], se, cse)
+
+    say()
+    if cg:
+        say(f"  CEILING  sd(pred) {cg['sd_pred']:.4f} / sd(own-PA actual) "
+            f"{cg['sd_act']:.4f}  ->  r <= {cg['ceiling']:.4f}")
+        say("    An exactly correct per-hitter rate could not beat this: a few")
+        say("    plate appearances of wOBA carry an order of magnitude more")
+        say("    noise than the entire spread of hitter talent. Approximate, and")
+        say("    a real correlation CAN exceed it -- read it as the scale a null")
+        say("    is judged against, never as a bar to clear.")
+        say(f"  GATE  {cg['n_ceiling']:,.0f} hitter-games for |z| = 2 if the rate "
+            f"is perfect,")
+        say(f"        {cg['n_half']:,.0f} if it is half that strong"
+            + (f"  (x{cg['inflation']:.2f} for the clustering measured here)"
+               if abs(cg['inflation'] - 1.0) > 0.005 else ""))
+        have = len(m)
+        if rate:
+            say(f"        have {have:,} over {rate[1]} slates "
+                f"({rate[0]:,.0f} a slate) -> "
+                f"{max(0.0,(cg['n_ceiling']-have)/rate[0]):,.0f} more slates to the "
+                f"first, {max(0.0,(cg['n_half']-have)/rate[0]):,.0f} to the second")
+        else:
+            say(f"        have {have:,}")
+        say("    Read NOTHING before the first. A null under it is an")
+        say("    underpowered test, not a fact about the rate -- which is the")
+        say("    state the team-level version of this question sat in for weeks.")
 
     say()
     tc = team_control(m)
