@@ -392,6 +392,14 @@ precedent — they are how the fix is known to look.
   means merging dumps rather than naming them — a different change with a
   different risk. Do not read "not a rebuild" as "pregame throughout".
 
+  **That residue is survivable only because the ledger filters it, which is
+  exactly why the same rule was destructive on `hitters_*`** — a file class with
+  no ledger behind it, where the all-or-nothing diversion fired once in nine
+  slates and 79.3% of committed rows ended up post-hoc. Fixed there by per-row
+  provenance and a merge rather than by changing `dump_is_post_hoc`; see the
+  resolved entry below. The lesson cuts back here: when a new artifact adopts
+  this guard, check what made the guard sufficient for dumps.
+
   **v11 changes `compare_v8_v9`'s glob population and this is recorded, not patched.**
   The primary dump suffix is `_xw` again, so `data/leans_*_xw.csv` now matches
   v11 dumps alongside the pre-wOBA ones. That is not obviously wrong — the
@@ -1427,6 +1435,111 @@ precedent — they are how the fix is known to look.
   out of the ledger while this was broken. This change means the grader is
   never offered them; it does not mean the check can be relaxed.
 
+- **The same diversion, on a file with no ledger behind it — where it almost
+  never fired.** `hitter_frame` wrote through `dump_path(..., post_hoc)` from
+  the day it shipped, so it already had the entry above. It diverted **once in
+  nine slates**. `dump_is_post_hoc` returns True only when EVERY game on the
+  slate has started, and every slate has a straggler: measured at the
+  post-rollover build, 14 of 15 games started, 9 of 10, 10 of 15, 12 of 15. One
+  unstarted game keeps the live name, and the file is rewritten.
+
+  For `leans_*` that is correct and is not changed: each row carries
+  `lock_status`, `ingest()` admits only the pregame ones, and the mixture is
+  labelled and filtered downstream — which is exactly what the live entry above
+  says the residue is. **`hitters_*` has no ledger behind it. The file IS the
+  record**, so the same rule silently replaced predictions with post-hoc ones.
+  Measured before the fix: **1728 of 2178 committed rows (79.3%) were written
+  after their own game started, median 172 minutes late, worst 561** — and
+  every file held exactly one snapshot, which is the overwrite.
+
+  What that cost is not provenance but the thing itself. A frame written after
+  first pitch carries a Savant leaderboard the game is already inside, so
+  scoring it is lookahead, and `hitter_level_probe` had been doing so: its first
+  published reading, corr +0.0499 over 1832 rows, was ~79% contaminated.
+
+  Three parts to the fix, and the second is the reusable one:
+
+  * **Per-row provenance.** Each row now stores `scheduled_start_utc` and
+    `lock_status`, from `hitter_frame.lock_status()` — deliberately
+    `grade_leans._lock_status`'s rule including the strict `<`, because a
+    second definition of "started" is a second thing to keep in sync. The frame
+    could not previously answer "was I pregame?" from its own contents, so every
+    consumer had to re-join the ledger to find out, and the one that mattered
+    did not.
+  * **The merge unit is the LINEUP, not the hitter.** `merge_preserving_pregame`
+    keeps an older group only when it is wholly pregame and the incoming one is
+    not, keyed on `(game_pk, batting_side)`. Merging per hitter would mix a
+    pregame bat with a post-hoc one and produce a nine-man lineup that never
+    existed, whose composite no build ever computed — a worse artifact than
+    either input.
+  * **A later PREGAME poll still refreshes.** The rule protects a lineup from
+    being downgraded, never from being updated, so the stored row remains the
+    LAST snapshot before first pitch rather than the first.
+
+  Verified by replay rather than by argument: run the real 2026-09-06 slate and
+  its own start times through both builds and the 14 started games keep their
+  pregame values while the single straggler correctly takes the fresh refresh,
+  15 of 15. Two smaller consequences fall out — an empty build now leaves an
+  existing file alone (clearing the pregame copy on an empty slate is this same
+  defect from the other side), and an unreadable existing file is treated as
+  absent rather than fatal, since the module is best-effort and off the critical
+  path by design.
+
+  **Nothing recovers the 79%.** Those pregame frames are gone and no-lookahead
+  forbids reconstructing them; the clean sample restarts from the next build.
+
+  **The general lesson: a diversion sized for an artifact the ledger protects is
+  not sized for one that is its own record.** `dump_is_post_hoc`'s all-or-nothing
+  rule is a deliberate choice about dumps, and it was inherited by a file class
+  with no downstream filter to make the mixture safe. When a new artifact adopts
+  an existing guard, check what made the guard sufficient where it came from.
+  Diagnostic only — no lean, delta, grade or ledger row moves.
+
+- **A control on a different row set, in a probe rather than on a page.**
+  `hitter_level_probe` told its reader to compare its number against
+  `ledger_report.txt`'s component line. That line covers every v12 slate while
+  the probe covers only the slates with a persisted frame, and the two **disagree
+  in sign**: −0.039 over 792 side-games there against **+0.065 over the same 208
+  games** here. Read across those row sets the probe's +0.050 looks like evidence
+  for the aggregation hypothesis it exists to test; read against its own rows,
+  hitter-minus-team is **−0.015 ± 0.074, z = −0.21** and nothing separates.
+
+  Same rule as the abstention instance below — a control is only a control if it
+  is scored on the rows the model was scored on — with the failure one level out:
+  not a control computed wrongly, but a *pointer to a control computed
+  elsewhere*. `team_control` now derives from the probe's own joined rows so it
+  cannot drift from them. **A reading instruction is part of the instrument.**
+
+- **Threshold cliffs, fourth instance — written INTO the fix for the entry
+  above.** (The first three are further down this file; this one is here because
+  it belongs beside the control it suppressed.) `team_control` shipped with
+  `if len(agg) < 30: return None`. On the
+  first clean run the probe joined 252 hitter-games = **28 sides**, so the report
+  printed `TEAM CONTROL on these same rows: not computable from this frame` — no
+  control at all, on the run whose entire purpose was to stop a reader reaching
+  for the component line instead. The gate suppressed the number in exactly the
+  case it was needed.
+
+  Removed rather than lowered, per this file's own two rules: *print the standard
+  error, never suppress the number*, and *the fix for a hard `>= N` is almost
+  never a better `N`*. What remains are structural refusals only — missing
+  columns, a zero-variance predictor where the correlation is undefined, and
+  fewer than four sides where `1/sqrt(n−3)` is not finite. Those are arithmetic,
+  not judgement. **A gate written into a fix deserves the same suspicion as one
+  found in old code**, and this one survived review, a test suite and a PR body
+  before a real run caught it.
+
+- **A test that pinned a property by character distance.**
+  `test_a_failure_writing_the_frame_cannot_cost_the_slate` sliced 400 characters
+  around `hitter_frame.write` and asserted `try:` appeared in the window. The
+  property is real and load-bearing — the write happens after the irreplaceable
+  pregame dumps, inside a handler that swallows its failures — but adding a
+  comment beside the call pushed `try:` out of the slice and the test went red
+  for formatting. It now walks the AST for the `Try` node that actually encloses
+  the call. **A structural claim needs a structural assertion**; a text window
+  fails for reasons that have nothing to do with the claim, and the cheapest way
+  to "fix" such a red is to delete the assertion.
+
 - **A monitor that measures its own correction.** `sp_ip_calibration()` reads
   `expected_sp_ip_raw` where present precisely so the fit cannot feed on its own
   output — and the standing monitor that prints its slope every build,
@@ -2092,7 +2205,7 @@ inputs, while relying on the market join to supply the paired moneylines.
 | `dog_contrast_test.py` | pre-registered underdog sign-flip contrast, frozen 2026-09-03; NOT independent of arm 2 (also prints every build) |
 | `hfa_probe.py` | does adding a home-field term to the lean improve it? (no) |
 | `lineup_window_probe.py` | is the negative lineup component slope an artifact of the SP/BP scoring window? (no) |
-| `hitter_level_probe.py` | does a hitter's predicted xwOBA predict his OWN plate appearances? (starts empty — forward only) |
+| `hitter_level_probe.py` | does a hitter's predicted xwOBA predict his OWN plate appearances? (forward only; runs as a step of the `lineup-window-collect` workflow, the only place it can — it needs the collector's `batter_id` and StatsAPI is unreachable from the dev environment) |
 | `interaction_probe.py` | do single signals or other combiners beat `B·P/L`? |
 | `dispersion_probe.py` | does a concentrated lineup beat the mean it is averaged into? |
 | `bp_ablation.py` | does removing the bullpen term change any decision? |
@@ -2404,16 +2517,57 @@ Do not re-derive these by hand; they have readouts.
   a past slate's per-hitter frame needs that slate's Savant leaderboard, which
   is exactly the lookahead `.savant_cache/` exists to forbid, so the 299 v12
   games behind the current component block can never be scored this way. The
-  sample starts at zero. At roughly 270 hitter-games and 1,100 scoring PAs a
-  slate the nominal SE falls fast — 0.0066 at 22,758 rows against 0.0410 at the
-  598 side-games available today — but the rows are not independent, since one
-  hitter recurs, so the printed SE is optimistic. Read nothing from a slate or
-  two.
+  sample starts at zero, and it restarted once — see the post-hoc frame entry in
+  the anti-patterns: 79.3% of the frames written before that fix were themselves
+  post-hoc, so the probe's first published reading was contaminated and the
+  clean sample begins after it.
 
-  Read it against the component block: positive per-hitter beside the null
-  team-level line implicates the aggregation; null in both implicates the rate.
-  The probe prints the raw pre-shrinkage rate beside the shrunk one, which is
-  the comparison K cannot be tuned on at team level for the reason above.
+  Read it against the probe's OWN team control, printed beside it, never against
+  `ledger_report.txt`'s component line — those are different row sets and they
+  have already disagreed in sign. Positive per-hitter beside a null control
+  implicates the aggregation; the two agreeing implicates the rate. The probe
+  prints the raw pre-shrinkage rate beside the shrunk one, which is the
+  comparison K cannot be tuned on at team level for the reason above, and the
+  SE it prints is clustered on `player_id` because one hitter recurs across his
+  games — 0.0727 against 0.0634 if the rows were independent, on the first
+  clean run.
+
+  **First clean reading, 2026-09-14: 252 hitter-games, 1002 scoring PAs, shrunk
+  corr +0.0841 ± 0.0727 clustered (z = +1.16), raw −0.0119 ± 0.0804.** Nothing
+  established, and recorded so a later reader can see the sample's origin rather
+  than a number. Note only that shrunk and raw SPLIT here, where the
+  contaminated sample had them nearly identical (+0.0499 against +0.0503) —
+  which is a reason to keep both columns, not a finding.
+
+  **Three things the team-level side has already ruled out, so the probe is not
+  chasing them.** The ceiling is arithmetic, not a fault: `d_lineup` has sd
+  0.0104 against a realised differential of sd 0.1349, so a ceiling of r = 0.077
+  — 1.5 se from zero at n=396, meaning that test cannot separate a PERFECT
+  composite from a worthless one and needs ~671 games to try (`d_sp` needs 69).
+  Per-side the ceiling is 0.079 against an observed −0.039 ± 0.036. The
+  compression is the nine-hitter mean and not a defect: within-lineup hitter sd
+  is 0.0234, divided by √9 is 0.0078, and the observed composite sd is 0.0072,
+  while a single starter carries 3.2× that spread — which is why the starter
+  term measures and the lineup term structurally cannot.
+
+  **The aggregation is not the culprit either**, measured on the committed
+  frames: seven variants over the same 210 side-games — slot-weighted shrunk
+  (shipped) +0.048, unweighted shrunk +0.047, PA-weighted raw +0.065, unweighted
+  raw +0.015, slot-weighted raw +0.021, top-4 slots +0.036, max hitter +0.056 —
+  all inside one standard error of ±0.070. Un-shrinking doubles the spread and
+  makes the correlation *worse*, so shrinkage is not eating the signal. And
+  averaging the per-game noise away does not rescue it: pooled by team over ~26
+  games each the ceiling rises to 0.37 and the correlation reads **−0.057 ±
+  0.192** across 30 teams, against the starter's +0.226.
+
+  Incidental, and worth a look if v4 is ever revisited: **slot weighting does
+  essentially nothing.** Leadoff carries 1.102 against 9th at 0.899, a 1.226:1
+  ratio with a within-lineup coefficient of variation of 0.069, and the
+  slot-weighted and unweighted composites correlate with the actual at +0.048
+  and +0.047. At n=210 that does not establish v4 was worthless; it is
+  consistent with this file's own note that two turns through the order makes
+  the weights near-uniform. Savant backfill is ruled out as a contaminant on
+  the current frames: 5 of 2,088 hitter rows (0.2%).
 
 - **The metric question** — the shadow arm, running wOBA under an xwOBA
   primary. Needs roughly 18 paired slates for 80% power on a 0.09 gap.
