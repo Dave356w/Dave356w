@@ -62,8 +62,8 @@ import numpy as np
 import pandas as pd
 import requests
 
-from market_backfill import (MARKET_COLS, attach_market, excess_se,
-                             metric_label)
+from market_backfill import (MARKET_COLS, ODDS_LADDER, attach_market,
+                             excess_se, ladder_rung, metric_label)
 from actuals_backfill import (ACTUAL_COLS, attach_actuals, actuals_summary,
                               actuals_family_line, components_summary,
                               target_reliability,
@@ -1024,6 +1024,131 @@ def _magnitude_price_grid_lines(g):
     return out
 
 
+def _selection_price_matrix_lines(g):
+    """|xw_net| bands x the SELECTED side's closing price rung, FOLLOW only.
+
+    This is the grid the per-game card publishes one cell of, brought into the
+    internal artifact. It is deliberately NOT the block above it, and the two
+    are meant to be read as different instruments rather than reconciled:
+
+      * that grid bands the market's own probability `q` of the LEAN and reads
+        saved PREGAME prices with no close fallback, so it scores fewer rows;
+      * this one buckets the published SELECTION on the closing moneyline
+        ladder, which is the axis a reader of the card sees, and scores every
+        followed row of the current family.
+
+    Follow branch only. The fade rows are a different bet -- by construction
+    they back the favourite -- so pooling them would put two rules in one cell.
+    The header states that denominator rather than leaving it to subtraction.
+
+    Arithmetic comes from `hybrid_v2.apply_rule`, never a local copy, and the
+    rungs from `market_backfill.ladder_rung`, so a cell here and the same cell
+    on the card cannot drift apart. That equality is the whole point of adding
+    the block: the site began publishing per-cell units with no counterpart in
+    this file, which is the artifacts-disagreeing defect waiting to happen.
+
+    Retrospective. Both v2 gates were chosen after examining these rows, so no
+    cell here is out-of-sample, and a grid is a search -- the null-max line at
+    the foot is the reference a cell is read against, never zero.
+    """
+    import hybrid_v2
+    d = hybrid_v2.decidable(g)
+    if d is None or d.empty:
+        return []
+    h = hybrid_v2.apply_rule(d)
+    h = h[h["follow"].astype(bool)]
+    if h.empty:
+        return []
+
+    mag = pd.to_numeric(h["xw_net"], errors="coerce").abs().to_numpy(dtype=float)
+    ml = pd.to_numeric(h["ml_bet"], errors="coerce").to_numpy(dtype=float)
+    p = pd.to_numeric(h["p_bet"], errors="coerce").to_numpy(dtype=float)
+    profit = pd.to_numeric(h["profit"], errors="coerce").to_numpy(dtype=float)
+    won = h["bet_won"].to_numpy(dtype=bool)
+    rung = np.array([ladder_rung(float(m)) if np.isfinite(m) else None
+                     for m in ml], dtype=object)
+    bands = list(zip(FIXED_MAGNITUDE_EDGES, FIXED_MAGNITUDE_EDGES[1:]))
+    labels = [lab for _lo, _hi, lab in ODDS_LADDER]
+    # Short headers only: the full rung labels are 12 characters and eight of
+    # them do not fit a readable row.
+    short = {lab: lab.replace(" to ", "/").replace(" ", "") for lab in labels}
+
+    def fmt(mask, kind):
+        if not mask.any():
+            return "·"
+        n = int(mask.sum())
+        w = int(won[mask].sum())
+        if kind == "wl":
+            return f"{n}:{w}-{n - w}"
+        if kind == "u":
+            return f"{profit[mask].sum():+.2f}"
+        exc = won[mask].mean() - p[mask].mean()
+        return f"{100 * exc:+.0f}±{100 * excess_se(pd.Series(p[mask])):.0f}"
+
+    n_all, w_all = len(h), int(won.sum())
+    out = [
+        f"{MODEL_METRIC_LABEL} |delta| x SELECTED-side closing price "
+        f"(hybrid v2 FOLLOW branch; the grid the game card shows one cell of)",
+        f"  rows: {n_all} followed of {len(d)} decidable; "
+        f"{int(len(d) - n_all)} faded rows excluded (a fade backs the favourite "
+        f"by construction, so it is a different bet).",
+        "  Price basis: the selection's own CLOSING moneyline -- not the saved "
+        "pregame price the block above uses, so the two grids score different "
+        "row sets on purpose.",
+        "  Retrospective: both v2 gates were chosen on these rows. Cells are "
+        "descriptive history, not a validated mapping from |delta| to a win "
+        "probability, and no cell is a registered rule.",
+    ]
+    width, lab_w = 12, 15
+    for title, kind in (("n and W-L", "wl"),
+                        ("flat-stake units (1u a game, at each row's own close)", "u"),
+                        ("beat its own price (pp +- se)", "e")):
+        out.append(f"  {title}")
+        head = "    " + f"{'|delta|':<{lab_w}}" + "".join(
+            f"{short[lab]:>{width}}" for lab in labels) + f"{'ROW':>{width}}"
+        out.append(head)
+        out.append("    " + "-" * (len(head) - 4))
+        for lo, hi in bands:
+            row = (mag >= lo) & (mag < hi)
+            cells = [fmt(row & (rung == lab), kind) for lab in labels]
+            cells.append(fmt(row, kind))
+            out.append("    " + f"{_band_label(lo, hi):<{lab_w}}"
+                       + "".join(f"{c:>{width}}" for c in cells))
+        cols = [fmt(rung == lab, kind) for lab in labels]
+        cols.append(fmt(np.ones(n_all, dtype=bool), kind))
+        out.append("    " + f"{'COLUMN':<{lab_w}}"
+                   + "".join(f"{c:>{width}}" for c in cols))
+
+    # A grid is a search: the best cell is read against what the best cell
+    # averages when every game settles at its own price. Empty cells are
+    # rendered above and excluded here -- a cell with no rows is a finding
+    # about the model, not a candidate.
+    cell_p, best, best_lab = [], None, ""
+    for lo, hi in bands:
+        row = (mag >= lo) & (mag < hi)
+        for lab in labels:
+            m = row & (rung == lab)
+            if not m.any():
+                continue
+            cell_p.append(p[m])
+            exc = float(won[m].mean() - p[m].mean())
+            if best is None or exc > best:
+                best, best_lab = exc, f"|delta| {_band_label(lo, hi)} {lab} (n={int(m.sum())})"
+    ref = _grid_null_best_excess(cell_p)
+    pooled = float(won.mean() - p.mean())
+    out.append(
+        f"  best-cell reference: the best of these {len(cell_p)} non-empty cells averages "
+        f"{100 * ref:+.1f} pp of excess under 'every game settles at its own price'; "
+        f"the observed best is {100 * best:+.1f} pp, {best_lab}. "
+        f"A grid is a search, so a cell is read against that reference, never against zero.")
+    out.append(
+        f"  pooled over all {n_all} followed rows: {w_all}-{n_all - w_all} "
+        f"({w_all / n_all:.3f})   excess {100 * pooled:+.1f} +- "
+        f"{100 * excess_se(pd.Series(p)):.1f} pp   {profit.sum():+.2f}u. "
+        f"The margins are better estimated than any cell; read them first.")
+    return out
+
+
 def _logit_fit(X, y, iters=60):
     b = np.zeros(X.shape[1])
     for _ in range(iters):
@@ -1387,6 +1512,12 @@ def report_text(led):
         except Exception as _exc:                  # noqa: BLE001 - see above
             say(f"{MODEL_METRIC_LABEL} |delta| x saved-pregame market "
                 f"probability unavailable ({type(_exc).__name__})")
+        try:
+            for line in _selection_price_matrix_lines(g):
+                say(line)
+        except Exception as _exc:                  # noqa: BLE001 - see above
+            say(f"{MODEL_METRIC_LABEL} |delta| x selected-side closing price "
+                f"unavailable ({type(_exc).__name__})")
         if len(g) >= 9:
             g["_terc"] = pd.qcut(g["xw_delta"], 3, labels=["low", "mid", "hi"], duplicates="drop")
             say(f"{MODEL_METRIC_LABEL} F5 by |Δ| tercile:")
