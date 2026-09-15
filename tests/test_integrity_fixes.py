@@ -3402,34 +3402,28 @@ class HybridRuleTests(unittest.TestCase):
         # A lean naming neither club cannot be mirrored, so it abstains.
         self.assertIsNone(build_site.hybrid_selection("XXX", "A", "H", .30, .005))
 
-    def test_follow_panel_shows_delta_model_and_price_rung_market_results(self):
+    def test_follow_panel_shows_the_delta_by_price_intersection(self):
         ctx = {
-            ("delta_follow", 1): {
-                "model": dict(n=14, w=10, l=4, actual=.714),
+            ("delta_price_follow", 1, "+100 to +129"): {
+                "model": dict(n=14, w=7, l=7, actual=.500),
             },
-            ("market_rung", "+100 to +129"): dict(
-                n=437, w=206, actual=.471, implied=.455),
         }
         html = build_site._verdict_html(
             "PIT", dict(p_home=.529, away_ml=103), "PIT", "SD", ctx, .0187,
         )
-        self.assertIn("Past comparisons", html)
+        self.assertIn("Past V12 XWOBA SIDE picks", html)
         self.assertIn("Past results", html)
         self.assertIn(
-            "V12 XWOBA SIDE · Δ .010–.020 · 14 games</span><span>10-4 (0.714)",
-            html)
+            "Δ .010–.020 · closing ML +100 to +129 · 14 games", html)
         self.assertIn(
-            "Market · closing ML +100 to +129 · 437 sides</span><span>"
-            "206-231 (0.471) vs 45.5% implied",
+            "Past results</span><span>7-7 (0.500) · thin sample",
             html)
 
     def test_pit_acceptance_panel_has_the_requested_reads(self):
         ctx = {
-            ("delta_follow", 1): {
-                "model": dict(n=14, w=10, l=4, actual=.714),
+            ("delta_price_follow", 1, "+100 to +129"): {
+                "model": dict(n=14, w=7, l=7, actual=.500),
             },
-            ("market_rung", "+100 to +129"): dict(
-                n=437, w=206, actual=.471, implied=.455),
         }
         html = build_site._verdict_html(
             "PIT", dict(p_home=.529, away_ml=103), "PIT", "SD", ctx, .0187,
@@ -3440,11 +3434,10 @@ class HybridRuleTests(unittest.TestCase):
             "Market price</span><span>PIT +103 · 47.1% no-vig",
             "Rule</span><span><b>XWOBA SIDE → PIT</b> +103",
             "remains the XWOBA side",
-            "Past comparisons",
-            "Past results, not a prediction",
-            "V12 XWOBA SIDE · Δ .010–.020 · 14 games</span><span>10-4 (0.714)",
-            "Market · closing ML +100 to +129 · 437 sides</span><span>"
-            "206-231 (0.471) vs 45.5% implied",
+            "Past V12 XWOBA SIDE picks",
+            "Δ .010–.020 · closing ML +100 to +129 · 14 games",
+            "Past results</span><span>7-7 (0.500) · thin sample",
+            "Retroactive current-rule slice, not a prediction or forward test.",
         ):
             self.assertIn(expected, html)
         for banned in ("value bet", "best bet", "free money", "lock"):
@@ -3470,6 +3463,7 @@ class HybridRuleTests(unittest.TestCase):
             "hybrid_follow": [True, True, False],
             "hybrid_won": [1.0, 0.0, 0.0],
             "hybrid_p": [.60, .55, .60],
+            "hybrid_ml": [-120.0, -120.0, -120.0],
             "hybrid_resid": [.40, -.55, -.60],
             "hybrid_profit": [.50, -1.0, -1.0],
             "chalk_won": [1.0, 0.0, 0.0],
@@ -3482,11 +3476,10 @@ class HybridRuleTests(unittest.TestCase):
                 mock.patch.object(build_site, "_lean_market_observations",
                                   return_value=obs):
             out = build_site.hybrid_branch_records()
-        bucket = out[("delta_follow", 0)]
+        bucket = out[("delta_price_follow", 0, "-129 to -100")]
         self.assertEqual(bucket["model"]["n"], 2)
         self.assertEqual((bucket["model"]["w"], bucket["model"]["l"]),
                          (1, 1))
-        self.assertNotIn("market", bucket)
 
     def test_the_fade_branch_record_equals_its_chalk_control(self):
         """Not a coincidence to be observed -- a construction to be enforced.
