@@ -517,10 +517,10 @@ class RenderTests(unittest.TestCase):
         show a reader a record for a selection nobody made.
         """
         ctx = {
-            ("branch", "FOLLOW"): dict(
-                n=208, w=135, l=73, implied=.564, actual=.649, excess=.085,
-                excess_se=.034, roi=.134, units=27.94,
-            ),
+            ("delta_follow", 2): {
+                "model": dict(n=83, w=52, l=31, actual=.627),
+                "market": dict(n=83, w=49, l=34, actual=.590),
+            },
             ("branch", "FADE"): dict(
                 n=15, w=11, l=4, implied=.586, actual=.733, excess=.147,
                 excess_se=.127, roi=.238, units=3.56,
@@ -529,10 +529,10 @@ class RenderTests(unittest.TestCase):
         follow = b._verdict_html(
             "ARI", dict(p_home=.62, home_ml=-160), "LAD", "ARI", ctx, .02,
         )
-        self.assertIn("Past V12 model-side picks · 208 games", follow)
+        self.assertIn("Past V12 XWOBA SIDE picks · Δ .020–.030 · 83 completed games", follow)
         self.assertIn("XWOBA SIDE → ARI", follow)
-        self.assertIn("<b>135-73 (64.9%)", follow)
-        self.assertIn("135-73 (64.9%) vs 56.4% priced", follow)
+        self.assertIn("XWOBA SIDE</span><span>52-31 (0.627)", follow)
+        self.assertIn("Market</span><span>49-34 (0.590)", follow)
         # The reason has to sit on the decision, not be inferable from two
         # numbers printed above it.
         self.assertIn("remains the XWOBA side", follow)
@@ -556,7 +556,7 @@ class RenderTests(unittest.TestCase):
         fb = b._verdict_html(
             "ARI", dict(p_home=.62, home_ml=-160), "LAD", "ARI", {}, .02,
         )
-        self.assertIn("No completed V12 model-side selections yet", fb)
+        self.assertIn("No completed V12 XWOBA SIDE picks in the Δ .020–.030 range yet", fb)
         self.assertNotIn("completed games", fb)
 
     def test_the_fade_branch_prints_its_chalk_control(self):
@@ -600,22 +600,18 @@ class RenderTests(unittest.TestCase):
         self.assertIn("the same bet", calib)
         self.assertIn(f"Always chalk · {b.hybrid_public_label('FADE')} rows only",
                       calib)
-        # And it must not have been dropped from the branch where it is NOT a
-        # duplicate: on FOLLOW chalk is a different record and is the only
-        # thing saying whether the model beat backing the favourite.
+        # XWOBA SIDE shows its same-range market comparison as a separate row.
         follow = b._verdict_html(
             "ARI", dict(p_home=.62, home_ml=-160), "LAD", "ARI",
-            {("branch", "FOLLOW"): dict(n=208, w=135, l=73, implied=.564,
-                                        actual=.649, excess=.085,
-                                        excess_se=.034, roi=.134, units=27.94),
-             ("chalk", "FOLLOW"): dict(n=208, w=122, l=86, implied=.575,
-                                       actual=.587, excess=.012,
-                                       excess_se=.034, roi=-.01, units=-2.1)},
+            {("delta_follow", 2): {
+                "model": dict(n=83, w=52, l=31, actual=.627),
+                "market": dict(n=83, w=49, l=34, actual=.590),
+            }},
             .02)
-        self.assertIn("Always chalk, same games", follow)
-        self.assertIn("122-86 (58.7%)", follow)
+        self.assertIn("XWOBA SIDE</span><span>52-31 (0.627)", follow)
+        self.assertIn("Market</span><span>49-34 (0.590)", follow)
 
-    def test_verdict_panel_prints_its_own_error_bar(self):
+    def test_market_over_lean_panel_prints_its_own_error_bar(self):
         """A published excess must carry its sampling distribution.
 
         BRANCH_RECORD_MIN is 1, so a one-game branch can publish a headline.
@@ -623,13 +619,14 @@ class RenderTests(unittest.TestCase):
         rendering the least certain number on the page as the most certain.
         """
         ctx = {
-            ("branch", "FOLLOW"): dict(
+            ("branch", "FADE"): dict(
                 n=1, w=1, l=0, implied=.662, actual=1.0, excess=.338,
                 excess_se=.473, roi=.51, units=.51,
             ),
         }
         h = b._verdict_html(
-            "ARI", dict(p_home=.662, home_ml=-196), "LAD", "ARI", ctx, .005,
+            "LAD", dict(p_home=.70, away_ml=210, home_ml=-250),
+            "LAD", "ARI", ctx, .005,
         )
         self.assertIn("1-0 (100.0%) vs 66.2% priced", h)
         self.assertIn("within noise", h)
@@ -687,71 +684,31 @@ class RenderTests(unittest.TestCase):
         self.assertIn("within noise", b._branch_read(under))
         self.assertIn("outside noise", b._branch_read(over))
 
-    def test_the_branch_record_is_cut_to_this_games_price_band(self):
-        """A pooled branch record is not the history of a game like this one.
-
-        389 follow rows mix a .46 underdog lean with a .72 favourite -- two
-        different bets with different base rates. The card shows the band the
-        game falls in, names which band it is, and falls back to the pooled
-        branch (saying so) when no band is available.
-        """
-        ctx = {
-            ("branch", "FOLLOW"): dict(n=389, w=247, l=142, implied=.560,
-                                       actual=.635, excess=.075,
-                                       excess_se=.025, roi=.107, units=41.7),
-            ("band", "FOLLOW", "45\u201350%"): dict(
-                n=67, w=42, l=25, implied=.476, actual=.627, excess=.151,
-                excess_se=.061, roi=.311, units=20.8),
-            ("bandchalk", "FOLLOW", "45\u201350%"): dict(
-                n=67, w=25, l=42, implied=.524, actual=.373, excess=-.151,
-                excess_se=.061, roi=-.28, units=-18.7),
-        }
-        # A lean priced .47 lands in the 45-50% band, not the pooled line.
+    def test_xwoba_side_record_is_cut_to_this_games_delta_range(self):
+        """The XWOBA SIDE card uses its fixed delta range, not price band."""
+        ctx = {("delta_follow", 2): {
+            "model": dict(n=83, w=52, l=31, actual=.627),
+            "market": dict(n=83, w=49, l=34, actual=.590),
+        }}
         h = b._verdict_html(
             "LAD", dict(p_home=.53, away_ml=115, home_ml=-135), "LAD", "ARI",
             ctx, .02)
-        self.assertIn("42-25 (62.7%)", h)
-        self.assertNotIn("247-142", h)
-        # The band is NAMED. A record that silently changes row set between
-        # games under an unqualified heading is the substitution this file
-        # keeps recording.
-        self.assertIn("45\u201350%", h)
-        # And its control is scored on the SAME rows -- band chalk, not the
-        # whole branch's. A band record over a pooled control is the
-        # different-row-set defect, invisible because both look like records
-        # of "these games".
-        self.assertIn("25-42 (37.3%)", h)
+        self.assertIn("Δ .020–.030", h)
+        self.assertIn("52-31 (0.627)", h)
+        self.assertIn("49-34 (0.590)", h)
+        self.assertNotIn("45\u201350%", h)
 
-        # No band for this price: fall back to the pooled branch AND say so.
-        far = b._verdict_html(
-            "ARI", dict(p_home=.62, home_ml=-160), "LAD", "ARI", ctx, .02)
-        self.assertIn("247-142", far)
-        self.assertIn("all prices", far)
-
-    def test_the_chalk_control_is_hidden_only_when_it_duplicates_the_record(self):
-        """Show the control when it says something; hide a literal copy.
-
-        Where the model's side is priced at or above .50 that side IS the
-        favourite, so chalk backs it too and the two records are equal by
-        construction. Printing both is the redundancy the operator cut. Below
-        .50 they differ and the gap is the point.
-        """
-        same = dict(n=93, w=51, l=42, implied=.524, actual=.548, excess=.024,
-                    excess_se=.052, roi=.02, units=1.9)
-        ctx = {("branch", "FOLLOW"): same,
-               ("band", "FOLLOW", "50\u201355%"): same,
-               ("bandchalk", "FOLLOW", "50\u201355%"): dict(same)}
+    def test_delta_history_always_names_the_market_comparison(self):
+        """The same-range Market row remains explicit, even if records tie."""
+        same = dict(n=83, w=52, l=31, actual=.627)
+        ctx = {("delta_follow", 2): {
+            "model": same,
+            "market": dict(same),
+        }}
         h = b._verdict_html(
             "ARI", dict(p_home=.52, home_ml=-108), "LAD", "ARI", ctx, .02)
-        self.assertIn("51-42 (54.8%)", h)
-        self.assertNotIn("Always chalk, same games", h)
-        # Differing control is shown.
-        ctx[("bandchalk", "FOLLOW", "50\u201355%")] = dict(
-            same, w=42, l=51, actual=.452)
-        h2 = b._verdict_html(
-            "ARI", dict(p_home=.52, home_ml=-108), "LAD", "ARI", ctx, .02)
-        self.assertIn("Always chalk, same games", h2)
-        self.assertIn("42-51", h2)
+        self.assertEqual(h.count("52-31 (0.627)"), 2)
+        self.assertIn("Market</span>", h)
 
     def test_a_thin_branch_is_marked_thin_on_its_own_row(self):
         """A thin branch must not read as a rate you can rely on.
@@ -787,22 +744,16 @@ class RenderTests(unittest.TestCase):
         self.assertNotIn("All V12 leans", h2)
         self.assertNotIn("139-84", h2)
 
-    def test_the_panel_never_calls_a_branch_record_a_forward_result(self):
-        """The threshold was chosen on these rows; the copy has to say so.
-
-        Without it the panel publishes a +8.5pp discovery excess that reads
-        like out-of-sample evidence -- which is the reading `hybrid_test.py`
-        exists to prevent.
-        """
-        ctx = {("branch", "FOLLOW"): dict(n=208, w=135, l=73, implied=.564,
-                                          actual=.649, excess=.085,
-                                          excess_se=.034, roi=.134,
-                                          units=27.94)}
+    def test_follow_panel_labels_delta_records_as_past_results(self):
+        """The delta comparison is retrospective, never a game prediction."""
+        ctx = {("delta_follow", 2): {
+            "model": dict(n=83, w=52, l=31, actual=.627),
+            "market": dict(n=83, w=49, l=34, actual=.590),
+        }}
         h = b._verdict_html(
             "ARI", dict(p_home=.62, home_ml=-160), "LAD", "ARI", ctx, .02)
-        self.assertIn("not a forward test", h)
-        # And it must not read as a claim about tonight's game.
-        self.assertIn("not a prediction", h)
+        self.assertIn("Past results", h)
+        self.assertNotIn("prediction for this game", h)
 
     def test_verdict_never_claims_a_value_bet(self):
         """Measured walk-forward, no bucket in this ledger beats the close.
