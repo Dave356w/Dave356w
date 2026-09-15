@@ -530,11 +530,14 @@ class RenderTests(unittest.TestCase):
         follow = b._verdict_html(
             "ARI", dict(p_home=.62, home_ml=-160), "LAD", "ARI", ctx, .02,
         )
-        self.assertIn("Past V12 XWOBA SIDE picks · Δ .020–.030 · 83 completed games", follow)
+        self.assertIn("Past comparisons", follow)
         self.assertIn("XWOBA SIDE → ARI", follow)
-        self.assertIn("XWOBA SIDE</span><span>52-31 (0.627)", follow)
         self.assertIn(
-            "Market · -174 to -130</span><span>233-159 (0.594) vs 57.5% implied",
+            "V12 XWOBA SIDE · Δ .020–.030 · 83 games</span><span>52-31 (0.627)",
+            follow)
+        self.assertIn(
+            "Market · closing ML -174 to -130 · 392 sides</span><span>"
+            "233-159 (0.594) vs 57.5% implied",
             follow)
         # The reason has to sit on the decision, not be inferable from two
         # numbers printed above it.
@@ -614,9 +617,12 @@ class RenderTests(unittest.TestCase):
                     n=392, w=233, actual=.594, implied=.575),
             },
             .02)
-        self.assertIn("XWOBA SIDE</span><span>52-31 (0.627)", follow)
         self.assertIn(
-            "Market · -174 to -130</span><span>233-159 (0.594) vs 57.5% implied",
+            "V12 XWOBA SIDE · Δ .020–.030 · 83 games</span><span>52-31 (0.627)",
+            follow)
+        self.assertIn(
+            "Market · closing ML -174 to -130 · 392 sides</span><span>"
+            "233-159 (0.594) vs 57.5% implied",
             follow)
 
     def test_market_over_lean_panel_prints_its_own_error_bar(self):
@@ -707,7 +713,8 @@ class RenderTests(unittest.TestCase):
         self.assertIn("Δ .020–.030", h)
         self.assertIn("52-31 (0.627)", h)
         self.assertIn(
-            "Market · +100 to +129</span><span>206-231 (0.471) vs 45.5% implied",
+            "Market · closing ML +100 to +129 · 437 sides</span><span>"
+            "206-231 (0.471) vs 45.5% implied",
             h)
         self.assertNotIn("45\u201350%", h)
 
@@ -722,9 +729,12 @@ class RenderTests(unittest.TestCase):
         }
         h = b._verdict_html(
             "ARI", dict(p_home=.52, home_ml=-108), "LAD", "ARI", ctx, .02)
-        self.assertIn("XWOBA SIDE</span><span>52-31 (0.627)", h)
         self.assertIn(
-            "Market · -129 to -100</span><span>254-256 (0.498) vs 51.4% implied",
+            "V12 XWOBA SIDE · Δ .020–.030 · 83 games</span><span>52-31 (0.627)",
+            h)
+        self.assertIn(
+            "Market · closing ML -129 to -100 · 510 sides</span><span>"
+            "254-256 (0.498) vs 51.4% implied",
             h)
 
     def test_a_thin_branch_is_marked_thin_on_its_own_row(self):
@@ -768,8 +778,8 @@ class RenderTests(unittest.TestCase):
         }}
         h = b._verdict_html(
             "ARI", dict(p_home=.62, home_ml=-160), "LAD", "ARI", ctx, .02)
-        self.assertIn(
-            "Past results · Market uses all sides in its closing-price rung", h)
+        self.assertIn("Past comparisons", h)
+        self.assertIn("Past results, not a prediction", h)
         self.assertNotIn("prediction for this game", h)
 
     def test_verdict_never_claims_a_value_bet(self):

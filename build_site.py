@@ -4446,24 +4446,26 @@ def _xwoba_side_history(ctx, delta, selection_ml=None):
                 f"Δ {range_txt} range yet.</span></div>")
 
     model = parts["model"]
-    body = (f"<div class='vline'><span class='vk'>XWOBA SIDE</span>"
+    model_unit = "game" if model["n"] == 1 else "games"
+    body = (f"<div class='vline'><span class='vk'>{version} XWOBA SIDE · "
+            f"Δ {range_txt} · {model['n']} {model_unit}</span>"
             f"<span>{model['w']}-{model['l']} "
             f"({model['actual']:.3f})</span></div>")
     ml = _f(selection_ml)
     rung = _ladder_rung(ml) if ml is not None else None
     market = (ctx or {}).get(("market_rung", rung)) if rung else None
     if market:
+        market_unit = "side" if market["n"] == 1 else "sides"
         body += (
-            f"<div class='vline'><span class='vk'>Market · {_esc(rung)}</span>"
+            f"<div class='vline'><span class='vk'>Market · closing ML "
+            f"{_esc(rung)} · {market['n']} {market_unit}</span>"
             f"<span>{market['w']}-{market['n'] - market['w']} "
             f"({market['actual']:.3f}) vs "
             f"{100 * market['implied']:.1f}% implied</span></div>")
     return (
         "<div class='vprofile'>"
-        f"<div class='vprofile-title'>Past {version} XWOBA SIDE picks · Δ {range_txt} · "
-        f"{model['n']} completed {'game' if model['n'] == 1 else 'games'}</div>"
-        "<div class='vprofile-band'>Past results · Market uses all sides in "
-        "its closing-price rung</div>"
+        "<div class='vprofile-title'>Past comparisons</div>"
+        "<div class='vprofile-band'>Past results, not a prediction</div>"
         f"{body}</div>"
     )
 

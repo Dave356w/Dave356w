@@ -3413,11 +3413,14 @@ class HybridRuleTests(unittest.TestCase):
         html = build_site._verdict_html(
             "PIT", dict(p_home=.529, away_ml=103), "PIT", "SD", ctx, .0187,
         )
-        self.assertIn("Past V12 XWOBA SIDE picks · Δ .010–.020 · 14 completed games", html)
+        self.assertIn("Past comparisons", html)
         self.assertIn("Past results", html)
-        self.assertIn("XWOBA SIDE</span><span>10-4 (0.714)", html)
         self.assertIn(
-            "Market · +100 to +129</span><span>206-231 (0.471) vs 45.5% implied",
+            "V12 XWOBA SIDE · Δ .010–.020 · 14 games</span><span>10-4 (0.714)",
+            html)
+        self.assertIn(
+            "Market · closing ML +100 to +129 · 437 sides</span><span>"
+            "206-231 (0.471) vs 45.5% implied",
             html)
 
     def test_pit_acceptance_panel_has_the_requested_reads(self):
@@ -3437,10 +3440,11 @@ class HybridRuleTests(unittest.TestCase):
             "Market price</span><span>PIT +103 · 47.1% no-vig",
             "Rule</span><span><b>XWOBA SIDE → PIT</b> +103",
             "remains the XWOBA side",
-            "Past V12 XWOBA SIDE picks · Δ .010–.020 · 14 completed games",
-            "Past results",
-            "XWOBA SIDE</span><span>10-4 (0.714)",
-            "Market · +100 to +129</span><span>206-231 (0.471) vs 45.5% implied",
+            "Past comparisons",
+            "Past results, not a prediction",
+            "V12 XWOBA SIDE · Δ .010–.020 · 14 games</span><span>10-4 (0.714)",
+            "Market · closing ML +100 to +129 · 437 sides</span><span>"
+            "206-231 (0.471) vs 45.5% implied",
         ):
             self.assertIn(expected, html)
         for banned in ("value bet", "best bet", "free money", "lock"):
