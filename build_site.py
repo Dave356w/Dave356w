@@ -4448,23 +4448,30 @@ def _branch_history(ctx, action):
     # the `±` makes it MORE load-bearing, not less.
     rows = [("Won", _wl_priced(parts, bold=True)
              + f" <span class='muted'>· {_esc(_branch_read(parts))}</span>")]
-    # The control, and a sentence saying what it means HERE. Adjacency alone
-    # was not enough: on FADE the two lines are identical to the decimal, and
-    # without a clause saying why, a reader sees duplicated data or a bug
-    # rather than the point -- that this branch has no model content.
+    # The chalk control, and whether it is worth a ROW or only a clause. The
+    # answer differs by branch and is checked rather than assumed:
+    #
+    #   FADE   -- chalk is 13-4 (76.5%) against the branch's 13-4 (76.5%). A
+    #             literal duplicate, because fading a sub-45% lean backs the
+    #             favourite on every row. Printing it twice is the redundancy
+    #             the operator flagged, so the row goes and the CLAIM stays as
+    #             one clause. The claim itself cannot go: a reader shown
+    #             "13-4 (76.5%)" with nothing saying it is the favourite's
+    #             record reads chalk as the rule's own skill, which is the
+    #             named incident behind `Deleting controls as clutter`.
+    #   FOLLOW -- chalk is 228-161 (58.6%) against the branch's 247-142
+    #             (63.5%). Different numbers, so nothing is duplicated and the
+    #             row is the only thing on the card saying whether the model
+    #             beat simply backing the favourite. It stays.
     chalk = (ctx or {}).get(("chalk", action))
     note = ""
     if chalk:
-        rows.append(("Always chalk, same games", _wl_priced(chalk)))
-        # The claim survives; the argument for it moves into this comment.
-        # On FADE the two rows are equal to the decimal, so without a clause
-        # saying why a reader sees duplicated data or a bug rather than the
-        # point -- that this branch carries no model content.
         if action == "FADE":
-            note = (f"Identical by construction: under "
+            note = (f"This is the favourite's record: under "
                     f"{100 * HYBRID_THRESHOLD:.0f}% the other side is always "
-                    "the favourite — the same bet.")
+                    "the favourite, so it is the same bet.")
         else:
+            rows.append(("Always chalk, same games", _wl_priced(chalk)))
             note = "Chalk is the yardstick: the favourite on these same games."
     body = "".join(
         f"<div class='vline'><span class='vk'>{k}</span><span>{v}</span></div>"
@@ -4473,15 +4480,15 @@ def _branch_history(ctx, action):
     # row two rows above it is a note the reader has to hunt for.
     if note:
         body += f"<div class='vnote'>{note}</div>"
-    pooled = (ctx or {}).get("pooled")
-    if pooled:
-        # "leans", not "picks". `pooled` is built from the default column set,
-        # which is the MODEL's own lean -- 251-155 here, a different record
-        # from the rule's 260-146. Labelled "All V12 picks" beside a branch of
-        # the rule, it reads as the rule's own pooled line and quietly
-        # publishes one record under another's name.
-        body += (f"<div class='vline'><span class='vk'>All {version} leans"
-                 f"</span><span>{_wl_priced(pooled)}</span></div>")
+    # The pooled reference is gone from this card, on the operator's call.
+    # It was added so a reader would not anchor on a thin branch, but that job
+    # is now done by `_branch_read` on the record row itself -- "within noise"
+    # says the same thing about the same number, in place, without a fourth
+    # row of context. It remains on grades.html, which is where a reader who
+    # wants the whole family's record is pointed.
+    #
+    # `ctx["pooled"]` is still computed and still rendered there, so this is
+    # not a value disappearing off every surface.
     return (
         "<div class='vprofile'>"
         f"<div class='vprofile-title'>Past {version} {history_branch} picks · "

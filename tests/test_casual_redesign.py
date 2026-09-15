@@ -580,14 +580,32 @@ class RenderTests(unittest.TestCase):
             "LAD", dict(p_home=.70, away_ml=200, home_ml=-260), "LAD", "ARI",
             ctx, .005,
         )
-        self.assertIn("Always chalk, same games", h)
-        # Identical to the record above it, which is the point being made...
+        # The chalk ROW is gone on FADE, because there it is a literal
+        # duplicate of the record above it -- same W-L, same rate, same price.
+        # Printing it twice was redundancy, and the operator cut it.
+        self.assertNotIn("Always chalk, same games", h)
+        # The CLAIM is what could not go. A reader shown "11-4 (73.3%)" with
+        # nothing saying it is the favourite's own record reads chalk as the
+        # rule's skill, which is the incident behind `Deleting controls as
+        # clutter`. So the record must still be named as the favourite's and
+        # still be called the same bet.
         self.assertIn("11-4 (73.3%) vs 58.6% priced", h)
-        # ...and adjacency alone did not carry it. On a fade the two rows are
-        # equal to the decimal, so without this clause a reader sees duplicated
-        # data or a bug rather than "this branch has no model content".
-        self.assertIn("Identical by construction", h)
+        self.assertIn("favourite", h)
         self.assertIn("the same bet", h)
+        # And it must not have been dropped from the branch where it is NOT a
+        # duplicate: on FOLLOW chalk is a different record and is the only
+        # thing saying whether the model beat backing the favourite.
+        follow = b._verdict_html(
+            "ARI", dict(p_home=.62, home_ml=-160), "LAD", "ARI",
+            {("branch", "FOLLOW"): dict(n=208, w=135, l=73, implied=.564,
+                                        actual=.649, excess=.085,
+                                        excess_se=.034, roi=.134, units=27.94),
+             ("chalk", "FOLLOW"): dict(n=208, w=122, l=86, implied=.575,
+                                       actual=.587, excess=.012,
+                                       excess_se=.034, roi=-.01, units=-2.1)},
+            .02)
+        self.assertIn("Always chalk, same games", follow)
+        self.assertIn("122-86 (58.7%)", follow)
 
     def test_verdict_panel_prints_its_own_error_bar(self):
         """A published excess must carry its sampling distribution.
@@ -661,25 +679,39 @@ class RenderTests(unittest.TestCase):
         self.assertIn("within noise", b._branch_read(under))
         self.assertIn("outside noise", b._branch_read(over))
 
-    def test_verdict_panel_shows_the_pooled_reference(self):
-        """A thin branch is read against the powered number beside it."""
-        ctx = {
-            ("branch", "FADE"): dict(
-                n=15, w=11, l=4, implied=.586, actual=.733, excess=.147,
-                excess_se=.127, roi=.238, units=3.56),
-            "pooled": dict(n=223, w=139, l=84, implied=.554, actual=.623,
-                           excess=.070, excess_se=.033, roi=.10, units=22.6),
-        }
+    def test_a_thin_branch_is_marked_thin_on_its_own_row(self):
+        """A thin branch must not read as a rate you can rely on.
+
+        This was a pooled reference row: a better-estimated number beside the
+        branch so a reader would not anchor on 15 games. That row is gone, on
+        the operator's call -- the anchor is now ON the record itself, where
+        `_branch_read` marks it from the branch's own standard error. Same
+        job, one row instead of two, and in the place the reader is looking.
+
+        Pinned as the CLAIM (a thin branch says it is thin) rather than as the
+        row that used to carry it, and pinned in both directions so a future
+        trim cannot take the marker with it.
+        """
+        thin = {("branch", "FADE"): dict(
+            n=15, w=11, l=4, implied=.586, actual=.733, excess=.147,
+            excess_se=.127, roi=.238, units=3.56)}
         h = b._verdict_html(
             "LAD", dict(p_home=.70, away_ml=200, home_ml=-260), "LAD", "ARI",
-            ctx, .005)
-        self.assertIn("All V12 leans", h)
-        self.assertIn("139-84 (62.3%) vs 55.4% priced", h)
-        # Absent pooled entry must not break the panel.
-        ctx.pop("pooled")
-        self.assertNotIn("All V12 leans", b._verdict_html(
+            thin, .005)
+        self.assertIn("11-4 (73.3%)", h)
+        self.assertIn("within noise", h)
+        # The pooled row itself is deliberately absent, and a `pooled` entry in
+        # the context must not bring it back.
+        self.assertNotIn("All V12 leans", h)
+        with_pooled = dict(thin)
+        with_pooled["pooled"] = dict(n=223, w=139, l=84, implied=.554,
+                                     actual=.623, excess=.070, excess_se=.033,
+                                     roi=.10, units=22.6)
+        h2 = b._verdict_html(
             "LAD", dict(p_home=.70, away_ml=200, home_ml=-260), "LAD", "ARI",
-            ctx, .005))
+            with_pooled, .005)
+        self.assertNotIn("All V12 leans", h2)
+        self.assertNotIn("139-84", h2)
 
     def test_the_panel_never_calls_a_branch_record_a_forward_result(self):
         """The threshold was chosen on these rows; the copy has to say so.
