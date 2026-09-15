@@ -3402,32 +3402,26 @@ class HybridRuleTests(unittest.TestCase):
         # A lean naming neither club cannot be mirrored, so it abstains.
         self.assertIsNone(build_site.hybrid_selection("XXX", "A", "H", .30, .005))
 
-    def test_branch_panel_is_shown_with_market_adjusted_detail(self):
+    def test_follow_panel_shows_same_delta_model_and_market_results(self):
         ctx = {
-            ("branch", "FOLLOW"): dict(
-                n=14, w=10, l=4, implied=.481, actual=.714, excess=.233,
-                excess_se=.121, roi=.352, units=4.93,
-            ),
+            ("delta_follow", 1): {
+                "model": dict(n=14, w=10, l=4, actual=.714),
+                "market": dict(n=14, w=9, l=5, actual=.643),
+            },
         }
         html = build_site._verdict_html(
             "PIT", dict(p_home=.529, away_ml=103), "PIT", "SD", ctx, .0187,
         )
-        self.assertIn("Past V12 model-side picks · 14 games", html)
-        self.assertIn("<b>10-4 (71.4%)", html)
-        # Named for what it is. This sat directly under the game's own
-        # "47.1% no-vig" as a bare "Market implied 48.1%", two unrelated
-        # percentages a line apart with nothing saying they differ.
-        # The branch price is NAMED rather than left a bare percentage, and
-        # now sits in the same row as the record it qualifies instead of a
-        # line below it.
-        self.assertIn("10-4 (71.4%) vs 48.1% priced", html)
-        self.assertIn("within noise", html)
+        self.assertIn("Past V12 XWOBA SIDE picks · Δ .010–.020 · 14 completed games", html)
+        self.assertIn("Saved pregame results", html)
+        self.assertIn("XWOBA SIDE</span><span>10-4 (0.714)", html)
+        self.assertIn("Market</span><span>9-5 (0.643)", html)
 
     def test_pit_acceptance_panel_has_the_requested_reads(self):
-        ctx = {("branch", "FOLLOW"): dict(
-            n=14, w=10, l=4, implied=.481, actual=.714, excess=.233,
-            excess_se=.121, roi=.352, units=4.93,
-        )}
+        ctx = {("delta_follow", 1): {
+            "model": dict(n=14, w=10, l=4, actual=.714),
+            "market": dict(n=14, w=9, l=5, actual=.643),
+        }}
         html = build_site._verdict_html(
             "PIT", dict(p_home=.529, away_ml=103), "PIT", "SD", ctx, .0187,
         )
@@ -3437,11 +3431,10 @@ class HybridRuleTests(unittest.TestCase):
             "Market price</span><span>PIT +103 · 47.1% no-vig",
             "Rule</span><span><b>XWOBA SIDE → PIT</b> +103",
             "remains the XWOBA side",
-            "Past V12 model-side picks · 14 games",
-            "not a prediction",
-            "<b>10-4 (71.4%)",
-            "10-4 (71.4%) vs 48.1% priced",
-            "within noise",
+            "Past V12 XWOBA SIDE picks · Δ .010–.020 · 14 completed games",
+            "Saved pregame results",
+            "XWOBA SIDE</span><span>10-4 (0.714)",
+            "Market</span><span>9-5 (0.643)",
         ):
             self.assertIn(expected, html)
         for banned in ("value bet", "best bet", "free money", "lock"):
@@ -3451,8 +3444,65 @@ class HybridRuleTests(unittest.TestCase):
         led = build_site.load_ledger_df()
         with mock.patch.object(build_site, "BRANCH_RECORD_MIN", 10**6):
             out = build_site.hybrid_branch_records()
-        self.assertEqual([k for k in out if isinstance(k, tuple)], [])
+        self.assertEqual(
+            [k for k in out if isinstance(k, tuple)
+             and k[0] in ("branch", "chalk")], [])
         self.assertIn("threshold", out)
+
+    def test_delta_history_excludes_market_over_lean_rows(self):
+        """A same-delta switched game is not part of the XWOBA SIDE record."""
+        obs = pd.DataFrame({
+            "delta": [.005, .006, .007],
+            "won": [1.0, 0.0, 1.0],
+            "market_p": [.60, .55, .40],
+            "market_resid": [.40, -.55, .60],
+            "profit": [.50, -1.0, 1.50],
+            "hybrid_follow": [True, True, False],
+            "hybrid_won": [1.0, 0.0, 0.0],
+            "hybrid_p": [.60, .55, .60],
+            "hybrid_resid": [.40, -.55, -.60],
+            "hybrid_profit": [.50, -1.0, -1.0],
+            "chalk_won": [1.0, 0.0, 0.0],
+            "chalk_p": [.60, .55, .60],
+            "chalk_resid": [.40, -.55, -.60],
+            "chalk_profit": [.50, -1.0, -1.0],
+        })
+        with mock.patch.object(build_site, "load_ledger_df",
+                               return_value=pd.DataFrame([{}])), \
+                mock.patch.object(build_site, "_lean_market_observations",
+                                  return_value=obs), \
+                mock.patch.object(build_site, "_locked_hybrid_observations",
+                                  return_value=obs):
+            out = build_site.hybrid_branch_records()
+        bucket = out[("delta_follow", 0)]
+        self.assertEqual(bucket["model"]["n"], 2)
+        self.assertEqual((bucket["model"]["w"], bucket["model"]["l"]),
+                         (1, 1))
+        self.assertEqual(bucket["market"]["n"], 2)
+
+    def test_locked_history_uses_saved_action_and_pregame_market_only(self):
+        """A moved close cannot reclassify a pick; closing-basis rows are out."""
+        base = dict(
+            status="graded", game_date="2026-09-12",
+            model_tag=build_site.MODEL_TAG, away="A", home="H",
+            xw_lean="H", xw_net=.005, full_away=1, full_home=4,
+            selection_rule_tag=build_site.HYBRID_RULE_TAG,
+            hybrid_action="FOLLOW", hybrid_selection="H",
+            hybrid_p=.60, hybrid_ml=-150, hybrid_full="W",
+            pregame_p_home=.60, pregame_home_ml=-150,
+            pregame_away_ml=130,
+            # The close moved through both v2 gates; it must never be read.
+            close_p_home=.30, close_home_ml=220, close_away_ml=-260,
+        )
+        saved = dict(base, game_pk=1, hybrid_price_source="saved_pregame")
+        closing = dict(base, game_pk=2, hybrid_price_source="closing")
+        got = build_site._locked_hybrid_observations(
+            pd.DataFrame([saved, closing]))
+        self.assertEqual(len(got), 1)
+        self.assertTrue(bool(got.iloc[0]["hybrid_follow"]))
+        self.assertEqual(got.iloc[0]["hybrid_won"], 1.0)
+        self.assertAlmostEqual(got.iloc[0]["hybrid_p"], .60)
+        self.assertAlmostEqual(got.iloc[0]["chalk_p"], .60)
 
     def test_the_fade_branch_record_equals_its_chalk_control(self):
         """Not a coincidence to be observed -- a construction to be enforced.
