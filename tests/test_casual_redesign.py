@@ -556,7 +556,7 @@ class RenderTests(unittest.TestCase):
         fb = b._verdict_html(
             "ARI", dict(p_home=.62, home_ml=-160), "LAD", "ARI", {}, .02,
         )
-        self.assertIn("No completed saved-pregame V12 XWOBA SIDE picks in the Δ .020–.030 range yet", fb)
+        self.assertIn("No completed V12 XWOBA SIDE picks in the Δ .020–.030 range yet", fb)
         self.assertNotIn("completed games", fb)
 
     def test_the_fade_branch_prints_its_chalk_control(self):
@@ -752,7 +752,7 @@ class RenderTests(unittest.TestCase):
         }}
         h = b._verdict_html(
             "ARI", dict(p_home=.62, home_ml=-160), "LAD", "ARI", ctx, .02)
-        self.assertIn("Saved pregame results", h)
+        self.assertIn("Past results", h)
         self.assertNotIn("prediction for this game", h)
 
     def test_verdict_never_claims_a_value_bet(self):
