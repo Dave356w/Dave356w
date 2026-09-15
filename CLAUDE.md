@@ -2006,6 +2006,30 @@ precedent — they are how the fix is known to look.
   reader shown 11-4 / +23.8% without that adjacency reads a chalk result as the
   rule's own skill, in a window where chalk beat its price by +4.0pp.
 
+  **That adjacency has since been MOVED off the per-game card, on the
+  operator's call, and this paragraph no longer describes that surface.**
+  2026-09-15: the FADE card carried the chalk row and the identity clause
+  under a record identical to both — `13-4 (76.5%)` three times over. The row
+  went first as a literal duplicate, then the clause. What the card keeps is
+  the record and `within noise`, so the number is still not published as
+  reliable; what it loses is the attribution.
+
+  Read this as the entry's own remedy applied rather than as its violation —
+  `Deleting controls as clutter` says a noisy control is muted or **moved**,
+  never deleted, and `market-calibration.html` carries both halves together:
+  the `Always chalk · MARKET OVER LEAN rows only` row AND "the other side is
+  always the favourite, so the two are the same bet". That is more than the
+  card ever showed, on the page whose subject is controls. The test asserts
+  BOTH ends — absent from the card, present on the calibration page — because
+  a test that only checked the card would pass just as happily if the claim
+  vanished from the site entirely, which is the deletion this entry forbids.
+
+  The live exposure is worth stating plainly rather than arguing away: the
+  front page is where a casual reader meets the rule, and on a FADE game it
+  now shows a 76.5% record whose chalk-identity is one click away instead of
+  in place. If that reads wrong in practice, the fix is to restore the clause
+  — the control itself never left.
+
   **`HYBRID_THRESHOLD` is imported from `hybrid_test`, never restated**, and a
   test greps the source to forbid a second `= 0.45` assignment. Two copies of a
   threshold is the "one value, three homes" defect one file out: the display

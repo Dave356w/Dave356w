@@ -4395,7 +4395,7 @@ def _branch_read(parts):
     return "outside noise across both branches"
 
 
-def _branch_history(ctx, action):
+def _branch_history(ctx, action, p_lean=None):
     """Track record of the branch this game's price puts it in.
 
     Every line here describes PAST games, and the wording has to make that
@@ -4446,26 +4446,75 @@ def _branch_history(ctx, action):
     # the error bar the numbers no longer print, and at n=17 it is the only
     # thing stopping 76.5% from reading as a rate you can bank -- so dropping
     # the `±` makes it MORE load-bearing, not less.
-    rows = [("Won", _wl_priced(parts, bold=True)
-             + f" <span class='muted'>· {_esc(_branch_read(parts))}</span>")]
-    # The control, and a sentence saying what it means HERE. Adjacency alone
-    # was not enough: on FADE the two lines are identical to the decimal, and
-    # without a clause saying why, a reader sees duplicated data or a bug
-    # rather than the point -- that this branch has no model content.
-    chalk = (ctx or {}).get(("chalk", action))
+    # Prefer the band that contains THIS game's price. A pooled branch line
+    # mixes a .46 underdog lean with a .72 favourite -- different bets with
+    # different base rates -- so the pooled number is not the history of a
+    # game like tonight's. Falls back to the pooled branch whenever the band
+    # is missing or too thin, and SAYS which of the two it is showing, because
+    # a record under an unqualified "Won" that silently changes row set
+    # between games is the substitution this file keeps recording.
+    band, band_lab = None, None
+    if p_lean is not None:
+        for lo, hi, lab in _BRANCH_PRICE_BANDS:
+            if lo <= p_lean < hi:
+                band, band_lab = (ctx or {}).get(("band", action, lab)), lab
+                break
+    use, scope = (band, f"at {band_lab}") if band else (parts, "all prices")
+    rows = [(f"Won <span class='muted'>({_esc(scope)})</span>",
+             _wl_priced(use, bold=True)
+             + f" <span class='muted'>· {_esc(_branch_read(use))}</span>")]
+    # The chalk control, and whether it is worth a ROW or only a clause. The
+    # answer differs by branch and is checked rather than assumed:
+    #
+    #   FADE   -- chalk is 13-4 (76.5%) against the branch's 13-4 (76.5%). A
+    #             literal duplicate, because fading a sub-45% lean backs the
+    #             favourite on every row. Printing it twice is the redundancy
+    #             the operator flagged, so the row goes and the CLAIM stays as
+    #             one clause. The claim itself cannot go: a reader shown
+    #             "13-4 (76.5%)" with nothing saying it is the favourite's
+    #             record reads chalk as the rule's own skill, which is the
+    #             named incident behind `Deleting controls as clutter`.
+    #   FOLLOW -- chalk is 228-161 (58.6%) against the branch's 247-142
+    #             (63.5%). Different numbers, so nothing is duplicated and the
+    #             row is the only thing on the card saying whether the model
+    #             beat simply backing the favourite. It stays.
+    # The control must be scored on whatever rows the record above it used:
+    # band chalk for a band record, branch chalk for the pooled fallback.
+    chalk = ((ctx or {}).get(("bandchalk", action, band_lab)) if band
+             else (ctx or {}).get(("chalk", action)))
     note = ""
-    if chalk:
+    # Show the control when it SAYS something, and not when it is a copy of
+    # the line above. Measured, and structural rather than incidental: where
+    # the model's side is priced at or above .50 that side IS the favourite,
+    # so chalk backs it too and the two records are equal by construction --
+    # 51-42 in the 50-55% band, 146-69 at 55%+, 13-4 on every fade. Only the
+    # underdog bands differ, and there the gap is the whole point: 42-25 for
+    # the model against 25-42 for chalk at 45-50%.
+    #
+    # This replaces an `action != "FADE"` special case with the property that
+    # case was standing in for, so the new price bands get the same treatment
+    # without a second rule. Subtractive: one branch fewer, and it cannot go
+    # stale the way a hardcoded branch name would.
+    duplicate = chalk and (chalk["w"], chalk["l"]) == (use["w"], use["l"])
+    if chalk and not duplicate:
         rows.append(("Always chalk, same games", _wl_priced(chalk)))
-        # The claim survives; the argument for it moves into this comment.
-        # On FADE the two rows are equal to the decimal, so without a clause
-        # saying why a reader sees duplicated data or a bug rather than the
-        # point -- that this branch carries no model content.
-        if action == "FADE":
-            note = (f"Identical by construction: under "
-                    f"{100 * HYBRID_THRESHOLD:.0f}% the other side is always "
-                    "the favourite — the same bet.")
-        else:
-            note = "Chalk is the yardstick: the favourite on these same games."
+        note = "Chalk is the yardstick: the favourite on these same games."
+    # FADE carries neither, on the operator's call. The row was a literal
+    # duplicate of the record above it and went first; the identity clause
+    # went with it.
+    #
+    # This is NOT the control being deleted, which `Deleting controls as
+    # clutter` forbids -- that entry's own remedy is to mute a noisy control
+    # or move it, and it is moved. market-calibration.html carries the row AND
+    # the claim together: "Always chalk · MARKET OVER LEAN rows only" beside
+    # "the other side is always the favourite, so the two are the same bet",
+    # which is more than this card ever showed, on the page whose subject is
+    # controls. Verified rendered, not assumed, and pinned by a test below.
+    #
+    # What a reader of the CARD loses is the warning that 13-4 (76.5%) is the
+    # favourite's record rather than the rule's skill. `within noise` still
+    # sits on that row, so the number is not published as reliable; the
+    # attribution now lives one click away.
     body = "".join(
         f"<div class='vline'><span class='vk'>{k}</span><span>{v}</span></div>"
         for k, v in rows)
@@ -4473,15 +4522,15 @@ def _branch_history(ctx, action):
     # row two rows above it is a note the reader has to hunt for.
     if note:
         body += f"<div class='vnote'>{note}</div>"
-    pooled = (ctx or {}).get("pooled")
-    if pooled:
-        # "leans", not "picks". `pooled` is built from the default column set,
-        # which is the MODEL's own lean -- 251-155 here, a different record
-        # from the rule's 260-146. Labelled "All V12 picks" beside a branch of
-        # the rule, it reads as the rule's own pooled line and quietly
-        # publishes one record under another's name.
-        body += (f"<div class='vline'><span class='vk'>All {version} leans"
-                 f"</span><span>{_wl_priced(pooled)}</span></div>")
+    # The pooled reference is gone from this card, on the operator's call.
+    # It was added so a reader would not anchor on a thin branch, but that job
+    # is now done by `_branch_read` on the record row itself -- "within noise"
+    # says the same thing about the same number, in place, without a fourth
+    # row of context. It remains on grades.html, which is where a reader who
+    # wants the whole family's record is pointed.
+    #
+    # `ctx["pooled"]` is still computed and still rendered there, so this is
+    # not a value disappearing off every surface.
     return (
         "<div class='vprofile'>"
         f"<div class='vprofile-title'>Past {version} {history_branch} picks · "
@@ -4559,7 +4608,7 @@ def _verdict_html(fav, odds, away_abbr, home_abbr, ctx=None, delta=None):
             + (f" {_fmt_ml(sel_price)}" if sel_price is not None else "")
             + f"</span></div><div class='vnote'>{why}</div>")
 
-    history = _branch_history(ctx, action)
+    history = _branch_history(ctx, action, p_lean)
     # The warm accent marks a FADE -- the one case where the published
     # selection differs from the model's own lean. It has never meant "bet
     # this side".
@@ -7094,6 +7143,22 @@ def _baseline_controls(g):
 # caveat, which is the rule this repo settled when it deleted `N_FIT_MIN`.
 BRANCH_RECORD_MIN = 1
 
+# Price bands for the per-game branch record, on the model side's own no-vig
+# price. Edges are imported or definitional, never fitted: HYBRID_THRESHOLD is
+# the registered gate, .50 is what makes a side the underdog, and the mirror
+# of the gate closes the pair. The same three edges the magnitude-by-market
+# grid in ledger_report.txt uses.
+#
+# A lean priced under .50 IS the underdog, so this one cut already separates
+# underdog leans from favourite leans -- crossing price with "lean type" would
+# only re-split cells that are each wholly one or the other.
+_BRANCH_PRICE_BANDS = (
+    (0.0, HYBRID_THRESHOLD, f"under {100 * HYBRID_THRESHOLD:.0f}%"),
+    (HYBRID_THRESHOLD, 0.50, f"{100 * HYBRID_THRESHOLD:.0f}–50%"),
+    (0.50, 1.0 - HYBRID_THRESHOLD, f"50–{100 * (1 - HYBRID_THRESHOLD):.0f}%"),
+    (1.0 - HYBRID_THRESHOLD, 1.01, f"{100 * (1 - HYBRID_THRESHOLD):.0f}%+"),
+)
+
 
 def hybrid_branch_records():
     """Current-family records for each hybrid branch, plus its chalk control.
@@ -7138,6 +7203,40 @@ def hybrid_branch_records():
                                resid="chalk_resid", profit="chalk_profit")
         if ctl and ctl["n"] >= BRANCH_RECORD_MIN:
             out[("chalk", action)] = ctl
+        # The same branch cut by the price of the model's own side, so the
+        # card can show the rows that resemble TONIGHT'S game instead of one
+        # number pooling a .46 underdog with a .72 favourite.
+        #
+        # This is ONE axis, not a grid, and that is measured rather than
+        # assumed: a lean priced under .500 IS the underdog, so "lean type"
+        # and "price band" are the same cut. Crossing them gives cells that
+        # are each wholly dog or wholly favourite -- the 3x5 delta-by-price
+        # profile grid this panel used to publish is exactly what that
+        # produces, and it was deleted for putting n=1 cells on a public page.
+        # Four bands over 389 follow rows hold 14 / 67 / 93 / 215.
+        #
+        # The edges are not fitted. `.45` is the registered gate imported from
+        # `hybrid_test`, `.50` is the definition of a favourite and `.55` is
+        # the gate's mirror -- the same three the magnitude-by-market grid in
+        # ledger_report.txt already uses. Nothing here was chosen by looking
+        # at which split flattered the record.
+        for lo, hi, lab in _BRANCH_PRICE_BANDS:
+            band = mask & (obs["market_p"] >= lo) & (obs["market_p"] < hi)
+            got = _lean_market_agg(obs, band, won="hybrid_won", p="hybrid_p",
+                                   resid="hybrid_resid",
+                                   profit="hybrid_profit")
+            if got and got["n"] >= BRANCH_RECORD_MIN:
+                out[("band", action, lab)] = got
+                # The band's OWN chalk, from the same mask. A band record
+                # printed above the whole branch's chalk is a control on a
+                # different row set -- the defect this repo has recorded
+                # twice, and it would be invisible here because both lines
+                # look like records of "these games".
+                bc = _lean_market_agg(obs, band, won="chalk_won",
+                                      p="chalk_p", resid="chalk_resid",
+                                      profit="chalk_profit")
+                if bc and bc["n"] >= BRANCH_RECORD_MIN:
+                    out[("bandchalk", action, lab)] = bc
     return out
 
 
