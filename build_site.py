@@ -7550,15 +7550,34 @@ def _grades_row(r, show_ml=False):
             sel_cell += f"<span class='sp' title='{why}'>{tag}</span>"
         res = r["xw_full"]
     elif action == "FADE":
-        # Δ is deliberately NOT shown here. It is the model's separation in
-        # favour of the side the rule just declined; printed beside the club
-        # the rule selected it would read as the model rating THAT team, which
-        # is the opposite of what the number means.
+        # Δ is deliberately NOT shown beside `pick`. It is the model's
+        # separation in favour of the side the rule just declined; printed
+        # beside the club the rule selected it would read as the model rating
+        # THAT team, which is the opposite of what the number means.
+        #
+        # But that left the declined club named NOWHERE on the row, on exactly
+        # the rows where the rule and the model disagree -- the only rows whose
+        # selection the rule is responsible for. The tooltip said "Δ describes
+        # the declined model side" while the page never said which side that
+        # was. So the club is named, and Δ rides with it: the number sits
+        # beside the team it is a statement about, which is what the reasoning
+        # above actually requires rather than silence.
         sel_cell = _lean_cell(pick, None)
         sel_cell += ("<span class='sp fade-mark' title='the model side was "
                      "priced below 45% and its |Δ| was below .012, so the rule "
-                     "took the market's side; Δ describes the declined model side'>"
+                     "took the market's side'>"
                      f"{hybrid_public_label('FADE')}</span>")
+        declined = r.get("xw_lean")
+        if isinstance(declined, str) and declined and declined != pick:
+            # Same Δ formatting as `_lean_cell`, read off the same column, so
+            # a followed row and a declined side cannot render the number two
+            # different ways.
+            _d = pd.to_numeric(r.get("xw_delta"), errors="coerce")
+            d_txt = f" Δ{delta3(_d)}" if pd.notna(_d) else ""
+            sel_cell += (
+                "<span class='sp declined' title='the model leaned this side; "
+                "the rule declined it, and Δ is the model separation in its "
+                f"favour'>declined {_esc(declined)}{d_txt}</span>")
         res = rule_grade
     else:
         sel_cell = _lean_cell(pick, r["xw_delta"])
@@ -7799,10 +7818,18 @@ def render_grades_html(built_txt):
             rule = _lean_market_agg(obs, priced, **hyb)
             lean_only = _lean_market_agg(obs, priced)
             n_fade = int((~obs["hybrid_follow"]).sum())
+            # "at the close" is the basis, not filler. Every figure in this
+            # strip is scored at the close, while the table below shows each
+            # row's LOCKED action -- and the two can disagree, because a
+            # pregame and a closing price can straddle the 45% gate (they do
+            # on 2026-09-07 NYM@MIA: locked .4576 FOLLOW, closed .4406). A
+            # reader who counts fade rows in the table and gets a different
+            # number is then reading two bases, not finding an error, so the
+            # count has to say which one it is on.
             stat(f"V12 {label} Hybrid", f"{rule['w']}-{rule['l']}",
                  f"{rule['actual']:.3f} · lean alone "
                  f"{lean_only['w']}-{lean_only['l']} · "
-                 f"{n_fade} deferred to the market")
+                 f"{n_fade} deferred at the close")
             # z leads. A raw rate in a price-selected sample is mostly base
             # rate -- the statistic this repo already retired from the per-game
             # panel for exactly that reason.
@@ -7815,6 +7842,17 @@ def render_grades_html(built_txt):
             # Controls, from the SAME aggregate over the SAME rows as the
             # record above them, so no `n=` reconciliation is needed and the
             # denominators cannot drift apart in the first place.
+            #
+            # They carry the price-relative line too, and that is not
+            # decoration. The comment above this block says a raw rate in a
+            # price-selected sample is mostly base rate -- and the controls
+            # then published a bare rate, so the reader was invited to compare
+            # the rule's `+7.9 pp vs price` against chalk's `.594`, which are
+            # not the same kind of number. `excess` and `units` were already on
+            # the aggregate and reached no surface: the unrendered-column
+            # instance, on the two tiles whose whole job is to be compared.
+            # `±` rather than a z here because a control is a yardstick to read
+            # the record against, not a hypothesis under test.
             for lab, cols in (
                 ("Always chalk", dict(won="chalk_won", p="chalk_p",
                                       resid="chalk_resid",
@@ -7825,8 +7863,16 @@ def render_grades_html(built_txt):
             ):
                 ctl = _lean_market_agg(obs, priced, **cols)
                 if ctl:
-                    stat(lab, f"{ctl['w']}-{ctl['l']}",
-                         f"{ctl['actual']:.3f}", tone="dim")
+                    sub = f"{ctl['actual']:.3f}"
+                    cse = ctl.get("excess_se")
+                    if ctl.get("excess") is not None and np.isfinite(ctl["excess"]):
+                        sub += f" · {100 * ctl['excess']:+.1f}"
+                        if cse is not None and np.isfinite(cse):
+                            sub += f" ± {100 * cse:.1f}"
+                        sub += " pp"
+                    if ctl.get("units") is not None and np.isfinite(ctl["units"]):
+                        sub += f" · {ctl['units']:+.2f}u"
+                    stat(lab, f"{ctl['w']}-{ctl['l']}", sub, tone="dim")
         # The caveat the calibration panel and the per-game card both carry,
         # missing on the page that publishes the LARGEST version of the
         # number: this header leads with a z-score for a rule whose threshold
@@ -7843,7 +7889,11 @@ def render_grades_html(built_txt):
             # figures above cannot see which basis they are reading.
             notes.append(
                 "<b>ML</b> is the selection's price: locked pregame where the "
-                "row has one, else the close. Records are scored at the close")
+                "row has one, else the close. Records are scored at the close, "
+                "while each row below shows the branch its <b>locked</b> price "
+                "chose — the bet actually made. A pregame and a closing price "
+                "can straddle the 45% gate, so the two bases can disagree on a "
+                "row, and the counts above are the closing ones")
         lock = _lock_note(led)
         if lock:
             notes.append(lock)
