@@ -4425,48 +4425,41 @@ def _lean_history_range(lo, hi):
 
 
 def _xwoba_side_history(ctx, delta, selection_ml=None):
-    """XWOBA SIDE delta history plus the selected price's market rung.
+    """XWOBA SIDE history at the intersection of delta and closing-price rung.
 
-    The model row is current-family and restricted to this delta range. The
-    market row deliberately answers a different question: how every side in
-    the full ledger closed and settled at a price like tonight's. Its aggregate
-    comes from `_market_calibration_rows`, so this card and the calibration page
-    cannot disagree about rung membership or performance.
+    This is one current-rule population, not two adjacent aggregates with
+    different denominators. The displayed moneyline chooses the rung; the
+    historical rows themselves are still bucketed on their closing prices.
     """
     bucket = _lean_history_bucket(delta)
     if bucket is None:
         return ""
     i, lo, hi = bucket
-    parts = (ctx or {}).get(("delta_follow", i))
     range_txt = _lean_history_range(lo, hi)
     version = _model_version_short()
+    ml = _f(selection_ml)
+    rung = _ladder_rung(ml) if ml is not None else None
+    if rung is None:
+        return ""
+    parts = (ctx or {}).get(("delta_price_follow", i, rung))
     if not parts:
         return ("<div class='vline hist'><span class='vk'>Past results:</span>"
                 f"<span>No completed {version} XWOBA SIDE picks in the "
-                f"Δ {range_txt} range yet.</span></div>")
+                f"Δ {range_txt} / closing ML {_esc(rung)} intersection "
+                "yet.</span></div>")
 
     model = parts["model"]
     model_unit = "game" if model["n"] == 1 else "games"
-    body = (f"<div class='vline'><span class='vk'>{version} XWOBA SIDE · "
-            f"Δ {range_txt} · {model['n']} {model_unit}</span>"
+    body = ("<div class='vline'><span class='vk'>Past results</span>"
             f"<span>{model['w']}-{model['l']} "
-            f"({model['actual']:.3f})</span></div>")
-    ml = _f(selection_ml)
-    rung = _ladder_rung(ml) if ml is not None else None
-    market = (ctx or {}).get(("market_rung", rung)) if rung else None
-    if market:
-        market_unit = "side" if market["n"] == 1 else "sides"
-        body += (
-            f"<div class='vline'><span class='vk'>Market · closing ML "
-            f"{_esc(rung)} · {market['n']} {market_unit}</span>"
-            f"<span>{market['w']}-{market['n'] - market['w']} "
-            f"({market['actual']:.3f}) vs "
-            f"{100 * market['implied']:.1f}% implied</span></div>")
+            f"({model['actual']:.3f}) · thin sample</span></div>")
     return (
         "<div class='vprofile'>"
-        "<div class='vprofile-title'>Past comparisons</div>"
-        "<div class='vprofile-band'>Past results, not a prediction</div>"
-        f"{body}</div>"
+        f"<div class='vprofile-title'>Past {version} XWOBA SIDE picks</div>"
+        f"<div class='vprofile-band'>Δ {range_txt} · closing ML {_esc(rung)} · "
+        f"{model['n']} {model_unit}</div>"
+        f"{body}<div class='vnote'>Retroactive current-rule slice, not a "
+        "prediction or forward test.</div></div>"
     )
 
 
@@ -7272,25 +7265,22 @@ def hybrid_branch_records():
     pooled = _lean_market_agg(obs, obs["won"].notna())
     if pooled:
         out["pooled"] = pooled
-    # Reuse the market-calibration page's exact whole-ledger rung aggregates.
-    # The per-game Market row is keyed by the current selection's displayed ML,
-    # not by the model's delta bucket, so a -231 side reads the -249 to -175
-    # history on both surfaces.
-    market_rows, _market_totals = _market_calibration_rows(led)
-    for row in market_rows:
-        if row.get("all"):
-            out[("market_rung", row["rung"])] = row["all"]
-    # Fixed |delta| bands power the per-game XWOBA SIDE history. This is an
-    # actual Hybrid branch slice: MARKET OVER LEAN rows are excluded before
-    # the model-side record is calculated.
+    # Cross the fixed |delta| bands with the selected side's closing-price rung.
+    # This is an actual current-rule Hybrid slice: MARKET OVER LEAN rows are
+    # excluded before the record is calculated. Counts are intentionally
+    # retained even when thin because the public card labels that limitation.
     delta = pd.to_numeric(obs["delta"], errors="coerce")
+    hybrid_ml = pd.to_numeric(obs["hybrid_ml"], errors="coerce")
+    price_rung = hybrid_ml.map(
+        lambda value: _ladder_rung(float(value)) if pd.notna(value) else None)
     for i, (lo, hi) in enumerate(_LEAN_HISTORY_BINS):
-        mask = delta.ge(lo) & delta.lt(hi) & obs["hybrid_follow"]
-        model = _lean_market_agg(
-            obs, mask, won="hybrid_won", p="hybrid_p",
-            resid="hybrid_resid", profit="hybrid_profit")
-        if model:
-            out[("delta_follow", i)] = {"model": model}
+        delta_mask = delta.ge(lo) & delta.lt(hi) & obs["hybrid_follow"]
+        for _rung_lo, _rung_hi, rung in _ODDS_LADDER:
+            model = _lean_market_agg(
+                obs, delta_mask & price_rung.eq(rung), won="hybrid_won",
+                p="hybrid_p", resid="hybrid_resid", profit="hybrid_profit")
+            if model:
+                out[("delta_price_follow", i, rung)] = {"model": model}
     for action, mask in (("FOLLOW", obs["hybrid_follow"]),
                          ("FADE", ~obs["hybrid_follow"])):
         parts = _lean_market_agg(obs, mask, won="hybrid_won",
