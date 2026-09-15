@@ -4395,23 +4395,6 @@ def _branch_read(parts):
     return "outside noise across both branches"
 
 
-def _excess_pm(parts):
-    """` ± X.X` for a published excess, or "" when no spread can be formed.
-
-    Every excess on this site prints with one of these. `_excess_se` sizes it
-    at the market's own prices under the null that each game settles at its
-    close, so it is defined at n=1 and can never collapse to ±0.0 the way a
-    p-hat form does on an all-W or all-L branch.
-    """
-    se = parts.get("excess_se")
-    try:
-        if se is None or not np.isfinite(se):
-            return ""
-    except TypeError:
-        return ""
-    return f" ± {100 * float(se):.1f}"
-
-
 def _branch_history(ctx, action):
     """Track record of the branch this game's price puts it in.
 
@@ -4438,13 +4421,33 @@ def _branch_history(ctx, action):
 
     version = _model_version_short()
     n = parts["n"]
-    rows = [
-        ("Won", f"{parts['w']}-{parts['l']} ({100 * parts['actual']:.1f}%)"),
-        ("Their average price", f"{100 * parts['implied']:.1f}% implied"),
-        ("Beat that price by",
-         f"<b>{100 * parts['excess']:+.1f} pp</b>{_excess_pm(parts)}"
-         f" · {_esc(_branch_read(parts))}"),
-    ]
+
+    def _wl_priced(p, bold=False):
+        """`W-L (win%) vs X% priced` -- the public shape for every record here.
+
+        Operator's call for the public surfaces: z and excess-in-points are
+        analyst units and are not published. But a bare win rate is mostly base
+        rate -- chalk takes 76.5% of these same games by backing the favourite
+        -- so something has to keep the record price-relative.
+
+        ROI would do it and is used on the ledger page, which already publishes
+        flat-stake units. It is deliberately NOT used here: this card reports
+        calibration and never a betting result, a property `test_verdict_panel_
+        leaves_no_computed_key_unrendered` pins by asserting `roi` and `units`
+        do not appear. So the branch's own average price carries it instead --
+        `76.5% vs 58.2% priced` is the same comparison the excess used to make,
+        in plain words and with no betting framing.
+        """
+        rec = (f"{p['w']}-{p['l']} ({100 * p['actual']:.1f}%)"
+               f" vs {100 * p['implied']:.1f}% priced")
+        return f"<b>{rec}</b>" if bold else rec
+
+    # The reliability marker stays, in words. It is the plain-English form of
+    # the error bar the numbers no longer print, and at n=17 it is the only
+    # thing stopping 76.5% from reading as a rate you can bank -- so dropping
+    # the `±` makes it MORE load-bearing, not less.
+    rows = [("Won", _wl_priced(parts, bold=True)
+             + f" <span class='muted'>· {_esc(_branch_read(parts))}</span>")]
     # The control, and a sentence saying what it means HERE. Adjacency alone
     # was not enough: on FADE the two lines are identical to the decimal, and
     # without a clause saying why, a reader sees duplicated data or a bug
@@ -4452,17 +4455,17 @@ def _branch_history(ctx, action):
     chalk = (ctx or {}).get(("chalk", action))
     note = ""
     if chalk:
-        rows.append(("Always chalk, same games",
-                     f"{chalk['w']}-{chalk['l']} "
-                     f"({100 * chalk['actual']:.1f}%) · "
-                     f"{100 * chalk['excess']:+.1f} pp"))
+        rows.append(("Always chalk, same games", _wl_priced(chalk)))
+        # The claim survives; the argument for it moves into this comment.
+        # On FADE the two rows are equal to the decimal, so without a clause
+        # saying why a reader sees duplicated data or a bug rather than the
+        # point -- that this branch carries no model content.
         if action == "FADE":
-            note = ("Identical by construction: under "
+            note = (f"Identical by construction: under "
                     f"{100 * HYBRID_THRESHOLD:.0f}% the other side is always "
-                    "the favourite, so here the two are the same bet.")
+                    "the favourite — the same bet.")
         else:
-            note = ("Chalk is the yardstick: the favourite on these same "
-                    "games, whatever the model said.")
+            note = "Chalk is the yardstick: the favourite on these same games."
     body = "".join(
         f"<div class='vline'><span class='vk'>{k}</span><span>{v}</span></div>"
         for k, v in rows)
@@ -4472,15 +4475,19 @@ def _branch_history(ctx, action):
         body += f"<div class='vnote'>{note}</div>"
     pooled = (ctx or {}).get("pooled")
     if pooled:
-        body += (f"<div class='vline'><span class='vk'>Every {version} pick"
-                 f"</span><span>{100 * pooled['excess']:+.1f} pp"
-                 f"{_excess_pm(pooled)} vs price · n={pooled['n']}</span></div>")
+        # "leans", not "picks". `pooled` is built from the default column set,
+        # which is the MODEL's own lean -- 251-155 here, a different record
+        # from the rule's 260-146. Labelled "All V12 picks" beside a branch of
+        # the rule, it reads as the rule's own pooled line and quietly
+        # publishes one record under another's name.
+        body += (f"<div class='vline'><span class='vk'>All {version} leans"
+                 f"</span><span>{_wl_priced(pooled)}</span></div>")
     return (
         "<div class='vprofile'>"
-        f"<div class='vprofile-title'>Past {version} {history_branch} selections · "
-        f"{n} completed {'game' if n == 1 else 'games'}</div>"
-        "<div class='vprofile-band'>Track record of this branch — "
-        "not a prediction for this game, and not a forward test</div>"
+        f"<div class='vprofile-title'>Past {version} {history_branch} picks · "
+        f"{n} {'game' if n == 1 else 'games'}</div>"
+        "<div class='vprofile-band'>Past results, not a prediction — "
+        "and not a forward test</div>"
         f"{body}"
         "</div>"
     )
@@ -7826,33 +7833,37 @@ def render_grades_html(built_txt):
             # reader who counts fade rows in the table and gets a different
             # number is then reading two bases, not finding an error, so the
             # count has to say which one it is on.
-            stat(f"V12 {label} Hybrid", f"{rule['w']}-{rule['l']}",
-                 f"{rule['actual']:.3f} · lean alone "
-                 f"{lean_only['w']}-{lean_only['l']} · "
-                 f"{n_fade} deferred at the close")
-            # z leads. A raw rate in a price-selected sample is mostly base
-            # rate -- the statistic this repo already retired from the per-game
-            # panel for exactly that reason.
-            se = rule["excess_se"]
-            z = (rule["excess"] / se
-                 if se is not None and np.isfinite(se) and se > 0 else np.nan)
-            stat("vs market", f"z {z:+.2f}" if np.isfinite(z) else "—",
-                 f"{100 * rule['excess']:+.1f} pp · {rule['units']:+.2f}u flat",
-                 tone="cool" if np.isfinite(z) and z > 0 else "warm")
-            # Controls, from the SAME aggregate over the SAME rows as the
-            # record above them, so no `n=` reconciliation is needed and the
-            # denominators cannot drift apart in the first place.
+            # ONE SHAPE FOR EVERY ROW: W-L as the value, win% and flat-stake
+            # ROI beneath it. Operator's call for the public surface -- z and
+            # excess-in-points are analyst units and are not published here;
+            # they remain in data/ledger_report.txt and the probes, which is
+            # where a reader who wants them is pointed.
             #
-            # They carry the price-relative line too, and that is not
-            # decoration. The comment above this block says a raw rate in a
-            # price-selected sample is mostly base rate -- and the controls
-            # then published a bare rate, so the reader was invited to compare
-            # the rule's `+7.9 pp vs price` against chalk's `.594`, which are
-            # not the same kind of number. `excess` and `units` were already on
-            # the aggregate and reached no surface: the unrendered-column
-            # instance, on the two tiles whose whole job is to be compared.
-            # `±` rather than a z here because a control is a yardstick to read
-            # the record against, not a hypothesis under test.
+            # ROI is what keeps that honest rather than a softening of it. A
+            # bare win rate in a price-selected sample is mostly base rate --
+            # always-chalk wins 59.4% by doing nothing, so .640 beside .594
+            # reads as a sliver when the real separation is +11.4% against
+            # -0.5%. ROI is price-relative by construction (it pays each bet at
+            # its own odds), so it carries the comparison the excess used to
+            # carry, in the units this audience already reads. Which is why
+            # every control MUST print it too: the moment one line has ROI and
+            # the next does not, the reader is back to comparing a rate against
+            # a return.
+            #
+            # Same aggregate, same row mask for all five, so the denominators
+            # cannot drift apart -- the defect that once put a control on more
+            # games than the record beside it.
+            def _pub(parts):
+                out = f"{100 * parts['actual']:.1f}%"
+                roi = parts.get("roi")
+                if roi is not None and np.isfinite(roi):
+                    out += f" · ROI {100 * roi:+.1f}%"
+                return out
+
+            stat(f"V12 {label} Hybrid", f"{rule['w']}-{rule['l']}", _pub(rule),
+                 tone="cool" if rule.get("roi", 0) > 0 else "warm")
+            stat("Model lean alone", f"{lean_only['w']}-{lean_only['l']}",
+                 _pub(lean_only), tone="dim")
             for lab, cols in (
                 ("Always chalk", dict(won="chalk_won", p="chalk_p",
                                       resid="chalk_resid",
@@ -7863,16 +7874,7 @@ def render_grades_html(built_txt):
             ):
                 ctl = _lean_market_agg(obs, priced, **cols)
                 if ctl:
-                    sub = f"{ctl['actual']:.3f}"
-                    cse = ctl.get("excess_se")
-                    if ctl.get("excess") is not None and np.isfinite(ctl["excess"]):
-                        sub += f" · {100 * ctl['excess']:+.1f}"
-                        if cse is not None and np.isfinite(cse):
-                            sub += f" ± {100 * cse:.1f}"
-                        sub += " pp"
-                    if ctl.get("units") is not None and np.isfinite(ctl["units"]):
-                        sub += f" · {ctl['units']:+.2f}u"
-                    stat(lab, f"{ctl['w']}-{ctl['l']}", sub, tone="dim")
+                    stat(lab, f"{ctl['w']}-{ctl['l']}", _pub(ctl), tone="dim")
         # The caveat the calibration panel and the per-game card both carry,
         # missing on the page that publishes the LARGEST version of the
         # number: this header leads with a z-score for a rule whose threshold
@@ -7884,16 +7886,26 @@ def render_grades_html(built_txt):
                 "Registered v2: data/ledger_report.txt")
         if show_ml:
             # One heading, two prices, and every aggregate above scored at the
-            # close. The gap is small (it flips no branch on the committed
-            # ledger) but a reader reconciling a row's price against the unit
-            # figures above cannot see which basis they are reading.
-            notes.append(
-                "<b>ML</b> is the selection's price: locked pregame where the "
-                "row has one, else the close. Records are scored at the close, "
-                "while each row below shows the branch its <b>locked</b> price "
-                "chose — the bet actually made. A pregame and a closing price "
-                "can straddle the 45% gate, so the two bases can disagree on a "
-                "row, and the counts above are the closing ones")
+            # close. Both facts are claims this page has to carry, but they are
+            # carried in one clause each rather than a paragraph -- the copy
+            # here is for a reader of a scoreboard, and the argument behind
+            # each claim belongs in this comment, not on the page.
+            #
+            # `n_fade` rides here rather than in a tile because it is a count
+            # on the CLOSING basis while the table below shows each row's
+            # locked branch, and the two straddle the gate on 2026-09-07
+            # NYM@MIA (locked .4576 FOLLOW, closed .4406). Printed as a tile it
+            # invites a reader to count fade rows and find a different number.
+            ml_note = ("<b>ML</b> is the selection's price, locked pregame "
+                       "where the row has one. Records are scored at the close")
+            if not obs.empty:
+                # Guarded: `rule` and `n_fade` exist only on the priced path.
+                # Unguarded this raised NameError on an empty market join --
+                # the path that fires whenever the backfill has not run.
+                ml_note += (f", where {n_fade} of {rule['n']} went to the "
+                            "market; each row shows the branch its "
+                            "<b>locked</b> price chose")
+            notes.append(ml_note)
         lock = _lock_note(led)
         if lock:
             notes.append(lock)

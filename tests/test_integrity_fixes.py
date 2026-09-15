@@ -2396,10 +2396,15 @@ class ModelTagProvenanceTests(unittest.TestCase):
         # The vs-market cell is looked up by that same label; a mismatch used
         # to drop it silently rather than raise.
         self.assertIn("vs mkt", pages["record strip"])
-        # The grades page scores the published RULE's selection, so its tile is
-        # "vs market" rather than the strip's raw-lean "vs mkt". Different
-        # statistics, deliberately different labels.
-        self.assertIn("vs market", pages["grades page"])
+        # The grades page no longer publishes a "vs market" z tile -- z and
+        # excess-in-points are analyst units and were dropped from the public
+        # surfaces. Its records carry flat-stake ROI instead, which is the
+        # price-relative comparison in the units this page publishes, so the
+        # model-against-chalk reading survives the change. What must NOT
+        # happen is the two surfaces sharing a label for different statistics,
+        # so the strip's raw-lean cell stays off this page.
+        self.assertIn("ROI", pages["grades page"])
+        self.assertNotIn("vs mkt", pages["grades page"])
 
     def test_vs_market_cell_key_matches_the_label_it_is_looked_up_by(self):
         """The vs-market bucket and its lookup must share one derivation.
@@ -3407,13 +3412,15 @@ class HybridRuleTests(unittest.TestCase):
         html = build_site._verdict_html(
             "PIT", dict(p_home=.529, away_ml=103), "PIT", "SD", ctx, .0187,
         )
-        self.assertIn("Past V12 model-side selections · 14 completed games", html)
-        self.assertIn("Won</span><span>10-4 (71.4%)", html)
+        self.assertIn("Past V12 model-side picks · 14 games", html)
+        self.assertIn("Won</span><span><b>10-4 (71.4%)", html)
         # Named for what it is. This sat directly under the game's own
         # "47.1% no-vig" as a bare "Market implied 48.1%", two unrelated
         # percentages a line apart with nothing saying they differ.
-        self.assertIn("Their average price</span><span>48.1% implied", html)
-        self.assertIn("Beat that price by</span><span><b>+23.3 pp", html)
+        # The branch price is NAMED rather than left a bare percentage, and
+        # now sits in the same row as the record it qualifies instead of a
+        # line below it.
+        self.assertIn("10-4 (71.4%) vs 48.1% priced", html)
         self.assertIn("within noise", html)
 
     def test_pit_acceptance_panel_has_the_requested_reads(self):
@@ -3430,11 +3437,10 @@ class HybridRuleTests(unittest.TestCase):
             "Market price</span><span>PIT +103 · 47.1% no-vig",
             "Rule</span><span><b>XWOBA SIDE → PIT</b> +103",
             "remains the XWOBA side",
-            "Past V12 model-side selections · 14 completed games",
-            "not a prediction for this game",
-            "Won</span><span>10-4 (71.4%)",
-            "Their average price</span><span>48.1% implied",
-            "Beat that price by</span><span><b>+23.3 pp",
+            "Past V12 model-side picks · 14 games",
+            "not a prediction",
+            "Won</span><span><b>10-4 (71.4%)",
+            "10-4 (71.4%) vs 48.1% priced",
             "within noise",
         ):
             self.assertIn(expected, html)
@@ -3538,16 +3544,16 @@ class HybridRuleTests(unittest.TestCase):
         h = build_site._verdict_html(
             "LAD", dict(p_home=.70, away_ml=200, home_ml=-260), "LAD", "ARI",
             ctx, .005)
-        self.assertIn("Past V12 market-side selections · 15 completed games", h)
-        self.assertIn("not a prediction for this game", h)
+        self.assertIn("Past V12 market-side picks · 15 games", h)
+        self.assertIn("not a prediction", h)
         # The bare rate must not appear as its own value; it is qualified by
         # the record it came from.
         self.assertNotIn("<span>73.3%</span>", h)
-        self.assertIn("Won</span><span>11-4 (73.3%)", h)
+        self.assertIn("Won</span><span><b>11-4 (73.3%)", h)
         # The game's own price and the branch's average price are distinct
         # numbers and must be distinctly labelled.
         self.assertIn("30.0% no-vig", h)
-        self.assertIn("Their average price</span><span>58.6% implied", h)
+        self.assertIn("11-4 (73.3%) vs 58.6% priced", h)
 
     def test_the_ledger_labels_each_undecidable_case_distinctly(self):
         """Three different reasons the rule did not act, three different marks.
