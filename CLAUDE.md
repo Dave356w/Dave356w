@@ -1295,6 +1295,80 @@ precedent — they are how the fix is known to look.
 
   No code changed and no registered constant moved; `MODEL_TAG` is unchanged.
 
+  **Re-run 2026-09-15 on 406 rows, and the sweep reproduces almost exactly —
+  but the measurement the first pass lacked is the one that settles it.**
+  Same 837 candidates: plain lean **+8.30%**, shipped v2 **+11.41%**, maximum
+  `q < .44 & |Δ| < .012` at **+12.04%**, null max mean +4.56%,
+  P(null best ≥ observed) = 0.0155. Same argmax cell, now **three** games from
+  what ships instead of two. What is new is a walk-forward: refit the best cell
+  on prior slates, bet the next, 376 bets over 29 slates —
+  **best-cell-so-far +9.68% against shipped v2's +10.09% and the plain lean's
+  +7.20%.** Chasing the maximum LOSES to the rule it would replace. And this is
+  not the per-slate refit noise that killed `forward_test` arm 1: the pick is
+  *stable*, `(.44, .012)` on 24 of 29 slates. A stable argmax that still fails
+  forward is the sharper lesson — **passing the null-max test does not make a
+  threshold extractable.**
+
+  The three games are the whole of it, and they are worth naming because the
+  ranking is one coin-flip deep: 2026-09-07 NYM@MIA (q .4406, lean won),
+  2026-09-11 BAL@TOR (q .4482, won), 2026-09-14 ATL@CHC (q .4489, lost). The
+  leans went 2-1, which is what puts `.44` ahead by +2.56u. The surface says
+  the same thing: `.43` +9.92%, `.44` +12.04%, `.45` +11.41% — a spike beside
+  its own neighbour, not a ridge. `.45` keeps its a-priori provenance
+  (`hybrid_test`'s registration, frozen for an unrelated reason); `.44` was
+  chosen by looking. **Decision: unchanged.**
+
+  **Side-specific rules were tested at the same time and are the best
+  cautionary instance in this file, because they passed the search test and
+  then failed worse than doing nothing.** Motivated by a real structural fact
+  (below the gate the rows are **29 away leans against 2 home**, because the
+  market prices home field and the model carries no such term, so a sub-.45
+  lean is 93.5% an away lean). Fitting a separate `(q, |Δ|)` per side over a
+  30,976-candidate joint space: retrospective **+13.07%** against shipped's
+  +11.41%, null max mean +5.07%, **P(null ≥ observed) = 0.0110** — a *better*
+  nominal p-value than the side-blind sweep. Walk-forward it returns
+  **+3.90%**, against shipped +10.09% and the plain lean +7.20%: worse than
+  not having a rule at all. The cause is visible — the searched home gate is
+  `q < .54`, fading 34 home leans that went 15-19, because there is no
+  home-side sample below .45 to fit on, so the search pushes the gate into
+  populated territory where it has no business being. The simple restrictions
+  lose too: away-only fades +10.61%, home-only +9.10%, both under side-blind.
+  **Do not make the hybrid side-aware.**
+
+  **The fade branch's value is concentrated in one 0.01-wide price band, and
+  this is not recorded anywhere else.** Of the 17 fades, 5 sit in `q .43–.44`
+  and carry **+8.60u of the branch's +12.60u switch delta (68%)**. That band
+  holds 7 leans and they went **0-7** — expected wins 3.04, P(exactly 0) =
+  0.0185, which sounds striking until you count that **25 bins of n≥5 exist
+  across the price range**, so one all-loss cell is roughly what chance
+  returns. It is *not* a single-day cluster (6 distinct slates), which is the
+  one way it differs from the 2026-07-08/09/10 artifact recorded above.
+  Granularly the sign flip at `.45` dissolves: three of the five 0.01-bins
+  below `.45` are POSITIVE, and dropping the 0-7 cell moves the whole
+  below-gate region from **−2.8pp to +9.1pp**. So "the model's edge changes
+  sign at pick'em" overstates what the rows support — what they show is a
+  broad positive plateau from ~.44 to ~.51 and a thin negative patch resting
+  on seven games.
+
+  Two things that survive that deflation. Within the narrow price band the
+  gate operates in — where prices are near-uniform at ~.43, so base rate is
+  largely controlled — the delta gate's premise holds: the leans it fades run
+  **4-13 (−18.2 ± 11.9 pp)** against **8-6 (+16.0 ± 13.1)** for the ones it
+  follows, contrast −34.2 ± 17.8, z = −1.93. And excluding the 0-7 cell
+  entirely the faded group is still 4-8 at −7.8 ± 14.2, same direction. n=31
+  either way, so this is a mechanism for why the rule works, not evidence that
+  it does; `delta_filter_test` registers the same question and reads null
+  forward (+0.70pp ± 6.82).
+
+  **The missing home-field term is not what the fade branch is patching.**
+  Away leans beat their price by **+5.7 ± 3.5 pp** against home leans' +7.2 ±
+  3.4 — a 1.5pp gap on ±3.4, nothing — and below the gate away leans land at
+  −0.2 ± 9.1, dead on price. So the 93.5% away composition is selection (home
+  teams are priced higher: mean q .5887 home-lean against .5184 away-lean),
+  not a defect the gate corrects. That is consistent with `hfa_probe`: the
+  market's home-field content reaches the selection through the price, and
+  adding it to the lean as well made the lean worse.
+
   **Why the cliff is there at all — the market-overpricing account, which is a
   better explanation than the mechanical one and came from the operator rather
   than from this analysis.** xwOBA and the market normally agree (the lean is
@@ -2323,6 +2397,78 @@ them cannot be smoke-tested locally; run the workflow.
 
 ### Measured and rejected
 
+- **A sweep of every unused pregame column for a signal against price — 26
+  hypotheses, nothing above the noise floor.** Recorded so it is not re-run:
+  the answer is no, and the way to see that is the search correction, not any
+  individual number. Asked "are there unused signals that correspond with wins
+  or losses", measured 2026-09-15 over the 406 decidable v12 rows.
+
+  Two rules made it answerable. Every `act_*` column is a POST-GAME actual, so
+  using one is lookahead and all are excluded — the panel is strictly pregame.
+  And every candidate is scored **against price**, never on raw win rate:
+  `corr(|xw_net|, q) = +0.486`, so a raw rate mostly measures favourite-ness
+  (all-v12 `|d|>=.012` wins 65.1% against 55.5%, which is base rate, not edge).
+
+  Thirteen candidates, each oriented to the leaned side, tested by median split
+  and by joint logit `P(lean wins) ~ logit(q) + z(signal)`. Best by logit:
+  SP sample BF diff **+1.91**, F5-minus-full-market **+1.71**, `d_sp` **+1.45**,
+  own expected SP IP +1.17; `d_lineup` **−1.00**, line movement **−0.23**.
+  **Zero signals reached |z| > 2, against an expected max of ~2.26 from 13
+  independent nulls** — the best result in the panel is smaller than what a
+  search this wide typically returns from noise.
+
+  Three readings worth keeping. **Line movement toward the model's side is the
+  cleanest null**: it had a real prior (the classic CLV story) and came back
+  −0.23, if anything the wrong way. **`d_lineup` points negative in both
+  tests**, matching the component monitor and `interaction_probe`; still every
+  interval contains zero, so "not measurably contributing", not "inverted".
+  And **four of the thirteen were mislabelled as unused** — `d_sp`, `d_lineup`,
+  `expected_sp_ip` and SP phase share are model INPUTS, so a null on top of
+  price means already consumed, not uninformative. The genuinely unused ones
+  were line movement, F5 divergence, bullpen depth and fatigue, lineup
+  dispersion, savant backfill count and the platoon differential.
+
+  `expected_sp_ip` was then tested in **nine** forms on request — calibrated
+  and raw differentials, own and opposing starter, min, sum, and the v12
+  calibration's own correction (`calib − raw`). Max |z| = **1.18** against an
+  expected max of ~2.10; weaker than the main panel. Two by-products: the
+  calibrated and raw differentials are indistinguishable (+0.084 vs +0.084),
+  which is a free confirmation that the v12 fit compresses the estimate
+  without reordering it; and `calib − raw` scores −1.18, so the correction is
+  not itself predictive, which is what a variance fix should look like.
+
+  **The OPS arm is the one cut that looked alive and did not survive
+  conditioning.** `consensus` (AGREE/DIVERGE) is genuinely unread by the
+  shipped rule and had a real prior. Agreement runs **+9.9 ± 3.2 pp** against
+  divergence's +1.3 ± 5.7, contrast +8.6 ± 6.5, **z = +1.32** — and the
+  divergence half behaving as the story predicts is why it deserved a proper
+  test rather than dismissal. It fails three ways. Most of it is
+  *reliability*, not agreement: `ops_valid` alone splits +6.2 ± 5.8, while
+  `ops_delta` magnitude splits null at z = −0.47. The arms are not independent
+  — both read the same lineups and starters, agreeing on 75.9% of games by
+  construction. And in a joint logit with price and `|xw_net|`, `ops_delta`
+  enters **−0.174 ± 0.121**, the wrong sign for a confirmation story.
+
+  Raw `ops_delta` thresholds were then swept three ways and none helps.
+  Replacing `|xw_net|` with it in the gate tops out at +9.39% against shipped's
+  +11.41%. As a THIRD gate the optimal threshold is **inert** — best +11.41% at
+  `ops_delta < 0.17`, identical to shipped to the decimal, because p75 is 0.120
+  so that cutoff excludes nothing; across 39 thresholds the best the search can
+  do is switch the gate off. As a standalone abstention filter every threshold
+  underperforms betting all 406 (+8.30%), and the ordering is scatter —
+  6.30 / 3.21 / 5.86 / 5.55 / 7.58 / 1.29 / 4.12 — which is the tell. Note the
+  scales differ by ~4x (`ops_delta` median 0.0787 against `|xw_net|`'s 0.0182),
+  so no threshold transfers between them and each must be swept on its own.
+
+  One trap to avoid re-reading: the third-gate sweep prints P(null ≥ obs) =
+  0.0000, and that is NOT a passing search test for `ops_delta`. Every
+  candidate in it already contains the shipped `q` and `|Δ|` gates, so the
+  p-value measures whether the SHIPPED RULE beats chance, not whether the added
+  gate contributes. **A search whose candidate set contains the baseline cannot
+  test the increment.**
+
+  Diagnostic only; nothing shipped, no constant moved, `MODEL_TAG` unchanged.
+
 - **The lineup component's negative slope as a window artifact.** The component
   block scores each term "against its own realised phase", and the SP/BP
   boundary is endogenous to lineup quality — a strong lineup chases the starter
@@ -2442,6 +2588,25 @@ them cannot be smoke-tested locally; run the workflow.
 
 ### Rules these have earned
 
+- **The null-max test is necessary and NOT sufficient; only a walk-forward
+  closes a threshold question.** Two variants cleared the search test and then
+  failed forward: the ROI-tuned cell (P = 0.0155, then +9.68% against shipped's
+  +10.09%) and the side-specific rule (**P = 0.0110 — a better nominal p-value
+  than the rule it would replace** — then +3.90%, worse than having no rule at
+  all). A *stable* argmax does not rescue it either: the tuned cell was picked
+  on 24 of 29 slates and still lost. Run both tests, in that order, and treat a
+  good p-value as permission to walk-forward rather than as a result.
+- **A search whose candidate set contains the baseline cannot test the
+  increment.** Sweeping a third gate on top of the shipped rule returns
+  P(null ≥ observed) = 0.0000 — which measures the shipped rule beating chance,
+  not the new gate contributing anything. Score the increment against the
+  baseline, never the combined rule against zero.
+- **Before believing a signal, count the hypotheses and compare against the
+  expected maximum, not against zero.** `sqrt(2·ln(k))` is the bar for `k`
+  independent nulls: ~2.10 at 9 tests, ~2.26 at 13, ~2.55 at 26. The 2026-09-15 unused-
+  signal sweep peaked at |z| = 1.91 across 26 tests, i.e. *below* what noise
+  typically returns, which is what makes "nothing here" a finding rather than a
+  failure to look hard enough.
 - **A deferred decision needs a numeric gate and a self-reporting instrument.**
   Not one or the other. `expected_sp_ip` is the worked example: measured
   over-dispersed, deliberately not fixed, gate set at ~600 side-games, slope
