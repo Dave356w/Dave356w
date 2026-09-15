@@ -2235,14 +2235,37 @@ precedent — they are how the fix is known to look.
   `xw_full` as a statement about the model's prediction rather than about a
   betting rule layered on it.
 
-  Adding a *new* stored column was also rejected, for a weaker but sufficient
-  reason: the hybrid grade is a deterministic function of `xw_lean`, `home`,
-  `close_p_home` and `xw_full`, all of which are write-once (`attach_market`
-  never revises a close it has already set). Storing it creates a second home
-  for a value that can then drift from its derivation — the defect that put
-  v10 math under a v9 tag. **The rule is a VIEW over the ledger, derived at
-  read time, and a test asserts no `hybrid*` column exists in the artifact or
-  in the writer's column lists.**
+  Adding a *new* stored column was also rejected at the time, for a weaker but
+  sufficient reason: the hybrid grade is a deterministic function of `xw_lean`,
+  `home`, `close_p_home` and `xw_full`, all of which are write-once
+  (`attach_market` never revises a close it has already set). Storing it
+  creates a second home for a value that can then drift from its derivation —
+  the defect that put v10 math under a v9 tag. So the rule was a VIEW over the
+  ledger, derived at read time, and a test asserted no `hybrid*` column existed
+  in the artifact or in the writer's column lists.
+
+  **That second half was reversed by the v2 migration on 2026-09-11, and the
+  reason it had to be is worth more than the columns.** The derivation argument
+  is sound for the CLOSING basis and only for it: `close_p_home` is write-once
+  and still present at read time, so a closing-priced hybrid grade genuinely is
+  recomputable and nothing needs storing. The registered forward test does not
+  score that basis. It scores the PREGAME one — the decision and the price a
+  bettor could actually have taken — and those are **not** re-derivable at any
+  later read, because the no-lookahead invariant keeps market columns off
+  pending rows and a decision-time price that was never captured is simply
+  gone. A rule registered against an obtainable price therefore cannot be a
+  pure view; the capture is the evidence.
+
+  So the ledger now stores `hybrid_action`, `hybrid_selection`, `hybrid_p`,
+  `hybrid_ml` and `hybrid_full`, plus the archived `hybrid_v1_*` set, and
+  **no test forbids them** — a grep for one is the mistake this paragraph
+  exists to stop. The drift hazard the rejection named is real and is handled
+  rather than avoided: `hybrid_price_source` records per row which basis that
+  row's fields were captured on (`saved_pregame` or `closing`), so a mixed
+  population can be split instead of silently averaged, and the report prints
+  the split. **What did NOT change is the first half** — `xw_full` is still the
+  lean's grade and is still never overwritten, which is the part of this entry
+  that was load-bearing.
 
 - **Internal and public artifacts disagreeing.** `data/ledger_report.txt` once
   said the current family had no graded games while the site published a pooled
@@ -2392,20 +2415,25 @@ registered pregame scorer excludes and counts malformed locked commitments;
 close-scored sections exclude missing `close_p_home` and their rule-specific
 inputs, while relying on the market join to supply the paired moneylines.
 
-**Probes run on demand.** Seven read committed artifacts and run anywhere:
+**Probes run on demand.** Fifteen read committed artifacts and need no live API.
+All run anywhere with one qualification, stated in its own row:
+`hitter_level_probe` executes but cannot produce a reading without the
+collector's per-PA CSV. Recount this list when you add a probe: the lead
+sentence read "seven" while the table beneath it already listed fifteen, and
+the count is the one thing here a reader cannot check without counting:
 
 | probe | question |
 |---|---|
 | `value_probe.py` | is there a tradable relationship between `xw_net` and price? (incl. band grids) |
 | `forward_test.py` | pre-registered fade rule, frozen 2026-08-29 (also prints every build) |
 | `hybrid_test.py` | retired v1 hybrid registration, frozen 2026-09-01; reads archived `hybrid_v1_*` saved-pregame decisions |
-| `hybrid_v2.py` | current hybrid rule, registered 2026-09-11; fade only at q < .45 AND |xw_net| < .012 |
+| `hybrid_v2.py` | current hybrid rule, registered 2026-09-11; fade only at q < .45 AND |xw_net| < .012. A library, not a script — it has no `__main__`, and `build_site`/`grade_leans` print its reading into `ledger_report.txt` every build |
 | `delta_filter_test.py` | pre-registered |delta| conviction filter, frozen 2026-09-03; NEGATIVE prior (also prints every build) |
 | `abstain_test.py` | pre-registered abstain-vs-fade variant of the hybrid, frozen 2026-09-03 (also prints every build) |
 | `dog_contrast_test.py` | pre-registered underdog sign-flip contrast, frozen 2026-09-03; NOT independent of arm 2 (also prints every build) |
 | `hfa_probe.py` | does adding a home-field term to the lean improve it? (no) |
 | `lineup_window_probe.py` | is the negative lineup component slope an artifact of the SP/BP scoring window? (no) |
-| `hitter_level_probe.py` | does a hitter's predicted xwOBA predict his OWN plate appearances? (forward only; runs as a step of the `lineup-window-collect` workflow, the only place it can — it needs the collector's `batter_id` and StatsAPI is unreachable from the dev environment) |
+| `hitter_level_probe.py` | does a hitter's predicted xwOBA predict his OWN plate appearances? (forward only; runs anywhere and reads the committed `hitters_*` frames, but scores nothing without the collector's per-PA CSV passed to `--pa` — that CSV needs `batter_id` from `lineup_window_collect.py`, and StatsAPI is unreachable from the dev environment, so the `lineup-window-collect` workflow is the only place it produces a reading) |
 | `interaction_probe.py` | do single signals or other combiners beat `B·P/L`? |
 | `dispersion_probe.py` | does a concentrated lineup beat the mean it is averaged into? |
 | `bp_ablation.py` | does removing the bullpen term change any decision? |
