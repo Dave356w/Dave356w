@@ -4424,12 +4424,14 @@ def _lean_history_range(lo, hi):
     return f"{lo_txt}–{f'{hi:.3f}'.lstrip('0')}"
 
 
-def _xwoba_side_history(ctx, delta):
-    """Actual XWOBA SIDE branch and market results for this |delta| range.
+def _xwoba_side_history(ctx, delta, selection_ml=None):
+    """XWOBA SIDE delta history plus the selected price's market rung.
 
-    Switched MARKET OVER LEAN games are excluded. Both rows use the same
-    current-family, closing-priced games in the same delta range; only the
-    selected side differs.
+    The model row is current-family and restricted to this delta range. The
+    market row deliberately answers a different question: how every side in
+    the full ledger closed and settled at a price like tonight's. Its aggregate
+    comes from `_market_calibration_rows`, so this card and the calibration page
+    cannot disagree about rung membership or performance.
     """
     bucket = _lean_history_bucket(delta)
     if bucket is None:
@@ -4443,22 +4445,30 @@ def _xwoba_side_history(ctx, delta):
                 f"<span>No completed {version} XWOBA SIDE picks in the "
                 f"Δ {range_txt} range yet.</span></div>")
 
-    model, market = parts["model"], parts["market"]
-    rows = (("XWOBA SIDE", model), ("Market", market))
-    body = "".join(
-        f"<div class='vline'><span class='vk'>{label}</span>"
-        f"<span>{p['w']}-{p['l']} ({p['actual']:.3f})</span></div>"
-        for label, p in rows)
+    model = parts["model"]
+    body = (f"<div class='vline'><span class='vk'>XWOBA SIDE</span>"
+            f"<span>{model['w']}-{model['l']} "
+            f"({model['actual']:.3f})</span></div>")
+    ml = _f(selection_ml)
+    rung = _ladder_rung(ml) if ml is not None else None
+    market = (ctx or {}).get(("market_rung", rung)) if rung else None
+    if market:
+        body += (
+            f"<div class='vline'><span class='vk'>Market · {_esc(rung)}</span>"
+            f"<span>{market['w']}-{market['n'] - market['w']} "
+            f"({market['actual']:.3f}) vs "
+            f"{100 * market['implied']:.1f}% implied</span></div>")
     return (
         "<div class='vprofile'>"
         f"<div class='vprofile-title'>Past {version} XWOBA SIDE picks · Δ {range_txt} · "
         f"{model['n']} completed {'game' if model['n'] == 1 else 'games'}</div>"
-        "<div class='vprofile-band'>Past results</div>"
+        "<div class='vprofile-band'>Past results · Market uses all sides in "
+        "its closing-price rung</div>"
         f"{body}</div>"
     )
 
 
-def _branch_history(ctx, action, p_lean=None, delta=None):
+def _branch_history(ctx, action, p_lean=None, delta=None, selection_ml=None):
     """Track record of the branch this game's price puts it in.
 
     Every line here describes PAST games, and the wording has to make that
@@ -4476,7 +4486,7 @@ def _branch_history(ctx, action, p_lean=None, delta=None):
         # restating it is the redundancy this rewrite is removing.
         return ""
     if action == "FOLLOW":
-        return _xwoba_side_history(ctx, delta)
+        return _xwoba_side_history(ctx, delta, selection_ml)
     history_branch = "model-side" if action == "FOLLOW" else "market-side"
     parts = (ctx or {}).get(("branch", action))
     if not parts:
@@ -4642,11 +4652,11 @@ def _verdict_html(fav, odds, away_abbr, home_abbr, ctx=None, delta=None):
              else "no no-vig price yet")
 
     thr = f"{100 * HYBRID_THRESHOLD:.0f}%"
+    sel_price = None
     if action is None:
         rule_line = ("<div class='vline'><span class='vk'>Rule</span>"
                      "<span>abstains — no two-sided price yet</span></div>")
     else:
-        sel_price = None
         if pick is not None:
             sel_price = (odds.get("home_ml") if pick == home_abbr
                          else odds.get("away_ml"))
@@ -4673,7 +4683,7 @@ def _verdict_html(fav, odds, away_abbr, home_abbr, ctx=None, delta=None):
             + (f" {_fmt_ml(sel_price)}" if sel_price is not None else "")
             + f"</span></div><div class='vnote'>{why}</div>")
 
-    history = _branch_history(ctx, action, p_lean, delta)
+    history = _branch_history(ctx, action, p_lean, delta, sel_price)
     # The warm accent marks a FADE -- the one case where the published
     # selection differs from the model's own lean. It has never meant "bet
     # this side".
@@ -7260,20 +7270,25 @@ def hybrid_branch_records():
     pooled = _lean_market_agg(obs, obs["won"].notna())
     if pooled:
         out["pooled"] = pooled
+    # Reuse the market-calibration page's exact whole-ledger rung aggregates.
+    # The per-game Market row is keyed by the current selection's displayed ML,
+    # not by the model's delta bucket, so a -231 side reads the -249 to -175
+    # history on both surfaces.
+    market_rows, _market_totals = _market_calibration_rows(led)
+    for row in market_rows:
+        if row.get("all"):
+            out[("market_rung", row["rung"])] = row["all"]
     # Fixed |delta| bands power the per-game XWOBA SIDE history. This is an
     # actual Hybrid branch slice: MARKET OVER LEAN rows are excluded before
-    # both the branch record and its same-game market control are calculated.
+    # the model-side record is calculated.
     delta = pd.to_numeric(obs["delta"], errors="coerce")
     for i, (lo, hi) in enumerate(_LEAN_HISTORY_BINS):
         mask = delta.ge(lo) & delta.lt(hi) & obs["hybrid_follow"]
         model = _lean_market_agg(
             obs, mask, won="hybrid_won", p="hybrid_p",
             resid="hybrid_resid", profit="hybrid_profit")
-        market = _lean_market_agg(
-            obs, mask, won="chalk_won", p="chalk_p",
-            resid="chalk_resid", profit="chalk_profit")
-        if model and market:
-            out[("delta_follow", i)] = {"model": model, "market": market}
+        if model:
+            out[("delta_follow", i)] = {"model": model}
     for action, mask in (("FOLLOW", obs["hybrid_follow"]),
                          ("FADE", ~obs["hybrid_follow"])):
         parts = _lean_market_agg(obs, mask, won="hybrid_won",

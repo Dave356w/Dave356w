@@ -519,8 +519,9 @@ class RenderTests(unittest.TestCase):
         ctx = {
             ("delta_follow", 2): {
                 "model": dict(n=83, w=52, l=31, actual=.627),
-                "market": dict(n=83, w=49, l=34, actual=.590),
             },
+            ("market_rung", "-174 to -130"): dict(
+                n=392, w=233, actual=.594, implied=.575),
             ("branch", "FADE"): dict(
                 n=15, w=11, l=4, implied=.586, actual=.733, excess=.147,
                 excess_se=.127, roi=.238, units=3.56,
@@ -532,7 +533,9 @@ class RenderTests(unittest.TestCase):
         self.assertIn("Past V12 XWOBA SIDE picks · Δ .020–.030 · 83 completed games", follow)
         self.assertIn("XWOBA SIDE → ARI", follow)
         self.assertIn("XWOBA SIDE</span><span>52-31 (0.627)", follow)
-        self.assertIn("Market</span><span>49-34 (0.590)", follow)
+        self.assertIn(
+            "Market · -174 to -130</span><span>233-159 (0.594) vs 57.5% implied",
+            follow)
         # The reason has to sit on the decision, not be inferable from two
         # numbers printed above it.
         self.assertIn("remains the XWOBA side", follow)
@@ -600,16 +603,21 @@ class RenderTests(unittest.TestCase):
         self.assertIn("the same bet", calib)
         self.assertIn(f"Always chalk · {b.hybrid_public_label('FADE')} rows only",
                       calib)
-        # XWOBA SIDE shows its same-range market comparison as a separate row.
+        # XWOBA SIDE shows the selected price rung's market history separately.
         follow = b._verdict_html(
             "ARI", dict(p_home=.62, home_ml=-160), "LAD", "ARI",
-            {("delta_follow", 2): {
-                "model": dict(n=83, w=52, l=31, actual=.627),
-                "market": dict(n=83, w=49, l=34, actual=.590),
-            }},
+            {
+                ("delta_follow", 2): {
+                    "model": dict(n=83, w=52, l=31, actual=.627),
+                },
+                ("market_rung", "-174 to -130"): dict(
+                    n=392, w=233, actual=.594, implied=.575),
+            },
             .02)
         self.assertIn("XWOBA SIDE</span><span>52-31 (0.627)", follow)
-        self.assertIn("Market</span><span>49-34 (0.590)", follow)
+        self.assertIn(
+            "Market · -174 to -130</span><span>233-159 (0.594) vs 57.5% implied",
+            follow)
 
     def test_market_over_lean_panel_prints_its_own_error_bar(self):
         """A published excess must carry its sampling distribution.
@@ -685,30 +693,39 @@ class RenderTests(unittest.TestCase):
         self.assertIn("outside noise", b._branch_read(over))
 
     def test_xwoba_side_record_is_cut_to_this_games_delta_range(self):
-        """The XWOBA SIDE card uses its fixed delta range, not price band."""
-        ctx = {("delta_follow", 2): {
-            "model": dict(n=83, w=52, l=31, actual=.627),
-            "market": dict(n=83, w=49, l=34, actual=.590),
-        }}
+        """Model history uses delta; market context uses the selected ML rung."""
+        ctx = {
+            ("delta_follow", 2): {
+                "model": dict(n=83, w=52, l=31, actual=.627),
+            },
+            ("market_rung", "+100 to +129"): dict(
+                n=437, w=206, actual=.471, implied=.455),
+        }
         h = b._verdict_html(
             "LAD", dict(p_home=.53, away_ml=115, home_ml=-135), "LAD", "ARI",
             ctx, .02)
         self.assertIn("Δ .020–.030", h)
         self.assertIn("52-31 (0.627)", h)
-        self.assertIn("49-34 (0.590)", h)
+        self.assertIn(
+            "Market · +100 to +129</span><span>206-231 (0.471) vs 45.5% implied",
+            h)
         self.assertNotIn("45\u201350%", h)
 
-    def test_delta_history_always_names_the_market_comparison(self):
-        """The same-range Market row remains explicit, even if records tie."""
-        same = dict(n=83, w=52, l=31, actual=.627)
-        ctx = {("delta_follow", 2): {
-            "model": same,
-            "market": dict(same),
-        }}
+    def test_delta_history_names_the_market_price_rung(self):
+        """The Market row explicitly identifies its different population."""
+        ctx = {
+            ("delta_follow", 2): {
+                "model": dict(n=83, w=52, l=31, actual=.627),
+            },
+            ("market_rung", "-129 to -100"): dict(
+                n=510, w=254, actual=.498, implied=.514),
+        }
         h = b._verdict_html(
             "ARI", dict(p_home=.52, home_ml=-108), "LAD", "ARI", ctx, .02)
-        self.assertEqual(h.count("52-31 (0.627)"), 2)
-        self.assertIn("Market</span>", h)
+        self.assertIn("XWOBA SIDE</span><span>52-31 (0.627)", h)
+        self.assertIn(
+            "Market · -129 to -100</span><span>254-256 (0.498) vs 51.4% implied",
+            h)
 
     def test_a_thin_branch_is_marked_thin_on_its_own_row(self):
         """A thin branch must not read as a rate you can rely on.
@@ -748,11 +765,11 @@ class RenderTests(unittest.TestCase):
         """The delta comparison is retrospective, never a game prediction."""
         ctx = {("delta_follow", 2): {
             "model": dict(n=83, w=52, l=31, actual=.627),
-            "market": dict(n=83, w=49, l=34, actual=.590),
         }}
         h = b._verdict_html(
             "ARI", dict(p_home=.62, home_ml=-160), "LAD", "ARI", ctx, .02)
-        self.assertIn("Past results", h)
+        self.assertIn(
+            "Past results · Market uses all sides in its closing-price rung", h)
         self.assertNotIn("prediction for this game", h)
 
     def test_verdict_never_claims_a_value_bet(self):
