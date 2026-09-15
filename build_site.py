@@ -4395,7 +4395,70 @@ def _branch_read(parts):
     return "outside noise across both branches"
 
 
-def _branch_history(ctx, action, p_lean=None):
+_LEAN_HISTORY_BINS = (
+    (0.000, 0.010),
+    (0.010, 0.020),
+    (0.020, 0.030),
+    (0.030, 0.050),
+    (0.050, math.inf),
+)
+
+
+def _lean_history_bucket(delta):
+    """Fixed ledger-style |xwOBA delta| range containing ``delta``."""
+    d = _f(delta)
+    if d is None or not np.isfinite(d) or d < 0:
+        return None
+    d = abs(d)
+    for i, (lo, hi) in enumerate(_LEAN_HISTORY_BINS):
+        if lo <= d < hi:
+            return i, lo, hi
+    return None
+
+
+def _lean_history_range(lo, hi):
+    """Compact public range label matching the ledger's half-open bins."""
+    lo_txt = f"{lo:.3f}".lstrip("0")
+    if np.isinf(hi):
+        return f"{lo_txt}+"
+    return f"{lo_txt}–{f'{hi:.3f}'.lstrip('0')}"
+
+
+def _xwoba_side_history(ctx, delta):
+    """Actual XWOBA SIDE branch and market results for this |delta| range.
+
+    Switched MARKET OVER LEAN games are excluded. Both rows use the same
+    current-family, closing-priced games in the same delta range; only the
+    selected side differs.
+    """
+    bucket = _lean_history_bucket(delta)
+    if bucket is None:
+        return ""
+    i, lo, hi = bucket
+    parts = (ctx or {}).get(("delta_follow", i))
+    range_txt = _lean_history_range(lo, hi)
+    version = _model_version_short()
+    if not parts:
+        return ("<div class='vline hist'><span class='vk'>Past results:</span>"
+                f"<span>No completed {version} XWOBA SIDE picks in the "
+                f"Δ {range_txt} range yet.</span></div>")
+
+    model, market = parts["model"], parts["market"]
+    rows = (("XWOBA SIDE", model), ("Market", market))
+    body = "".join(
+        f"<div class='vline'><span class='vk'>{label}</span>"
+        f"<span>{p['w']}-{p['l']} ({p['actual']:.3f})</span></div>"
+        for label, p in rows)
+    return (
+        "<div class='vprofile'>"
+        f"<div class='vprofile-title'>Past {version} XWOBA SIDE picks · Δ {range_txt} · "
+        f"{model['n']} completed {'game' if model['n'] == 1 else 'games'}</div>"
+        "<div class='vprofile-band'>Past results</div>"
+        f"{body}</div>"
+    )
+
+
+def _branch_history(ctx, action, p_lean=None, delta=None):
     """Track record of the branch this game's price puts it in.
 
     Every line here describes PAST games, and the wording has to make that
@@ -4412,6 +4475,8 @@ def _branch_history(ctx, action, p_lean=None):
         # The rule line already says the rule abstains and why; a second line
         # restating it is the redundancy this rewrite is removing.
         return ""
+    if action == "FOLLOW":
+        return _xwoba_side_history(ctx, delta)
     history_branch = "model-side" if action == "FOLLOW" else "market-side"
     parts = (ctx or {}).get(("branch", action))
     if not parts:
@@ -4608,7 +4673,7 @@ def _verdict_html(fav, odds, away_abbr, home_abbr, ctx=None, delta=None):
             + (f" {_fmt_ml(sel_price)}" if sel_price is not None else "")
             + f"</span></div><div class='vnote'>{why}</div>")
 
-    history = _branch_history(ctx, action, p_lean)
+    history = _branch_history(ctx, action, p_lean, delta)
     # The warm accent marks a FADE -- the one case where the published
     # selection differs from the model's own lean. It has never meant "bet
     # this side".
@@ -6552,7 +6617,9 @@ def _lean_market_observations(led):
 
     The ledger has no per-game SE/SD for xw_delta. Do not manufacture one from
     lineup dispersion or opponent-rate SD -- those are different quantities.
-    The v2 rule uses the observed absolute delta only as a fixed weak-lean gate.
+    The v2 rule uses the observed absolute delta as a fixed weak-lean gate. The
+    card also uses fixed delta ranges as descriptive history; those ranges do
+    not add any new decision threshold to the rule.
     """
     cols = {"close_p_home", "close_home_ml", "close_away_ml",
             "xw_lean", "xw_full", "home", "away"}
@@ -6712,7 +6779,8 @@ def _lean_market_agg(obs, mask, won="won", p="market_p",
 # because at 21-82 rows a cell's null sd is 8-21 percentage points of ROI. The
 # hybrid has two branches, so a reader is never shown a one-game headline.
 # V2 uses one predeclared weak-delta cutoff; it does not restore the exploratory
-# matrix or present the display bands as separately validated strategies.
+# matrix or present the display ranges as separately validated strategies. The
+# card's fixed delta ranges are descriptive history, not additional rule gates.
 #
 # Display and monitoring only. The rule never enters a lean and does not bump
 # MODEL_TAG.
@@ -7192,6 +7260,20 @@ def hybrid_branch_records():
     pooled = _lean_market_agg(obs, obs["won"].notna())
     if pooled:
         out["pooled"] = pooled
+    # Fixed |delta| bands power the per-game XWOBA SIDE history. This is an
+    # actual Hybrid branch slice: MARKET OVER LEAN rows are excluded before
+    # both the branch record and its same-game market control are calculated.
+    delta = pd.to_numeric(obs["delta"], errors="coerce")
+    for i, (lo, hi) in enumerate(_LEAN_HISTORY_BINS):
+        mask = delta.ge(lo) & delta.lt(hi) & obs["hybrid_follow"]
+        model = _lean_market_agg(
+            obs, mask, won="hybrid_won", p="hybrid_p",
+            resid="hybrid_resid", profit="hybrid_profit")
+        market = _lean_market_agg(
+            obs, mask, won="chalk_won", p="chalk_p",
+            resid="chalk_resid", profit="chalk_profit")
+        if model and market:
+            out[("delta_follow", i)] = {"model": model, "market": market}
     for action, mask in (("FOLLOW", obs["hybrid_follow"]),
                          ("FADE", ~obs["hybrid_follow"])):
         parts = _lean_market_agg(obs, mask, won="hybrid_won",
