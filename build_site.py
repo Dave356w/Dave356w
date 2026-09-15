@@ -4430,6 +4430,26 @@ def _xwoba_side_history(ctx, delta, selection_ml=None):
     This is one current-rule population, not two adjacent aggregates with
     different denominators. The displayed moneyline chooses the rung; the
     historical rows themselves are still bucketed on their closing prices.
+
+    The record carries FLAT-STAKE UNITS rather than a reliability marker, on
+    the operator's call. That is a deliberate reversal of the rule stated in
+    `_branch_history` -- which still holds for the branch line beside it -- so
+    read the two as different surfaces on purpose, not as one drifting: the
+    branch line keeps its record price-relative with the branch's own average
+    price, and this one does it with the units those same closing prices
+    actually returned. `units` is the sum of `_american_unit_profit` at 1u a
+    game, priced at each row's own close, so it is already price-relative in
+    the way a bare win rate is not: 5-5 at -200 is a loss and reads as one.
+
+    What went with the marker is a CLAIM, not decoration -- these rows are
+    retrospective, the v2 gates were chosen after this sample, and the ranges
+    are descriptive bands rather than validated cells. That framing has not
+    been deleted from the site; it is carried by the panel's own copy on
+    `market-calibration.html` and by `hybrid_v2.py`'s registration, which is
+    still the only thing that can answer whether the rule works. A thin cell
+    here can show a large units figure for the same reason it could show a
+    large excess, and nothing on this card converts either into a forward
+    expectation.
     """
     bucket = _lean_history_bucket(delta)
     if bucket is None:
@@ -4452,14 +4472,13 @@ def _xwoba_side_history(ctx, delta, selection_ml=None):
     model_unit = "game" if model["n"] == 1 else "games"
     body = ("<div class='vline'><span class='vk'>Past results</span>"
             f"<span>{model['w']}-{model['l']} "
-            f"({model['actual']:.3f}) · thin sample</span></div>")
+            f"({model['actual']:.3f}) · ROI {model['units']:+.2f}u</span></div>")
     return (
         "<div class='vprofile'>"
         f"<div class='vprofile-title'>Past {version} XWOBA SIDE picks</div>"
         f"<div class='vprofile-band'>Δ {range_txt} · closing ML {_esc(rung)} · "
         f"{model['n']} {model_unit}</div>"
-        f"{body}<div class='vnote'>Retroactive current-rule slice, not a "
-        "prediction or forward test.</div></div>"
+        f"{body}</div>"
     )
 
 
@@ -4501,12 +4520,21 @@ def _branch_history(ctx, action, p_lean=None, delta=None, selection_ml=None):
         -- so something has to keep the record price-relative.
 
         ROI would do it and is used on the ledger page, which already publishes
-        flat-stake units. It is deliberately NOT used here: this card reports
-        calibration and never a betting result, a property `test_verdict_panel_
-        leaves_no_computed_key_unrendered` pins by asserting `roi` and `units`
-        do not appear. So the branch's own average price carries it instead --
-        `76.5% vs 58.2% priced` is the same comparison the excess used to make,
-        in plain words and with no betting framing.
+        flat-stake units. It is deliberately NOT used on THIS line: the branch
+        record stays calibration-shaped, and the branch's own average price
+        carries it instead -- `76.5% vs 58.2% priced` is the same comparison
+        the excess used to make, in plain words and with no betting framing.
+
+        The scope of that rule narrowed on the operator's call and the wording
+        here narrowed with it. It once read "this card reports calibration and
+        never a betting result", which stopped being true of the card when
+        `_xwoba_side_history` began publishing flat-stake units beside its
+        intersection record. The branch line is what the rule now covers, and
+        `test_verdict_panel_leaves_no_computed_key_unrendered` pins exactly
+        that much -- `roi` and `units` absent from the BRANCH parts -- rather
+        than a property of the whole panel it no longer has. A comment that
+        keeps claiming the wider version is the defect this repo files under
+        prose asserting what the code does not do.
         """
         rec = (f"{p['w']}-{p['l']} ({100 * p['actual']:.1f}%)"
                f" vs {100 * p['implied']:.1f}% priced")
@@ -8063,10 +8091,17 @@ def render_grades_html(built_txt):
                 ctl = _lean_market_agg(obs, priced, **cols)
                 if ctl:
                     stat(lab, f"{ctl['w']}-{ctl['l']}", _pub(ctl), tone="dim")
-        # The caveat the calibration panel and the per-game card both carry,
-        # missing on the page that publishes the LARGEST version of the
-        # number: this header leads with a z-score for a rule whose threshold
-        # was fitted on the very rows it is scored over.
+        # The caveat the calibration panel carries and this page did not:
+        # the header leads with a z-score for a rule whose threshold was
+        # fitted on the very rows it is scored over.
+        #
+        # The per-game card used to carry it too. It no longer does on a
+        # FOLLOW -- `_branch_history` hands that game to
+        # `_xwoba_side_history`, which now publishes flat-stake units in
+        # place of its caveat line -- so for the majority branch this note
+        # and the calibration panel are the whole of the framing. That makes
+        # it the reverse of the situation it was written for, and it is not
+        # optional copy.
         if not obs.empty:
             notes.append(
                 "<b>Discovery</b>, not a forward test: the 45% price and "
