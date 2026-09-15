@@ -7144,41 +7144,81 @@ def hybrid_branch_records():
 # Prior cutoffs. No longer a last-resort branch: they are the prior that the
 # observed quantiles are shrunk toward, so they always contribute and their
 # influence decays smoothly as the pool grows (see lean_strength).
-# STALE BY ITS OWN RULE, KNOWINGLY. Provenance: p33/p80 of |xw_net| over the 24
-# ledger rows on the *xwOBA v9/v10* scale as of 2026-07-28 (0.0151 / 0.0325),
-# rounded. All 24 were tagged v9 -- an earlier wording here said "v8/v9", but no
-# xw+plat_consol_v8 row has ever been graded into the ledger (v8 shipped for one
-# morning; its 11 rows were still pending when v9 landed, so the pregame refresh
-# rebuilt and re-stamped them). The v8 entries in _SCALE_FAMILIES match zero rows
-# and are history, not a live pool. The literal before that was the *pre-v5
-# unshrunk* p33/p80 (0.021, 0.060), left in place across the v5, v7 and v8
-# shrinkage changes that moved the distribution underneath it; with v9's observed
-# maximum |xw_net| of 0.0462 it made "strong" unreachable for every game.
+# CURRENT provenance is the RE-DERIVED block below (2026-09-15, n=519). The two
+# entries here are the lineage that produced it, kept because each is a worked
+# instance of this constant going wrong in a different way.
+#
+# Superseded 2026-09-15: p33/p80 of |xw_net| over the 24 ledger rows on the
+# *xwOBA v9/v10* scale as of 2026-07-28 (0.0151 / 0.0325), rounded to
+# 0.015 / 0.032. All 24 were tagged v9 -- an earlier wording here said "v8/v9",
+# but no xw+plat_consol_v8 row has ever been graded into the ledger (v8 shipped
+# for one morning; its 11 rows were still pending when v9 landed, so the pregame
+# refresh rebuilt and re-stamped them). The v8 entries in _SCALE_FAMILIES match
+# zero rows and are history, not a live pool. Its failure mode was SAMPLE SIZE:
+# 24 rows of the noisiest sub-family, and the pair it produced is outside that
+# family's own 95% CI once the pool reaches 519.
+#
+# The literal before that was the *pre-v5 unshrunk* p33/p80 (0.021, 0.060), left
+# in place across the v5, v7 and v8 shrinkage changes that moved the
+# distribution underneath it; with v9's observed maximum |xw_net| of 0.0462 it
+# made "strong" unreachable for every game. Its failure mode was a SCALE CHANGE
+# going unnoticed -- which is the invalidation this block's rule names, and the
+# only one that licenses a re-derivation.
 #
 # The rule this block has always stated: invalidated by any MODEL_TAG bump that
 # changes the delta scale -- i.e. whenever _SCALE_FAMILIES gains a new entry.
-# Four bumps have added one since (wOBA v1; v2 sharing v1; then v3 and v4 each
-# isolating), so these two numbers are a prior carried over from a retired
-# family. Do not re-derive them against whichever family this comment happens to
-# name -- name the one SCALE_TAGS resolves to when you read it, since a stale
-# family name here is the same defect as a stale literal. That family is v4
-# alone as of 2026-08-06, and its pool is far too thin to freeze: n=11, own
-# p33/p80 0.0059 / 0.0153, which at that size is noise, and copying it in would
-# be the very anti-pattern this comment exists to prevent. Shrinkage plus the
-# slate top-up in lean_strength_scale() bound the damage meanwhile -- at n=11
-# the shrunk cutoffs are 0.0141 / 0.0303, essentially the prior.
+# Do not re-derive against whichever family this comment happens to name -- name
+# the one SCALE_TAGS resolves to when you read it, since a stale family name
+# here is the same defect as a stale literal.
 #
-# Every row in the family counts toward that n, graded or pending, because
+# Every row in the family counts toward n, graded or pending, because
 # lean_strength_scale() ranks a pregame magnitude and needs no outcome. A fresh
 # family being ungraded is therefore not what blocks a re-derivation; its size
 # is.
 #
-# WHAT TO DO: once the current SCALE_TAGS pool passes ~60 rows, recompute
-# p33/p80 from that family alone and replace these literals, then update this
-# provenance. Pool growth is otherwise NOT an invalidation -- this is a prior,
-# and re-deriving it from the same family it is shrunk against every build would
-# make it the data.
-LEAN_STRENGTH_FALLBACK = (0.015, 0.032)   # slight < ~p33 <= clear < ~p80 <= strong
+# RE-DERIVED 2026-09-15, and NOT because the pool grew. The literals before
+# these were 0.015 / 0.032, read off 24 v9 rows on 2026-07-28. v11 reverted the
+# metric to xwOBA and rejoined this pool, so the prior is back on the very
+# family it was fitted to -- and measured there at n=519 it is no longer a
+# plausible estimate of it:
+#
+#     pooled p33 0.0120 +/- 0.0009   95% CI [0.0106, 0.0138]   (old 0.015: OUT)
+#     pooled p80 0.0345 +/- 0.0012   95% CI [0.0322, 0.0363]   (old 0.032: OUT)
+#
+# Both bootstrap CIs (4000 resamples, seed 0) exclude the old literal, so this
+# is a sampling artifact of the n=24 sample being corrected once, not drift
+# being chased. The artifact's origin is visible in the sub-pools: v9 alone
+# (n=28) still reads 0.0149 / 0.0357, which is essentially the old literal --
+# it was the noisiest sub-family, and it was the whole sample.
+#
+# Pooling the sub-families is licensed by their agreeing, which was checked
+# rather than assumed -- v9 n=28 median 0.0188, v10 n=71 median 0.0186,
+# v12 n=420 median 0.0181. (v8 and v11 match zero ledger rows; both shipped and
+# were superseded before any row of theirs survived a pregame refresh, so
+# "the v8/v9/v10/v11/v12 pool" is the v9/v10/v12 pool.)
+#
+# WHAT THIS COSTS, stated because it is the standing objection to doing it at
+# all: the prior is what the pool's own quantiles are shrunk toward, so setting
+# it to those quantiles makes the shrinkage a no-op at this instant --
+# c = observed exactly. What survives is the part the prior actually exists
+# for, the n=0 and thin-pool cases, and there the refresh strictly helps: a
+# prior outside its own family's CI pulls a fresh family's cutoffs AWAY from
+# the population quantile, which is the fidelity half of the K=100 benchmark
+# below. Measured impact on the live pool is small precisely because the prior
+# was already outweighed 0.838/0.162 at n=519 -- cutoffs move 0.01245/0.03412
+# -> 0.01196/0.03452, relabelling 10 of 519 rows (1.9%): 6 slight->clear and
+# 4 strong->clear. These literals are rounded to 4dp from 0.011954/0.034524,
+# which is inside the SE either way and costs one of those rows against the
+# unrounded form.
+#
+# WHAT TO DO NEXT: nothing, until _SCALE_FAMILIES gains a new entry. Pool growth
+# is NOT an invalidation and a gap reopening between these literals and the live
+# quantiles is NOT either -- it is the shrinkage working. Re-deriving on drift
+# is the ratchet this comment exists to prevent: do it twice and the prior is
+# just the data with extra steps. The trigger is a scale change; the 2026-09-15
+# refresh above is the one documented exception and it needed a CI exclusion to
+# justify itself.
+LEAN_STRENGTH_FALLBACK = (0.0120, 0.0345)  # slight < ~p33 <= clear < ~p80 <= strong
 
 # Pseudo-count for shrinking the observed p33/p80 toward LEAN_STRENGTH_FALLBACK.
 # This replaced a hard `pool >= 30` gate that switched between frozen and

@@ -291,12 +291,21 @@ precedent — they are how the fix is known to look.
   for the v9/v10 xwOBA family, and **every wOBA bump since has re-staled it** —
   a new `_SCALE_FAMILIES` entry is exactly the invalidation its own comment
   names, and there have now been four (wOBA v1, v2 sharing v1, then v3 and v4
-  each isolating). It is deliberately not re-derived yet: the wOBA pool is still
-  small enough that its p33/p80 is noise, and freezing that would be this
-  anti-pattern with a fresher date on it. Shrinkage plus the slate top-up hold
-  the line meanwhile — recompute the pool before quoting it rather than reading
-  a number off this file, which is the same discipline the controls entry below
-  demands.
+  each isolating). It was deliberately not re-derived at the time: the wOBA pool
+  was still small enough that its p33/p80 was noise, and freezing that would
+  have been this anti-pattern with a fresher date on it. Shrinkage plus the
+  slate top-up held the line meanwhile — recompute the pool before quoting it
+  rather than reading a number off this file, which is the same discipline the
+  controls entry below demands.
+
+  **It has since been re-derived, on 2026-09-15, and the entry stays live
+  anyway.** The number is still a literal frozen off data, which is the class
+  this entry names; what changed is that it is now a *defensible* one, fitted
+  to n=519 rather than n=24 and with the interval that justifies it recorded
+  beside it. The refresh is argued in full further down this entry, including
+  the one thing that licensed it (bootstrap CIs excluding the old pair) and the
+  one thing it costs (shrinkage is a no-op against the pool at the instant of
+  freezing).
 
   The one directional reading this entry used to carry — that as of 2026-08-04
   (wOBA v1+v2, n=16) the observed p80 ran well under the 0.032 prior while p33
@@ -343,6 +352,43 @@ precedent — they are how the fix is known to look.
   measured basis, so the first graded v11 rows are the check on both things at
   once: if median |xw_net| has moved, the family split is wrong AND this
   constant is stale again.
+
+  **Re-derived 2026-09-15 to 0.0120 / 0.0345, and the reason matters more than
+  the number: the reprieve above did not survive its own re-measurement.** At
+  n=99 the frozen 0.015 / 0.032 was called "close enough" against an observed
+  0.0127 / 0.0343. At n=519 the same family reads **p33 0.0120 ± 0.0009, CI
+  [0.0106, 0.0138]** and **p80 0.0345 ± 0.0012, CI [0.0322, 0.0363]** — the old
+  literal is **outside both** (4000-resample bootstrap, seed 0). The n=99 read
+  was not converging toward it; it was already the same answer this one gives,
+  and "close enough" was a judgement made without an interval. **A gap you
+  cannot reject and a gap you have not put an error bar on are different
+  things**, and this file made the second look like the first.
+
+  What the old literal actually was: v9's own quantiles. That sub-pool alone
+  (n=28) still reads 0.0149 / 0.0357, essentially the frozen pair — it was the
+  noisiest sub-family and, at n=24 on 2026-07-28, it was the whole sample. So
+  this is a sampling artifact corrected once, **not drift being chased**, and
+  the distinction is the entire licence for the change: pool growth is still
+  not an invalidation, and a gap reopening later is the shrinkage working
+  rather than a reason to go again. Re-derive twice on drift and the prior is
+  the data with extra steps.
+
+  Two things checked rather than assumed. Pooling the sub-families is licensed
+  by their agreeing — v9 n=28 median 0.0188, v10 n=71 median 0.0186, v12 n=420
+  median 0.0181 — which is also the closest thing to a direct measurement the
+  v12 scale-share has received, and it agrees with the share. And the cost is
+  stated: setting the prior to the pool's own quantiles makes the shrinkage a
+  no-op *at that instant*, so what the refresh buys is confined to the n=0 and
+  thin-pool cases the prior actually exists for. There it is a strict
+  improvement, since a prior outside its family's CI pulls a fresh family AWAY
+  from the population quantile — the fidelity half of the `K = 100` benchmark.
+  Live impact is small because the prior was already outweighed 0.838/0.162:
+  cutoffs 0.01245/0.03412 → 0.01196/0.03452, relabelling **10 of 519 rows
+  (1.9%)**, all into `clear`. Display-only; no lean, delta, grade or ledger row
+  moves, so no `MODEL_TAG` implication.
+
+  Do not quote 0.0120 / 0.0345 from here either. The rule is unchanged and it
+  is the one thing in this entry with no expiry: recompute.
 
   `HEAT_DOMAINS` is the same shape one level out, and v11 changes what is known
   about it rather than settling it. Its saturation ranges were calibrated on the
@@ -2628,7 +2674,12 @@ Do not re-derive these by hand; they have readouts.
 - **The metric question** — the shadow arm, running wOBA under an xwOBA
   primary. Needs roughly 18 paired slates for 80% power on a 0.09 gap.
 - **`LEAN_STRENGTH_FALLBACK`** — recompute from whatever `SCALE_TAGS` resolves
-  to rather than quoting any number in this file.
+  to rather than quoting any number in this file. Re-derived 2026-09-15 to
+  0.0120 / 0.0345 against an n=519 pool whose bootstrap CIs excluded the old
+  pair; see the anti-pattern entry for why that was a correction and not drift
+  chasing. **Nothing is waiting on this now** — the next `_SCALE_FAMILIES`
+  entry is the trigger, and a gap reopening against the live quantiles is not
+  one.
 
 ## Before opening a PR
 
