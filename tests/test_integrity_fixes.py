@@ -2017,11 +2017,17 @@ class GradesHeaderClaimsTests(unittest.TestCase):
     def test_the_header_says_its_own_figures_are_a_discovery_result(self):
         """This page leads with a z-score for a rule fitted on these rows.
 
-        The calibration panel says so in its lead and the per-game card stamps
-        "not a forward test" on every branch history. The page publishing the
-        largest version of the number said nothing at all, so a reader met
+        The calibration panel says so in its lead. The per-game card used to
+        stamp "not a forward test" on every branch history; since the FOLLOW
+        panel was rewritten to publish flat-stake units, it carries that only
+        on a FADE, so a followed game states it nowhere. The page publishing
+        the largest version of the number said nothing at all, so a reader met
         `z +2.86` with no way to know the threshold above it was chosen on the
         same games it is scored over.
+
+        That makes this assertion load-bearing in a way it was not when it was
+        written: it is now the site's ONLY pinned discovery framing for the
+        majority branch. Do not relax it.
         """
         head = self._header(pd.DataFrame([self._row(1), self._row(2, xw_full="L",
                                                     full_away=5, full_home=3)]))
@@ -3405,7 +3411,7 @@ class HybridRuleTests(unittest.TestCase):
     def test_follow_panel_shows_the_delta_by_price_intersection(self):
         ctx = {
             ("delta_price_follow", 1, "+100 to +129"): {
-                "model": dict(n=14, w=7, l=7, actual=.500),
+                "model": dict(n=14, w=7, l=7, actual=.500, units=-1.80),
             },
         }
         html = build_site._verdict_html(
@@ -3416,13 +3422,13 @@ class HybridRuleTests(unittest.TestCase):
         self.assertIn(
             "Δ .010–.020 · closing ML +100 to +129 · 14 games", html)
         self.assertIn(
-            "Past results</span><span>7-7 (0.500) · thin sample",
+            "Past results</span><span>7-7 (0.500) · ROI -1.80u",
             html)
 
     def test_pit_acceptance_panel_has_the_requested_reads(self):
         ctx = {
             ("delta_price_follow", 1, "+100 to +129"): {
-                "model": dict(n=14, w=7, l=7, actual=.500),
+                "model": dict(n=14, w=7, l=7, actual=.500, units=-1.80),
             },
         }
         html = build_site._verdict_html(
@@ -3436,8 +3442,7 @@ class HybridRuleTests(unittest.TestCase):
             "remains the XWOBA side",
             "Past V12 XWOBA SIDE picks",
             "Δ .010–.020 · closing ML +100 to +129 · 14 games",
-            "Past results</span><span>7-7 (0.500) · thin sample",
-            "Retroactive current-rule slice, not a prediction or forward test.",
+            "Past results</span><span>7-7 (0.500) · ROI -1.80u",
         ):
             self.assertIn(expected, html)
         for banned in ("value bet", "best bet", "free money", "lock"):

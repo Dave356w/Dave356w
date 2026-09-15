@@ -518,7 +518,7 @@ class RenderTests(unittest.TestCase):
         """
         ctx = {
             ("delta_price_follow", 2, "-174 to -130"): {
-                "model": dict(n=32, w=21, l=11, actual=.656),
+                "model": dict(n=32, w=21, l=11, actual=.656, units=4.62),
             },
             ("branch", "FADE"): dict(
                 n=15, w=11, l=4, implied=.586, actual=.733, excess=.147,
@@ -533,7 +533,7 @@ class RenderTests(unittest.TestCase):
         self.assertIn(
             "Δ .020–.030 · closing ML -174 to -130 · 32 games", follow)
         self.assertIn(
-            "Past results</span><span>21-11 (0.656) · thin sample",
+            "Past results</span><span>21-11 (0.656) · ROI +4.62u",
             follow)
         # The reason has to sit on the decision, not be inferable from two
         # numbers printed above it.
@@ -609,14 +609,14 @@ class RenderTests(unittest.TestCase):
             "ARI", dict(p_home=.62, home_ml=-160), "LAD", "ARI",
             {
                 ("delta_price_follow", 2, "-174 to -130"): {
-                    "model": dict(n=32, w=21, l=11, actual=.656),
+                    "model": dict(n=32, w=21, l=11, actual=.656, units=4.62),
                 },
             },
             .02)
         self.assertIn(
             "Δ .020–.030 · closing ML -174 to -130 · 32 games", follow)
         self.assertIn(
-            "Past results</span><span>21-11 (0.656) · thin sample",
+            "Past results</span><span>21-11 (0.656) · ROI +4.62u",
             follow)
 
     def test_market_over_lean_panel_prints_its_own_error_bar(self):
@@ -696,7 +696,7 @@ class RenderTests(unittest.TestCase):
         """The public rate comes from one delta-by-price population."""
         ctx = {
             ("delta_price_follow", 2, "+100 to +129"): {
-                "model": dict(n=8, w=5, l=3, actual=.625),
+                "model": dict(n=8, w=5, l=3, actual=.625, units=2.15),
             },
         }
         h = b._verdict_html(
@@ -704,20 +704,20 @@ class RenderTests(unittest.TestCase):
             ctx, .02)
         self.assertIn("Δ .020–.030", h)
         self.assertIn("closing ML +100 to +129 · 8 games", h)
-        self.assertIn("5-3 (0.625) · thin sample", h)
+        self.assertIn("5-3 (0.625) · ROI +2.15u", h)
         self.assertNotIn("45\u201350%", h)
 
     def test_intersection_changes_with_the_selected_price_rung(self):
         """The displayed ML selects the matching intersection, not a pooled row."""
         ctx = {
             ("delta_price_follow", 2, "-129 to -100"): {
-                "model": dict(n=21, w=12, l=9, actual=.571),
+                "model": dict(n=21, w=12, l=9, actual=.571, units=-0.35),
             },
         }
         h = b._verdict_html(
             "ARI", dict(p_home=.52, home_ml=-108), "LAD", "ARI", ctx, .02)
         self.assertIn("closing ML -129 to -100 · 21 games", h)
-        self.assertIn("12-9 (0.571) · thin sample", h)
+        self.assertIn("12-9 (0.571) · ROI -0.35u", h)
 
     def test_a_thin_branch_is_marked_thin_on_its_own_row(self):
         """A thin branch must not read as a rate you can rely on.
@@ -754,16 +754,36 @@ class RenderTests(unittest.TestCase):
         self.assertNotIn("139-84", h2)
 
     def test_follow_panel_labels_delta_records_as_past_results(self):
-        """The delta comparison is retrospective, never a game prediction."""
+        """The delta comparison is retrospective, never a game prediction.
+
+        The explicit "Retroactive current-rule slice, not a prediction or
+        forward test" line was removed on the operator's call when this panel
+        began publishing flat-stake units. What still has to hold is the CLAIM
+        rather than that wording: every figure here is labelled as past, and
+        nothing on the panel reads as a forecast for tonight. The tense of the
+        title and the "Past results" key are what carry it now, so they are
+        pinned as load-bearing copy rather than as decoration.
+
+        Note the asymmetry this leaves, recorded here because it is the cost
+        of the change rather than an oversight: `_branch_history` returns this
+        panel INSTEAD of its own on a FOLLOW game, so a followed card no
+        longer states "not a forward test" anywhere. The claim survives on
+        grades.html, which `test_the_header_says_its_own_figures_are_a_
+        discovery_result` pins, and that test is now the only thing standing
+        between this site and publishing a fitted rule with no discovery
+        framing at all.
+        """
         ctx = {("delta_price_follow", 2, "-174 to -130"): {
-            "model": dict(n=32, w=21, l=11, actual=.656),
+            "model": dict(n=32, w=21, l=11, actual=.656, units=4.62),
         }}
         h = b._verdict_html(
             "ARI", dict(p_home=.62, home_ml=-160), "LAD", "ARI", ctx, .02)
         self.assertIn("Past results", h)
-        self.assertIn("Retroactive current-rule slice", h)
-        self.assertIn("not a prediction or forward test", h)
+        self.assertIn("Past V12 XWOBA SIDE picks", h)
         self.assertNotIn("prediction for this game", h)
+        # The units figure is the reason the marker went; it must be present,
+        # signed, and never rendered as a rate for the next game.
+        self.assertIn("ROI +4.62u", h)
 
     def test_verdict_never_claims_a_value_bet(self):
         """Measured walk-forward, no bucket in this ledger beats the close.
