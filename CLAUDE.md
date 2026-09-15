@@ -1075,10 +1075,13 @@ precedent — they are how the fix is known to look.
   a standing monitor. Watching the distribution is not the same as betting on
   it, and the monitor is what made the proposal checkable in an afternoon.
 
-  **The hybrid has a DEAD ZONE covering 61.5% of games, and the registration
-  understated it by an order of magnitude.** `hybrid_test`'s point 4 says the
-  fade branch is always-chalk "exactly and by construction -- verified, 15 of
-  15". True, and far too narrow: it is a property of the RULE, not the branch.
+  **The hybrid v1 rule had a DEAD ZONE covering 61.5% of games, and the
+  registration understated it by an order of magnitude. Read this entry as
+  the case that PRODUCED v2, not as a property of the shipped rule** — the
+  conjunctive gate dissolves most of it, measured below. `hybrid_test`'s
+  point 4 says the fade branch is always-chalk "exactly and by construction
+  -- verified, 15 of 15". True, and far too narrow: it is a property of the
+  RULE, not the branch.
   With `q` the leaned side's price, a model leaning a favourite priced above
   0.55 gives `q > 0.55 >= 0.45` → FOLLOW → favourite; the same game with the
   model leaning the dog gives `q < 0.45` → FADE → favourite. Both branches
@@ -1091,6 +1094,31 @@ precedent — they are how the fix is known to look.
   0.5455). So the chalk identity covers 155 games, not 15, and that — not the
   fade branch's smallness — is why the combined line "mostly restates the
   model".
+
+  **v2 dissolves most of the dead zone, and this is the measurement that says
+  so.** The algebra above turns entirely on the fade being unconditional: a
+  dog lean at `q < .45` was faded back onto the favourite, so the model's
+  opinion could not move the ticket. v2 fades only when `|xw_net| < .012` as
+  well, so a dog lean the model holds with any conviction is now FOLLOWED and
+  the ticket changes. Re-run the same counterfactual — invert every lean, count
+  the selections that do not move — over the 406 decidable current-family rows
+  at closing prices:
+
+  | rule | dead zone | share |
+  |---|---|---|
+  | v1 (fade whenever `q < .45`) | 246 of 406 | **60.6%** |
+  | v2 (fade `q < .45` AND `\|d\| < .012`) | 62 of 406 | **15.3%** |
+
+  v1 reproduces at 60.6% against the 61.5% recorded above on 252 rows, which
+  is the check that the two derivations agree. **Do not read the 15.3% as a
+  result about the rule's edge.** It says the model's opinion can now move the
+  ticket on 85% of games instead of 39%; it says nothing about whether moving
+  it helps, and the registered forward reading is the only thing that can.
+  Note also what it did NOT cost: the shipped selection differs between v1 and
+  v2 on just **14 of 406 rows** (mean `q` .412, lean 8-6). So v2 bought a
+  four-fold reduction in counterfactual deadness by changing fourteen tickets
+  — which is the same reason to be careful with it, since fourteen games is
+  not a sample either.
 
   **The 81.3% chalk overlap is true and quoting it alone is unfair to the
   rule** — it describes what the rule copies rather than what it adds, and
@@ -1143,6 +1171,18 @@ precedent — they are how the fix is known to look.
   partition the games whose favourite is priced at or above .55 — **239, which
   is precisely the count of all sides priced ≥ .55, and 60.4% of the 396
   decidable rows**, confirming the 61.5% measured on 252 above.
+
+  **"Dead zone" means two different things from here on, and v2 is what split
+  them.** This paragraph's is a PRICE REGION — the games whose favourite is at
+  or above .55 — and it does not move with the rule: 246 of the current
+  family's 406 decidable rows, 60.6%. The counterfactual one measured in the
+  table above is the set where the model's opinion cannot change the ticket,
+  and that IS a property of the rule: 60.6% under v1, 15.3% under v2. Under v1
+  the two are the SAME 246 rows — measured, not assumed, which is why one name
+  served. They no longer do, so a claim about
+  "the dead zone" now has to say which — the information findings below are
+  about the region and stand unchanged; the "the model cannot change the
+  selection" claims are about the rule and apply to v1 only.
 
   Inside it the model's agreement carries **no information, not merely a chalk
   ticket**: the 211 model-leaned sides beat their closes by +6.6 ± 3.3 pp while
@@ -1775,11 +1815,27 @@ precedent — they are how the fix is known to look.
     substitution with the tag rather than the metric label as the lie, and
     v11 is the proof it would fire: it shipped and was superseded without ever
     grading a row. `RecordScopeTests` pins this.
-  * **The pooled surfaces stayed pooled, and say so.** Per-club accuracy and
-    the market verdict's context bucket still call `_display_grades()`,
-    because one family leaves most clubs one or two games — comparability is
-    the wrong trade there. The team page's lead states that it pools, so the
-    two surfaces cannot read as contradicting each other.
+  * **The pooled surfaces stayed pooled, and say so** — true when written,
+    and no longer true of any surface. Per-club accuracy went with
+    `team-grades.html`, and the market verdict's context bucket was rescoped
+    to the current family (`hybrid_branch_records` → `_lean_market_observations`
+    → `_record_grades`). That left `_display_grades()` with **no production
+    caller**, and this bullet, plus two docstrings in `build_site.py`, went on
+    asserting it had one. All three are now corrected and the function is
+    deleted, alongside `_ledger_club_labels` and `_team_record_parts` — the
+    other two helpers the team-page deletion orphaned — and `opener_pids`, a
+    backward-compatible shim whose last caller was `opener_classifications`
+    itself. Measured before deleting: zero references in any `.py`, `.yml` or
+    `.html`; the two `opener_pids` tests were repointed rather than dropped,
+    and the suite holds at 1054 passed either side.
+
+    **This is the fifth instance of the same shape** — `_lock_provenance`,
+    `price_band_records`, the unrendered `price_dislocation` column, and
+    `interaction_probe`'s stale row selector are the others. The pattern is
+    always a deletion that removes call sites and leaves the callee, with a
+    note in this file describing the surface that used to read it. The cheap
+    detection is a whole-repo reference count per top-level function, not a
+    re-read of the prose.
 
   The 45-37 (.549) / 42-40 / 49-33 line quoted here for 2026-08-02 was the
   *report's* current-family line, not the page's — which at that date were
@@ -2624,6 +2680,26 @@ recorded in `hybrid_price_source`. Never substitute one basis for the other.
 live `hybrid_*` namespace to v2 but copies deterministic v1 saved-pregame
 decisions into `hybrid_v1_*`; the v1 scorer projects those archive columns back
 into its original schema. Do not remove them or retag them as v2 evidence.
+
+**How to read the forward block, because its headline is mostly not the rule.**
+The registered v2 reading prints a combined hybrid line beside a plain-lean
+line and an always-chalk control, and at the first reads the combined line and
+the control post the SAME record — which is a coincidence of counts, not the
+same tickets. Decompose it before quoting it. At 40 eligible rows over 3
+slates (2026-09-15): hybrid 26-14 +5.69u, chalk 26-14 +3.29u, and splitting on
+whether the two name the same side gives **30 rows with an identical ticket
+(21-9, +4.43u, contributing all but +1.26u) and 10 where the model differs
+(hybrid 5-5 +1.26u against chalk 5-5 −1.14u)**. So three quarters of the
+headline is chalk the rule copied, and the rule's own content over the window
+is +2.40u on ten games. **And the fade gate — the entire difference between v1
+and v2 — has fired exactly once.** Its n=1 line reads +73.5% ROI; that is one
+game, not a rate.
+
+Do not quote those figures, recompute them: `hybrid_v2.scored_rows()` returns
+the frame, and `hybrid_p` against `chalk_p` is the ticket-agreement split. The
+gate is the same one v1 had and it is far away — read nothing until the fade
+branch alone has a sample, and note that v2 fades strictly less often than v1
+did, so it accrues one MORE slowly, not less.
 
 Do not commit routine bot-generated `data/` changes by hand. A deliberate,
 reviewed schema/rule migration such as `migrate_hybrid_v2.py` is the exception.

@@ -1760,14 +1760,6 @@ def opener_classifications(recent_start_era, max_avg_ip=OPENER_MAX_AVG_IP,
     return out
 
 
-def opener_pids(recent_start_era, max_avg_ip=OPENER_MAX_AVG_IP,
-                min_starts=OPENER_MIN_STARTS):
-    """Backward-compatible set of probable-pitcher ids classified as openers."""
-    return set(opener_classifications(
-        recent_start_era, max_avg_ip=max_avg_ip, min_starts=min_starts
-    ))
-
-
 def _meta(row):
     return {k: row[k] for k in ["game_pk", "game_date", "game_datetime_utc",
                                 "matchup", "away_team", "home_team",
@@ -6326,33 +6318,6 @@ def _rec_txt(s):
     return f"{base} ({pct})" if pct else base
 
 
-def _ledger_club_labels():
-    """Ledger abbreviation -> familiar club label for the 30 MLB clubs.
-
-    The model's display map follows StatsAPI's Arizona abbreviation (AZ),
-    while grade_leans.py persists ESPN/ledger-style ARI. `ledger_abbr` owns
-    that one boundary; this reads the ledger, so it goes through it too.
-    Building the set from the existing club maps also keeps
-    exhibition abbreviations such as AME/NAT off the team page without a
-    second hand-maintained list of clubs.
-    """
-    out = {}
-    for full_name, stats_abbr in ABBR.items():
-        out[ledger_abbr(stats_abbr)] = TEAM_LABELS.get(full_name, full_name)
-    return out
-
-
-def _team_record_parts(frame):
-    """Raw W/L/T counts for one team-page slice."""
-    grade = frame["xw_full"]
-    return {
-        "n": int(len(frame)),
-        "w": int(grade.eq("W").sum()),
-        "l": int(grade.eq("L").sum()),
-        "t": int(grade.eq("T").sum()),
-    }
-
-
 _ODDS_LADDER = (
     (None, -250, "≤ -250"),
     (-249, -175, "-249 to -175"),
@@ -7044,24 +7009,15 @@ def _record_grades(led):
     comparable, so those surfaces and data/ledger_report.txt now answer the
     same question over the same rows.
 
-    NOT the row set for anything that needs volume rather than comparability.
-    The per-club table and the market-verdict context still pool every family
-    through _display_grades, because a current-family slice gives most clubs
-    one or two games. Those surfaces say so on their face; see
-    _record_scope_note."""
+    Every surface that quotes a record now scores this set. The pooled view
+    that once sat beside it is gone: the per-club table went with
+    team-grades.html, and the market-verdict context reaches these same rows
+    through `hybrid_branch_records` -> `_lean_market_observations`. The
+    `_display_grades` helper those two used outlived both callers and has been
+    removed; this paragraph asserted it was still live for weeks after it was
+    not. Where a surface is narrower than the whole ledger it says so on its
+    face; see _record_scope_note."""
     return led[(led["status"] == "graded") & (led["model_tag"].isin(RECORD_TAGS))]
-
-
-def _display_grades(led):
-    """All graded rows, every model version joined.
-
-    The pooled view. Used where a statistic needs sample size more than it
-    needs methodological comparability -- per-club accuracy, the market
-    verdict's context bucket -- never for a headline record. A record answers
-    "how good is this model", and pooling twelve prediction families into it
-    answers a different question; that is what RECORD_TAGS exists to separate
-    and what _record_grades now serves."""
-    return led[led["status"] == "graded"]
 
 
 def _record_scope_note(led, g):
