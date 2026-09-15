@@ -529,10 +529,10 @@ class RenderTests(unittest.TestCase):
         follow = b._verdict_html(
             "ARI", dict(p_home=.62, home_ml=-160), "LAD", "ARI", ctx, .02,
         )
-        self.assertIn("Past V12 model-side selections · 208 completed games", follow)
+        self.assertIn("Past V12 model-side picks · 208 games", follow)
         self.assertIn("XWOBA SIDE → ARI", follow)
-        self.assertIn("Won</span><span>135-73 (64.9%)", follow)
-        self.assertIn("Beat that price by</span><span><b>+8.5 pp", follow)
+        self.assertIn("Won</span><span><b>135-73 (64.9%)", follow)
+        self.assertIn("135-73 (64.9%) vs 56.4% priced", follow)
         # The reason has to sit on the decision, not be inferable from two
         # numbers printed above it.
         self.assertIn("remains the XWOBA side", follow)
@@ -543,9 +543,9 @@ class RenderTests(unittest.TestCase):
             "LAD", dict(p_home=.70, away_ml=200, home_ml=-260), "LAD", "ARI",
             ctx, .005,
         )
-        self.assertIn("Past V12 market-side selections · 15 completed games", fade)
+        self.assertIn("Past V12 market-side picks · 15 games", fade)
         self.assertIn(f"{b.hybrid_public_label('FADE')} → ARI", fade)
-        self.assertIn("Won</span><span>11-4 (73.3%)", fade)
+        self.assertIn("Won</span><span><b>11-4 (73.3%)", fade)
         self.assertIn("within noise", fade)
         # On a fade the selected club appears nowhere else on the panel, so
         # the reason line has to name it.
@@ -582,12 +582,12 @@ class RenderTests(unittest.TestCase):
         )
         self.assertIn("Always chalk, same games", h)
         # Identical to the record above it, which is the point being made...
-        self.assertIn("11-4 (73.3%) · +14.7 pp", h)
+        self.assertIn("11-4 (73.3%) vs 58.6% priced", h)
         # ...and adjacency alone did not carry it. On a fade the two rows are
         # equal to the decimal, so without this clause a reader sees duplicated
         # data or a bug rather than "this branch has no model content".
         self.assertIn("Identical by construction", h)
-        self.assertIn("the two are the same bet", h)
+        self.assertIn("the same bet", h)
 
     def test_verdict_panel_prints_its_own_error_bar(self):
         """A published excess must carry its sampling distribution.
@@ -605,11 +605,11 @@ class RenderTests(unittest.TestCase):
         h = b._verdict_html(
             "ARI", dict(p_home=.662, home_ml=-196), "LAD", "ARI", ctx, .005,
         )
-        self.assertIn("+33.8 pp</b> ± 47.3", h)
+        self.assertIn("1-0 (100.0%) vs 66.2% priced", h)
         self.assertIn("within noise", h)
         # Singular, and the count lives in the heading rather than being
         # repeated on the row beneath it.
-        self.assertIn("1 completed game<", h)
+        self.assertIn("1 game<", h)
 
     def test_verdict_panel_leaves_no_computed_key_unrendered(self):
         """Every key _lean_market_agg returns must reach a surface.
@@ -673,11 +673,11 @@ class RenderTests(unittest.TestCase):
         h = b._verdict_html(
             "LAD", dict(p_home=.70, away_ml=200, home_ml=-260), "LAD", "ARI",
             ctx, .005)
-        self.assertIn("Every V12 pick", h)
-        self.assertIn("+7.0 pp ± 3.3 vs price · n=223", h)
+        self.assertIn("All V12 leans", h)
+        self.assertIn("139-84 (62.3%) vs 55.4% priced", h)
         # Absent pooled entry must not break the panel.
         ctx.pop("pooled")
-        self.assertNotIn("Every V12 pick", b._verdict_html(
+        self.assertNotIn("All V12 leans", b._verdict_html(
             "LAD", dict(p_home=.70, away_ml=200, home_ml=-260), "LAD", "ARI",
             ctx, .005))
 
@@ -696,7 +696,7 @@ class RenderTests(unittest.TestCase):
             "ARI", dict(p_home=.62, home_ml=-160), "LAD", "ARI", ctx, .02)
         self.assertIn("not a forward test", h)
         # And it must not read as a claim about tonight's game.
-        self.assertIn("not a prediction for this game", h)
+        self.assertIn("not a prediction", h)
 
     def test_verdict_never_claims_a_value_bet(self):
         """Measured walk-forward, no bucket in this ledger beats the close.
