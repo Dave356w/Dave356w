@@ -43,6 +43,9 @@ from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
+
+from market_backfill import (ODDS_LADDER as _mb_odds_ladder,
+                             ladder_rung as _mb_ladder_rung)
 import requests
 
 import hitter_frame
@@ -6472,28 +6475,13 @@ def _rec_txt(s):
     return f"{base} ({pct})" if pct else base
 
 
-_ODDS_LADDER = (
-    (None, -250, "≤ -250"),
-    (-249, -175, "-249 to -175"),
-    (-174, -130, "-174 to -130"),
-    (-129, -100, "-129 to -100"),
-    (100, 129, "+100 to +129"),
-    (130, 174, "+130 to +174"),
-    (175, 249, "+175 to +249"),
-    (250, None, "≥ +250"),
-)
-
-
-def _ladder_rung(ml):
-    """Rung label for an American price, or None if it is not a valid one.
-
-    American odds never fall strictly between -100 and +100, so the rungs above
-    tile every representable price. A None return therefore means the input was
-    not a real moneyline, and the caller drops it rather than guessing."""
-    for lo, hi, label in _ODDS_LADDER:
-        if (lo is None or ml >= lo) and (hi is None or ml <= hi):
-            return label
-    return None
+# The price ladder now has ONE home, in market_backfill, because
+# `ledger_report.txt` buckets the same rows on the same rungs and
+# `grade_leans` cannot import this module. These names are kept as aliases so
+# every existing call site here reads unchanged; see `market_backfill.ladder_rung`
+# for why the edges may not be copied.
+_ODDS_LADDER = _mb_odds_ladder
+_ladder_rung = _mb_ladder_rung
 
 
 def _excess_se(probs):

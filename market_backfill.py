@@ -356,6 +356,42 @@ def metric_label(df, mixed="Model"):
     return uniq[0] if len(uniq) == 1 else mixed
 
 
+ODDS_LADDER = (
+    (None, -250, "≤ -250"),
+    (-249, -175, "-249 to -175"),
+    (-174, -130, "-174 to -130"),
+    (-129, -100, "-129 to -100"),
+    (100, 129, "+100 to +129"),
+    (130, 174, "+130 to +174"),
+    (175, 249, "+175 to +249"),
+    (250, None, "≥ +250"),
+)
+
+
+def ladder_rung(ml):
+    """Rung label for an American price, or None if it is not a valid one.
+
+    American odds never fall strictly between -100 and +100, so the rungs
+    above tile every representable price. A None return therefore means the
+    input was not a real moneyline, and the caller drops it rather than
+    guessing.
+
+    One home, for `excess_se`'s reason exactly: the per-game card buckets a
+    game's history on these rungs and the ledger report's selection x price
+    matrix buckets the same rows the same way. Two copies of the edges would
+    let the public surface and the internal artifact disagree about which
+    cell a game is in -- the artifacts-disagreeing defect, with the reader
+    unable to see which ladder they are reading. It lives here rather than in
+    build_site because grade_leans cannot import that module (it refuses a
+    non-xwOBA MODEL_TAG at import time) and because this is a statement about
+    market prices.
+    """
+    for lo, hi, label in ODDS_LADDER:
+        if (lo is None or ml >= lo) and (hi is None or ml <= hi):
+            return label
+    return None
+
+
 def excess_se(probs):
     """SE of (realised rate - mean implied) under correctly priced games.
 
