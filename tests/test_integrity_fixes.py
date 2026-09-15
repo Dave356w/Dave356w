@@ -514,7 +514,7 @@ class RecentStarterEraTests(unittest.TestCase):
                 mock.patch.object(build_site.time, "sleep"):
             result = build_site.load_recent_start_era([55])
         self.assertLess(result[55]["avg_ip"], build_site.OPENER_MAX_AVG_IP)
-        self.assertEqual(build_site.opener_pids(result), {55})
+        self.assertEqual(set(build_site.opener_classifications(result)), {55})
 
     def test_kyle_hart_reliever_profile_flags_first_spot_start(self):
         # Regression for 2026-07-23: Hart had one prior official start, so the
@@ -772,14 +772,14 @@ class PostedLineupBackfillTests(unittest.TestCase):
 
 
 class PitchingPlanTests(unittest.TestCase):
-    def test_opener_pids_respects_ip_and_starts_thresholds(self):
+    def test_opener_classifications_respect_ip_and_starts_thresholds(self):
         era = {
             1: {"avg_ip": 1.2, "starts": 3},   # opener
             2: {"avg_ip": 5.8, "starts": 20},  # workhorse
             3: {"avg_ip": 1.0, "starts": 1},   # one short start only -> not yet
             4: {"avg_ip": np.nan, "starts": 0},  # no starts
         }
-        self.assertEqual(build_site.opener_pids(era), {1})
+        self.assertEqual(set(build_site.opener_classifications(era)), {1})
 
     def test_reliever_role_rejects_recent_starter_length_work(self):
         profile = {
