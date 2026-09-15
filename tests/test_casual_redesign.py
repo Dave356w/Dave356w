@@ -584,14 +584,22 @@ class RenderTests(unittest.TestCase):
         # duplicate of the record above it -- same W-L, same rate, same price.
         # Printing it twice was redundancy, and the operator cut it.
         self.assertNotIn("Always chalk, same games", h)
-        # The CLAIM is what could not go. A reader shown "11-4 (73.3%)" with
-        # nothing saying it is the favourite's own record reads chalk as the
-        # rule's skill, which is the incident behind `Deleting controls as
-        # clutter`. So the record must still be named as the favourite's and
-        # still be called the same bet.
+        # The identity CLAUSE is gone from the card too, on the operator's
+        # call. The record itself stays, and stays marked thin.
         self.assertIn("11-4 (73.3%) vs 58.6% priced", h)
-        self.assertIn("favourite", h)
-        self.assertIn("the same bet", h)
+        self.assertIn("within noise", h)
+        self.assertNotIn("the same bet", h)
+        # This is the control MOVED, not deleted -- which is what `Deleting
+        # controls as clutter` requires. market-calibration.html carries the
+        # chalk row for these same rows AND the identity claim beside it, so
+        # the assertion is that the claim still exists somewhere a reader can
+        # reach, not merely that the card no longer shows it. Without this
+        # half the test would pass just as happily if the claim vanished from
+        # the site entirely.
+        calib = b.render_market_calibration_html("test build")
+        self.assertIn("the same bet", calib)
+        self.assertIn(f"Always chalk · {b.hybrid_public_label('FADE')} rows only",
+                      calib)
         # And it must not have been dropped from the branch where it is NOT a
         # duplicate: on FOLLOW chalk is a different record and is the only
         # thing saying whether the model beat backing the favourite.

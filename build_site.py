@@ -4465,14 +4465,28 @@ def _branch_history(ctx, action):
     #             beat simply backing the favourite. It stays.
     chalk = (ctx or {}).get(("chalk", action))
     note = ""
-    if chalk:
-        if action == "FADE":
-            note = (f"This is the favourite's record: under "
-                    f"{100 * HYBRID_THRESHOLD:.0f}% the other side is always "
-                    "the favourite, so it is the same bet.")
-        else:
-            rows.append(("Always chalk, same games", _wl_priced(chalk)))
-            note = "Chalk is the yardstick: the favourite on these same games."
+    if chalk and action != "FADE":
+        # FOLLOW keeps the control: chalk is 228-161 against the branch's
+        # 247-142, a different record, and the only line on this card saying
+        # whether the model beat simply backing the favourite.
+        rows.append(("Always chalk, same games", _wl_priced(chalk)))
+        note = "Chalk is the yardstick: the favourite on these same games."
+    # FADE carries neither, on the operator's call. The row was a literal
+    # duplicate of the record above it and went first; the identity clause
+    # went with it.
+    #
+    # This is NOT the control being deleted, which `Deleting controls as
+    # clutter` forbids -- that entry's own remedy is to mute a noisy control
+    # or move it, and it is moved. market-calibration.html carries the row AND
+    # the claim together: "Always chalk · MARKET OVER LEAN rows only" beside
+    # "the other side is always the favourite, so the two are the same bet",
+    # which is more than this card ever showed, on the page whose subject is
+    # controls. Verified rendered, not assumed, and pinned by a test below.
+    #
+    # What a reader of the CARD loses is the warning that 13-4 (76.5%) is the
+    # favourite's record rather than the rule's skill. `within noise` still
+    # sits on that row, so the number is not published as reliable; the
+    # attribution now lives one click away.
     body = "".join(
         f"<div class='vline'><span class='vk'>{k}</span><span>{v}</span></div>"
         for k, v in rows)
