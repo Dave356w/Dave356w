@@ -3413,7 +3413,7 @@ class HybridRuleTests(unittest.TestCase):
             "PIT", dict(p_home=.529, away_ml=103), "PIT", "SD", ctx, .0187,
         )
         self.assertIn("Past V12 model-side picks · 14 games", html)
-        self.assertIn("Won</span><span><b>10-4 (71.4%)", html)
+        self.assertIn("<b>10-4 (71.4%)", html)
         # Named for what it is. This sat directly under the game's own
         # "47.1% no-vig" as a bare "Market implied 48.1%", two unrelated
         # percentages a line apart with nothing saying they differ.
@@ -3439,7 +3439,7 @@ class HybridRuleTests(unittest.TestCase):
             "remains the XWOBA side",
             "Past V12 model-side picks · 14 games",
             "not a prediction",
-            "Won</span><span><b>10-4 (71.4%)",
+            "<b>10-4 (71.4%)",
             "10-4 (71.4%) vs 48.1% priced",
             "within noise",
         ):
@@ -3549,7 +3549,7 @@ class HybridRuleTests(unittest.TestCase):
         # The bare rate must not appear as its own value; it is qualified by
         # the record it came from.
         self.assertNotIn("<span>73.3%</span>", h)
-        self.assertIn("Won</span><span><b>11-4 (73.3%)", h)
+        self.assertIn("<b>11-4 (73.3%)", h)
         # The game's own price and the branch's average price are distinct
         # numbers and must be distinctly labelled.
         self.assertIn("30.0% no-vig", h)

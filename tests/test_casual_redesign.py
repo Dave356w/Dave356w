@@ -531,7 +531,7 @@ class RenderTests(unittest.TestCase):
         )
         self.assertIn("Past V12 model-side picks · 208 games", follow)
         self.assertIn("XWOBA SIDE → ARI", follow)
-        self.assertIn("Won</span><span><b>135-73 (64.9%)", follow)
+        self.assertIn("<b>135-73 (64.9%)", follow)
         self.assertIn("135-73 (64.9%) vs 56.4% priced", follow)
         # The reason has to sit on the decision, not be inferable from two
         # numbers printed above it.
@@ -545,7 +545,7 @@ class RenderTests(unittest.TestCase):
         )
         self.assertIn("Past V12 market-side picks · 15 games", fade)
         self.assertIn(f"{b.hybrid_public_label('FADE')} → ARI", fade)
-        self.assertIn("Won</span><span><b>11-4 (73.3%)", fade)
+        self.assertIn("<b>11-4 (73.3%)", fade)
         self.assertIn("within noise", fade)
         # On a fade the selected club appears nowhere else on the panel, so
         # the reason line has to name it.
@@ -686,6 +686,72 @@ class RenderTests(unittest.TestCase):
         over = dict(under, excess=2.4 * se)
         self.assertIn("within noise", b._branch_read(under))
         self.assertIn("outside noise", b._branch_read(over))
+
+    def test_the_branch_record_is_cut_to_this_games_price_band(self):
+        """A pooled branch record is not the history of a game like this one.
+
+        389 follow rows mix a .46 underdog lean with a .72 favourite -- two
+        different bets with different base rates. The card shows the band the
+        game falls in, names which band it is, and falls back to the pooled
+        branch (saying so) when no band is available.
+        """
+        ctx = {
+            ("branch", "FOLLOW"): dict(n=389, w=247, l=142, implied=.560,
+                                       actual=.635, excess=.075,
+                                       excess_se=.025, roi=.107, units=41.7),
+            ("band", "FOLLOW", "45\u201350%"): dict(
+                n=67, w=42, l=25, implied=.476, actual=.627, excess=.151,
+                excess_se=.061, roi=.311, units=20.8),
+            ("bandchalk", "FOLLOW", "45\u201350%"): dict(
+                n=67, w=25, l=42, implied=.524, actual=.373, excess=-.151,
+                excess_se=.061, roi=-.28, units=-18.7),
+        }
+        # A lean priced .47 lands in the 45-50% band, not the pooled line.
+        h = b._verdict_html(
+            "LAD", dict(p_home=.53, away_ml=115, home_ml=-135), "LAD", "ARI",
+            ctx, .02)
+        self.assertIn("42-25 (62.7%)", h)
+        self.assertNotIn("247-142", h)
+        # The band is NAMED. A record that silently changes row set between
+        # games under an unqualified heading is the substitution this file
+        # keeps recording.
+        self.assertIn("45\u201350%", h)
+        # And its control is scored on the SAME rows -- band chalk, not the
+        # whole branch's. A band record over a pooled control is the
+        # different-row-set defect, invisible because both look like records
+        # of "these games".
+        self.assertIn("25-42 (37.3%)", h)
+
+        # No band for this price: fall back to the pooled branch AND say so.
+        far = b._verdict_html(
+            "ARI", dict(p_home=.62, home_ml=-160), "LAD", "ARI", ctx, .02)
+        self.assertIn("247-142", far)
+        self.assertIn("all prices", far)
+
+    def test_the_chalk_control_is_hidden_only_when_it_duplicates_the_record(self):
+        """Show the control when it says something; hide a literal copy.
+
+        Where the model's side is priced at or above .50 that side IS the
+        favourite, so chalk backs it too and the two records are equal by
+        construction. Printing both is the redundancy the operator cut. Below
+        .50 they differ and the gap is the point.
+        """
+        same = dict(n=93, w=51, l=42, implied=.524, actual=.548, excess=.024,
+                    excess_se=.052, roi=.02, units=1.9)
+        ctx = {("branch", "FOLLOW"): same,
+               ("band", "FOLLOW", "50\u201355%"): same,
+               ("bandchalk", "FOLLOW", "50\u201355%"): dict(same)}
+        h = b._verdict_html(
+            "ARI", dict(p_home=.52, home_ml=-108), "LAD", "ARI", ctx, .02)
+        self.assertIn("51-42 (54.8%)", h)
+        self.assertNotIn("Always chalk, same games", h)
+        # Differing control is shown.
+        ctx[("bandchalk", "FOLLOW", "50\u201355%")] = dict(
+            same, w=42, l=51, actual=.452)
+        h2 = b._verdict_html(
+            "ARI", dict(p_home=.52, home_ml=-108), "LAD", "ARI", ctx, .02)
+        self.assertIn("Always chalk, same games", h2)
+        self.assertIn("42-51", h2)
 
     def test_a_thin_branch_is_marked_thin_on_its_own_row(self):
         """A thin branch must not read as a rate you can rely on.
