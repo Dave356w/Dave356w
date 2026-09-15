@@ -4425,11 +4425,11 @@ def _lean_history_range(lo, hi):
 
 
 def _xwoba_side_history(ctx, delta):
-    """Actual XWOBA SIDE branch and market results for this |delta| range.
+    """Actual locked XWOBA SIDE and market results for this |delta| range.
 
     Switched MARKET OVER LEAN games are excluded. Both rows use the same
-    current-family, closing-priced games in the same delta range; only the
-    selected side differs.
+    post-registration, saved-pregame V12 commitments in the same delta range;
+    only the selected side differs.
     """
     bucket = _lean_history_bucket(delta)
     if bucket is None:
@@ -4440,7 +4440,7 @@ def _xwoba_side_history(ctx, delta):
     version = _model_version_short()
     if not parts:
         return ("<div class='vline hist'><span class='vk'>Past results:</span>"
-                f"<span>No completed {version} XWOBA SIDE picks in the "
+                f"<span>No completed saved-pregame {version} XWOBA SIDE picks in the "
                 f"Δ {range_txt} range yet.</span></div>")
 
     model, market = parts["model"], parts["market"]
@@ -4453,7 +4453,7 @@ def _xwoba_side_history(ctx, delta):
         "<div class='vprofile'>"
         f"<div class='vprofile-title'>Past {version} XWOBA SIDE picks · Δ {range_txt} · "
         f"{model['n']} completed {'game' if model['n'] == 1 else 'games'}</div>"
-        "<div class='vprofile-band'>Past results</div>"
+        "<div class='vprofile-band'>Saved pregame results</div>"
         f"{body}</div>"
     )
 
@@ -7228,6 +7228,52 @@ _BRANCH_PRICE_BANDS = (
 )
 
 
+def _locked_hybrid_observations(led):
+    """Post-registration V12 commitments scored from saved pregame fields.
+
+    `hybrid_v2.scored_rows` is the registered locked-pick population and its
+    `apply_locked_rule` path reads the stored action, selection, grade, price,
+    and pregame market. Requiring `saved_pregame` here prevents a migrated
+    closing-basis row from being presented as an actual published pick.
+    """
+    locked = hybrid_v2.scored_rows(led)
+    if (locked is None or locked.empty
+            or "model_tag" not in locked.columns
+            or "hybrid_price_source" not in locked.columns):
+        return pd.DataFrame()
+    locked = locked[locked["model_tag"].isin(RECORD_TAGS)].copy()
+    locked = locked[locked["hybrid_price_source"].eq("saved_pregame")]
+    if locked.empty:
+        return pd.DataFrame()
+    delta = pd.to_numeric(locked["xw_net"], errors="coerce").abs()
+    valid = (delta.notna() & np.isfinite(delta)
+             & locked["follow"].notna()
+             & locked["bet_won"].notna()
+             & locked["chalk_won"].notna())
+    locked = locked.loc[valid]
+    delta = delta.loc[valid]
+    if locked.empty:
+        return pd.DataFrame()
+    bet_won = locked["bet_won"].to_numpy(dtype=float)
+    bet_p = pd.to_numeric(locked["p_bet"], errors="coerce").to_numpy()
+    chalk_won = locked["chalk_won"].to_numpy(dtype=float)
+    chalk_p = pd.to_numeric(locked["chalk_p"], errors="coerce").to_numpy()
+    return pd.DataFrame({
+        "delta": delta.to_numpy(dtype=float),
+        "hybrid_follow": locked["follow"].to_numpy(dtype=bool),
+        "hybrid_won": bet_won,
+        "hybrid_p": bet_p,
+        "hybrid_resid": bet_won - bet_p,
+        "hybrid_profit": pd.to_numeric(
+            locked["profit"], errors="coerce").to_numpy(),
+        "chalk_won": chalk_won,
+        "chalk_p": chalk_p,
+        "chalk_resid": chalk_won - chalk_p,
+        "chalk_profit": pd.to_numeric(
+            locked["chalk_profit"], errors="coerce").to_numpy(),
+    }, index=locked.index)
+
+
 def hybrid_branch_records():
     """Current-family records for each hybrid branch, plus its chalk control.
 
@@ -7260,20 +7306,22 @@ def hybrid_branch_records():
     pooled = _lean_market_agg(obs, obs["won"].notna())
     if pooled:
         out["pooled"] = pooled
-    # Fixed |delta| bands power the per-game XWOBA SIDE history. This is an
-    # actual Hybrid branch slice: MARKET OVER LEAN rows are excluded before
-    # both the branch record and its same-game market control are calculated.
-    delta = pd.to_numeric(obs["delta"], errors="coerce")
-    for i, (lo, hi) in enumerate(_LEAN_HISTORY_BINS):
-        mask = delta.ge(lo) & delta.lt(hi) & obs["hybrid_follow"]
-        model = _lean_market_agg(
-            obs, mask, won="hybrid_won", p="hybrid_p",
-            resid="hybrid_resid", profit="hybrid_profit")
-        market = _lean_market_agg(
-            obs, mask, won="chalk_won", p="chalk_p",
-            resid="chalk_resid", profit="chalk_profit")
-        if model and market:
-            out[("delta_follow", i)] = {"model": model, "market": market}
+    # The card's fixed |delta| ranges use actual locked commitments, not this
+    # close-recomputed retrospective frame. The rest of this function remains
+    # closing-based for the calibration and discovery surfaces that say so.
+    locked = _locked_hybrid_observations(led)
+    if not locked.empty:
+        delta = pd.to_numeric(locked["delta"], errors="coerce")
+        for i, (lo, hi) in enumerate(_LEAN_HISTORY_BINS):
+            mask = delta.ge(lo) & delta.lt(hi) & locked["hybrid_follow"]
+            model = _lean_market_agg(
+                locked, mask, won="hybrid_won", p="hybrid_p",
+                resid="hybrid_resid", profit="hybrid_profit")
+            market = _lean_market_agg(
+                locked, mask, won="chalk_won", p="chalk_p",
+                resid="chalk_resid", profit="chalk_profit")
+            if model and market:
+                out[("delta_follow", i)] = {"model": model, "market": market}
     for action, mask in (("FOLLOW", obs["hybrid_follow"]),
                          ("FADE", ~obs["hybrid_follow"])):
         parts = _lean_market_agg(obs, mask, won="hybrid_won",
