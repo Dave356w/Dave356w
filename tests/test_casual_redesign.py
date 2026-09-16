@@ -547,7 +547,7 @@ class RenderTests(unittest.TestCase):
         )
         self.assertIn("Past V12 market-side picks · 15 games", fade)
         self.assertIn(f"{b.hybrid_public_label('FADE')} → ARI", fade)
-        self.assertIn("<b>11-4 (73.3%)", fade)
+        self.assertIn("<b>11-4 (0.733) · +3.56u</b>", fade)
         self.assertIn("within noise", fade)
         # On a fade the selected club appears nowhere else on the panel, so
         # the reason line has to name it.
@@ -590,7 +590,7 @@ class RenderTests(unittest.TestCase):
         self.assertNotIn("Always chalk, same games", h)
         # The identity CLAUSE is gone from the card too, on the operator's
         # call. The record itself stays, and stays marked thin.
-        self.assertIn("11-4 (73.3%) vs 58.6% priced", h)
+        self.assertIn("11-4 (0.733) · +3.56u", h)
         self.assertIn("within noise", h)
         self.assertNotIn("the same bet", h)
         # This is the control MOVED, not deleted -- which is what `Deleting
@@ -636,7 +636,7 @@ class RenderTests(unittest.TestCase):
             "LAD", dict(p_home=.70, away_ml=210, home_ml=-250),
             "LAD", "ARI", ctx, .005,
         )
-        self.assertIn("1-0 (100.0%) vs 66.2% priced", h)
+        self.assertIn("1-0 (1.000) · +0.51u", h)
         self.assertIn("within noise", h)
         # Singular, and the count lives in the heading rather than being
         # repeated on the row beneath it.
@@ -649,20 +649,43 @@ class RenderTests(unittest.TestCase):
         the "column carried to no surface" instance, one dict out. Keys the
         card deliberately delegates elsewhere are named here so that adding a
         NEW one fails until it is either rendered or listed.
+
+        THE FIXTURE MOVED TO THE FADE BRANCH, AND THAT IS THE POINT. It used to
+        pass a FOLLOW branch at |Δ| .02, which routes to the delta-by-price
+        intersection history and renders NOTHING from `parts` -- so the old
+        `assertNotIn` was true of a panel that never printed a record at all.
+        A test asserting a key's absence on a surface that renders no keys is
+        theatre, and it went unnoticed until a POSITIVE assertion was added and
+        failed. Same shape as the rebuild-prefix test that pins the naive form
+        WOULD have matched: an absence claim needs a fixture where presence was
+        possible.
         """
         parts = dict(n=208, w=135, l=73, implied=.564, actual=.649, excess=.085,
                      excess_se=.034, roi=.134, units=27.94)
-        ctx = {("branch", "FOLLOW"): parts}
+        ctx = {("branch", "FADE"): parts}
         h = b._verdict_html(
-            "ARI", dict(p_home=.62, home_ml=-160), "LAD", "ARI", ctx, .02,
+            "LAD", dict(p_home=.70, away_ml=200, home_ml=-260), "LAD", "ARI",
+            ctx, .005,
         )
-        rendered = {"n", "implied", "actual", "excess", "excess_se"}
-        # w/l/roi/units are the calibration table's columns, not the card's:
-        # the card reports calibration and never a betting result.
-        delegated = {"w", "l", "roi", "units"}
+        # The fixture must actually reach the branch line, or everything below
+        # is vacuous again.
+        self.assertIn("Past V12 market-side picks", h)
+        rendered = {"n", "implied", "actual", "excess", "excess_se",
+                    "w", "l", "units"}
+        # `roi` stays the calibration table's column: the card publishes the
+        # flat-stake TOTAL, which is the same information per row set and does
+        # not invite a per-game rate reading.
+        delegated = {"roi"}
         self.assertEqual(set(parts) - rendered - delegated, set())
-        for key in ("roi", "units"):
-            self.assertNotIn(f"{100 * parts[key]:+.1f}%", h)
+        # Units must be RENDERED, not merely returned -- the reversal of
+        # 2026-09-16. Asserted as the value reaching the surface rather than as
+        # a substring of the whole panel, so a stray match elsewhere cannot
+        # stand in for the branch line.
+        self.assertIn(f"{parts['units']:+.2f}u", h)
+        self.assertIn(f"{parts['w']}-{parts['l']} ({parts['actual']:.3f})", h)
+        # The implied price is what the swap gave up; it must not linger in
+        # the old shape, or the line carries both and says neither cleanly.
+        self.assertNotIn("% priced", h)
 
     def test_branch_read_has_no_threshold_cliff(self):
         """One completed game must not relabel a branch's credibility.
@@ -738,7 +761,7 @@ class RenderTests(unittest.TestCase):
         h = b._verdict_html(
             "LAD", dict(p_home=.70, away_ml=200, home_ml=-260), "LAD", "ARI",
             thin, .005)
-        self.assertIn("11-4 (73.3%)", h)
+        self.assertIn("11-4 (0.733) · +3.56u", h)
         self.assertIn("within noise", h)
         # The pooled row itself is deliberately absent, and a `pooled` entry in
         # the context must not bring it back.

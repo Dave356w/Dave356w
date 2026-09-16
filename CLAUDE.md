@@ -3406,6 +3406,62 @@ gate is the same one v1 had and it is far away — read nothing until the fade
 branch alone has a sample, and note that v2 fades strictly less often than v1
 did, so it accrues one MORE slowly, not less.
 
+**The abstain decision is pre-committed, 2026-09-16, at n = 5.**
+`abstain_test.DECISION_*` freezes it: at `GATE_DECLINED` (82) declined games,
+RETIRE the shipped fade branch unless `fade_minus_abstain` is strictly
+positive. A point estimate with no significance requirement, and the asymmetry
+is deliberate — the prior is NULL, the two arms differ by 0.25pp
+retrospectively, fading pays vig and publishes an always-chalk ticket as a
+model selection while abstaining costs nothing, and this file's standing
+preference is subtractive. A branch must EARN its place, so under a null the
+simpler rule wins and the branch does not get the benefit of an interval
+spanning zero.
+
+Two things recorded with it. **A positive reading at the gate would mean the
+branch has not disqualified itself, not that it works** — 82 is sized for the
+DISCOVERY effect and a plausible +0.10u one needs 251. And **the live readings
+at the moment of freezing are written into the module**: forward −0.060u over
+n=5, retrospective −0.022u over n=34, against a discovery of +0.175u. Both
+negative. That is the disclosure that matters — the criterion was set to a bar
+the branch was already failing, in the direction the recommendation already
+favoured, stated in advance rather than discovered afterwards. `decision()`
+returns None below the gate so it cannot fire early, and nothing in shipping
+code consults it: it decides nothing, it records what the number was agreed to
+mean before anyone could see it.
+
+**The per-game branch line publishes flat-stake units, reversing the
+2026-09-15 call.** `13-6 (68.4%) vs 58.0% priced` is now
+`13-6 (0.684) · +2.58u`. The old shape existed because a bare win rate is
+mostly base rate — chalk takes 76.5% of the FADE branch's games — so something
+had to keep the record price-relative, and the branch's mean implied price did
+that. Units do the same job better: a record settled at each row's own
+moneyline is priced in by construction, so 68.4% at short odds and at long odds
+are different numbers under units and the same number under `vs X% priced`.
+What is given up is stated on the surface rather than absorbed — the implied
+price no longer appears on the card, and it lives on `market-calibration.html`
+with the other controls, the same place the chalk-identity clause was moved to.
+`units` was already returned by `_lean_market_agg` for every bucket, scoped to
+the same mask as the record; it was a returned-and-unrendered key listed as
+`delegated`, and its test now requires it RENDERED. Units and not ROI, and the
+label says neither: ROI is a rate, units is a total, and `+1.57u` is
+unambiguous where `ROI +1.57u` would name one and show the other.
+
+**Two tests were found asserting nothing while the shape changed under them.**
+`test_verdict_panel_leaves_no_computed_key_unrendered` passed a FOLLOW branch
+at |Δ| .02, which routes to the delta-by-price intersection history and renders
+NOTHING from `parts` — so its `assertNotIn` was true of a panel that printed no
+record at all, and it went unnoticed until a POSITIVE assertion was added and
+failed. An absence claim needs a fixture where presence was possible; the
+fixture moved to the FADE branch and now asserts it reached the branch line
+first. And `test_the_panel_never_presents_history_as_this_games_chances`
+required two percentages to be distinctly labelled; there is now only one, so
+the claim is restated as a COUNT of percentages on the panel rather than as a
+pair of substrings — a second one reappearing anywhere fails there instead of
+silently recreating the ambiguity.
+
+Display and registration-bookkeeping only: no lean, delta, grade or ledger row
+moves, no registered constant changes, `MODEL_TAG` unchanged.
+
 Do not commit routine bot-generated `data/` changes by hand. A deliberate,
 reviewed schema/rule migration such as `migrate_hybrid_v2.py` is the exception.
 Do not commit `public/`.

@@ -109,6 +109,48 @@ GATE_DECLINED = 82
 GATE_DECLINED_REALISTIC = 251
 PRIOR = "null"
 
+# --- THE DECISION RULE, PRE-COMMITTED 2026-09-16 AT n = 5 -------------------
+# Frozen on the operator's call while the sample was still too small to argue
+# about, which is the only moment a criterion is cheap. Deciding at n = 82 with
+# the figure already on the screen is how a gate gets re-litigated.
+#
+# THE RULE: at GATE_DECLINED declined games, retire the shipped fade branch --
+# ship abstention as v3 -- UNLESS `fade_minus_abstain` is strictly POSITIVE.
+#
+# A point estimate, with no significance requirement, and that asymmetry is
+# deliberate rather than lax. The prior here is NULL, the two arms differ by
+# 0.25pp retrospectively, and CLAUDE.md's standing preference is subtractive:
+# a branch must EARN its place, so under a null the simpler rule wins. Fading
+# also pays vig and publishes an always-chalk ticket as a model selection,
+# while abstaining costs nothing and publishes nothing. So the branch survives
+# only if the evidence points its way AT ALL; it does not get the benefit of
+# an interval that spans zero.
+#
+# WHAT A POSITIVE READING WOULD AND WOULD NOT MEAN. It would mean the branch
+# has not disqualified itself, not that it works: GATE_DECLINED is sized for
+# the DISCOVERY-sized effect, and a plausible +0.10u one needs
+# GATE_DECLINED_REALISTIC. Clearing the first gate keeps the branch and leaves
+# the registration running; it settles nothing on its own.
+#
+# THE LIVE READING AT THE MOMENT OF FREEZING, recorded so a later reader can
+# see the criterion was NOT set to a bar the branch conveniently clears -- it
+# was set to one the branch was already failing:
+#
+#     forward          -0.060u per declined game over n = 5
+#     retrospective    -0.022u over n = 34 on the current family
+#     discovery        +0.175u over n = 20
+#
+# Both live readings are negative and both are far too small to act on. That
+# is the point: the criterion commits the decision to a sample neither of them
+# is, and it commits it in the direction the recommendation already favoured,
+# stated in advance rather than discovered afterwards.
+DECISION_PRE_COMMITTED_ON = "2026-09-16"
+DECISION_AT_N = 5                          # declined games when this was frozen
+DECISION_LIVE_FORWARD = -0.060             # u per declined game, n = 5
+DECISION_LIVE_RETROSPECTIVE = -0.022       # u per declined game, n = 34
+# Retire the branch unless fade-minus-abstain is strictly greater than this.
+DECISION_KEEP_THRESHOLD = 0.0
+
 LEDGER = hybrid_test.LEDGER
 
 
@@ -197,6 +239,45 @@ def _line(f, label, won_col="bet_won", p_col="p_bet", profit_col="profit"):
             f"ROI {u / n * 100:+6.1f}%")
 
 
+def decision(g):
+    """The pre-committed verdict, or None before the gate.
+
+    Returns ``(verdict, n_declined, mean)`` where verdict is ``"RETIRE"`` or
+    ``"KEEP"``. None until `GATE_DECLINED` declined games exist, so the rule
+    cannot fire early -- a criterion that can be read at n = 5 is not a
+    pre-commitment, it is a running commentary, and this module's own first
+    trap was scoring rows that belonged to its discovery sample.
+
+    Deliberately NOT consulted by any shipping code. It decides nothing on its
+    own; it records in advance what the operator said the number would mean,
+    so the reading at the gate is an outcome rather than an argument.
+    """
+    m, _se, n_d = fade_minus_abstain(g)
+    if n_d < GATE_DECLINED:
+        return None
+    return ("KEEP" if m > DECISION_KEEP_THRESHOLD else "RETIRE"), n_d, m
+
+
+def decision_lines(g):
+    """The pre-commitment, printed every build whether or not it can fire."""
+    m, _se, n_d = fade_minus_abstain(g)
+    out = [f"    PRE-COMMITTED {DECISION_PRE_COMMITTED_ON} (at n={DECISION_AT_N}): "
+           f"at {GATE_DECLINED} declined games, RETIRE the shipped fade branch "
+           f"unless this is > {DECISION_KEEP_THRESHOLD:+.1f}."]
+    d = decision(g)
+    if d is None:
+        out.append(f"      not at the gate: {n_d} of {GATE_DECLINED} declined "
+                   "games. No verdict, and the number above is not one.")
+    else:
+        verdict, n_at, m_at = d
+        out.append(f"      GATE REACHED at n={n_at}: verdict {verdict} "
+                   f"({m_at:+.3f}u per declined game). A KEEP means the branch "
+                   f"has not disqualified itself, not that it works — "
+                   f"{GATE_DECLINED_REALISTIC} is the gate for a plausible "
+                   "+0.10u effect.")
+    return out
+
+
 def report_lines(led=None):
     """Report body as a list of lines. Pure -- no printing, no file writes."""
     out = [f"pre-registered abstain-vs-fade test  (registered {REGISTERED_ON}; "
@@ -220,6 +301,7 @@ def report_lines(led=None):
         out.append(f"    GATE: 0 of ~{GATE_DECLINED} declined games "
                    f"(~{GATE_DECLINED / 1.05:.0f} slates at "
                    f"{DISCOVERY_DECLINE_RATE:.2f} of a slate).")
+        out.extend(decision_lines(g))
         return out
 
     m, se, n_d = fade_minus_abstain(g)
@@ -234,6 +316,7 @@ def report_lines(led=None):
                    f"{DISCOVERY_CI[1]:+.3f}].")
     else:
         out.append("    FADE MINUS ABSTAIN (registered)    no declined games yet")
+    out.extend(decision_lines(g))
 
     out.append("")
     out.append(_line(kept(g), "this rule (declined out)"))

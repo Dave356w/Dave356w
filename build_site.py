@@ -4525,33 +4525,44 @@ def _branch_history(ctx, action, p_lean=None, delta=None, selection_ml=None):
     version = _model_version_short()
     n = parts["n"]
 
-    def _wl_priced(p, bold=False):
-        """`W-L (win%) vs X% priced` -- the public shape for every record here.
+    def _wl_units(p, bold=False):
+        """`W-L (0.xxx) · +N.NNu` -- the public shape for every record here.
 
-        Operator's call for the public surfaces: z and excess-in-points are
-        analyst units and are not published. But a bare win rate is mostly base
-        rate -- chalk takes 76.5% of these same games by backing the favourite
-        -- so something has to keep the record price-relative.
+        REVERSED ON THE OPERATOR'S CALL, 2026-09-16. This line used to read
+        `13-6 (68.4%) vs 58.0% priced`, and the reasoning for that shape was
+        sound as far as it went: a bare win rate is mostly base rate -- chalk
+        takes 76.5% of these same games by backing the favourite -- so the
+        record has to carry something price-relative beside it, and the
+        branch's own mean implied price did that without betting framing.
 
-        ROI would do it and is used on the ledger page, which already publishes
-        flat-stake units. It is deliberately NOT used on THIS line: the branch
-        record stays calibration-shaped, and the branch's own average price
-        carries it instead -- `76.5% vs 58.2% priced` is the same comparison
-        the excess used to make, in plain words and with no betting framing.
+        Flat-stake units do the same job and do it better, which is why the
+        swap costs nothing the old form was protecting. A record is priced in
+        by construction once you settle it at each row's own moneyline: 68.4%
+        at short odds and 68.4% at long odds are different numbers here and
+        the same number under `vs X% priced`. So the property that mattered --
+        the reader cannot mistake base rate for skill -- is preserved rather
+        than traded away.
 
-        The scope of that rule narrowed on the operator's call and the wording
-        here narrowed with it. It once read "this card reports calibration and
-        never a betting result", which stopped being true of the card when
-        `_xwoba_side_history` began publishing flat-stake units beside its
-        intersection record. The branch line is what the rule now covers, and
-        `test_verdict_panel_leaves_no_computed_key_unrendered` pins exactly
-        that much -- `roi` and `units` absent from the BRANCH parts -- rather
-        than a property of the whole panel it no longer has. A comment that
-        keeps claiming the wider version is the defect this repo files under
-        prose asserting what the code does not do.
+        What IS given up is stated plainly: the implied price itself no longer
+        appears on this line, so a reader can no longer see WHICH prices the
+        branch was betting. That is the branch's mean `q`, and it is still on
+        `market-calibration.html` where the controls live -- the same place
+        the chalk-identity clause was moved to, and for the same reason.
+
+        `units` is not a new computation. `_lean_market_agg` has returned it
+        for every bucket all along, scoped to the same row mask as the record
+        above it, so a band record gets that band's units and the pooled
+        fallback gets the branch's. It was a returned-and-unrendered key,
+        listed as `delegated` in
+        `test_verdict_panel_leaves_no_computed_key_unrendered`; that test now
+        requires it to be RENDERED instead, so the key cannot go quiet again.
+
+        Units, not ROI, and the label says neither. ROI is a rate and units is
+        a total; printing `+1.57u` is unambiguous where `ROI +1.57u` would name
+        one and show the other.
         """
-        rec = (f"{p['w']}-{p['l']} ({100 * p['actual']:.1f}%)"
-               f" vs {100 * p['implied']:.1f}% priced")
+        rec = (f"{p['w']}-{p['l']} ({p['actual']:.3f})"
+               f" · {p['units']:+.2f}u")
         return f"<b>{rec}</b>" if bold else rec
 
     # The reliability marker stays, in words. It is the plain-English form of
@@ -4573,7 +4584,7 @@ def _branch_history(ctx, action, p_lean=None, delta=None, selection_ml=None):
                 break
     use, scope = (band, f"at {band_lab}") if band else (parts, "all prices")
     rows = [(f"Won <span class='muted'>({_esc(scope)})</span>",
-             _wl_priced(use, bold=True)
+             _wl_units(use, bold=True)
              + f" <span class='muted'>· {_esc(_branch_read(use))}</span>")]
     # The chalk control, and whether it is worth a ROW or only a clause. The
     # answer differs by branch and is checked rather than assumed:
@@ -4609,7 +4620,7 @@ def _branch_history(ctx, action, p_lean=None, delta=None, selection_ml=None):
     # stale the way a hardcoded branch name would.
     duplicate = chalk and (chalk["w"], chalk["l"]) == (use["w"], use["l"])
     if chalk and not duplicate:
-        rows.append(("Always chalk, same games", _wl_priced(chalk)))
+        rows.append(("Always chalk, same games", _wl_units(chalk)))
         note = "Chalk is the yardstick: the favourite on these same games."
     # FADE carries neither, on the operator's call. The row was a literal
     # duplicate of the record above it and went first; the identity clause
