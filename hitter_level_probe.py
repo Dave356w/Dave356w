@@ -193,6 +193,35 @@ CLUSTER_BOOT = 2000
 CLUSTER_SEED = 20260914
 
 
+def cluster_se(stat, clusters, n_boot=CLUSTER_BOOT, seed=CLUSTER_SEED):
+    """SE of any row-level statistic when rows repeat within a cluster.
+
+    `stat` takes an array of row indices and returns a float; a resample it
+    cannot be computed on returns a non-finite value and is skipped rather
+    than counted as zero.
+
+    ONE resampler, not one per statistic. The correlation above and the
+    moderation coefficients below are read against each other, and two loops
+    carrying two seeds would put them on two different resamples of the same
+    players -- a difference between two numbers would then partly be a
+    difference between two bootstraps.
+    """
+    g = np.asarray(clusters)
+    uniq, inv = np.unique(g, return_inverse=True)
+    if len(uniq) < 3:
+        return float("nan")
+    idx = [np.flatnonzero(inv == k) for k in range(len(uniq))]
+    rng = np.random.default_rng(seed)
+    out = []
+    for _ in range(n_boot):
+        pick = rng.integers(0, len(uniq), size=len(uniq))
+        rows = np.concatenate([idx[k] for k in pick])
+        v = stat(rows)
+        if v is not None and np.isfinite(v):
+            out.append(float(v))
+    return float(np.std(out, ddof=1)) if len(out) > 1 else float("nan")
+
+
 def cluster_se_corr(x, y, clusters, n_boot=CLUSTER_BOOT, seed=CLUSTER_SEED):
     """SE of a correlation when rows repeat within a cluster.
 
@@ -205,21 +234,198 @@ def cluster_se_corr(x, y, clusters, n_boot=CLUSTER_BOOT, seed=CLUSTER_SEED):
     """
     x = np.asarray(x, float)
     y = np.asarray(y, float)
-    g = np.asarray(clusters)
-    uniq, inv = np.unique(g, return_inverse=True)
-    if len(uniq) < 3:
-        return float("nan")
-    idx = [np.flatnonzero(inv == k) for k in range(len(uniq))]
-    rng = np.random.default_rng(seed)
-    out = []
-    for _ in range(n_boot):
-        pick = rng.integers(0, len(uniq), size=len(uniq))
-        rows = np.concatenate([idx[k] for k in pick])
+
+    def corr(rows):
         xs, ys = x[rows], y[rows]
         if xs.std() == 0 or ys.std() == 0:
+            return float("nan")
+        return float(np.corrcoef(xs, ys)[0, 1])
+
+    return cluster_se(corr, clusters, n_boot, seed)
+
+
+# The moderators, in a FIXED declared order so the panel cannot be read as a
+# ranking. Three, not the four the obvious list has: the shrinkage weight
+# `PA/(PA+K)` is strictly monotone in PA, so a "shrinkage weight" stratum is
+# the PA stratum relabelled and would count a second time against the search
+# correction below. The report MEASURES that rather than asserting it.
+MODERATORS = (
+    ("PA behind the rate", "PA",
+     "also the K diagnostic: on the SHRUNK rate this slope is "
+     "(PA+K)/(PA+K*), so it is flat exactly when K is calibrated"),
+    ("batting slot", "batting_order",
+     "the E[PA] axis the slot weights already carry"),
+    ("rate level", "xwoba_shrunk",
+     "curvature -- x*z is x^2 here, so this asks whether beta bends with the "
+     "rate, not whether two groups of hitters differ"),
+)
+
+
+def _slot_weight_cv(m):
+    """Median within-lineup coefficient of variation of the slot weights.
+
+    This is the materiality bar, and it is derived rather than chosen. The
+    shipped composite already varies its weights by this much; a beta that
+    varies by LESS than this cannot change the composite more than the
+    weighting it would be layered on top of, whatever its z-score. A bar
+    picked by taste -- "beta must vary by 10%" -- would be the frozen constant
+    this repo has filed four times.
+    """
+    if "slot_weight" not in m.columns:
+        return None
+    d = m.dropna(subset=["slot_weight"])
+    if d.empty or not {"game_pk", "batting_side"} <= set(d.columns):
+        return None
+    cvs = []
+    for _, g in d.groupby(["game_pk", "batting_side"]):
+        w = pd.to_numeric(g["slot_weight"], errors="coerce").dropna()
+        if len(w) < 2 or w.mean() <= 0:
             continue
-        out.append(float(np.corrcoef(xs, ys)[0, 1]))
-    return float(np.std(out, ddof=1)) if len(out) > 1 else float("nan")
+        cvs.append(float(w.std(ddof=1) / w.mean()))
+    return float(np.median(cvs)) if cvs else None
+
+
+def beta_moderation(m, moderators=MODERATORS, n_boot=CLUSTER_BOOT,
+                    seed=CLUSTER_SEED):
+    """Does the per-hitter slope `beta` vary by hitter type?
+
+    WHY THIS AND NOT A SEARCH OVER COMBINERS. If a hitter's rate `x_i`
+    predicts his own plate appearances with slope `beta_i`, the linear
+    composite that minimises squared error is `sum(w_i x_i)` with
+    `w_i` proportional to `E[PA_i] * beta_i`. That is a derivation, not a
+    hypothesis: nothing has to be tried. The slot weights are already an
+    `E[PA]` estimate -- measured near-uniform at a within-lineup CV of ~0.07,
+    which is what two turns through the order implies -- so the only unknown
+    left in the expression is whether `beta` varies across hitters. A flat
+    `beta` closes the aggregation question; a varying one hands over the
+    weights directly. Either outcome is an answer, which is what the
+    team-level panel cannot promise: at its own ceiling it can only ever
+    return noise.
+
+    THE FORM IS AN INTERACTION, NOT A MEDIAN SPLIT. Cutting hitters into
+    high-PA and low-PA halves throws away the ordering and introduces a cut
+    point that was chosen by looking -- and this repo has a `p = 0.693`
+    instance of exactly that. Fitting
+
+        act ~ b0 + b1*xc + b2*zc + b3*(xc*zc)
+
+    on centred `x` and standardised `z` puts `b1` at `beta` for the average
+    hitter and `b3` at the change in `beta` per standard deviation of the
+    moderator, with no threshold anywhere. Per-stratum means are printed
+    beside it as description and carry no claim of their own.
+
+    THE PA ROW IS ALSO A MEASUREMENT OF `K`, AND THE TWO READINGS MUST NOT
+    BE CONFLATED. Write the outcome as `act = theta + eps` and the season rate
+    as `x = theta + e` with `Var(e) = sigma^2/PA`. The slope of the outcome on
+    the RAW rate is then `PA/(PA + K*)` with `K* = sigma^2/tau^2` -- pure
+    attenuation, rising with PA whatever the build does, and uninformative
+    about hitter type. The composite does not consume the raw rate. It
+    consumes the shrunk one, `mu + w(x - mu)` with `w = PA/(PA + K)`, and
+    dividing through gives
+
+        beta(PA) = (PA + K) / (PA + K*)
+
+    which is flat at 1 for every PA exactly when `K = K*` and tilts otherwise.
+    So a PA moderation on the shrunk rate is first a statement about the
+    shrinkage constant and only second a statement about hitters: `b3 > 0`
+    says `K` is too SMALL (low-PA rates reach the composite still carrying
+    noise, and their slope is attenuated), `b3 < 0` says it is too large. This
+    does not contradict the standing note that `K` cannot fix the lineup
+    CORRELATION -- shrinkage is affine, so it moves the composite's spread and
+    its slope while leaving its ORDER, and therefore `corr`, untouched. The
+    weights read the slope. That is why this panel fits one.
+
+    Read a material PA term as `K` before reading it as hitter type, and fix
+    `K` rather than the weights: re-weighting by a beta that is really an
+    un-shrunk residual would be a second, worse copy of the shrinkage.
+
+    WHAT IT CANNOT DO. `b3` is descriptive: the moderators are properties of
+    the hitter, not assignments, so a moderated slope says the relationship
+    differs across hitters and never why. And `rate level` reuses the
+    regressor as its own moderator, so its `b3` is a quadratic term rather
+    than a between-group contrast -- labelled in `MODERATORS` rather than
+    left for a reader to work out.
+
+    Returns None when the frame cannot support a fit, rather than a slope
+    with an invented interval.
+    """
+    need = {"xwoba_shrunk", "act", "player_id"}
+    if m is None or getattr(m, "empty", True) or not need <= set(m.columns):
+        return None
+    d = m.dropna(subset=["xwoba_shrunk", "act", "player_id"]).copy()
+    if len(d) < 30:
+        return None
+    x = pd.to_numeric(d["xwoba_shrunk"], errors="coerce").to_numpy(float)
+    y = pd.to_numeric(d["act"], errors="coerce").to_numpy(float)
+    ok = np.isfinite(x) & np.isfinite(y)
+    if ok.sum() < 30:
+        return None
+    d, x, y = d[ok], x[ok], y[ok]
+    if not float(np.std(x)) > 0:
+        return None
+    players = d["player_id"].to_numpy()
+    xc_all = x - x.mean()
+
+    def _slope(rows):
+        xs, ys = xc_all[rows], y[rows]
+        if xs.std() == 0:
+            return float("nan")
+        A = np.column_stack([np.ones(len(xs)), xs])
+        coef, *_ = np.linalg.lstsq(A, ys, rcond=None)
+        return float(coef[1])
+
+    A = np.column_stack([np.ones(len(x)), xc_all])
+    beta = float(np.linalg.lstsq(A, y, rcond=None)[0][1])
+    se_beta = cluster_se(_slope, players, n_boot, seed)
+
+    terms = []
+    for label, col, note in moderators:
+        if col not in d.columns:
+            terms.append({"label": label, "note": note, "n": 0,
+                          "b3": float("nan"), "se": float("nan"),
+                          "reason": "column absent from this frame"})
+            continue
+        z = pd.to_numeric(d[col], errors="coerce").to_numpy(float)
+        good = np.isfinite(z)
+        if good.sum() < 30 or not float(np.std(z[good])) > 0:
+            terms.append({"label": label, "note": note, "n": int(good.sum()),
+                          "b3": float("nan"), "se": float("nan"),
+                          "reason": "no usable spread in the moderator"})
+            continue
+        xg, yg, zg, pg = xc_all[good], y[good], z[good], players[good]
+        zs = (zg - zg.mean()) / zg.std()
+
+        def _b3(rows, xg=xg, yg=yg, zs=zs):
+            xs, ys, zz = xg[rows], yg[rows], zs[rows]
+            if xs.std() == 0 or zz.std() == 0:
+                return float("nan")
+            M = np.column_stack([np.ones(len(xs)), xs, zz, xs * zz])
+            try:
+                coef, *_ = np.linalg.lstsq(M, ys, rcond=None)
+            except np.linalg.LinAlgError:
+                return float("nan")
+            return float(coef[3])
+
+        b3 = _b3(np.arange(len(xg)))
+        se = cluster_se(_b3, pg, n_boot, seed)
+        terms.append({"label": label, "note": note, "n": int(len(xg)),
+                      "b3": b3, "se": se, "reason": None})
+
+    tested = [t for t in terms if np.isfinite(t["b3"])]
+    k = max(len(tested), 1)
+    return {
+        "n": int(len(x)),
+        "n_players": int(len(np.unique(players))),
+        "beta": beta,
+        "se_beta": se_beta,
+        "terms": terms,
+        "k": len(tested),
+        # The bar a maximum is read against, not zero. `sqrt(2 ln k)` is what
+        # the largest of k independent nulls typically returns, and this repo
+        # has a sweep whose best |z| of 1.91 over 26 tests sat BELOW it.
+        "expected_max_z": float(np.sqrt(2.0 * np.log(k))) if k > 1 else 0.0,
+        "slot_cv": _slot_weight_cv(d),
+    }
 
 
 def team_control(m):
@@ -515,6 +721,102 @@ def report(hitters, pa, min_pa=1, ledger=LEDGER):
         say("    games here). A control on a different row set can turn a")
         say("    sample difference into an apparent aggregation effect.")
 
+    say()
+    bm = beta_moderation(m)
+    if bm is None:
+        say("  WEIGHTS: not computable on this frame (needs xwoba_shrunk, act,")
+        say("    player_id and >= 30 rows with spread in the rate).")
+    else:
+        say("  WEIGHTS — the composite a per-hitter slope implies, derived")
+        say("    If a hitter's rate x_i predicts his own plate appearances with")
+        say("    slope beta_i, the linear composite that minimises squared")
+        say("    error is sum(w_i x_i) with w_i ∝ E[PA_i] * beta_i. Nothing has")
+        say("    to be tried for that: it is algebra, not a hypothesis. The")
+        say("    slot weights are ALREADY an E[PA] estimate, so the one open")
+        say("    term is whether beta varies across hitters. Flat beta closes")
+        say("    the aggregation question; a varying one hands the weights over.")
+        say()
+        sb = (f"±{bm['se_beta']:.4f} clustered" if np.isfinite(bm["se_beta"])
+              else " (no clustered SE: fewer than 3 players)")
+        say(f"    pooled beta {bm['beta']:+.4f}{sb}   "
+            f"n={bm['n']:,} hitter-games over {bm['n_players']:,} players")
+        say("      beta is the slope of his own realised wOBA on his predicted")
+        say("      rate. It is NOT the correlation above rescaled by taste --")
+        say("      the weights read the slope, so the slope is what is fitted.")
+        say()
+        say("    does it move? change in beta per 1 sd of the moderator:")
+        for t in bm["terms"]:
+            if not np.isfinite(t["b3"]):
+                say(f"      {t['label']:20s} — {t['reason']}")
+                continue
+            z = (t["b3"] / t["se"] if np.isfinite(t["se"]) and t["se"] > 0
+                 else float("nan"))
+            zt = f"z {z:+.2f}" if np.isfinite(z) else "z n/a"
+            say(f"      {t['label']:20s} b3 {t['b3']:+.4f}"
+                f"±{t['se']:.4f}  {zt}   n={t['n']:,}")
+            say(f"        {t['note']}")
+        say("      A material PA term is a statement about K BEFORE it is one")
+        say("      about hitters: on the shrunk rate that slope is")
+        say("      (PA+K)/(PA+K*), flat only when K is calibrated. b3 > 0 says")
+        say("      K is too small. Fix K there, not the weights -- re-weighting")
+        say("      on a beta that is really an un-shrunk residual is a second,")
+        say("      worse copy of the shrinkage. (This does not reopen the")
+        say("      standing note that K cannot fix the lineup CORRELATION:")
+        say("      shrinkage is affine, so it moves spread and slope and never")
+        say("      order. The weights read the slope.)")
+        say("      The shrinkage weight is deliberately NOT a fourth row:")
+        say("      PA/(PA+K) is strictly increasing in PA, so it is the first")
+        say("      row relabelled and counting it twice would inflate the")
+        say("      search correction below rather than test anything.")
+        say()
+        if bm["k"] > 1:
+            say(f"    BAR  {bm['k']} moderators, so the largest |z| among them")
+            say(f"         averages {bm['expected_max_z']:.2f} under pure noise."
+                f" Read the maximum")
+            say("         against that, never against zero.")
+        if bm["slot_cv"]:
+            cv = bm["slot_cv"]
+            mat = cv * abs(bm["beta"])
+            say(f"    MATERIALITY  the slot weights already vary by a")
+            say(f"         within-lineup CV of {cv:.3f}, so beta has to vary by")
+            say(f"         at least |b3| = {mat:.4f} before re-weighting on it")
+            say("         changes the composite more than the weighting it")
+            say("         would sit on top of. That bar is derived from the")
+            say("         shipped weights, not chosen -- a round number here")
+            say("         would be the frozen constant this repo files under")
+            say("         `constants frozen from data`.")
+            for t in bm["terms"]:
+                if not (np.isfinite(t["b3"]) and np.isfinite(t["se"])
+                        and t["se"] > 0 and mat > 0):
+                    continue
+                # se falls as 1/sqrt(n), so the n that resolves the BAR at
+                # |z| = 2 scales with the square of how far the bar sits
+                # inside the current interval.
+                need = t["n"] * (2.0 * t["se"] / mat) ** 2
+                extra = ((f", {max(0.0, (need - len(m)) / rate[0]):,.0f} more "
+                          f"slates") if rate and rate[0] > 0 else "")
+                say(f"         {t['label']:18s} resolves the bar at "
+                    f"n≈{need:,.0f} ({need / max(t['n'], 1):.1f}x this "
+                    f"sample{extra})")
+            say("         If those are decades rather than weeks, that IS the")
+            say("         answer and not a reason to wait: a beta that cannot")
+            say("         be shown to vary by more than the slot weights' own")
+            say("         CV cannot move the composite further than the two")
+            say("         ends of the weight family sit apart, which")
+            say("         lineup_agg_probe measures directly (they correlate")
+            say("         above 0.997). Re-weighting is then closed by")
+            say("         derivation, and the open question is whether to")
+            say("         DISCARD hitters at all — which that panel can")
+            say("         already answer and this one cannot.")
+        say()
+        say("    Read it this way. Every |z| under the bar and every b3 inside")
+        say("    the materiality figure: beta is flat as far as this can see,")
+        say("    the optimal weights are the E[PA] ones already shipped, and")
+        say("    the aggregation is closed by derivation rather than by a")
+        say("    search over combiners -- which is the outcome the team-level")
+        say("    panel cannot deliver at any sample it will reach. A b3 above")
+        say("    BOTH: re-weight by slot_weight * (beta + b3*z) and say which")
+        say("    moderator, in that order.")
     say()
     say("  The shrunk line is the one that matters: it is the value the lineup")
     say("  composite consumed. The raw line beside it says whether shrinkage")
