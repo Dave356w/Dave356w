@@ -592,7 +592,7 @@ class RenderTests(unittest.TestCase):
         self.assertIn("11-4 (0.733) · +3.56u", h)
         # The two guards that remain on the card.
         self.assertIn("15 games", h)
-        self.assertIn("not a prediction", h)
+        self.assertIn("Not a prediction", h)
         # And the marker is gone rather than reworded.
         self.assertNotIn("noise", h)
         self.assertNotIn("the same bet", h)
@@ -643,6 +643,38 @@ class RenderTests(unittest.TestCase):
         # Singular, and the count lives in the heading rather than being
         # repeated on the row beneath it.
         self.assertIn("1 game<", h)
+
+    def test_the_fade_record_carries_no_price_band_qualifier(self):
+        """`Won (at under 45%)` was a qualifier that could not take a value.
+
+        `_branch_history` returns to `_xwoba_side_history` for FOLLOW, so
+        everything below that line is FADE-only -- and FADE fires only when the
+        leaned side is priced below THRESHOLD, which is exactly the first price
+        band. Every fade row therefore landed in it, the band's record was
+        bit-identical to the branch's, and the label could never read anything
+        but `at under 45%`. Same class as the calibration tile that read
+        `50.0% vs 50.0% implied` forever.
+
+        Pinned as the PROPERTY -- the record equals the branch record and no
+        band qualifier appears -- across prices spanning the old band edges, so
+        reintroducing a selector that happens to pick the same band on one
+        fixture would still fail here.
+        """
+        parts = dict(n=19, w=13, l=6, implied=.5797, actual=.6842,
+                     excess=.1045, excess_se=.1131, roi=.1358, units=2.5806)
+        ctx = {("branch", "FADE"): parts, ("chalk", "FADE"): dict(parts)}
+        for p_home, away_ml, home_ml in ((.70, 200, -260), (.62, 150, -180),
+                                         (.58, 130, -150)):
+            h = b._verdict_html("LAD", dict(p_home=p_home, away_ml=away_ml,
+                                            home_ml=home_ml),
+                                "LAD", "ARI", ctx, .005)
+            self.assertIn("Past results", h)
+            self.assertIn("13-6 (0.684) · +2.58u", h)
+            self.assertNotIn("at under", h)
+            self.assertNotIn("all prices", h)
+            # And the phrase must not be duplicated on consecutive lines: the
+            # band carries the claim, the row carries the label.
+            self.assertEqual(h.count("Past results"), 1, h)
 
     def test_card_units_are_never_labelled_roi(self):
         """One label per quantity: ROI is a rate, units is a total.

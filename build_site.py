@@ -4495,7 +4495,10 @@ def _branch_history(ctx, action, p_lean=None, delta=None, selection_ml=None):
         return ""
     if action == "FOLLOW":
         return _xwoba_side_history(ctx, delta, selection_ml)
-    history_branch = "model-side" if action == "FOLLOW" else "market-side"
+    # Everything below is FADE-only -- FOLLOW returned on the line above. The
+    # ternary that used to stand here, `"model-side" if action == "FOLLOW"`,
+    # could never take its first arm.
+    history_branch = "market-side"
     parts = (ctx or {}).get(("branch", action))
     if not parts:
         return ("<div class='vline hist'><span class='vk'>Track record:</span>"
@@ -4549,22 +4552,30 @@ def _branch_history(ctx, action, p_lean=None, delta=None, selection_ml=None):
     # the error bar the numbers no longer print, and at n=17 it is the only
     # thing stopping 76.5% from reading as a rate you can bank -- so dropping
     # the `±` makes it MORE load-bearing, not less.
-    # Prefer the band that contains THIS game's price. A pooled branch line
-    # mixes a .46 underdog lean with a .72 favourite -- different bets with
-    # different base rates -- so the pooled number is not the history of a
-    # game like tonight's. Falls back to the pooled branch whenever the band
-    # is missing or too thin, and SAYS which of the two it is showing, because
-    # a record under an unqualified "Won" that silently changes row set
-    # between games is the substitution this file keeps recording.
-    band, band_lab = None, None
-    if p_lean is not None:
-        for lo, hi, lab in _BRANCH_PRICE_BANDS:
-            if lo <= p_lean < hi:
-                band, band_lab = (ctx or {}).get(("band", action, lab)), lab
-                break
-    use, scope = (band, f"at {band_lab}") if band else (parts, "all prices")
-    rows = [(f"Won <span class='muted'>({_esc(scope)})</span>",
-             _wl_units(use, bold=True))]
+    # THE PRICE-BAND SELECTION WAS REMOVED 2026-09-16 BECAUSE IT COULD NOT
+    # CHOOSE. It existed to prefer the band containing THIS game's price, on
+    # the sound reasoning that a pooled branch line mixes a .46 underdog lean
+    # with a .72 favourite. That reasoning applies to FOLLOW -- which never
+    # reaches this function, having returned to `_xwoba_side_history` above,
+    # where it bands on delta x moneyline instead.
+    #
+    # On FADE the rule fires only when the leaned side is priced below
+    # THRESHOLD, and the first band is [0, THRESHOLD), so EVERY fade row lands
+    # in it. The band was therefore always `under 45%`, its record was always
+    # bit-identical to the branch's (verified on the committed ledger, n=19,
+    # every key equal), and the label it produced -- `Won (at under 45%)` --
+    # was a qualifier that could not take another value. Same class as the
+    # calibration tile that read `50.0% vs 50.0% implied` forever: a statistic
+    # whose value is fixed by the partition rather than by the data.
+    #
+    # It also read as a second, unexplained `45%` one line under the rule's own
+    # `market gives ATL under 45%`, which is what made it confusing rather than
+    # merely redundant.
+    #
+    # The label now matches `_xwoba_side_history`'s, since both lines describe
+    # the same kind of thing and there is no longer a row set to disambiguate.
+    use = parts
+    rows = [("Past results", _wl_units(use, bold=True))]
     # The chalk control, and whether it is worth a ROW or only a clause. The
     # answer differs by branch and is checked rather than assumed:
     #
@@ -4582,8 +4593,7 @@ def _branch_history(ctx, action, p_lean=None, delta=None, selection_ml=None):
     #             beat simply backing the favourite. It stays.
     # The control must be scored on whatever rows the record above it used:
     # band chalk for a band record, branch chalk for the pooled fallback.
-    chalk = ((ctx or {}).get(("bandchalk", action, band_lab)) if band
-             else (ctx or {}).get(("chalk", action)))
+    chalk = (ctx or {}).get(("chalk", action))
     note = ""
     # Show the control when it SAYS something, and not when it is a copy of
     # the line above. Measured, and structural rather than incidental: where
@@ -4640,7 +4650,11 @@ def _branch_history(ctx, action, p_lean=None, delta=None, selection_ml=None):
         "<div class='vprofile'>"
         f"<div class='vprofile-title'>Past {version} {history_branch} picks · "
         f"{n} {'game' if n == 1 else 'games'}</div>"
-        "<div class='vprofile-band'>Past results, not a prediction — "
+        # "Past results," led this band until 2026-09-16, when the record row
+        # below it took that exact label -- the two then read as one phrase
+        # repeated on consecutive lines. The band keeps the CLAIM and drops
+        # the duplicated words; the row is what says these are past results.
+        "<div class='vprofile-band'>Not a prediction — "
         "and not a forward test</div>"
         f"{body}"
         "</div>"
@@ -7252,12 +7266,6 @@ BRANCH_RECORD_MIN = 1
 # A lean priced under .50 IS the underdog, so this one cut already separates
 # underdog leans from favourite leans -- crossing price with "lean type" would
 # only re-split cells that are each wholly one or the other.
-_BRANCH_PRICE_BANDS = (
-    (0.0, HYBRID_THRESHOLD, f"under {100 * HYBRID_THRESHOLD:.0f}%"),
-    (HYBRID_THRESHOLD, 0.50, f"{100 * HYBRID_THRESHOLD:.0f}–50%"),
-    (0.50, 1.0 - HYBRID_THRESHOLD, f"50–{100 * (1 - HYBRID_THRESHOLD):.0f}%"),
-    (1.0 - HYBRID_THRESHOLD, 1.01, f"{100 * (1 - HYBRID_THRESHOLD):.0f}%+"),
-)
 
 
 def hybrid_branch_records():
@@ -7319,40 +7327,6 @@ def hybrid_branch_records():
                                resid="chalk_resid", profit="chalk_profit")
         if ctl and ctl["n"] >= BRANCH_RECORD_MIN:
             out[("chalk", action)] = ctl
-        # The same branch cut by the price of the model's own side, so the
-        # card can show the rows that resemble TONIGHT'S game instead of one
-        # number pooling a .46 underdog with a .72 favourite.
-        #
-        # This is ONE axis, not a grid, and that is measured rather than
-        # assumed: a lean priced under .500 IS the underdog, so "lean type"
-        # and "price band" are the same cut. Crossing them gives cells that
-        # are each wholly dog or wholly favourite -- the 3x5 delta-by-price
-        # profile grid this panel used to publish is exactly what that
-        # produces, and it was deleted for putting n=1 cells on a public page.
-        # Four bands over 389 follow rows hold 14 / 67 / 93 / 215.
-        #
-        # The edges are not fitted. `.45` is the registered gate imported from
-        # `hybrid_test`, `.50` is the definition of a favourite and `.55` is
-        # the gate's mirror -- the same three the magnitude-by-market grid in
-        # ledger_report.txt already uses. Nothing here was chosen by looking
-        # at which split flattered the record.
-        for lo, hi, lab in _BRANCH_PRICE_BANDS:
-            band = mask & (obs["market_p"] >= lo) & (obs["market_p"] < hi)
-            got = _lean_market_agg(obs, band, won="hybrid_won", p="hybrid_p",
-                                   resid="hybrid_resid",
-                                   profit="hybrid_profit")
-            if got and got["n"] >= BRANCH_RECORD_MIN:
-                out[("band", action, lab)] = got
-                # The band's OWN chalk, from the same mask. A band record
-                # printed above the whole branch's chalk is a control on a
-                # different row set -- the defect this repo has recorded
-                # twice, and it would be invisible here because both lines
-                # look like records of "these games".
-                bc = _lean_market_agg(obs, band, won="chalk_won",
-                                      p="chalk_p", resid="chalk_resid",
-                                      profit="chalk_profit")
-                if bc and bc["n"] >= BRANCH_RECORD_MIN:
-                    out[("bandchalk", action, lab)] = bc
     return out
 
 

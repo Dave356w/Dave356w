@@ -3502,6 +3502,45 @@ well — the exact deletion the test existed to prevent, arrived at one step
 later. It now pins the guards that survive and asserts the marker is gone
 rather than reworded.
 
+**`Won (at under 45%)` was a qualifier that could not take another value, and
+the machinery behind it was unreachable.** Flagged by the operator as confusing;
+it was worse than confusing. `_branch_history` returns to `_xwoba_side_history`
+for FOLLOW on its second line, so everything below is FADE-only — and FADE
+fires only when the leaned side is priced below `THRESHOLD`, which is exactly
+the first price band. So every fade row landed in that band, the band's record
+was **bit-identical to the branch's** (verified on the committed ledger: n=19,
+every key equal), and the label could never read anything else. Same class as
+the calibration tile that read `50.0% vs 50.0% implied` forever: a value fixed
+by the partition rather than by the data. It also printed a second, unexplained
+`45%` one line under the rule's own `market gives ATL under 45%`, which is what
+made it read as confusing rather than merely redundant.
+
+Three things went with it, and the second is the one worth the entry:
+
+  * **An unreachable ternary.** `history_branch = "model-side" if action ==
+    "FOLLOW" else "market-side"` sat below the early return, so its first arm
+    could never be taken.
+  * **Eight aggregates computed and rendered nowhere.** `("band", "FOLLOW", …)`
+    and `("bandchalk", "FOLLOW", …)` — four price bands and their chalk
+    controls — were built every call by `hybrid_branch_records` and read only
+    at the two FADE-only sites. FOLLOW bands on delta × moneyline in
+    `_xwoba_side_history` instead, so they had no consumer and never would.
+    That is the `column carried to no surface` entry, eight columns at once,
+    and it survived because the renderer that would have shown them returns
+    before reaching them. **A returned-and-unrendered key is easy to spot; an
+    unrendered key whose renderer is unreachable is not.**
+  * **`_BRANCH_PRICE_BANDS` itself**, with nothing left reading it.
+
+The record row now matches `_xwoba_side_history`'s label — `Past results` —
+since both lines describe the same kind of thing and there is no longer a row
+set to disambiguate. That immediately duplicated the phrase, because the
+discovery band above it led with `Past results, not a prediction …`; the band
+keeps the claim and drops the words the row now carries. Pinned by
+`test_the_fade_record_carries_no_price_band_qualifier`, which asserts the
+PROPERTY across prices spanning the old band edges and that the phrase appears
+exactly once — so reintroducing a selector that happens to pick the same band
+on one fixture would still fail.
+
 **The general lesson, and it is the session's third instance: the defect was
 visible only when two surfaces were put on one page.** Reading
 `_xwoba_side_history` alone shows a label and a value that each look right.

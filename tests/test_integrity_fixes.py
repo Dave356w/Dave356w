@@ -3614,7 +3614,7 @@ class HybridRuleTests(unittest.TestCase):
             "LAD", dict(p_home=.70, away_ml=200, home_ml=-260), "LAD", "ARI",
             ctx, .005)
         self.assertIn("Past V12 market-side picks · 15 games", h)
-        self.assertIn("not a prediction", h)
+        self.assertIn("Not a prediction", h)
         # The bare rate must not appear as its own value; it is qualified by
         # the record it came from.
         self.assertNotIn("<span>73.3%</span>", h)
