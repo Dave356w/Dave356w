@@ -4380,35 +4380,6 @@ def _model_version_short():
 # branches the ~0.05 family-wise threshold is |z| ~ 2.2. Stated as a REFERENCE
 # and not a gate -- the number and its spread always print, only the sentence
 # beside them changes.
-_BRANCH_FAMILYWISE_Z = 2.2
-
-
-def _branch_read(parts):
-    """One honest sentence about what a branch's excess can support.
-
-    Moves continuously with the standard error rather than switching on a row
-    count, which is the threshold-cliff fix this repo has now applied four
-    times. It returns the VERDICT only -- the sample size is carried by the
-    block heading above it, and printing `n` twice in six lines was one of the
-    things making this panel hard to read.
-
-    Note what it does NOT say: nothing here calls a branch profitable, because
-    a branch clearing its bar on the discovery sample is a statement about rows
-    the rule was fitted on.
-    """
-    se, excess = parts.get("excess_se"), parts.get("excess")
-    try:
-        ok = se is not None and np.isfinite(se) and se > 0
-    except TypeError:
-        ok = False
-    if not ok:
-        return "spread unavailable"
-    z = abs(float(excess) / float(se))
-    if z < _BRANCH_FAMILYWISE_Z:
-        return "within noise"
-    return "outside noise across both branches"
-
-
 _LEAN_HISTORY_BINS = (
     (0.000, 0.010),
     (0.010, 0.020),
@@ -4593,8 +4564,7 @@ def _branch_history(ctx, action, p_lean=None, delta=None, selection_ml=None):
                 break
     use, scope = (band, f"at {band_lab}") if band else (parts, "all prices")
     rows = [(f"Won <span class='muted'>({_esc(scope)})</span>",
-             _wl_units(use, bold=True)
-             + f" <span class='muted'>· {_esc(_branch_read(use))}</span>")]
+             _wl_units(use, bold=True))]
     # The chalk control, and whether it is worth a ROW or only a clause. The
     # answer differs by branch and is checked rather than assumed:
     #
@@ -4654,12 +4624,15 @@ def _branch_history(ctx, action, p_lean=None, delta=None, selection_ml=None):
     # row two rows above it is a note the reader has to hunt for.
     if note:
         body += f"<div class='vnote'>{note}</div>"
-    # The pooled reference is gone from this card, on the operator's call.
-    # It was added so a reader would not anchor on a thin branch, but that job
-    # is now done by `_branch_read` on the record row itself -- "within noise"
-    # says the same thing about the same number, in place, without a fourth
-    # row of context. It remains on grades.html, which is where a reader who
-    # wants the whole family's record is pointed.
+    # The pooled reference is gone from this card, on the operator's call, and
+    # so is the `within noise` marker that replaced it (2026-09-16). Both were
+    # anchors against reading a thin branch as reliable; what carries that now
+    # is the block's own `not a prediction -- and not a forward test` band plus
+    # the printed `n`, and the error bar itself lives on
+    # market-calibration.html, where `_lean_market_value_cell` renders the same
+    # `excess_se` as a `±`. That is the control MOVED rather than deleted --
+    # the rule `Deleting controls as clutter` states -- and it is worth being
+    # plain that the card is now the weaker of the two surfaces on reliability.
     #
     # `ctx["pooled"]` is still computed and still rendered there, so this is
     # not a value disappearing off every surface.
@@ -7256,11 +7229,18 @@ def _baseline_controls(g):
 
 
 # Emergency kill switch only: raise it to suppress branch records entirely.
-# It is 1 rather than a sample floor because with two branches a thin one is
-# self-describing -- the record prints its own n and its own standard error,
-# and `_branch_read` says "within noise" whenever the spread cannot support
-# more. Suppressing a number invites someone to recompute it without the
-# caveat, which is the rule this repo settled when it deleted `N_FIT_MIN`.
+# It is 1 rather than a sample floor for ONE reason now, and the other is
+# recorded because it was removed rather than found wanting: suppressing a
+# number invites someone to recompute it without the caveat, which is the rule
+# this repo settled when it deleted `N_FIT_MIN`. That stands on its own.
+#
+# What went on 2026-09-16 is the second reason -- "a thin branch is
+# self-describing, because `_branch_read` says 'within noise' whenever the
+# spread cannot support more". The marker was removed from the card on the
+# operator's call, so that clause is void and is not left here to read as
+# though it still holds. A floor is NOT the answer to its absence: a hard
+# `>= N` is the threshold cliff this repo has removed four times, and the
+# printed `n` plus the block's discovery band are what a reader has.
 BRANCH_RECORD_MIN = 1
 
 # Price bands for the per-game branch record, on the model side's own no-vig

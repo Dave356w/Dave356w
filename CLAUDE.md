@@ -3465,6 +3465,43 @@ the two instances, since pinning `ROI +4.69u` absent would pass just as happily
 if a third line reintroduced it somewhere else. The fixture asserts it reached
 a record line first, which is the trap the key-coverage test below fell into.
 
+**`within noise` is gone from the branch line too, on the operator's call, and
+the deletion it forced is the part to record.** The marker was the plain-English
+form of the error bar and had one production caller — so removing it orphaned
+`_branch_read` and `_BRANCH_FAMILYWISE_Z`, which are deleted with it rather than
+left behind. That is the sixth instance of the callee-outliving-its-call-site
+pattern this file tracks, and the first caught at the moment of the deletion
+instead of days later; the cheap detection is still a reference count, run
+before the edit rather than after.
+
+**Two comments were resting on the marker and are corrected rather than left to
+go quietly false.** `BRANCH_RECORD_MIN = 1` was justified by TWO reasons — that
+suppressing a number invites recomputation without the caveat, and that "a thin
+branch is self-describing, because `_branch_read` says 'within noise'". The
+second is void. The first stands on its own and is what keeps the floor at 1; a
+floor is emphatically NOT the answer to the marker's absence, since a hard
+`>= N` is the threshold cliff this repo has removed four times. The
+pooled-reference comment named the marker as the anchor that replaced it, and
+now names what actually remains.
+
+**What guards a thin branch now, stated plainly rather than argued away: less
+than before.** The card keeps its own `n` and the `not a prediction — and not a
+forward test` band; the error bar itself is on `market-calibration.html`, where
+`_lean_market_value_cell` renders the same `excess_se` as a `±`. That is the
+control MOVED rather than deleted, which is what `Deleting controls as clutter`
+requires — but the card is now the weaker of the two surfaces on reliability
+and the comment there says so. `excess`, `excess_se` and `implied` moved from
+`rendered` to `delegated` in the key-coverage test, verified against their real
+call sites rather than assumed.
+
+**The test that pinned the marker was restated, not deleted, and that is the
+reusable half.** `test_a_thin_branch_is_marked_thin_on_its_own_row` asserted the
+marker in both directions. Had it simply been removed with its subject, nothing
+would then have stopped a later trim taking the `n` and the discovery band as
+well — the exact deletion the test existed to prevent, arrived at one step
+later. It now pins the guards that survive and asserts the marker is gone
+rather than reworded.
+
 **The general lesson, and it is the session's third instance: the defect was
 visible only when two surfaces were put on one page.** Reading
 `_xwoba_side_history` alone shows a label and a value that each look right.
