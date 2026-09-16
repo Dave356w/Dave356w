@@ -287,12 +287,18 @@ class CeilingAndGateTests(unittest.TestCase):
     """Without these a null is unreadable: nobody can tell a rate that carries
     nothing from a test too small to see one.
 
-    The first version computed `sd(shrunk)/sd(actual)`. Shrinkage is affine, so
-    `corr(shrunk, outcome) == corr(raw, outcome)` exactly and the ceiling
-    CANNOT depend on K -- yet that form reads K, and at the K this repo ships
-    it overstated by 39% in simulation. The bound is computed from the raw rate
-    net of its own PA noise instead, and the first test below is the one that
-    would have caught it."""
+    The first version computed `sd(shrunk)/sd(actual)`. A CONSTANT affine
+    rescaling leaves a correlation alone, so that form -- which reads K -- was
+    wrong, and at the K this repo ships it overstated by 39% in simulation.
+
+    The second version over-corrected in the other direction. It computed the
+    bound from the raw rate and the report held it against the SHRUNK
+    correlation, on the ground that shrinkage is affine. Real shrinkage is
+    `t + w*(x-t)` with `w = PA/(PA+K)`, so the weight differs per ROW and the
+    map is not affine across hitters at all: `corr(raw, shrunk)` is about 0.85
+    on the committed frames, and the first live run reported +0.0840 raw
+    against +0.1128 shrunk under a claim of exactness. `test_per_row_shrinkage
+    _is_not_an_affine_map` is the assertion that separates the two claims."""
 
     SIG = 0.5206          # per-PA wOBA sd, the repo's own weights
 
@@ -556,3 +562,368 @@ class ModerationReportTests(unittest.TestCase):
         text = self._report()
         self.assertIn("that IS the", text)
         self.assertIn("lineup_agg_probe", text)
+
+
+class ShrinkWeightRecoveryTests(unittest.TestCase):
+    """`K` and the shrink target are recovered from the two stored rate
+    columns, so the ceiling needs neither a `build_site` import nor a literal.
+
+    A frame is a historical artifact: it may have been written under a
+    different `K` than the build reading it, which is the version-skew this
+    repo files under `one value, three homes`.
+    """
+
+    def _cols(self, K=100.0, t=0.3147, n=400, seed=2):
+        rng = np.random.default_rng(seed)
+        pa = rng.integers(4, 680, n).astype(float)
+        raw = t + 0.04 * rng.standard_normal(n)
+        w = pa / (pa + K)
+        return raw, t + w * (raw - t), pa
+
+    def test_it_recovers_the_constant_the_frame_was_written_under(self):
+        for K in (50.0, 100.0, 400.0):
+            raw, shrunk, pa = self._cols(K=K)
+            got = hp.shrink_weights(raw, shrunk, pa)
+            self.assertAlmostEqual(got["k"], K, delta=K * 1e-6)
+            self.assertAlmostEqual(got["target"], 0.3147, places=6)
+            self.assertGreater(got["r2"], 0.999999)
+
+    def test_the_mean_weight_is_what_the_ceiling_needs(self):
+        raw, shrunk, pa = self._cols(K=100.0)
+        got = hp.shrink_weights(raw, shrunk, pa)
+        self.assertAlmostEqual(got["mean_w"], float(np.mean(pa / (pa + 100.0))),
+                               places=6)
+
+    def test_columns_that_are_not_a_shrinkage_return_none(self):
+        rng = np.random.default_rng(4)
+        raw = 0.31 + 0.04 * rng.standard_normal(300)
+        self.assertIsNone(hp.shrink_weights(
+            raw, rng.standard_normal(300), rng.integers(50, 600, 300)))
+
+    def test_it_recovers_the_shipped_constant_from_the_committed_frames(self):
+        """The one place a real artifact is read: if this drifts, either the
+        frames changed or the identity assumed here is wrong."""
+        h, _ = hp.pregame_only(hp.load_hitters("data"))
+        h = h.dropna(subset=["xwoba_raw", "xwoba_shrunk"])
+        if len(h) < 50:
+            self.skipTest("no committed frames to read")
+        got = hp.shrink_weights(h["xwoba_raw"], h["xwoba_shrunk"], h["PA"])
+        self.assertIsNotNone(got)
+        self.assertAlmostEqual(got["k"], 100.0, delta=1.0)
+        self.assertGreater(got["r2"], 0.999)
+
+
+class VarianceComponentFitTests(unittest.TestCase):
+    SIG = 0.5206
+
+    def _clean(self, tau=0.030, n=40_000, seed=5, lo=70, hi=650):
+        rng = np.random.default_rng(seed)
+        th = 0.318 + tau * rng.standard_normal(n)
+        pa = rng.integers(lo, hi, n).astype(float)
+        return th + (self.SIG / np.sqrt(pa)) * rng.standard_normal(n), pa
+
+    def test_a_well_behaved_sample_recovers_tau(self):
+        raw, pa = self._clean()
+        tau2, _sig2, method = hp.fit_variance_components(raw, pa, self.SIG)
+        self.assertAlmostEqual(np.sqrt(tau2), 0.030, delta=0.004)
+        self.assertEqual(method, "irls")
+
+    def test_the_weighting_survives_a_low_pa_tail_that_ols_cannot(self):
+        """The defect in one assertion. Var((x-mu)^2) goes as
+        (tau^2 + sigma^2/PA)^2, so a low-PA row is not merely noisier, it is
+        enormously more VARIABLE -- and OLS, which assumes it is not, hands the
+        fit to it. Here those rows also violate the model outright, which is
+        what the real frames do and what collapsed the printed ceiling."""
+        rng = np.random.default_rng(3)
+        n, tau = 40_000, 0.030
+        th = 0.318 + tau * rng.standard_normal(n)
+        pa = np.where(rng.random(n) < 0.08, rng.integers(4, 70, n),
+                      rng.integers(70, 650, n)).astype(float)
+        infl = np.where(pa < 70, 2.2, 1.0)
+        raw = th + (infl * self.SIG / np.sqrt(pa)) * rng.standard_normal(n)
+        inv, d2 = 1.0 / pa, (raw - raw.mean()) ** 2
+        A = np.column_stack([np.ones(n), inv])
+        ols_tau = np.sqrt(max(float(np.linalg.lstsq(A, d2, rcond=None)[0][0]), 0))
+        tau2, _s, _m = hp.fit_variance_components(raw, pa, self.SIG)
+        self.assertLess(ols_tau, 0.005)          # OLS collapses it to nothing
+        self.assertGreater(np.sqrt(tau2), ols_tau)
+        # NOT a cure: a model violation stays a model violation, and the
+        # weighted fit is still biased low here. It removes the leverage, which
+        # is the difference between a ceiling 5x under the correlation it
+        # bounds and one within a factor of 1.5.
+        self.assertLess(np.sqrt(tau2), tau)
+
+    def test_a_constant_pa_is_named_rather_than_fitted(self):
+        raw, pa = self._clean(lo=400, hi=401)
+        pa = np.full(len(pa), 400.0)
+        tau2, _sig2, method = hp.fit_variance_components(raw, pa, self.SIG)
+        self.assertEqual(method, "known-sigma")
+        self.assertAlmostEqual(np.sqrt(max(tau2, 0)), 0.030, delta=0.004)
+
+
+class CeilingBoundsTheScoredPredictorTests(unittest.TestCase):
+    SIG = 0.5206
+
+    def _sim(self, K=100.0, tau=0.030, n=80_000, seed=5):
+        rng = np.random.default_rng(seed)
+        th = 0.318 + tau * rng.standard_normal(n)
+        pa = rng.integers(4, 650, n).astype(float)
+        raw = th + (self.SIG / np.sqrt(pa)) * rng.standard_normal(n)
+        shrunk = 0.318 + (pa / (pa + K)) * (raw - 0.318)
+        act = th + (self.SIG / 2.0) * rng.standard_normal(n)
+        return raw, pa, act, shrunk
+
+    def test_per_row_shrinkage_is_not_an_affine_map(self):
+        """The claim the old bound rested on, falsified. A CONSTANT weight
+        leaves the correlation alone; PA/(PA+K) does not, because a 4-PA hitter
+        and a 650-PA hitter are shrunk by different amounts."""
+        raw, pa, act, shrunk = self._sim()
+        flat = 0.318 + 0.8 * (raw - 0.318)
+        self.assertAlmostEqual(float(np.corrcoef(flat, act)[0, 1]),
+                               float(np.corrcoef(raw, act)[0, 1]), delta=1e-12)
+        self.assertGreater(abs(float(np.corrcoef(shrunk, act)[0, 1])
+                               - float(np.corrcoef(raw, act)[0, 1])), 0.002)
+
+    def test_each_bound_holds_its_own_predictor(self):
+        raw, pa, act, shrunk = self._sim()
+        rawg = hp.ceiling_and_gate(raw, pa, act, self.SIG, .05, .05)
+        shrg = hp.ceiling_and_gate(raw, pa, act, self.SIG, .05, .05, pred=shrunk)
+        r_raw = abs(float(np.corrcoef(raw, act)[0, 1]))
+        r_shr = abs(float(np.corrcoef(shrunk, act)[0, 1]))
+        # Shrinkage de-noises the low-PA rows, so the shrunk predictor both
+        # correlates better AND is allowed to: the ordering must match.
+        self.assertGreater(r_shr, r_raw)
+        self.assertGreater(shrg["ceiling"], rawg["ceiling"])
+        for g, r in ((rawg, r_raw), (shrg, r_shr)):
+            self.assertGreaterEqual(g["ceiling"], r)
+            self.assertLess(g["ceiling"], r * 1.6)
+
+    def test_the_raw_bound_is_blind_to_k_and_the_scored_bound_is_not(self):
+        out = {}
+        for K in (100.0, 400.0):
+            raw, pa, act, shrunk = self._sim(K=K)
+            out[K] = (hp.ceiling_and_gate(raw, pa, act, self.SIG, .05, .05),
+                      hp.ceiling_and_gate(raw, pa, act, self.SIG, .05, .05,
+                                          pred=shrunk))
+        self.assertAlmostEqual(out[100.0][0]["ceiling"], out[400.0][0]["ceiling"],
+                               places=12)
+        self.assertNotAlmostEqual(out[100.0][1]["ceiling"],
+                                  out[400.0][1]["ceiling"], places=12)
+        self.assertAlmostEqual(out[100.0][1]["mean_w"],
+                               out[100.0][1]["mean_w"], places=12)
+
+    def test_the_default_path_is_the_raw_rate_unchanged(self):
+        """`pred=None` must reduce to the earlier formula exactly, so the
+        existing assertions above keep testing what they were written for."""
+        raw, pa, act, _s = self._sim()
+        g = hp.ceiling_and_gate(raw, pa, act, self.SIG, .05, .05)
+        self.assertEqual(g["mean_w"], 1.0)
+        self.assertAlmostEqual(g["sd_pred"], g["sd_raw"], places=12)
+
+    def test_a_backfilled_row_is_dropped_on_its_flag_not_a_pa_cutoff(self):
+        raw, pa, act, shrunk = self._sim(n=2000)
+        bf = np.zeros(len(raw), bool)
+        bf[:50] = True
+        g = hp.ceiling_and_gate(raw, pa, act, self.SIG, .05, .05,
+                                pred=shrunk, backfill=bf)
+        self.assertEqual(g["n_excluded"], 50)
+
+    def test_it_reports_the_calibrated_k_the_fit_implies(self):
+        raw, pa, act, shrunk = self._sim()
+        g = hp.ceiling_and_gate(raw, pa, act, self.SIG, .05, .05, pred=shrunk)
+        self.assertAlmostEqual(g["k_star"], g["sigma_fit"] ** 2 / g["tau"] ** 2,
+                               places=6)
+        self.assertAlmostEqual(g["shrink_k"], 100.0, delta=1.0)
+
+
+class TwoWayClusterTests(unittest.TestCase):
+    """Rows are dependent twice over and the two groupings are CROSSED: a
+    hitter recurs across lineups, nine hitters share one lineup."""
+
+    def _stat(self, y):
+        return lambda rows: float(np.mean(y[rows]))
+
+    def test_a_lineup_shock_widens_what_player_clustering_alone_reports(self):
+        rng = np.random.default_rng(6)
+        n_lu, n_per = 80, 9
+        shock = rng.standard_normal(n_lu) * 1.0
+        players, lineups, y = [], [], []
+        for lu in range(n_lu):
+            for j in range(n_per):
+                players.append(rng.integers(0, 120))
+                lineups.append(lu)
+                y.append(shock[lu] + 0.3 * rng.standard_normal())
+        y = np.asarray(y, float)
+        players = np.asarray(players)
+        lineups = np.asarray(lineups)
+        one = hp.cluster_se(self._stat(y), players, n_boot=400)
+        two, basis = hp.cluster_se_twoway(self._stat(y), players, lineups,
+                                          n_boot=400)
+        self.assertEqual(basis, "two-way")
+        self.assertGreater(two, one * 1.5)
+
+    def test_it_is_the_cameron_gelbach_miller_combination(self):
+        rng = np.random.default_rng(7)
+        y = rng.standard_normal(300)
+        a = rng.integers(0, 40, 300)
+        b = rng.integers(0, 30, 300)
+        rows = np.arange(300)
+        va = hp.cluster_se(self._stat(y), a, n_boot=300)
+        vb = hp.cluster_se(self._stat(y), b, n_boot=300)
+        vab = hp.cluster_se(self._stat(y), rows, n_boot=300)
+        got, basis = hp.cluster_se_twoway(self._stat(y), a, b, n_boot=300)
+        if basis == "two-way":
+            self.assertAlmostEqual(got, np.sqrt(va ** 2 + vb ** 2 - vab ** 2),
+                                   places=12)
+        else:
+            self.assertAlmostEqual(got, max(va, vb), places=12)
+
+    def test_a_negative_variance_falls_back_to_the_wider_one_way(self):
+        """Not guaranteed positive at small cluster counts. A silently
+        shrinking SE is worse than a visibly crude one."""
+        rng = np.random.default_rng(8)
+        y = rng.standard_normal(60)
+        a = np.arange(60) % 20
+        got, basis = hp.cluster_se_twoway(self._stat(y), a, a, n_boot=200)
+        self.assertIn(basis, ("two-way", "degenerate"))
+        self.assertTrue(np.isfinite(got))
+
+    def test_too_few_clusters_is_named_rather_than_returned_as_a_number(self):
+        y = np.arange(4, dtype=float)
+        got, basis = hp.cluster_se_twoway(self._stat(y), [1, 1, 2, 2],
+                                          [1, 1, 2, 2], n_boot=50)
+        self.assertEqual(basis, "none")
+        self.assertTrue(np.isnan(got))
+
+
+class ExcessOverCeilingWarningTests(unittest.TestCase):
+    """The diagnostic that caught all three defects: a correlation far above
+    its own bound means the bound is wrong or the interval is."""
+
+    def _report(self, tau_rate=0.035):
+        rng = np.random.default_rng(2)
+        cats = np.array(["1b", "2b", "3b", "hr", "bb", "hbp", "out"])
+        pr = np.array([.147, .045, .005, .036, .079, .011, .677])
+        pr = pr / pr.sum()
+        rows, pas = [], []
+        for i in range(180):
+            rate = 0.318 + tau_rate * rng.standard_normal()
+            rows.append({"game_pk": i // 9, "batting_side": "home",
+                         "player_id": 1000 + i, "batting_order": (i % 9) + 1,
+                         "PA": int(rng.integers(20, 650)),
+                         "xwoba_shrunk": rate, "xwoba_raw": rate,
+                         "slot_weight": 1.0, "savant_backfill": False})
+            pas.append(_pa(i // 9, 1000 + i, list(rng.choice(cats, 4, p=pr))))
+        old = hp.CLUSTER_BOOT
+        hp.CLUSTER_BOOT = 80
+        try:
+            return "\n".join(hp.report(_hitters(rows), pd.concat(pas)))
+        finally:
+            hp.CLUSTER_BOOT = old
+
+    def test_the_ceiling_names_the_predictor_it_bounds(self):
+        text = self._report()
+        self.assertIn("scored predictor", text)
+        self.assertIn("E[shrink weight]", text)
+
+    def test_it_says_the_two_sigmas_are_not_expected_to_agree(self):
+        """xwOBA is near wOBA's conditional expectation given batted-ball
+        shape, so its per-PA variance is strictly smaller -- the same argument
+        this repo already makes for K."""
+        text = self._report()
+        self.assertIn("NOT expected to agree", text)
+        self.assertIn("law of total variance", text)
+
+    def test_the_clustering_basis_is_printed_not_assumed(self):
+        text = self._report()
+        self.assertTrue("two-way clustered" in text
+                        or "player clustered" in text
+                        or "degenerate clustered" in text)
+
+    def test_an_excess_over_the_ceiling_is_flagged_loudly(self):
+        rng = np.random.default_rng(11)
+        rows, pas = [], []
+        cats = np.array(["1b", "hr", "out"])
+        for i in range(180):
+            # The prediction is the outcome, so the correlation is forced far
+            # above any variance-derived bound: the warning must fire.
+            hit = bool(rng.random() < 0.5)
+            rows.append({"game_pk": i // 9, "batting_side": "home",
+                         "player_id": 1000 + i, "batting_order": (i % 9) + 1,
+                         "PA": int(rng.integers(20, 650)),
+                         "xwoba_shrunk": 0.9 if hit else 0.1,
+                         "xwoba_raw": 0.9 if hit else 0.1,
+                         "slot_weight": 1.0, "savant_backfill": False})
+            pas.append(_pa(i // 9, 1000 + i,
+                           ["hr", "hr", "hr", "hr"] if hit
+                           else ["out", "out", "out", "out"]))
+        old = hp.CLUSTER_BOOT
+        hp.CLUSTER_BOOT = 80
+        try:
+            text = "\n".join(hp.report(_hitters(rows), pd.concat(pas)))
+        finally:
+            hp.CLUSTER_BOOT = old
+        self.assertIn("OBSERVED corr", text)
+        self.assertIn("x this ceiling", text)
+        self.assertIn("not to bank", text)
+
+
+class AffinePremiseTests(unittest.TestCase):
+    """The report must not repeat, one level up, the claim the ceiling fix
+    retracted. `K cannot fix the lineup correlation` rests on shrinkage being
+    affine in the lineup mean, which needs the nine hitters to carry equal PA.
+    """
+
+    def _report(self):
+        rng = np.random.default_rng(12)
+        cats = np.array(["1b", "hr", "bb", "out"])
+        pr = np.array([.18, .04, .09, .69])
+        rows, pas = [], []
+        for g in range(20):
+            for j in range(9):
+                pid = int(rng.integers(0, 300))
+                pa = int(rng.integers(4, 680))
+                rate = 0.318 + 0.03 * rng.standard_normal()
+                w = pa / (pa + 100.0)
+                rows.append({"game_pk": g, "batting_side": "home",
+                             "player_id": pid, "batting_order": j + 1,
+                             "PA": pa, "xwoba_raw": rate,
+                             "xwoba_shrunk": 0.318 + w * (rate - 0.318),
+                             "slot_weight": 4.6 - 0.09 * (j + 1),
+                             "savant_backfill": False})
+                pas.append(_pa(g, pid, list(rng.choice(cats, 4, p=pr))))
+        old = hp.CLUSTER_BOOT
+        hp.CLUSTER_BOOT = 60
+        try:
+            return "\n".join(hp.report(_hitters(rows), pd.concat(pas)))
+        finally:
+            hp.CLUSTER_BOOT = old
+
+    def test_the_report_no_longer_asserts_shrinkage_is_affine(self):
+        text = self._report()
+        self.assertNotIn("shrinkage is affine, so it moves spread and slope",
+                         text)
+
+    def test_it_says_the_premise_is_falsified_and_the_conclusion_is_not(self):
+        """The distinction is the whole content: a broken premise reopens the
+        question, it does not answer it the other way."""
+        text = self._report()
+        self.assertIn("falsifies the premise", text)
+        self.assertIn("reopened and unmeasured", text)
+
+    def test_the_lineup_premise_fails_on_the_committed_frames(self):
+        """Measured, not asserted. If this ever passes the equal-PA premise,
+        the paragraph above it is the thing to revisit."""
+        h, _ = hp.pregame_only(hp.load_hitters("data"))
+        h = h.dropna(subset=["xwoba_raw", "xwoba_shrunk"])
+        if len(h) < 90:
+            self.skipTest("no committed frames to read")
+        h = h.copy()
+        h["w"] = pd.to_numeric(h["slot_weight"], errors="coerce").fillna(1.0)
+        g = h.groupby(["game_pk", "batting_side"])
+        cs = g.apply(lambda d: np.average(d["xwoba_shrunk"], weights=d["w"]),
+                     include_groups=False)
+        cr = g.apply(lambda d: np.average(d["xwoba_raw"], weights=d["w"]),
+                     include_groups=False)
+        # Equal PA within a lineup would put this at 1.0 to float precision.
+        self.assertLess(float(np.corrcoef(cr, cs)[0, 1]), 0.95)

@@ -222,7 +222,167 @@ def cluster_se(stat, clusters, n_boot=CLUSTER_BOOT, seed=CLUSTER_SEED):
     return float(np.std(out, ddof=1)) if len(out) > 1 else float("nan")
 
 
-def cluster_se_corr(x, y, clusters, n_boot=CLUSTER_BOOT, seed=CLUSTER_SEED):
+def cluster_se_twoway(stat, clusters_a, clusters_b, n_boot=CLUSTER_BOOT,
+                      seed=CLUSTER_SEED):
+    """SE when rows repeat along TWO crossed groupings at once.
+
+    These rows are dependent twice over and the two are crossed rather than
+    nested: a hitter recurs across lineups, and nine hitters share one lineup,
+    one game and one opposing pitcher. Resampling players alone carries the
+    first dependence and none of the second, so the interval it returns is
+    still optimistic -- which is how the probe's first live run published a
+    correlation 5.5x its own ceiling at an apparently decisive z.
+
+    Cameron-Gelbach-Miller: the two-way variance is
+
+        V = V_a + V_b - V_ab
+
+    where `V_ab` is the variance under the INTERSECTION of the two groupings.
+    Each row here is one player in one lineup, so that intersection is the row
+    itself and `V_ab` is the ordinary bootstrap variance -- subtracted because
+    resampling each way counts the row-level noise once apiece.
+
+    The estimator is not guaranteed positive at small cluster counts. When it
+    comes out negative the larger one-way SE is returned instead, which is
+    conservative and is reported rather than silently substituted: a negative
+    variance is the estimator saying it cannot separate the two, and an SE that
+    quietly shrinks is worse than one that is visibly crude.
+    """
+    va = cluster_se(stat, clusters_a, n_boot, seed)
+    vb = cluster_se(stat, clusters_b, n_boot, seed)
+    rows = np.arange(len(np.asarray(clusters_a)))
+    vab = cluster_se(stat, rows, n_boot, seed)
+    if not all(np.isfinite(v) for v in (va, vb, vab)):
+        finite = [v for v in (va, vb) if np.isfinite(v)]
+        return (max(finite), "one-way") if finite else (float("nan"), "none")
+    v = va ** 2 + vb ** 2 - vab ** 2
+    if v <= 0:
+        return max(va, vb), "degenerate"
+    return float(np.sqrt(v)), "two-way"
+
+
+def shrink_weights(raw, shrunk, pa):
+    """Recover the per-row shrinkage weight from the two stored rate columns.
+
+    `xwoba_shrunk` is `t + w*(raw - t)` with `w = PA/(PA+K)`, and neither `K`
+    nor the target `t` is stored. Both are recoverable exactly, because that
+    identity rearranges to something linear in the unknowns:
+
+        PA*(shrunk - raw) = (K*t)*1 - K*shrunk
+
+    so an ordinary least squares of the left side on `[1, shrunk]` returns
+    `-K` as its slope and `K*t` as its intercept. Measured on the committed
+    frames that recovers `K = 99.99` against the shipped 100 and a target of
+    0.314657, at an R^2 of 0.99999.
+
+    Read off the DATA rather than imported from `build_site`, for two reasons
+    that both matter more than the one line it saves. A frame is a historical
+    artifact and may have been written under a different `K` than the build
+    running now, which is the version-skew this repo files under `one value,
+    three homes`; and `build_site` refuses a non-xwOBA `MODEL_TAG` at import,
+    so reading the constant from it would make this probe unusable in exactly
+    the era where an old frame most needs reading.
+
+    Returns None when the columns do not fit that form -- which is the answer
+    when they are not a shrinkage of each other at all.
+    """
+    x = np.asarray(raw, float)
+    s = np.asarray(shrunk, float)
+    n = np.asarray(pa, float)
+    ok = np.isfinite(x) & np.isfinite(s) & np.isfinite(n) & (n > 0)
+    if ok.sum() < 10:
+        return None
+    x, s, n = x[ok], s[ok], n[ok]
+    if float(np.std(s)) <= 0:
+        return None
+    y = n * (s - x)
+    A = np.column_stack([np.ones(len(s)), s])
+    try:
+        coef, *_ = np.linalg.lstsq(A, y, rcond=None)
+    except np.linalg.LinAlgError:
+        return None
+    k = -float(coef[1])
+    if not (np.isfinite(k) and k > 0):
+        return None
+    resid = y - A @ coef
+    denom = float(((y - y.mean()) ** 2).sum())
+    r2 = 1.0 - float((resid ** 2).sum()) / denom if denom > 0 else float("nan")
+    w = n / (n + k)
+    return {"k": k, "target": float(coef[0] / k), "r2": r2,
+            "mean_w": float(np.mean(w)), "n": int(len(w))}
+
+
+def fit_variance_components(raw, pa, sd_pa=None):
+    """Split a season rate's spread into talent and sampling noise.
+
+    `Var(x_i) = tau^2 + sigma^2/PA_i`, so regressing squared deviations on
+    `1/PA` returns `tau^2` as the intercept and `sigma^2` as the slope.
+
+    THE REGRESSION MUST BE WEIGHTED, and the unweighted version is what put the
+    printed ceiling a factor of five below the correlation it was bounding. For
+    a roughly normal rate `Var((x-mu)^2) = 2*(tau^2 + sigma^2/PA)^2`, so the
+    squared deviations of a low-PA hitter are not merely larger, they are
+    enormously more VARIABLE -- and ordinary least squares, which assumes they
+    are not, hands the whole fit to them. The committed frames carry PA down to
+    4, with 5% of rows under 70, and on those rows OLS returned tau = 0.0173
+    against 0.0268 from the weighted fit: a ceiling of 0.033 where the honest
+    one is 0.080.
+
+    Iteratively reweighted least squares with `1/fitted^2` is the textbook
+    correction and it needs no cutoff. A PA threshold was the alternative and
+    was rejected: this repo has removed a hard `>= N` four times, and the rows
+    a threshold would drop are real hitters whose rates the composite really
+    consumed.
+
+    Returns (tau2, sigma2, method). `method` is "irls", or "ols" when the
+    reweighting fails to converge to a positive intercept, or "known-sigma"
+    on the collinear fallback -- named rather than hidden, because the three
+    do not deserve equal trust.
+    """
+    x = np.asarray(raw, float)
+    n = np.asarray(pa, float)
+    inv = 1.0 / n
+    d2 = (x - x.mean()) ** 2
+    if float(np.std(inv)) <= 1e-12 * max(float(np.mean(inv)), 1e-12):
+        # Every hitter carries the same PA, so 1/n cannot separate the two
+        # components and the fit is collinear. There the subtraction IS exact,
+        # given sigma: Var(x) = tau^2 + sigma^2/n with one known n.
+        if not (sd_pa and sd_pa > 0):
+            return None
+        tau2 = float(np.var(x, ddof=1)) - float(sd_pa) ** 2 * float(np.mean(inv))
+        return tau2, float(sd_pa) ** 2, "known-sigma"
+    A = np.column_stack([np.ones(len(n)), inv])
+    try:
+        coef, *_ = np.linalg.lstsq(A, d2, rcond=None)
+    except np.linalg.LinAlgError:
+        return None
+    ols = (float(coef[0]), float(coef[1]))
+    # The weight floor is a fraction of the data's own scale rather than a
+    # literal epsilon: a fitted value near zero would otherwise carry a weight
+    # of 1e18 and the fit would be that one row.
+    floor = max(float(np.mean(d2)) * 1e-4, 1e-12)
+    c = np.array(coef, float)
+    for _ in range(25):
+        fitted = np.clip(A @ c, floor, None)
+        wt = 1.0 / fitted ** 2
+        try:
+            nxt, *_ = np.linalg.lstsq(A * np.sqrt(wt)[:, None],
+                                      d2 * np.sqrt(wt), rcond=None)
+        except np.linalg.LinAlgError:
+            return ols[0], ols[1], "ols"
+        if not np.all(np.isfinite(nxt)):
+            return ols[0], ols[1], "ols"
+        if np.allclose(nxt, c, rtol=1e-8, atol=1e-14):
+            c = nxt
+            break
+        c = nxt
+    if not (np.isfinite(c[0]) and np.isfinite(c[1]) and c[0] > 0):
+        return ols[0], ols[1], "ols"
+    return float(c[0]), float(c[1]), "irls"
+
+
+def cluster_se_corr(x, y, clusters, n_boot=CLUSTER_BOOT, seed=CLUSTER_SEED,
+                    clusters_b=None):
     """SE of a correlation when rows repeat within a cluster.
 
     `1/sqrt(n-3)` assumes independent observations. These are not: 1832
@@ -241,6 +401,8 @@ def cluster_se_corr(x, y, clusters, n_boot=CLUSTER_BOOT, seed=CLUSTER_SEED):
             return float("nan")
         return float(np.corrcoef(xs, ys)[0, 1])
 
+    if clusters_b is not None:
+        return cluster_se_twoway(corr, clusters, clusters_b, n_boot, seed)
     return cluster_se(corr, clusters, n_boot, seed)
 
 
@@ -364,7 +526,24 @@ def beta_moderation(m, moderators=MODERATORS, n_boot=CLUSTER_BOOT,
     if not float(np.std(x)) > 0:
         return None
     players = d["player_id"].to_numpy()
+    # The SECOND grouping. Nine hitters share a lineup, a game and an opposing
+    # starter, so their outcomes move together for reasons that have nothing to
+    # do with their own rates -- and resampling players alone carries none of
+    # that. Where the frame cannot identify a lineup the fit falls back to
+    # one-way clustering and `se_basis` says so, rather than reporting the
+    # narrower interval as though it were the corrected one.
+    lineups = None
+    if {"game_pk", "batting_side"} <= set(d.columns):
+        lineups = (d["game_pk"].astype(str) + "|"
+                   + d["batting_side"].astype(str)).to_numpy()
     xc_all = x - x.mean()
+
+    def _se(fn, keep=None):
+        pa_ = players if keep is None else players[keep]
+        if lineups is None:
+            return cluster_se(fn, pa_, n_boot, seed), "player"
+        lu_ = lineups if keep is None else lineups[keep]
+        return cluster_se_twoway(fn, pa_, lu_, n_boot, seed)
 
     def _slope(rows):
         xs, ys = xc_all[rows], y[rows]
@@ -376,13 +555,14 @@ def beta_moderation(m, moderators=MODERATORS, n_boot=CLUSTER_BOOT,
 
     A = np.column_stack([np.ones(len(x)), xc_all])
     beta = float(np.linalg.lstsq(A, y, rcond=None)[0][1])
-    se_beta = cluster_se(_slope, players, n_boot, seed)
+    se_beta, se_basis = _se(_slope)
 
     terms = []
     for label, col, note in moderators:
         if col not in d.columns:
             terms.append({"label": label, "note": note, "n": 0,
                           "b3": float("nan"), "se": float("nan"),
+                          "basis": "none",
                           "reason": "column absent from this frame"})
             continue
         z = pd.to_numeric(d[col], errors="coerce").to_numpy(float)
@@ -390,6 +570,7 @@ def beta_moderation(m, moderators=MODERATORS, n_boot=CLUSTER_BOOT,
         if good.sum() < 30 or not float(np.std(z[good])) > 0:
             terms.append({"label": label, "note": note, "n": int(good.sum()),
                           "b3": float("nan"), "se": float("nan"),
+                          "basis": "none",
                           "reason": "no usable spread in the moderator"})
             continue
         xg, yg, zg, pg = xc_all[good], y[good], z[good], players[good]
@@ -407,9 +588,9 @@ def beta_moderation(m, moderators=MODERATORS, n_boot=CLUSTER_BOOT,
             return float(coef[3])
 
         b3 = _b3(np.arange(len(xg)))
-        se = cluster_se(_b3, pg, n_boot, seed)
+        se, basis = _se(_b3, keep=good)
         terms.append({"label": label, "note": note, "n": int(len(xg)),
-                      "b3": b3, "se": se, "reason": None})
+                      "b3": b3, "se": se, "basis": basis, "reason": None})
 
     tested = [t for t in terms if np.isfinite(t["b3"])]
     k = max(len(tested), 1)
@@ -418,6 +599,9 @@ def beta_moderation(m, moderators=MODERATORS, n_boot=CLUSTER_BOOT,
         "n_players": int(len(np.unique(players))),
         "beta": beta,
         "se_beta": se_beta,
+        "se_basis": se_basis,
+        "n_lineups": (int(len(np.unique(lineups))) if lineups is not None
+                      else 0),
         "terms": terms,
         "k": len(tested),
         # The bar a maximum is read against, not zero. `sqrt(2 ln k)` is what
@@ -479,7 +663,8 @@ def team_control(m):
     return len(agg), r, 1.0 / np.sqrt(len(agg) - 3)
 
 
-def ceiling_and_gate(raw, pa, act, sd_pa, se_naive, se_clustered):
+def ceiling_and_gate(raw, pa, act, sd_pa, se_naive, se_clustered,
+                     pred=None, backfill=None):
     """The largest correlation this test could produce, and the n it needs.
 
     WHY A PROBE MUST PRINT THIS. Without it a null is unreadable: the reader
@@ -489,32 +674,43 @@ def ceiling_and_gate(raw, pa, act, sd_pa, se_naive, se_clustered):
     separate a PERFECT composite from a worthless one, and every null it
     produced was compatible with both.
 
-    THE BOUND, and why it is computed from the RAW rate rather than the shrunk
-    one. Shrinkage is affine, so `corr(shrunk, outcome) == corr(raw, outcome)`
-    exactly -- the ceiling cannot depend on K, and a formula that reads K is
-    measuring the wrong thing. The first version of this function used
-    `sd(shrunk)/sd(actual)`. That is exact only when K is the well-calibrated
-    `sigma^2/tau^2`; at the K this repo ships it OVERSTATED the ceiling by 39%
-    in simulation (0.1214 printed against a true 0.0875), because under-
-    shrinking inflates the predictor's spread with noise that cannot correlate
-    with anything.
-
-    The K-free form: with `x` the raw season rate, `x = theta + e` where
+    THE BOUND. With `x` the raw season rate, `x = theta + e` where
     `Var(e) = sigma^2/PA`, so the talent spread is `tau^2 = Var(x) -
-    mean(sigma^2/PA)`, and against an outcome `A = theta + eps`,
+    mean(sigma^2/PA)` -- fitted rather than subtracted, by
+    `fit_variance_components`. Against an outcome `A = theta + eps`, a
+    predictor `P = t + w*(x - t)` has `cov(P, A) = E[w]*tau^2`, so
 
-        corr(x, A) = tau^2 / (sd(x) * sd(A))
+        corr(P, A) <= E[w] * tau^2 / (sd(P) * sd(A))
 
-    `sigma` is the per-PA wOBA sd, measured from the very plate appearances
-    being scored rather than assumed -- ~0.52, against a per-hitter talent
-    spread near 0.03, which is why a few PA of chance dwarf the whole signal
-    and the bound lands near 0.09 however good the rate is.
+    THE BOUND IS FOR THE PREDICTOR ACTUALLY SCORED, and getting that wrong is
+    what this signature exists to stop. The previous version computed the
+    ceiling from the RAW rate and the report compared it against the SHRUNK
+    correlation, on the stated ground that "shrinkage is affine, so
+    `corr(shrunk, outcome) == corr(raw, outcome)` exactly". That is true of one
+    affine map and false of this one: the weight is `PA/(PA+K)`, so a 4-PA
+    hitter and a 650-PA hitter are shrunk by different amounts and the map is
+    not affine across rows at all. Measured on the committed frames,
+    `corr(raw, shrunk) = 0.85`, and the two correlations against the outcome
+    came back +0.0840 and +0.1128 -- a 34% gap under a claim of exactness.
 
-    It remains an APPROXIMATION: it assumes the game noise is independent of
-    talent and that the season rate's noise is binomial in PA. A measured
-    correlation can still exceed it -- the team-level bullpen line does, at
-    105% of its own. Read it as the order of magnitude a null is judged
-    against, never as a threshold something can "beat".
+    Pass `pred` and the bound is computed for it: `E[w]` is recovered from the
+    two stored columns by `shrink_weights`, and `sd(P)` is the scored
+    predictor's own. With `pred=None` the raw rate is the predictor, `E[w]` is
+    1 and this reduces to the earlier formula exactly -- which is why the raw
+    ceiling still cannot depend on `K` while the shrunk one must.
+
+    `backfill` drops rows whose stored rate is not a PA-sized sample at all: a
+    Savant-backfilled hitter carries the team aggregate and sits at the mean by
+    construction, so he has neither the spread nor the noise the variance model
+    assumes. Excluded on the flag the frame records rather than on a PA cutoff,
+    because the flag is the thing that is actually true of those rows.
+
+    It remains an APPROXIMATION -- `E[w]*tau^2` assumes the shrinkage weight is
+    independent of talent, and a hitter who plays more is not a random hitter.
+    A measured correlation can still exceed it. Read it as the scale a null is
+    judged against, never as a bar something can "beat"; the report says so
+    loudly when an observed correlation goes past it, because that is the
+    signature of a broken bound and it is how this one was caught.
 
     The gate is stated at the ceiling AND at half of it, because a rate that is
     real but partial is the likelier outcome and costs four times the sample.
@@ -525,51 +721,48 @@ def ceiling_and_gate(raw, pa, act, sd_pa, se_naive, se_clustered):
     x = np.asarray(raw, float)
     n = np.asarray(pa, float)
     a = np.asarray(act, float)
+    p = x if pred is None else np.asarray(pred, float)
     ok = np.isfinite(x) & np.isfinite(n) & np.isfinite(a) & (n > 0)
+    ok &= np.isfinite(p)
+    n_before = int(ok.sum())
+    if backfill is not None:
+        bf = np.asarray(pd.Series(backfill).fillna(False).astype(bool))
+        if len(bf) == len(ok):
+            ok &= ~bf
+    n_excluded = n_before - int(ok.sum())
     if ok.sum() < 30:
         return None
-    x, n, a = x[ok], n[ok], a[ok]
+    x, n, a, p = x[ok], n[ok], a[ok], p[ok]
     sx = float(np.std(x, ddof=1))
     sa = float(np.std(a, ddof=1))
-    if not (sx > 0 and sa > 0):
+    sp = float(np.std(p, ddof=1))
+    if not (sx > 0 and sa > 0 and sp > 0):
         return None
-    # tau^2 is FITTED, not subtracted. Var(x_i) = tau^2 + sigma^2/n_i, so
-    # regressing squared deviations on 1/n gives tau^2 as the intercept and
-    # sigma^2 as the slope. Subtracting a flat mean(sigma^2/n) instead -- the
-    # first thing tried -- is dominated by the low-PA tail: PA runs down to 4
-    # here, the harmonic mean is 143 against an arithmetic 382, and tau^2 came
-    # out NEGATIVE. Those rows are not PA-sized samples either; a Savant
-    # backfilled hitter carries the team aggregate and sits at the mean by
-    # construction, so his rate has neither the spread nor the noise the model
-    # assumes. The fit is robust to them because they land at one end of 1/n
-    # and move the slope rather than the intercept.
-    inv = 1.0 / n
-    d2 = (x - x.mean()) ** 2
-    if float(np.std(inv)) <= 1e-12 * max(float(np.mean(inv)), 1e-12):
-        # Every hitter carries the same PA, so 1/n cannot separate the two
-        # components and the fit is collinear. There the subtraction IS exact,
-        # given sigma: Var(x) = tau^2 + sigma^2/n with one known n.
-        if not (sd_pa and sd_pa > 0):
-            return None
-        tau2 = sx ** 2 - float(sd_pa) ** 2 * float(np.mean(inv))
-        sig2_fit = float(sd_pa) ** 2
-    else:
-        A = np.column_stack([np.ones(len(n)), inv])
-        try:
-            coef, *_ = np.linalg.lstsq(A, d2, rcond=None)
-        except np.linalg.LinAlgError:
-            return None
-        tau2, sig2_fit = float(coef[0]), float(coef[1])
+    fit = fit_variance_components(x, n, sd_pa)
+    if fit is None:
+        return None
+    tau2, sig2_fit, method = fit
     if tau2 <= 0:
         return None
-    ceil = tau2 / (sx * sa)
+    sw = None if pred is None else shrink_weights(x, p, n)
+    mean_w = 1.0 if sw is None else sw["mean_w"]
+    ceil = mean_w * tau2 / (sp * sa)
     infl = 1.0
     if (se_naive and se_naive > 0 and se_clustered is not None
             and np.isfinite(se_clustered) and se_clustered > 0):
         infl = se_clustered / se_naive
-    return {"sd_raw": sx, "sd_act": sa, "tau": float(np.sqrt(tau2)),
+    return {"sd_raw": sx, "sd_act": sa, "sd_pred": sp,
+            "tau": float(np.sqrt(tau2)),
             "sigma_fit": float(np.sqrt(sig2_fit)) if sig2_fit > 0 else float("nan"),
             "sigma_obs": float(sd_pa) if sd_pa else float("nan"),
+            "fit": method, "n_excluded": n_excluded, "mean_w": mean_w,
+            "shrink_k": (sw or {}).get("k", float("nan")),
+            "shrink_r2": (sw or {}).get("r2", float("nan")),
+            # sigma^2/tau^2 is the K a calibrated shrinkage would use. Printed
+            # because the shipped K is recoverable from the same frame, so the
+            # two sit side by side and the PA moderator's K reading becomes
+            # checkable instead of rhetorical.
+            "k_star": float(sig2_fit / tau2) if tau2 > 0 else float("nan"),
             "ceiling": ceil, "inflation": infl,
             "n_ceiling": (2.0 * infl / ceil) ** 2,
             "n_half": (2.0 * infl / (ceil / 2.0)) ** 2}
@@ -644,6 +837,7 @@ def report(hitters, pa, min_pa=1, ledger=LEDGER):
         if n_sl:
             rate = (len(m) / n_sl, n_sl)
 
+    corrs = {}
     for label, col in (("shrunk (what the composite used)", "xwoba_shrunk"),
                        ("raw (pre-shrinkage)", "xwoba_raw")):
         s = m.dropna(subset=[col, "act"])
@@ -653,40 +847,85 @@ def report(hitters, pa, min_pa=1, ledger=LEDGER):
         cal = ab.calibration(s[col], s["act"])
         r = float(np.corrcoef(s[col], s["act"])[0, 1])
         se = 1.0 / np.sqrt(len(s) - 3)
-        # The clustered SE is the one to read. The naive one is printed beside
-        # it rather than replaced, because the gap between them IS the
-        # dependence, and hiding it would leave a reader unable to see why the
-        # interval is wider than the row count suggests.
-        cse = (cluster_se_corr(s[col].to_numpy(), s["act"].to_numpy(),
-                               s["player_id"].to_numpy())
-               if "player_id" in s else float("nan"))
+        # The clustered SE is the one to read, and it is clustered on BOTH
+        # groupings: a hitter recurs across lineups and nine hitters share one
+        # lineup. The naive one is printed beside it rather than replaced,
+        # because the gap between them IS the dependence, and hiding it would
+        # leave a reader unable to see why the interval is wider than the row
+        # count suggests.
+        lu = ((s["game_pk"].astype(str) + "|" + s["batting_side"].astype(str))
+              .to_numpy() if {"game_pk", "batting_side"} <= set(s.columns)
+              else None)
+        cse, basis = float("nan"), "none"
+        if "player_id" in s:
+            got = cluster_se_corr(s[col].to_numpy(), s["act"].to_numpy(),
+                                  s["player_id"].to_numpy(), clusters_b=lu)
+            cse, basis = got if isinstance(got, tuple) else (got, "player")
         line = (f"  {label:34s} n={len(s):5d}  slope {cal['slope']:+.3f}"
                 f"±{cal['se_slope']:.3f}  corr {r:+.4f}")
         if np.isfinite(cse):
-            say(line + f"±{cse:.4f} clustered  (±{se:.4f} if rows were independent)")
+            say(line + f"±{cse:.4f} {basis} clustered  "
+                f"(±{se:.4f} if rows were independent)")
         else:
             say(line + f"±{se:.4f}")
+        corrs[col] = r
         if col == "xwoba_shrunk":
             cg = ceiling_and_gate(s.get("xwoba_raw"), s.get("PA"), s["act"],
-                                  sd_pa, se, cse)
+                                  sd_pa, se, cse, pred=s[col],
+                                  backfill=s.get("savant_backfill"))
 
     say()
     if cg:
-        say(f"  CEILING  fitted talent sd {cg['tau']:.4f}  (raw spread "
-            f"{cg['sd_raw']:.4f}; per-PA sigma fitted {cg['sigma_fit']:.3f} "
-            f"vs {cg['sigma_obs']:.3f} measured)")
-        say(f"           / sd(own-PA actual) {cg['sd_act']:.4f}"
-            f"  ->  r <= {cg['ceiling']:.4f}")
-        say("    The two sigmas are a CHECK, not decoration: they disagree when")
-        say("    the raw rates are not PA-sized samples, which is when the")
-        say("    fitted talent spread -- and so this whole bound -- is soft.")
-        say("    An exactly correct per-hitter rate could not beat this: a few")
-        say("    plate appearances of wOBA carry an order of magnitude more")
-        say("    noise than the entire spread of hitter talent. Computed from")
-        say("    the RAW rate because shrinkage is affine -- the correlation,")
-        say("    and so the ceiling, cannot depend on K. Approximate, and a real")
-        say("    correlation CAN exceed it: read it as the scale a null is")
-        say("    judged against, never as a bar to clear.")
+        say(f"  CEILING  fitted talent sd {cg['tau']:.4f} ({cg['fit']} fit; raw "
+            f"spread {cg['sd_raw']:.4f}; per-PA sigma fitted "
+            f"{cg['sigma_fit']:.3f} vs {cg['sigma_obs']:.3f} measured)")
+        say(f"           x E[shrink weight] {cg['mean_w']:.4f} / sd(scored "
+            f"predictor) {cg['sd_pred']:.4f} / sd(own-PA actual) "
+            f"{cg['sd_act']:.4f}")
+        say(f"           ->  r <= {cg['ceiling']:.4f}")
+        if cg["n_excluded"]:
+            say(f"    {cg['n_excluded']} row(s) excluded from the variance fit: a")
+            say("    Savant-backfilled hitter carries the team aggregate and sits")
+            say("    at the mean by construction, so his rate is not a PA-sized")
+            say("    sample. Dropped on the frame's own flag, not a PA cutoff.")
+        say("    It bounds the SCORED predictor, not the raw rate. Shrinkage")
+        say("    here is NOT one affine map -- the weight is PA/(PA+K), so a")
+        say("    4-PA hitter and a 650-PA one are shrunk by different amounts")
+        say("    and corr(raw, shrunk) runs about 0.85 on real frames. The raw")
+        say("    ceiling cannot depend on K; the shrunk one does, through E[w]")
+        say("    and the spread shrinkage removes -- weakly, since those two")
+        say("    largely cancel. What does NOT cancel is that the raw and")
+        say("    shrunk bounds differ, and only one of them bounds the number")
+        say("    printed above.")
+        say("    The two sigmas are a CHECK and they are NOT expected to agree:")
+        say("    the predictor is xwOBA and the measured sigma is wOBA's. xwOBA")
+        say("    is near enough wOBA's conditional expectation given batted-ball")
+        say("    shape, so by the law of total variance its per-PA variance is")
+        say("    strictly smaller -- the same argument this repo already makes")
+        say("    for K. A fitted sigma at or above the measured one is the")
+        say("    reading to distrust.")
+        if np.isfinite(cg["shrink_k"]):
+            say(f"    K recovered from the frame's own two rate columns: "
+                f"{cg['shrink_k']:.1f} (R^2 {cg['shrink_r2']:.5f}); the fit "
+                f"implies")
+            say(f"    a calibrated K* = sigma^2/tau^2 of {cg['k_star']:,.0f}. "
+                f"K* above the shipped K is")
+            say("    the same direction the PA moderator below reads as "
+                "'K too small'.")
+        say("    Approximate: E[w]*tau^2 assumes the shrink weight is")
+        say("    independent of talent, and a hitter who plays more is not a")
+        say("    random hitter. A real correlation CAN exceed it -- read it as")
+        say("    the scale a null is judged against, never as a bar to clear.")
+        obs = corrs.get("xwoba_shrunk")
+        if obs is not None and cg["ceiling"] > 0 and abs(obs) > cg["ceiling"]:
+            say(f"    !! OBSERVED corr {obs:+.4f} is "
+                f"{abs(obs) / cg['ceiling']:.1f}x this ceiling. A modest excess")
+            say("    is ordinary; a large one means the bound is wrong or the")
+            say("    interval is, and BOTH are reasons not to bank the")
+            say("    correlation. The first live run printed 5.5x, which is how")
+            say("    the unweighted variance fit and the mismatched predictor")
+            say("    were found. Check the fit method and the clustering basis")
+            say("    above before reading anything below.")
         say(f"  GATE  {cg['n_ceiling']:,.0f} hitter-games for |z| = 2 if the rate "
             f"is perfect,")
         say(f"        {cg['n_half']:,.0f} if it is half that strong"
@@ -736,10 +975,17 @@ def report(hitters, pa, min_pa=1, ledger=LEDGER):
         say("    term is whether beta varies across hitters. Flat beta closes")
         say("    the aggregation question; a varying one hands the weights over.")
         say()
-        sb = (f"±{bm['se_beta']:.4f} clustered" if np.isfinite(bm["se_beta"])
-              else " (no clustered SE: fewer than 3 players)")
+        sb = (f"±{bm['se_beta']:.4f} {bm['se_basis']} clustered"
+              if np.isfinite(bm["se_beta"])
+              else " (no clustered SE: fewer than 3 clusters)")
+        lu = (f" in {bm['n_lineups']:,} lineups" if bm["n_lineups"] else "")
         say(f"    pooled beta {bm['beta']:+.4f}{sb}   "
-            f"n={bm['n']:,} hitter-games over {bm['n_players']:,} players")
+            f"n={bm['n']:,} hitter-games over {bm['n_players']:,} players{lu}")
+        if bm["se_basis"] != "two-way":
+            say(f"      SE basis '{bm['se_basis']}': the lineup grouping was not")
+            say("      available or the two-way estimator came back degenerate,")
+            say("      so this interval carries less of the dependence than the")
+            say("      rows actually have. Read it as a floor.")
         say("      beta is the slope of his own realised wOBA on his predicted")
         say("      rate. It is NOT the correlation above rescaled by taste --")
         say("      the weights read the slope, so the slope is what is fitted.")
@@ -753,17 +999,25 @@ def report(hitters, pa, min_pa=1, ledger=LEDGER):
                  else float("nan"))
             zt = f"z {z:+.2f}" if np.isfinite(z) else "z n/a"
             say(f"      {t['label']:20s} b3 {t['b3']:+.4f}"
-                f"±{t['se']:.4f}  {zt}   n={t['n']:,}")
+                f"±{t['se']:.4f}  {zt}   n={t['n']:,}  [{t['basis']}]")
             say(f"        {t['note']}")
         say("      A material PA term is a statement about K BEFORE it is one")
         say("      about hitters: on the shrunk rate that slope is")
         say("      (PA+K)/(PA+K*), flat only when K is calibrated. b3 > 0 says")
         say("      K is too small. Fix K there, not the weights -- re-weighting")
         say("      on a beta that is really an un-shrunk residual is a second,")
-        say("      worse copy of the shrinkage. (This does not reopen the")
-        say("      standing note that K cannot fix the lineup CORRELATION:")
-        say("      shrinkage is affine, so it moves spread and slope and never")
-        say("      order. The weights read the slope.)")
+        say("      worse copy of the shrinkage.")
+        say("      The standing note that K cannot fix the lineup CORRELATION")
+        say("      rests on shrinkage being affine in the lineup mean, which")
+        say("      holds when the nine hitters carry equal PA. They do not:")
+        say("      within-lineup PA varies at a CV near 0.44 on the committed")
+        say("      frames, and the slot-weighted composites built from the raw")
+        say("      and shrunk rates correlate about 0.82 (Spearman 0.89) --")
+        say("      so K moves the composite's ORDER, not only its spread. That")
+        say("      falsifies the premise, and NOT the conclusion: nothing here")
+        say("      measures whether a different K would correlate better, and")
+        say("      no-lookahead means a past slate cannot be rebuilt to find")
+        say("      out. Treat it as reopened and unmeasured, not as a fix.")
         say("      The shrinkage weight is deliberately NOT a fourth row:")
         say("      PA/(PA+K) is strictly increasing in PA, so it is the first")
         say("      row relabelled and counting it twice would inflate the")

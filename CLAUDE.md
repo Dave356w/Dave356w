@@ -2676,6 +2676,22 @@ them cannot be smoke-tested locally; run the workflow.
   path.** The `xwoba` selection name reached the primary build only after the
   arm resolved it against the live endpoint, where being wrong cost a log line
   instead of a slate.
+- **A statistic far above its own printed bound is an instrument, not an
+  embarrassment — so print the ratio.** A ceiling exists to make a null
+  readable; a ceiling that is quietly violated makes a POSITIVE unreadable too,
+  and nothing was watching that direction. `hitter_level_probe` printed corr
+  +0.1128 against a ceiling of 0.0204 and the excess, once chased, named three
+  separate defects: a bound computed for the wrong predictor, an unweighted
+  variance fit, and a clustered SE carrying half the dependence. Same shape as
+  `an SE of zero is never a result` — an estimator saying it has nothing to
+  say, published as though it had.
+- **A clustered SE carries only the grouping you resampled.** Where the
+  dependences are CROSSED rather than nested — a hitter recurring across
+  lineups, nine hitters sharing a lineup — one-way clustering corrects one and
+  leaves the other, and the interval still reads decisive. Cameron-Gelbach-Miller
+  (`V_a + V_b − V_ab`) is three calls to the same resampler. Name the basis on
+  the line: a one-way fallback, a two-way estimate and a naive interval are
+  three different numbers and only one of them is the one you meant.
 - **Close what arithmetic closes before searching, and pair before you power
   up.** Seven lineup composites "all inside one standard error" was a true
   null over the least powerful statistic available: the variants share their
@@ -2848,6 +2864,27 @@ Do not re-derive these by hand; they have readouts.
   construction, which would corrupt both — but only 23 of 598 side-games have
   any, and the zero-backfill subset is slightly *worse* (corr −0.080 ± 0.042).
 
+  **"Varying PA makes that only second-order untrue" is false, measured
+  2026-09-16, and the premise is what falls rather than the conclusion.** The
+  equal-PA case is real algebra; the frames are not that case. Within-lineup PA
+  runs at a coefficient of variation near **0.44** (p90 0.68), and the
+  slot-weighted composites built from the raw and the shrunk rates correlate
+  **0.817** on the committed frames (Spearman 0.886) — not 1.0 to float
+  precision, which is what the affine premise would give. At the hitter level
+  it is worse: `corr(raw, shrunk) = 0.85`, and the two score +0.0840 and
+  +0.1128 against the same outcomes. So `K` moves the composite's ORDER, not
+  only its spread.
+
+  That does NOT make `K` the fix. Nothing measures whether a different `K`
+  correlates better, and no-lookahead forbids rebuilding a past slate to find
+  out, so the honest state is **reopened and unmeasured** — not "K would help".
+  The paragraph above stood for weeks as a closed door resting on a premise
+  nobody had checked against the frames, which is this file's own
+  `verify, don't recall` rule failing on its own text. `lineup_agg_probe`'s
+  `slot-weighted raw` row had been printing ρ = 0.786 against the shipped
+  composite since the panel landed; the refutation was already on the page and
+  was read as a variant score rather than as a premise check.
+
   **Forward only, and that is structural rather than an oversight.** Rebuilding
   a past slate's per-hitter frame needs that slate's Savant leaderboard, which
   is exactly the lookahead `.savant_cache/` exists to forbid, so the 299 v12
@@ -2863,9 +2900,13 @@ Do not re-derive these by hand; they have readouts.
   implicates the aggregation; the two agreeing implicates the rate. The probe
   prints the raw pre-shrinkage rate beside the shrunk one, which is the
   comparison K cannot be tuned on at team level for the reason above, and the
-  SE it prints is clustered on `player_id` because one hitter recurs across his
-  games — 0.0727 against 0.0634 if the rows were independent, on the first
-  clean run.
+  SE it prints is clustered on `player_id` AND on the lineup, because the two
+  dependences are crossed: one hitter recurs across his games, and nine hitters
+  share a game and an opposing starter. Clustering on the player alone was the
+  first version and it is what let a correlation 5.5x its own ceiling print at
+  z = 2.74 — see the second reading below. The report names the basis it used
+  on every line, because a one-way fallback and a two-way estimate are not the
+  same interval and neither is the naive one.
 
   **First clean reading, 2026-09-14: 252 hitter-games, 1002 scoring PAs, shrunk
   corr +0.0841 ± 0.0727 clustered (z = +1.16), raw −0.0119 ± 0.0804.** Nothing
@@ -2873,6 +2914,63 @@ Do not re-derive these by hand; they have readouts.
   than a number. Note only that shrunk and raw SPLIT here, where the
   contaminated sample had them nearly identical (+0.0499 against +0.0503) —
   which is a reason to keep both columns, not a finding.
+
+  **Second reading, 2026-09-16, and what it actually produced was three
+  defects rather than a result.** 702 hitter-games over 338 players and 9
+  slates: shrunk corr **+0.1128 ± 0.0412** at an apparently decisive z = 2.74,
+  **against a ceiling the same run printed at 0.0204** — 5.5x its own bound.
+  The probe's text allows a real correlation to exceed the bound and cites 105%
+  as precedent. 553% is not that, and the excess was the instrument, not the
+  embarrassment: chased down it named all three.
+
+  * **The bound was for the wrong predictor.** `ceiling_and_gate` computed it
+    from the RAW rate while the report held it against the SHRUNK correlation,
+    on the affine claim the paragraph above now retracts. The bound is
+    `E[w]·τ²/(sd(P)·sd(A))` for the predictor actually scored; `E[w]` and `K`
+    are recovered from the frame's own two rate columns — `PA·(s−x)` regressed
+    on `[1, s]` returns `−K` and `K·t`, which reads 99.99 and 0.314657 at
+    R² 0.99999. Read off the DATA, never imported: a frame may have been
+    written under a different `K` than the build reading it, and `build_site`
+    refuses a non-xwOBA tag at import, so importing the constant would make the
+    probe unusable in the era where an old frame most needs reading.
+  * **The variance fit was unweighted.** `Var((x−μ)²) = 2(τ² + σ²/PA)²`, so a
+    low-PA row is not merely noisier but enormously more VARIABLE, and OLS —
+    which assumes it is not — hands the fit to it. PA runs down to 4 with 5% of
+    rows under 70. OLS returned τ = 0.0173 and σ = 0.487; IRLS at `1/fitted²`
+    returns τ = 0.0268 and σ = 0.363. A PA cutoff was the alternative and was
+    rejected as the threshold cliff this repo has removed four times. **IRLS is
+    a mitigation, not a cure**: a simulation with a model-violating low-PA tail
+    has OLS collapse τ to 0.000 and IRLS recover 0.0102 against a true 0.030 —
+    better, still biased low.
+  * **The clustering carried half the dependence.** The two groupings are
+    CROSSED — a hitter recurs across lineups, nine hitters share a lineup, a
+    game and an opposing starter — and only the first was resampled. Now
+    Cameron-Gelbach-Miller, `V = V_player + V_lineup − V_row`, falling back to
+    the wider one-way SE when the estimator goes negative and SAYING which
+    basis it used.
+
+  Together the bound moves **0.0204 → 0.0818** and the excess from 5.5x to
+  1.4x, which is the band the approximation allows. Do not read that as the
+  correlation being rescued: it was never established, and the interval it is
+  read against is now wider as well.
+
+  **The reusable half: an observed statistic far above its own printed bound is
+  an instrument, so the probe now prints the ratio and says loudly that the
+  bound or the interval is wrong.** A ceiling exists to make a null readable;
+  one that is quietly violated makes a POSITIVE unreadable too, and nothing was
+  watching that direction. Same shape as the `SE of zero is never a result`
+  entry — an estimator saying it has nothing to say, published as though it had.
+
+  Two things fell out that are worth their own line. `σ_fit` and `σ_obs` are
+  printed as a CHECK and the old copy implied they should AGREE; they should
+  not. The predictor is xwOBA and the measured σ is wOBA's, and xwOBA is near
+  enough wOBA's conditional expectation given batted-ball shape that by the law
+  of total variance its per-PA variance is strictly smaller — the same argument
+  this file already makes for `K`. **A fitted σ at or above the measured one is
+  the reading to distrust**, which is exactly what the unweighted fit produced.
+  And the fit now prints the calibrated `K* = σ²/τ²` beside the `K` recovered
+  from the frame, so the PA moderator's "K too small" reading is checkable
+  rather than rhetorical.
 
   **Three things the team-level side has already ruled out, so the probe is not
   chasing them.** The ceiling is arithmetic, not a fault: `d_lineup` has sd
