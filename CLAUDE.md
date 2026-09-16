@@ -3446,6 +3446,31 @@ the same mask as the record; it was a returned-and-unrendered key listed as
 label says neither: ROI is a rate, units is a total, and `+1.57u` is
 unambiguous where `ROI +1.57u` would name one and show the other.
 
+**One card, two labels for one quantity — found by rendering both branches
+side by side, not by reading either function.** The FOLLOW intersection line
+read `ROI +4.69u` while the FADE branch line beside it read `+2.58u`. ROI is a
+RATE and units is a TOTAL, so the first named one quantity and showed another.
+It survived because the two lines were written on separate operator calls and
+neither was ever read beside the other — the "one value, three homes" defect in
+copy, the same class as the `MARKET FAVORITE` rename. Worse, the docstring
+defended it: "read the two as different surfaces on purpose, not as one
+drifting" is prose justifying an inconsistency rather than a design, and it is
+deleted rather than softened.
+
+Both card lines now read `W-L (0.xxx) · +N.NNu`. `ROI` survives only on the
+grades page, where it IS a rate and prints as `+11.4%`. Pinned by
+`test_card_units_are_never_labelled_roi`, which walks the RENDERED panel for
+both branches and forbids the word beside a unit suffix — a rule rather than
+the two instances, since pinning `ROI +4.69u` absent would pass just as happily
+if a third line reintroduced it somewhere else. The fixture asserts it reached
+a record line first, which is the trap the key-coverage test below fell into.
+
+**The general lesson, and it is the session's third instance: the defect was
+visible only when two surfaces were put on one page.** Reading
+`_xwoba_side_history` alone shows a label and a value that each look right.
+Neither function is wrong in isolation. What was wrong was the pair, and no
+amount of re-reading either one would have surfaced it.
+
 **Two tests were found asserting nothing while the shape changed under them.**
 `test_verdict_panel_leaves_no_computed_key_unrendered` passed a FOLLOW branch
 at |Δ| .02, which routes to the delta-by-price intersection history and renders

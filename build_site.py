@@ -4446,14 +4446,23 @@ def _xwoba_side_history(ctx, delta, selection_ml=None):
     historical rows themselves are still bucketed on their closing prices.
 
     The record carries FLAT-STAKE UNITS rather than a reliability marker, on
-    the operator's call. That is a deliberate reversal of the rule stated in
-    `_branch_history` -- which still holds for the branch line beside it -- so
-    read the two as different surfaces on purpose, not as one drifting: the
-    branch line keeps its record price-relative with the branch's own average
-    price, and this one does it with the units those same closing prices
-    actually returned. `units` is the sum of `_american_unit_profit` at 1u a
+    the operator's call. `units` is the sum of `_american_unit_profit` at 1u a
     game, priced at each row's own close, so it is already price-relative in
     the way a bare win rate is not: 5-5 at -200 is a loss and reads as one.
+
+    THE LABEL SAID `ROI` AND THE VALUE WAS UNITS -- fixed 2026-09-16. ROI is a
+    RATE and units is a TOTAL, so `ROI +4.69u` named one quantity and showed
+    another. It survived because the two card lines were written on separate
+    operator calls and neither was read beside the other; rendering both cards
+    from live ledger data in one page is what exposed it, not reading either
+    function. The paragraph this replaces made the divergence sound deliberate
+    -- "read the two as different surfaces on purpose, not as one drifting" --
+    which is prose defending an inconsistency rather than a design.
+
+    Both card lines now read `W-L (0.xxx) · +N.NNu`, and `ROI` survives only on
+    the grades page, where it IS a rate and prints as `+11.4%`. One label per
+    quantity; `test_card_units_are_never_labelled_roi` pins that no card line
+    pairs the word with a unit suffix.
 
     What went with the marker is a CLAIM, not decoration -- these rows are
     retrospective, the v2 gates were chosen after this sample, and the ranges
@@ -4486,7 +4495,7 @@ def _xwoba_side_history(ctx, delta, selection_ml=None):
     model_unit = "game" if model["n"] == 1 else "games"
     body = ("<div class='vline'><span class='vk'>Past results</span>"
             f"<span>{model['w']}-{model['l']} "
-            f"({model['actual']:.3f}) · ROI {model['units']:+.2f}u</span></div>")
+            f"({model['actual']:.3f}) · {model['units']:+.2f}u</span></div>")
     return (
         "<div class='vprofile'>"
         f"<div class='vprofile-title'>Past {version} XWOBA SIDE picks</div>"

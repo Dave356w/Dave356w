@@ -3450,7 +3450,7 @@ class HybridRuleTests(unittest.TestCase):
         self.assertIn(
             "Δ .010–.020 · closing ML +100 to +129 · 14 games", html)
         self.assertIn(
-            "Past results</span><span>7-7 (0.500) · ROI -1.80u",
+            "Past results</span><span>7-7 (0.500) · -1.80u",
             html)
 
     def test_pit_acceptance_panel_has_the_requested_reads(self):
@@ -3470,7 +3470,7 @@ class HybridRuleTests(unittest.TestCase):
             "remains the XWOBA side",
             "Past V12 XWOBA SIDE picks",
             "Δ .010–.020 · closing ML +100 to +129 · 14 games",
-            "Past results</span><span>7-7 (0.500) · ROI -1.80u",
+            "Past results</span><span>7-7 (0.500) · -1.80u",
         ):
             self.assertIn(expected, html)
         for banned in ("value bet", "best bet", "free money", "lock"):

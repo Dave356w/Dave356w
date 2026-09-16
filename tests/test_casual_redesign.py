@@ -533,7 +533,7 @@ class RenderTests(unittest.TestCase):
         self.assertIn(
             "Δ .020–.030 · closing ML -174 to -130 · 32 games", follow)
         self.assertIn(
-            "Past results</span><span>21-11 (0.656) · ROI +4.62u",
+            "Past results</span><span>21-11 (0.656) · +4.62u",
             follow)
         # The reason has to sit on the decision, not be inferable from two
         # numbers printed above it.
@@ -616,7 +616,7 @@ class RenderTests(unittest.TestCase):
         self.assertIn(
             "Δ .020–.030 · closing ML -174 to -130 · 32 games", follow)
         self.assertIn(
-            "Past results</span><span>21-11 (0.656) · ROI +4.62u",
+            "Past results</span><span>21-11 (0.656) · +4.62u",
             follow)
 
     def test_market_over_lean_panel_prints_its_own_error_bar(self):
@@ -641,6 +641,42 @@ class RenderTests(unittest.TestCase):
         # Singular, and the count lives in the heading rather than being
         # repeated on the row beneath it.
         self.assertIn("1 game<", h)
+
+    def test_card_units_are_never_labelled_roi(self):
+        """One label per quantity: ROI is a rate, units is a total.
+
+        The FOLLOW intersection line read `+4.69u` while the FADE branch
+        line beside it read `+2.58u` -- two labels for the same quantity on one
+        card, with one of them naming a rate and showing a total. It survived
+        because the two lines were written on separate operator calls and never
+        read beside each other; rendering both cards in one page is what
+        exposed it.
+
+        Pinned as a RULE over the rendered panel rather than as the two
+        instances, because pinning `+4.69u` absent would pass just as
+        happily if a third line reintroduced it somewhere else. `ROI` may still
+        appear on the grades page, where it is a rate and carries `%` -- that
+        surface is not built here and is not what this walks.
+        """
+        ctx = {
+            ("branch", "FADE"): dict(n=19, w=13, l=6, implied=.58, actual=.684,
+                                     excess=.104, excess_se=.11, roi=.136,
+                                     units=2.58),
+            ("delta_price_follow", 2, "-174 to -130"): {"model": dict(
+                n=34, w=23, l=11, implied=.60, actual=.676, excess=.076,
+                excess_se=.08, roi=.138, units=4.69)},
+        }
+        panels = [
+            b._verdict_html("LAD", dict(p_home=.70, away_ml=200, home_ml=-260),
+                            "LAD", "ARI", ctx, .005),
+            b._verdict_html("ARI", dict(p_home=.62, home_ml=-160),
+                            "LAD", "ARI", ctx, .025),
+        ]
+        for h in panels:
+            # The fixture has to reach a record line, or the rule is vacuous --
+            # the trap the key-coverage test above fell into.
+            self.assertRegex(h, r"\d+-\d+ \(\d\.\d{3}\) · [+-]\d+\.\d{2}u")
+            self.assertNotRegex(h, r"ROI\s*[+-]?\d+(\.\d+)?u")
 
     def test_verdict_panel_leaves_no_computed_key_unrendered(self):
         """Every key _lean_market_agg returns must reach a surface.
@@ -727,7 +763,7 @@ class RenderTests(unittest.TestCase):
             ctx, .02)
         self.assertIn("Δ .020–.030", h)
         self.assertIn("closing ML +100 to +129 · 8 games", h)
-        self.assertIn("5-3 (0.625) · ROI +2.15u", h)
+        self.assertIn("5-3 (0.625) · +2.15u", h)
         self.assertNotIn("45\u201350%", h)
 
     def test_intersection_changes_with_the_selected_price_rung(self):
@@ -740,7 +776,7 @@ class RenderTests(unittest.TestCase):
         h = b._verdict_html(
             "ARI", dict(p_home=.52, home_ml=-108), "LAD", "ARI", ctx, .02)
         self.assertIn("closing ML -129 to -100 · 21 games", h)
-        self.assertIn("12-9 (0.571) · ROI -0.35u", h)
+        self.assertIn("12-9 (0.571) · -0.35u", h)
 
     def test_a_thin_branch_is_marked_thin_on_its_own_row(self):
         """A thin branch must not read as a rate you can rely on.
@@ -806,7 +842,7 @@ class RenderTests(unittest.TestCase):
         self.assertNotIn("prediction for this game", h)
         # The units figure is the reason the marker went; it must be present,
         # signed, and never rendered as a rate for the next game.
-        self.assertIn("ROI +4.62u", h)
+        self.assertIn("+4.62u", h)
 
     def test_verdict_never_claims_a_value_bet(self):
         """Measured walk-forward, no bucket in this ledger beats the close.
