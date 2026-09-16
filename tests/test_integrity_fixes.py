@@ -3594,9 +3594,18 @@ class HybridRuleTests(unittest.TestCase):
         directly under tonight's two clubs, which reads as this pick's win
         probability. It is the rate at which PAST picks in the same branch won,
         and the site publishes no per-game probability at all. So the block is
-        headed by its own sample, every value row is past tense, and the two
-        percentages that used to sit unlabelled a line apart -- this game's
-        no-vig price and the branch's average price -- are each named.
+        headed by its own sample and every value row is past tense.
+
+        The two-percentages half of this changed on 2026-09-16 and the claim is
+        restated rather than dropped. It used to require that this game's
+        no-vig price and the branch's average price each be NAMED, because the
+        two sat unlabelled a line apart. The branch's average price is no
+        longer on the card -- the record carries flat-stake units instead, and
+        the implied price moved to market-calibration.html with the other
+        controls. So the ambiguity is REMOVED rather than labelled, which is
+        the stronger form: there is exactly one percentage on the panel, it is
+        this game's price, and the branch's rate is a decimal that cannot be
+        read as one.
         """
         ctx = {("branch", "FADE"): dict(n=15, w=11, l=4, implied=.586,
                                         actual=.733, excess=.147,
@@ -3609,11 +3618,14 @@ class HybridRuleTests(unittest.TestCase):
         # The bare rate must not appear as its own value; it is qualified by
         # the record it came from.
         self.assertNotIn("<span>73.3%</span>", h)
-        self.assertIn("<b>11-4 (73.3%)", h)
-        # The game's own price and the branch's average price are distinct
-        # numbers and must be distinctly labelled.
+        self.assertIn("<b>11-4 (0.733) · +3.56u</b>", h)
+        # This game's price is named, and it is now the ONLY percentage on the
+        # panel -- asserted as a COUNT rather than as a pair of substrings, so
+        # a second one reappearing anywhere fails here instead of silently
+        # recreating the ambiguity this test exists for.
         self.assertIn("30.0% no-vig", h)
-        self.assertIn("11-4 (73.3%) vs 58.6% priced", h)
+        self.assertEqual(len(re.findall(r"\d+\.\d%", h)), 1, h)
+        self.assertNotIn("58.6%", h)
 
     def test_the_ledger_labels_each_undecidable_case_distinctly(self):
         """Three different reasons the rule did not act, three different marks.
