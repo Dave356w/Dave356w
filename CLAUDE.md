@@ -2415,7 +2415,7 @@ registered pregame scorer excludes and counts malformed locked commitments;
 close-scored sections exclude missing `close_p_home` and their rule-specific
 inputs, while relying on the market join to supply the paired moneylines.
 
-**Probes run on demand.** Sixteen read committed artifacts and need no live API.
+**Probes run on demand.** Seventeen read committed artifacts and need no live API.
 All run anywhere with one qualification, stated in its own row:
 `hitter_level_probe` executes but cannot produce a reading without the
 collector's per-PA CSV. Recount this list when you add a probe: the lead
@@ -2440,6 +2440,7 @@ the count is the one thing here a reader cannot check without counting:
 | `bp_ablation.py` | does removing the bullpen term change any decision? |
 | `compare_v8_v9.py` | what the v9 sequential form changed against v8 |
 | `shadow_report.py` | what the paired metric arm can and cannot settle |
+| `phase_benchmark_probe.py` | should each phase's ratio have its own peer benchmark? Closes the hitter half and the uniform-centre case by arithmetic, then decides the rest on the realised SP-minus-BP gap rather than on a correlation |
 
 Seven need a live API and therefore a GitHub runner — `espn_403_probe`,
 `matchup_form_probe`, `phase_actuals_probe`, `pitch_arsenal_probe`,
@@ -2449,6 +2450,97 @@ and StatsAPI are unreachable from the dev environment, so a probe that needs
 them cannot be smoke-tested locally; run the workflow.
 
 ### Measured and rejected
+
+- **Phase-matched peer benchmarks, and the correlation that preferred
+  deleting a real effect.** Proposed as a well-specification fix: give every
+  ratio in `matchup_value` the benchmark of its own population — a
+  starters-allowed centre for the SP phase, an available-bullpen centre for
+  the BP phase, and a lineup benchmark built the same way the lineup composite
+  is, platoon adjustment included. Measured 2026-09-16 by
+  `phase_benchmark_probe.py` over the 444 v12 rows. Not shipped, `MODEL_TAG`
+  unchanged, and the reason is the ground-truth measurement rather than the
+  correlation.
+
+  **Two premises had to be corrected first, and both change what is left to
+  fix.** The model does not shrink pitching toward "one general pitching
+  mean": relievers already shrink toward the relief pool's own unweighted
+  centre (wOBA v3's half that v11 retained) and starters shrink toward the
+  league BATTER centre. So the population-shrinkage proposal is already
+  shipped on the bullpen side. On the starter side it is measured and small —
+  `prior_population_centres` prints it every build, and on 2026-09-16 the
+  slate probables sat **−0.0016** from the shared target for a displacement of
+  **−0.0004** on a published starter rate (mean prior weight 0.258, because a
+  probable carries ~430 BF). Pooled across 33 slates of published values the
+  ledger reads the same gap at −0.0027. Against a median `|xw_net|` of 0.0181
+  there is nothing there to correct.
+
+  **What arithmetic closes.** *Peer-reporting only* — computing the separate
+  averages and displaying them — is a no-op on every lean by construction, so
+  it is not a variant. *The pitcher benchmark cancels out of `M` whenever the
+  phase's expected level equals what that phase's pitchers allow*, surviving
+  only in the baseline `edge` subtracts: phase matching is a re-centring, and
+  its whole content is that the two phases are centred in different places.
+  Give both phases ONE centre and `net` is multiplied by a positive constant —
+  the delta stretches, no sign flips, every correlation is unchanged. That is
+  a scale statement, not an identity, and the first draft of the test asserted
+  the identity and was falsified by its own frame. *The hitter half cannot
+  matter much*: the pitcher centres differ by 0.0156 and the hitter centres by
+  0.0016, ten times less. Measured, the hitter knob flips **0** leans at mean
+  `|Δ net|` 0.00032. The user-facing refinement is the smallest thing on the
+  table.
+
+  **The whole effect is the pitcher knob, and it points the right way without
+  separating**: 12 flips of 444, mean `|Δ net|` 0.00260, paired **d_corr
+  +0.0105 ± 0.0065 (z +1.62)** against a 3-comparison noise bar of 1.48.
+  Swept as a dial from shipped to fully matched, d_corr rises **monotonically**
+  and never separates at any point on it.
+
+  **The measurement that decides it is not a correlation.** The shipped form
+  predicts an SP-minus-BP phase gap of **+0.01734**, because the bullpen
+  composite is a usage-weighted aggregate of the arms a club actually uses and
+  sits 0.0183 below the league batter centre it is divided by. Full phase
+  matching predicts **+0.00001**. The ledger already holds the answer:
+  `act_sp_*` is the starter's allowed line and the team batting line minus it
+  is the bullpen's, so the realised gap is computable from committed rows with
+  no API call and no lookahead. Over **854 sides / 429 games** it is
+  **+0.01085 ± 0.00579, CI [−0.00050, +0.02236]** (PA-weighted, game-clustered
+  bootstrap). Both candidates sit inside that interval, so the actuals do not
+  separate them either — but the gap they measure is **positive**. Relievers
+  do suppress offense. Phase matching would remove a real effect, not an
+  artifact, and the correlation that likes it has no way to tell those apart.
+  The two readings also disagree about where the optimum is: d_corr wants
+  λ = 1 and the realised gap implies **λ = 0.420**.
+
+  A middle λ is exactly the fitted literal this file's constants entry
+  forbids, and it would buy a `MODEL_TAG` bump, a reset record family and a
+  fresh `_SCALE_FAMILIES` question for a change that moves 12 of 444 leans on
+  a statistic that never clears its own noise bar. Read the closure as the
+  durable part: *most of what looks like four preregistrable variants is one
+  predictor, and three of the four are answered on paper.*
+
+  **One live defect fell out of it and is fixed here.** The build log's
+  `pitchers:RP` row claimed in its comment to describe "the pool
+  `bullpen_xwoba_aggregate` actually shrinks -- not a proxy for it." It does
+  not: `relief_pitcher_ids` walks a club's ACTIVE ROSTER and additionally
+  requires `appearances > 0`, while the diagnostic walks the whole Savant
+  leaderboard, which carries the marginal arms no club rosters. On the
+  2026-09-16 build the two read **0.3250** and **0.3000** against a target of
+  0.31463 — same magnitude, **opposite sign**, so a reader answering exactly
+  the question above off that row would conclude the relief pool sits above
+  the league centre when the pool the model uses sits below it. The row is now
+  `pitchers:RP(leaderboard)` and the real target is on the line immediately
+  above it, where `relief_pool_prior` already logged it. Pinned by a test that
+  asserts the PROPERTY — a pitcher on no roster still appears, and the
+  function takes no roster argument — because pinning the spelling would pass
+  just as happily if a later rename kept the meaning wrong. Log-only; no lean,
+  delta, grade or ledger row moves.
+
+  **What none of this bears on: `K`.** Whether starters and relievers want
+  different `K` is a question about `sigma^2/tau^2` per population, which
+  needs per-player raw rates and sample sizes; the ledger stores shrunk
+  aggregates only, and `reliever_shrink_probe` fits a wOBA-denominated `K`
+  this build does not use. Unmeasured, as the model-versioning section already
+  records — not answered here in either direction.
 
 - **A sweep of every unused pregame column for a signal against price — 26
   hypotheses, nothing above the noise floor.** Recorded so it is not re-run:
@@ -2641,6 +2733,19 @@ them cannot be smoke-tested locally; run the workflow.
 
 ### Rules these have earned
 
+- **A correlation cannot tell "removes a bias" from "removes a real effect".**
+  When a proposed change makes a directly observable prediction, measure that
+  first and let it decide. Phase matching scored d_corr +0.0105 (z +1.62) and
+  would have set the predicted SP-minus-BP gap to ~0 against a realised
+  +0.01085 — the correlation preferred deleting an effect the box scores say
+  is there. A scoring metric ranks; only the mechanism's own observable says
+  which direction is right.
+- **Ask what a variant list closes before you score it.** Four preregistered
+  variants of the phase-benchmark change were one predictor plus three
+  paper answers: peer-reporting-only cannot move a lean by construction, a
+  uniform centre only rescales the delta, and the hitter half has ten times
+  less room than the pitcher half and flipped nothing. Scoring all four would
+  have been a four-cell search over one effect.
 - **The null-max test is necessary and NOT sufficient; only a walk-forward
   closes a threshold question.** Two variants cleared the search test and then
   failed forward: the ROI-tuned cell (P = 0.0155, then +9.68% against shipped's
