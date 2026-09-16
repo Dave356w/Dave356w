@@ -1980,9 +1980,20 @@ def prior_population_centres(batter_cust, pitcher_cust, prior, k,
                          if pd.notna(i) else None)
         share = pd.to_numeric(share, errors="coerce")
         ip_app = pd.to_numeric(ip_app, errors="coerce")
-        # Same predicate relief_pitcher_ids uses, so the RP row describes the
-        # pool bullpen_xwoba_aggregate actually shrinks -- not a proxy for it.
-        add("  pitchers:RP", pitcher_cust,
+        # The role predicate is `relief_pitcher_ids`', and that is ALL it
+        # shares with the pool the model shrinks. That function walks a club's
+        # ACTIVE ROSTER and additionally requires `appearances > 0`; this walks
+        # the whole Savant leaderboard. The row is therefore a leaderboard-wide
+        # proxy, and the label says so rather than leaving a reader to assume
+        # otherwise -- it used to claim it was "not a proxy for it", which was
+        # false and mattered in the direction that misleads. Measured on the
+        # 2026-09-16 build: this pool centres at 0.3250, +0.0104 ABOVE the
+        # shared target, while `relief_pool_prior` -- the number relievers are
+        # actually shrunk toward, logged on the line immediately above this
+        # block -- read 0.3000, 0.0146 BELOW it. Same magnitude, opposite sign,
+        # because the leaderboard carries the marginal arms no club rosters.
+        # Read the two together; the roster-filtered one is the live target.
+        add("  pitchers:RP(leaderboard)", pitcher_cust,
             (share <= RP_MAX_START_SHARE) & (ip_app <= RP_MAX_IP_PER_APPEARANCE))
         add("  pitchers:SP", pitcher_cust, share > RP_MAX_START_SHARE)
     if probable_ids and pitcher_cust is not None and "player_id" in pitcher_cust.columns:
@@ -2002,11 +2013,11 @@ def log_prior_population_centres(batter_cust, pitcher_cust, prior, k,
         return
     log(f"  shrinkage target = {prior:.5f} (PA-weighted league {MODEL_RATE_LABEL}), "
         f"K={k:.0f}; pool centres:")
-    log(f"    {'pool':<24}{'n':>6}{'wtd':>9}{'unwtd':>9}{'mean w':>9}"
+    log(f"    {'pool':<28}{'n':>6}{'wtd':>9}{'unwtd':>9}{'mean w':>9}"
         f"{'unwtd-tgt':>11}{'bias':>9}{'r(rate,lnN)':>13}")
     for label, m in rows:
         r_n = "     --" if m["r_n"] is None else f"{m['r_n']:>+7.3f}"
-        log(f"    {label:<24}{m['n']:>6}{m['weighted']:>9.4f}{m['unweighted']:>9.4f}"
+        log(f"    {label:<28}{m['n']:>6}{m['weighted']:>9.4f}{m['unweighted']:>9.4f}"
             f"{m['mean_w']:>9.3f}{m['unweighted'] - prior:>+11.4f}{m['bias']:>+9.4f}"
             f"{r_n:>13}")
 

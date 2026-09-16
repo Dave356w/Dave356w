@@ -1350,9 +1350,17 @@ class PriorPopulationCentreTests(unittest.TestCase):
         self.assertAlmostEqual(m["bias"], 0.0, places=9)
 
     def test_pitcher_subpools_use_the_relief_pitcher_ids_predicate(self):
-        """A swingman on the boundary must land in the same pool the model
-        would shrink him in. If RP_MAX_START_SHARE moves, this fails here
-        rather than silently describing a pool the bullpen never used."""
+        """A swingman on the boundary must land on the same side of the ROLE
+        predicate the model uses. If RP_MAX_START_SHARE moves, this fails here
+        rather than silently describing a pool the bullpen never used.
+
+        The predicate is all the two share: `relief_pitcher_ids` also walks a
+        club's active roster, which this diagnostic has no way to do, so the
+        row is a leaderboard-wide proxy and its LABEL has to say so. The next
+        test pins that half, because the two centres have read 0.3250 and
+        0.3000 against the same target on a live build -- opposite sides of
+        it -- and an unqualified `pitchers:RP` invites reading the first as
+        the second."""
         prior, k = 0.310, 100.0
         share = build_site.RP_MAX_START_SHARE
         ip_cap = build_site.RP_MAX_IP_PER_APPEARANCE
@@ -1364,13 +1372,33 @@ class PriorPopulationCentreTests(unittest.TestCase):
         cust = self._cust([(11, 0.280, 200), (12, 0.330, 500), (13, 0.300, 90)])
         rows = dict(build_site.prior_population_centres(
             cust, cust, prior, k, role_map=roles))
-        self.assertEqual(rows["  pitchers:RP"]["n"], 1)
-        self.assertAlmostEqual(rows["  pitchers:RP"]["unweighted"], 0.280, places=9)
+        self.assertEqual(rows["  pitchers:RP(leaderboard)"]["n"], 1)
+        self.assertAlmostEqual(rows["  pitchers:RP(leaderboard)"]["unweighted"], 0.280, places=9)
         self.assertEqual(rows["  pitchers:SP"]["n"], 1)
         self.assertAlmostEqual(rows["  pitchers:SP"]["unweighted"], 0.330, places=9)
         # The long reliever is excluded from both, exactly as relief_pitcher_ids
         # excludes him and the rotation split does not claim him.
         self.assertEqual(rows["pitchers"]["n"], 3)
+
+    def test_relief_row_is_labelled_as_the_leaderboard_proxy_it_is(self):
+        """The row must not claim to be the shrunk pool, and the claim is
+        pinned as a PROPERTY rather than as a string: a pitcher on no active
+        roster still appears, so any label implying roster membership is
+        false. Asserting the exact spelling would pass just as happily if a
+        later rename dropped the qualifier and kept the meaning wrong."""
+        prior, k = 0.310, 100.0
+        share = build_site.RP_MAX_START_SHARE
+        roles = {31: {"start_share": share, "avg_ip_per_appearance": 1.0}}
+        cust = self._cust([(31, 0.280, 200)])
+        labels = [l for l, _ in build_site.prior_population_centres(
+            cust, cust, prior, k, role_map=roles)]
+        rp = [l for l in labels if "pitchers:RP" in l]
+        self.assertEqual(len(rp), 1)
+        # No roster was supplied and none can be: the signature carries none.
+        # So the row covers whoever the leaderboard holds, and says which.
+        self.assertIn("leaderboard", rp[0])
+        self.assertNotIn("roster_ids", str(
+            build_site.prior_population_centres.__code__.co_varnames))
 
     def test_slate_probable_pool_is_the_starters_actually_shrunk(self):
         prior, k = 0.310, 100.0
@@ -1389,7 +1417,7 @@ class PriorPopulationCentreTests(unittest.TestCase):
             cust, cust, 0.310, 100.0)]
         self.assertIn("batters", labels)
         self.assertIn("pitchers", labels)
-        self.assertNotIn("  pitchers:RP", labels)
+        self.assertNotIn("  pitchers:RP(leaderboard)", labels)
         # An unusable target yields nothing and must not raise.
         for bad in (None, float("nan")):
             self.assertEqual(
