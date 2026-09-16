@@ -3614,7 +3614,10 @@ class HybridRuleTests(unittest.TestCase):
             "LAD", dict(p_home=.70, away_ml=200, home_ml=-260), "LAD", "ARI",
             ctx, .005)
         self.assertIn("Past V12 market-side picks · 15 games", h)
-        self.assertIn("Not a prediction", h)
+        # The discovery band left the card on 2026-09-16; grades.html and
+        # market-calibration.html carry the claim, pinned in
+        # test_the_discovery_claim_survives_off_the_card. What this test needs
+        # from the card is only that its history block names its own sample.
         # The bare rate must not appear as its own value; it is qualified by
         # the record it came from.
         self.assertNotIn("<span>73.3%</span>", h)

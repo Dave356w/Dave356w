@@ -590,11 +590,11 @@ class RenderTests(unittest.TestCase):
         # The identity CLAUSE is gone from the card too, on the operator's
         # call. The record itself stays, and stays marked thin.
         self.assertIn("11-4 (0.733) · +3.56u", h)
-        # The two guards that remain on the card.
+        # The one guard that remains on the card.
         self.assertIn("15 games", h)
-        self.assertIn("Not a prediction", h)
-        # And the marker is gone rather than reworded.
+        # Both removed carriers are gone rather than reworded.
         self.assertNotIn("noise", h)
+        self.assertNotIn("forward test", h)
         self.assertNotIn("the same bet", h)
         # This is the control MOVED, not deleted -- which is what `Deleting
         # controls as clutter` requires. market-calibration.html carries the
@@ -643,6 +643,34 @@ class RenderTests(unittest.TestCase):
         # Singular, and the count lives in the heading rather than being
         # repeated on the row beneath it.
         self.assertIn("1 game<", h)
+
+    def test_the_discovery_claim_survives_off_the_card(self):
+        """`Moved, not deleted` is checked, never asserted.
+
+        The per-game card carried `not a prediction -- and not a forward test`
+        on both branches once; it now carries it on neither. That is only
+        acceptable while the claim renders somewhere a reader can reach, and
+        this repo has published a `each surface says so in its own copy`
+        assurance that turned out to be false about one of the three surfaces
+        -- which is why the page source is walked here rather than trusted.
+
+        Both remaining carriers are asserted, not just one: a test pinning a
+        single page would pass while the other quietly dropped it, and the
+        whole point is that the card is no longer a carrier at all.
+        """
+        src = open(b.__file__).read()
+        # grades.html
+        self.assertIn("<b>Discovery</b>, not a forward test", src)
+        # market-calibration.html
+        self.assertIn("<b>Retrospective</b>: both v2 gates were chosen after",
+                      src)
+        # And the card must not be counted as a third carrier.
+        ctx = {("branch", "FADE"): dict(n=19, w=13, l=6, implied=.58,
+                                        actual=.684, excess=.104,
+                                        excess_se=.113, roi=.136, units=2.58)}
+        h = b._verdict_html("LAD", dict(p_home=.70, away_ml=200, home_ml=-260),
+                            "LAD", "ARI", ctx, .005)
+        self.assertNotIn("forward test", h)
 
     def test_the_fade_record_carries_no_price_band_qualifier(self):
         """`Won (at under 45%)` was a qualifier that could not take a value.
@@ -788,21 +816,24 @@ class RenderTests(unittest.TestCase):
         self.assertIn("closing ML -129 to -100 · 21 games", h)
         self.assertIn("12-9 (0.571) · -0.35u", h)
 
-    def test_a_thin_branch_carries_its_own_sample_and_discovery_band(self):
-        """What is left guarding a thin branch, after two anchors were removed.
+    def test_a_thin_branch_still_states_its_own_sample_size(self):
+        """What is left guarding a thin branch, after THREE anchors were cut.
 
-        The history: a pooled reference ROW went first, on the operator's call,
-        and the `within noise` marker that replaced it went on 2026-09-16. Both
-        existed so a reader would not take 11-4 over 15 games as reliable, and
-        this test used to pin the second of them in both directions.
+        The sequence, all on the operator's call and all in one day: a pooled
+        reference ROW went first, then the `within noise` marker that had
+        replaced it, then the `not a prediction -- and not a forward test`
+        band. Each removal was defensible on its own and the cumulative result
+        should be read plainly: the card shows a record, its units, and the
+        sample count, and nothing else.
 
-        It is restated rather than deleted because the CLAIM survives even
-        though neither carrier does: the block still states its own `n` and
-        still stamps `not a prediction -- and not a forward test`, and the
-        error bar itself moved to market-calibration.html rather than being
-        deleted. Pinning those is what stops a future trim taking the last
-        guard with it -- which is exactly what a test asserting only the
-        removed marker would have allowed once the marker was gone.
+        This test has now been restated twice as its subject was removed under
+        it. That is the point of keeping it rather than deleting it alongside:
+        each time, what it pins narrows to the guards that actually survive,
+        so the LAST one cannot leave silently. Today that is the heading's
+        `n`. The discovery claim itself is verified on the two pages that
+        still carry it by `test_the_discovery_claim_survives_off_the_card`,
+        because "moved, not deleted" is a statement this repo has published
+        falsely before and does not accept unchecked.
         """
         thin = {("branch", "FADE"): dict(
             n=15, w=11, l=4, implied=.586, actual=.733, excess=.147,

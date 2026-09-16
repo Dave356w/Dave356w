@@ -4650,12 +4650,25 @@ def _branch_history(ctx, action, p_lean=None, delta=None, selection_ml=None):
         "<div class='vprofile'>"
         f"<div class='vprofile-title'>Past {version} {history_branch} picks · "
         f"{n} {'game' if n == 1 else 'games'}</div>"
-        # "Past results," led this band until 2026-09-16, when the record row
-        # below it took that exact label -- the two then read as one phrase
-        # repeated on consecutive lines. The band keeps the CLAIM and drops
-        # the duplicated words; the row is what says these are past results.
-        "<div class='vprofile-band'>Not a prediction — "
-        "and not a forward test</div>"
+        # THE DISCOVERY BAND IS GONE FROM THIS CARD, 2026-09-16, on the
+        # operator's call -- the third guard removed from this block in one
+        # day, after the pooled reference row and the `within noise` marker.
+        # What the card retains is its own `n` in the heading above.
+        #
+        # MOVED, NOT DELETED, and verified rather than asserted because this
+        # repo has published that claim falsely before. grades.html carries
+        # "<b>Discovery</b>, not a forward test: the 45% price and .012 |Δ|
+        # gates were chosen after examining these rows", and
+        # market-calibration.html carries "<b>Retrospective</b>: both v2 gates
+        # were chosen after examining these rows; the registered forward
+        # reading starts after <date>". Both render live; a test asserts the
+        # pair so a later trim cannot take the claim off the site entirely.
+        #
+        # It also makes FADE consistent with FOLLOW, which lost its caveat
+        # line to `_xwoba_side_history` earlier on the same grounds. Worth
+        # stating plainly rather than filing as tidy-up: the branch whose
+        # gates were fitted on exactly these 19 rows is now the one surface
+        # that shows their record with no framing at all.
         f"{body}"
         "</div>"
     )
@@ -8068,13 +8081,14 @@ def render_grades_html(built_txt):
         # the header leads with a z-score for a rule whose threshold was
         # fitted on the very rows it is scored over.
         #
-        # The per-game card used to carry it too. It no longer does on a
-        # FOLLOW -- `_branch_history` hands that game to
-        # `_xwoba_side_history`, which now publishes flat-stake units in
-        # place of its caveat line -- so for the majority branch this note
-        # and the calibration panel are the whole of the framing. That makes
-        # it the reverse of the situation it was written for, and it is not
-        # optional copy.
+        # The per-game card used to carry it too, on BOTH branches. It no
+        # longer does on either: FOLLOW lost it when `_branch_history` began
+        # handing that game to `_xwoba_side_history`, and FADE lost it on
+        # 2026-09-16. So this note and the calibration panel are now the whole
+        # of the framing for EVERY branch, not just the majority one -- which
+        # makes it load-bearing in a way its first version only anticipated.
+        # It is not optional copy, and `test_the_discovery_claim_survives_off_
+        # the_card` pins that it and the calibration panel's twin both render.
         if not obs.empty:
             notes.append(
                 "<b>Discovery</b>, not a forward test: the 45% price and "

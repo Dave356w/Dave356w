@@ -3502,6 +3502,38 @@ well — the exact deletion the test existed to prevent, arrived at one step
 later. It now pins the guards that survive and asserts the marker is gone
 rather than reworded.
 
+**The per-game card lost its discovery band too, and with it the third guard
+in one day.** On the operator's call. The sequence on the FADE block, all
+2026-09-16: the pooled reference ROW, then the `within noise` marker that had
+replaced it, then `not a prediction — and not a forward test`. Each removal was
+defensible on its own and the cumulative result is worth stating rather than
+filing as tidy-up: **the branch whose gates were fitted on exactly those 19 rows
+is now the one surface showing their record with no framing at all** — a
+record, its units, and the sample count in the heading.
+
+**"Moved, not deleted" was checked here, not asserted, and the check is the
+entry.** This file once carried an assurance that "each surface says so in its
+own copy (… a note on the grades page)" when there was no such note — the
+most-prominent copy of the number carrying the least framing. So the two
+remaining carriers were read out of the source before the band came off:
+grades.html's `<b>Discovery</b>, not a forward test: the 45% price and .012 |Δ|
+gates were chosen after examining these rows`, and market-calibration.html's
+`<b>Retrospective</b>: both v2 gates were chosen after examining these rows`.
+`test_the_discovery_claim_survives_off_the_card` pins BOTH — a test naming one
+page would pass while the other dropped it — and additionally pins that the
+card is no longer counted as a carrier.
+
+A stale comment came with it. The grades-page note explained itself as covering
+"the majority branch", because FOLLOW had lost its caveat to
+`_xwoba_side_history` while FADE still had one. It now covers every branch, so
+the comment says that instead of describing a card state that no longer exists.
+
+And `test_a_thin_branch_…` has now been restated **twice** as its subject was
+removed underneath it — pooled row, then marker, then band. That is the reason
+to keep restating rather than deleting it alongside each cut: what it pins
+narrows each time to the guards that actually survive, so the last one cannot
+leave silently. Today that is the heading's `n`.
+
 **`Won (at under 45%)` was a qualifier that could not take another value, and
 the machinery behind it was unreachable.** Flagged by the operator as confusing;
 it was worse than confusing. `_branch_history` returns to `_xwoba_side_history`
