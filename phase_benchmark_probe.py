@@ -91,6 +91,7 @@ import pandas as pd
 
 import actuals_backfill as ab
 import build_site
+import market_backfill
 
 LEDGER = "data/mlb_lean_ledger.csv"
 BOOT = 4000
@@ -142,6 +143,45 @@ def load(ledger=LEDGER, tags=None):
                           "L_spread": c.max(axis=1) - c.min(axis=1)},
                          index=d.index)
     return pd.concat([d, extra], axis=1)
+
+
+def load_all(ledger=LEDGER):
+    """Every ledger row, unfiltered by family.
+
+    The realised phase gap is a BOX-SCORE quantity -- `phase_lines` reads
+    `act_sp_*` and the team batting line and nothing else -- so it does not
+    depend on which model wrote the row, and scoping it to the current family
+    throws away half the games for no reason. The first version of this module
+    did exactly that, and on 429 games the interval was wide enough to contain
+    the shipped construction; on 966 it is not.
+
+    The PREDICTED gap is not model-independent and stays family-scoped: it is
+    in the family's own rate units, and pooling wOBA and xwOBA rows into one
+    predicted gap is the `_SCALE_FAMILIES` error. So the two halves of the
+    comparison legitimately read different row sets, and `report` prints the
+    licence for the pooled half rather than assuming it.
+    """
+    return pd.read_csv(ledger, low_memory=False)
+
+
+def pooling_licence(d, fam, boot=BOOT, seed=SEED):
+    """Is the realised gap the same inside and outside the current family?
+
+    Pooling is only licensed if this is null. It is a seasonal/compositional
+    check, not a model one -- the two row sets are different months of
+    baseball, and if relievers' advantage moved between them the pooled
+    estimate describes neither window.
+    """
+    inside = d[d["model_tag"].isin(fam)] if fam else d.iloc[0:0]
+    outside = d[~d["model_tag"].isin(fam)] if fam else d
+    a = realised_phase_gap(inside, boot=boot, seed=seed) if len(inside) else None
+    b = realised_phase_gap(outside, boot=boot, seed=seed) if len(outside) else None
+    if a is None or b is None:
+        return None
+    diff = a["gap"] - b["gap"]
+    se = float(np.hypot(a["se"], b["se"]))
+    return {"in": a, "out": b, "diff": diff, "se": se,
+            "z": diff / se if se > 0 else float("nan")}
 
 
 def peer_centres(d):
@@ -327,7 +367,8 @@ def report(ledger=LEDGER, tags=None):
     fam = tuple(build_site.RECORD_TAGS if tags is None else tags)
     say("PHASE-MATCHED PEER BENCHMARKS")
     say(f"  family {', '.join(fam) if fam else 'ALL TAGS (mixed scales)'}"
-        f"   rows {len(d)}")
+        f"   rows {len(d)}"
+        f"   with a phase split {int(d['L'].notna().sum()) if len(d) else 0}")
     if d.empty:
         say("  no rows; nothing to measure.")
         return out
@@ -350,7 +391,9 @@ def report(ledger=LEDGER, tags=None):
     L = float(d["L"].mean())
     say()
     say("  PEER CENTRES, recovered from the ledger's own published values.")
-    say(f"    shared denominator L (league batter xwOBA)      {L:.5f}")
+    metric = market_backfill.metric_label(d, mixed="MIXED METRICS")
+    say(f"    shared denominator L (league batter {metric})"
+        f"{'':>{max(0, 21 - len(metric))}}{L:.5f}")
     for k, label in (("H_SP", "lineup composite vs the starter"),
                      ("H_BP", "lineup composite, neutral"),
                      ("P_SP", "slate starters (shrunk)"),
@@ -361,9 +404,21 @@ def report(ledger=LEDGER, tags=None):
     say("    That ratio is the closure: the hitter knob has an order of")
     say("    magnitude less room to move anything than the pitcher knob.")
 
-    rg = realised_phase_gap(d)
+    allrows = load_all(ledger)
+    rg = realised_phase_gap(allrows)
+    lic = pooling_licence(allrows, fam)
     say()
     say("  THE REALISED PHASE GAP — the measurement this question turns on.")
+    say("    Scored on EVERY ledger row, not just the family: `phase_lines`")
+    say("    reads box scores, so this quantity does not know which model")
+    say("    wrote the row. The predicted gap below it stays family-scoped,")
+    say("    because that one is in the family's own rate units.")
+    if lic is not None:
+        say(f"    pooling licence: in-family {lic['in']['gap']:+.5f} vs "
+            f"out-of-family {lic['out']['gap']:+.5f}, "
+            f"difference {lic['diff']:+.5f} +- {lic['se']:.5f} "
+            f"(z {lic['z']:+.2f}) — "
+            f"{'null, so pooling holds' if abs(lic['z']) < 2 else 'NOT null; do not pool'}")
     if rg is None:
         say("    no row carries a usable starter-allowed line; not computable.")
     else:
@@ -374,12 +429,56 @@ def report(ledger=LEDGER, tags=None):
         say(f"    realised gap     {rg['gap']:+.5f} +- {rg['se']:.5f}  "
             f"CI [{rg['lo']:+.5f}, {rg['hi']:+.5f}]  "
             f"({rg['n_sides']} sides / {rg['n_games']} games)")
-        say(f"    shipped model predicts {phase_gap(d, c, 0.0, 0.0):+.5f}; "
-            f"full phase matching predicts {phase_gap(d, c, 1.0, 1.0):+.5f}.")
-        say("    Both are inside that interval. The actuals do not separate")
-        say("    them, and the gap they do measure is POSITIVE — relievers")
-        say("    suppress offense, so phase matching removes a real effect")
-        say("    rather than an artifact.")
+        g0, g1 = phase_gap(d, c, 0.0, 0.0), phase_gap(d, c, 1.0, 1.0)
+        say(f"    shipped model predicts {g0:+.5f}; "
+            f"full phase matching predicts {g1:+.5f}.")
+        if not rg["se"] > 0:
+            # A zero-width interval is the estimator saying it has nothing to
+            # say: every resample returned the same number. Rendering
+            # containment against it would publish a verdict with no sampling
+            # distribution behind it -- the `an SE of zero is never a result`
+            # entry. Refuse rather than print a confident-looking word.
+            say(f"    ZERO-WIDTH interval over {rg['n_games']} game(s): no")
+            say("    sampling distribution, so no containment verdict.")
+        else:
+            inside = lambda g: rg["lo"] <= g <= rg["hi"]  # noqa: E731
+            for lab, g in (("shipped model", g0), ("full phase matching", g1)):
+                say(f"      {lab} is "
+                    f"{'inside' if inside(g) else 'OUTSIDE'} the interval")
+            # Asserted in prose on the first version of this module, and the
+            # first run on a wider row set falsified it the same day: at 966
+            # games the interval tightens and the SHIPPED gap falls outside
+            # it, where at the family's own 429 it did not. Every reading is
+            # computed now, for the reason the rest of this file exists -- a
+            # sentence is not a measurement, and the sentence that got
+            # published was the flattering one about what already ships.
+            if inside(g0) and inside(g1):
+                say("    Neither is rejected, so the actuals do not separate")
+                say("    them on these rows.")
+            elif inside(g1) and not inside(g0):
+                say("    The SHIPPED gap is REJECTED and the matched one is")
+                say("    not: the construction overstates how much relievers")
+                if abs(rg["gap"]) > 1e-9:
+                    say(f"    suppress offense, by {g0 / rg['gap']:.1f}x on the")
+                    say("    point estimate. That does NOT make zero the")
+                else:
+                    say("    suppress offense. That does NOT make zero the")
+                say("    answer — the interval's upper end is a real gap this")
+                say("    sample cannot rule out either.")
+            elif inside(g0) and not inside(g1):
+                say("    The MATCHED gap is rejected and the shipped one is")
+                say("    not: on these rows the actuals favour what ships.")
+            else:
+                say("    BOTH are rejected; the construction is mis-levelled")
+                say("    in a way neither candidate fixes.")
+            if rg["lo"] > 0:
+                say("    Zero is excluded, so relievers measurably do suppress")
+                say("    offense and a correction that sets the gap to zero")
+                say("    removes a real effect rather than an artifact.")
+            else:
+                say("    Zero is inside the interval, so 'relievers suppress")
+                say("    offense' is the point estimate's direction and not an")
+                say("    established fact on these rows.")
 
     say()
     say("  THE KNOBS, scored against the realised run differential.")
