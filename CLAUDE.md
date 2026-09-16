@@ -224,6 +224,31 @@ phases, so units are untouched, and it flips 0 of 14 leans on measured rates,
 so the win-loss line is shared rather than reset for the eighth time in a month.
 A bump does not automatically mean isolation; argue it.
 
+Known latent gap, found 2026-09-16 while asking whether anything in the phase
+work implied a hybrid update: **`hybrid_v2.DELTA_THRESHOLD` and
+`delta_filter_test.DELTA_THRESHOLD` are denominated in the current delta
+scale, and nothing recorded that.** `xw_net` is an xwOBA difference whose
+spread is a property of the prediction math — v5 halved it (median `|xw_net|`
+.036 → .018) and v3's `K` quadrupling compressed it again — so a frozen 0.012
+tracks a different quantile after any `_SCALE_FAMILIES` entry. That is exactly
+the `LEAN_STRENGTH_FALLBACK` dependency one file out, and that constant has a
+whole anti-pattern entry while these two had no comment at all. Measured on the
+current family (421 decidable rows, median `|xw_net|` 0.01836): the fade branch
+holds **19** rows at the frozen gate, **31** if the scale halves and **12** if
+it doubles — a 2.6x range on the only branch the rule owns.
+
+**The response is NOT to re-derive it, and that is the part worth keeping.**
+These are registered constants, frozen on 2026-09-11 and 2026-09-03 and pinned
+by tests precisely so they cannot be edited while reaching for something else.
+Re-fitting one to the live pool would make its registration meaningless. What a
+scale change invalidates is not the number but the REGISTRATION: the forward
+window would have been scoring a different statistic than the one registered,
+and the honest response is a new registration with a fresh window. So a
+`MODEL_TAG` bump that lands a new `_SCALE_FAMILIES` entry has a consequence
+this file never stated — **it resets every delta-gated registration's forward
+window, not just the record and the strength cutoffs.** Recorded at both
+constants; no number moved.
+
 Known latent gap: v3's scale family is `(3,)` because `_SCALE_FAMILIES` has no
 v3 entry, though v3's math is identical to v2 and the two must share units.
 Inert — `SCALE_TAGS` only ever derives from the *current* tag — so it is

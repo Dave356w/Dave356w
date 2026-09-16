@@ -94,6 +94,10 @@ import pandas as pd
 # ---------------------------------------------------------------------------
 REGISTERED_ON = "2026-09-03"      # slates STRICTLY after this date are scored
 DELTA_THRESHOLD = 0.012           # |xw_net| >= keeps the lean; below abstains
+# Same scale dependence as `hybrid_v2.DELTA_THRESHOLD`, and the same response:
+# a `_SCALE_FAMILIES` entry does not stale the number so much as invalidate the
+# registration this module exists to run. See the comment there; it is not
+# repeated here so the two cannot drift into saying different things.
 STAKE = 1.0                       # flat
 RULE_TAG = "xwoba_delta_filter_v1"
 # No price band, no second delta tier, no per-slate refit. One number is frozen

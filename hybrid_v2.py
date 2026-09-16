@@ -13,6 +13,26 @@ import hybrid_test as v1
 
 REGISTERED_ON = "2026-09-11"      # slates STRICTLY after this date are scored
 THRESHOLD = v1.THRESHOLD
+# LATENT GAP, recorded rather than patched: this constant is denominated in
+# the CURRENT delta scale. `xw_net` is an xwOBA difference, and its spread is a
+# property of the prediction math -- `_SCALE_FAMILIES` exists precisely because
+# that spread has moved before (v5 halved it, median |xw_net| .036 -> .018;
+# v3's K quadrupling compressed it again). A frozen .012 therefore tracks a
+# different quantile of the distribution after any such change, exactly as
+# `LEAN_STRENGTH_FALLBACK` does one file out -- and unlike that constant, this
+# one has no entry saying so until now.
+#
+# Measured on the current family (421 decidable rows, median |xw_net| 0.01836):
+# the fade branch holds 19 rows at the frozen gate, 31 if the scale halves and
+# 12 if it doubles -- a 2.6x range on the only branch the rule owns.
+#
+# NOT re-derived here, and that is deliberate. This is a REGISTERED constant:
+# it was frozen on 2026-09-11 and re-fitting it to the live pool would make the
+# registration meaningless, which is the whole reason `tests/test_hybrid_test.py`
+# pins these literals. What a `_SCALE_FAMILIES` entry invalidates is not the
+# number but the REGISTRATION: a scale change means the forward window has been
+# scoring a different statistic than the one registered, and the honest
+# response is a new registration with a fresh window, not a quiet re-fit.
 DELTA_THRESHOLD = 0.012
 STAKE = v1.STAKE
 RULE_TAG = "xwoba_market_hybrid_v2"
