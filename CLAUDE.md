@@ -3446,6 +3446,139 @@ the same mask as the record; it was a returned-and-unrendered key listed as
 label says neither: ROI is a rate, units is a total, and `+1.57u` is
 unambiguous where `ROI +1.57u` would name one and show the other.
 
+**One card, two labels for one quantity — found by rendering both branches
+side by side, not by reading either function.** The FOLLOW intersection line
+read `ROI +4.69u` while the FADE branch line beside it read `+2.58u`. ROI is a
+RATE and units is a TOTAL, so the first named one quantity and showed another.
+It survived because the two lines were written on separate operator calls and
+neither was ever read beside the other — the "one value, three homes" defect in
+copy, the same class as the `MARKET FAVORITE` rename. Worse, the docstring
+defended it: "read the two as different surfaces on purpose, not as one
+drifting" is prose justifying an inconsistency rather than a design, and it is
+deleted rather than softened.
+
+Both card lines now read `W-L (0.xxx) · +N.NNu`. `ROI` survives only on the
+grades page, where it IS a rate and prints as `+11.4%`. Pinned by
+`test_card_units_are_never_labelled_roi`, which walks the RENDERED panel for
+both branches and forbids the word beside a unit suffix — a rule rather than
+the two instances, since pinning `ROI +4.69u` absent would pass just as happily
+if a third line reintroduced it somewhere else. The fixture asserts it reached
+a record line first, which is the trap the key-coverage test below fell into.
+
+**`within noise` is gone from the branch line too, on the operator's call, and
+the deletion it forced is the part to record.** The marker was the plain-English
+form of the error bar and had one production caller — so removing it orphaned
+`_branch_read` and `_BRANCH_FAMILYWISE_Z`, which are deleted with it rather than
+left behind. That is the sixth instance of the callee-outliving-its-call-site
+pattern this file tracks, and the first caught at the moment of the deletion
+instead of days later; the cheap detection is still a reference count, run
+before the edit rather than after.
+
+**Two comments were resting on the marker and are corrected rather than left to
+go quietly false.** `BRANCH_RECORD_MIN = 1` was justified by TWO reasons — that
+suppressing a number invites recomputation without the caveat, and that "a thin
+branch is self-describing, because `_branch_read` says 'within noise'". The
+second is void. The first stands on its own and is what keeps the floor at 1; a
+floor is emphatically NOT the answer to the marker's absence, since a hard
+`>= N` is the threshold cliff this repo has removed four times. The
+pooled-reference comment named the marker as the anchor that replaced it, and
+now names what actually remains.
+
+**What guards a thin branch now, stated plainly rather than argued away: less
+than before.** The card keeps its own `n` and the `not a prediction — and not a
+forward test` band; the error bar itself is on `market-calibration.html`, where
+`_lean_market_value_cell` renders the same `excess_se` as a `±`. That is the
+control MOVED rather than deleted, which is what `Deleting controls as clutter`
+requires — but the card is now the weaker of the two surfaces on reliability
+and the comment there says so. `excess`, `excess_se` and `implied` moved from
+`rendered` to `delegated` in the key-coverage test, verified against their real
+call sites rather than assumed.
+
+**The test that pinned the marker was restated, not deleted, and that is the
+reusable half.** `test_a_thin_branch_is_marked_thin_on_its_own_row` asserted the
+marker in both directions. Had it simply been removed with its subject, nothing
+would then have stopped a later trim taking the `n` and the discovery band as
+well — the exact deletion the test existed to prevent, arrived at one step
+later. It now pins the guards that survive and asserts the marker is gone
+rather than reworded.
+
+**The per-game card lost its discovery band too, and with it the third guard
+in one day.** On the operator's call. The sequence on the FADE block, all
+2026-09-16: the pooled reference ROW, then the `within noise` marker that had
+replaced it, then `not a prediction — and not a forward test`. Each removal was
+defensible on its own and the cumulative result is worth stating rather than
+filing as tidy-up: **the branch whose gates were fitted on exactly those 19 rows
+is now the one surface showing their record with no framing at all** — a
+record, its units, and the sample count in the heading.
+
+**"Moved, not deleted" was checked here, not asserted, and the check is the
+entry.** This file once carried an assurance that "each surface says so in its
+own copy (… a note on the grades page)" when there was no such note — the
+most-prominent copy of the number carrying the least framing. So the two
+remaining carriers were read out of the source before the band came off:
+grades.html's `<b>Discovery</b>, not a forward test: the 45% price and .012 |Δ|
+gates were chosen after examining these rows`, and market-calibration.html's
+`<b>Retrospective</b>: both v2 gates were chosen after examining these rows`.
+`test_the_discovery_claim_survives_off_the_card` pins BOTH — a test naming one
+page would pass while the other dropped it — and additionally pins that the
+card is no longer counted as a carrier.
+
+A stale comment came with it. The grades-page note explained itself as covering
+"the majority branch", because FOLLOW had lost its caveat to
+`_xwoba_side_history` while FADE still had one. It now covers every branch, so
+the comment says that instead of describing a card state that no longer exists.
+
+And `test_a_thin_branch_…` has now been restated **twice** as its subject was
+removed underneath it — pooled row, then marker, then band. That is the reason
+to keep restating rather than deleting it alongside each cut: what it pins
+narrows each time to the guards that actually survive, so the last one cannot
+leave silently. Today that is the heading's `n`.
+
+**`Won (at under 45%)` was a qualifier that could not take another value, and
+the machinery behind it was unreachable.** Flagged by the operator as confusing;
+it was worse than confusing. `_branch_history` returns to `_xwoba_side_history`
+for FOLLOW on its second line, so everything below is FADE-only — and FADE
+fires only when the leaned side is priced below `THRESHOLD`, which is exactly
+the first price band. So every fade row landed in that band, the band's record
+was **bit-identical to the branch's** (verified on the committed ledger: n=19,
+every key equal), and the label could never read anything else. Same class as
+the calibration tile that read `50.0% vs 50.0% implied` forever: a value fixed
+by the partition rather than by the data. It also printed a second, unexplained
+`45%` one line under the rule's own `market gives ATL under 45%`, which is what
+made it read as confusing rather than merely redundant.
+
+Three things went with it, and the second is the one worth the entry:
+
+  * **An unreachable ternary.** `history_branch = "model-side" if action ==
+    "FOLLOW" else "market-side"` sat below the early return, so its first arm
+    could never be taken.
+  * **Eight aggregates computed and rendered nowhere.** `("band", "FOLLOW", …)`
+    and `("bandchalk", "FOLLOW", …)` — four price bands and their chalk
+    controls — were built every call by `hybrid_branch_records` and read only
+    at the two FADE-only sites. FOLLOW bands on delta × moneyline in
+    `_xwoba_side_history` instead, so they had no consumer and never would.
+    That is the `column carried to no surface` entry, eight columns at once,
+    and it survived because the renderer that would have shown them returns
+    before reaching them. **A returned-and-unrendered key is easy to spot; an
+    unrendered key whose renderer is unreachable is not.**
+  * **`_BRANCH_PRICE_BANDS` itself**, with nothing left reading it.
+
+The record row now matches `_xwoba_side_history`'s label — `Past results` —
+since both lines describe the same kind of thing and there is no longer a row
+set to disambiguate. That immediately duplicated the phrase, because the
+discovery band above it led with `Past results, not a prediction …`; the band
+keeps the claim and drops the words the row now carries. Pinned by
+`test_the_fade_record_carries_no_price_band_qualifier`, which asserts the
+PROPERTY across prices spanning the old band edges and that the phrase appears
+exactly once — so reintroducing a selector that happens to pick the same band
+on one fixture would still fail.
+
+**The general lesson, and it is the session's third instance: the defect was
+visible only when two surfaces were put on one page.** Reading
+`_xwoba_side_history` alone shows a label and a value that each look right.
+Neither function is wrong in isolation. What was wrong was the pair, and no
+amount of re-reading either one would have surfaced it.
+
 **Two tests were found asserting nothing while the shape changed under them.**
 `test_verdict_panel_leaves_no_computed_key_unrendered` passed a FOLLOW branch
 at |Δ| .02, which routes to the delta-by-price intersection history and renders

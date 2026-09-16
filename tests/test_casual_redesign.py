@@ -533,7 +533,7 @@ class RenderTests(unittest.TestCase):
         self.assertIn(
             "Δ .020–.030 · closing ML -174 to -130 · 32 games", follow)
         self.assertIn(
-            "Past results</span><span>21-11 (0.656) · ROI +4.62u",
+            "Past results</span><span>21-11 (0.656) · +4.62u",
             follow)
         # The reason has to sit on the decision, not be inferable from two
         # numbers printed above it.
@@ -548,7 +548,6 @@ class RenderTests(unittest.TestCase):
         self.assertIn("Past V12 market-side picks · 15 games", fade)
         self.assertIn(f"{b.hybrid_public_label('FADE')} → ARI", fade)
         self.assertIn("<b>11-4 (0.733) · +3.56u</b>", fade)
-        self.assertIn("within noise", fade)
         # On a fade the selected club appears nowhere else on the panel, so
         # the reason line has to name it.
         self.assertIn("the market's side, ARI", fade)
@@ -591,7 +590,11 @@ class RenderTests(unittest.TestCase):
         # The identity CLAUSE is gone from the card too, on the operator's
         # call. The record itself stays, and stays marked thin.
         self.assertIn("11-4 (0.733) · +3.56u", h)
-        self.assertIn("within noise", h)
+        # The one guard that remains on the card.
+        self.assertIn("15 games", h)
+        # Both removed carriers are gone rather than reworded.
+        self.assertNotIn("noise", h)
+        self.assertNotIn("forward test", h)
         self.assertNotIn("the same bet", h)
         # This is the control MOVED, not deleted -- which is what `Deleting
         # controls as clutter` requires. market-calibration.html carries the
@@ -616,7 +619,7 @@ class RenderTests(unittest.TestCase):
         self.assertIn(
             "Δ .020–.030 · closing ML -174 to -130 · 32 games", follow)
         self.assertIn(
-            "Past results</span><span>21-11 (0.656) · ROI +4.62u",
+            "Past results</span><span>21-11 (0.656) · +4.62u",
             follow)
 
     def test_market_over_lean_panel_prints_its_own_error_bar(self):
@@ -637,10 +640,105 @@ class RenderTests(unittest.TestCase):
             "LAD", "ARI", ctx, .005,
         )
         self.assertIn("1-0 (1.000) · +0.51u", h)
-        self.assertIn("within noise", h)
         # Singular, and the count lives in the heading rather than being
         # repeated on the row beneath it.
         self.assertIn("1 game<", h)
+
+    def test_the_discovery_claim_survives_off_the_card(self):
+        """`Moved, not deleted` is checked, never asserted.
+
+        The per-game card carried `not a prediction -- and not a forward test`
+        on both branches once; it now carries it on neither. That is only
+        acceptable while the claim renders somewhere a reader can reach, and
+        this repo has published a `each surface says so in its own copy`
+        assurance that turned out to be false about one of the three surfaces
+        -- which is why the page source is walked here rather than trusted.
+
+        Both remaining carriers are asserted, not just one: a test pinning a
+        single page would pass while the other quietly dropped it, and the
+        whole point is that the card is no longer a carrier at all.
+        """
+        src = open(b.__file__).read()
+        # grades.html
+        self.assertIn("<b>Discovery</b>, not a forward test", src)
+        # market-calibration.html
+        self.assertIn("<b>Retrospective</b>: both v2 gates were chosen after",
+                      src)
+        # And the card must not be counted as a third carrier.
+        ctx = {("branch", "FADE"): dict(n=19, w=13, l=6, implied=.58,
+                                        actual=.684, excess=.104,
+                                        excess_se=.113, roi=.136, units=2.58)}
+        h = b._verdict_html("LAD", dict(p_home=.70, away_ml=200, home_ml=-260),
+                            "LAD", "ARI", ctx, .005)
+        self.assertNotIn("forward test", h)
+
+    def test_the_fade_record_carries_no_price_band_qualifier(self):
+        """`Won (at under 45%)` was a qualifier that could not take a value.
+
+        `_branch_history` returns to `_xwoba_side_history` for FOLLOW, so
+        everything below that line is FADE-only -- and FADE fires only when the
+        leaned side is priced below THRESHOLD, which is exactly the first price
+        band. Every fade row therefore landed in it, the band's record was
+        bit-identical to the branch's, and the label could never read anything
+        but `at under 45%`. Same class as the calibration tile that read
+        `50.0% vs 50.0% implied` forever.
+
+        Pinned as the PROPERTY -- the record equals the branch record and no
+        band qualifier appears -- across prices spanning the old band edges, so
+        reintroducing a selector that happens to pick the same band on one
+        fixture would still fail here.
+        """
+        parts = dict(n=19, w=13, l=6, implied=.5797, actual=.6842,
+                     excess=.1045, excess_se=.1131, roi=.1358, units=2.5806)
+        ctx = {("branch", "FADE"): parts, ("chalk", "FADE"): dict(parts)}
+        for p_home, away_ml, home_ml in ((.70, 200, -260), (.62, 150, -180),
+                                         (.58, 130, -150)):
+            h = b._verdict_html("LAD", dict(p_home=p_home, away_ml=away_ml,
+                                            home_ml=home_ml),
+                                "LAD", "ARI", ctx, .005)
+            self.assertIn("Past results", h)
+            self.assertIn("13-6 (0.684) · +2.58u", h)
+            self.assertNotIn("at under", h)
+            self.assertNotIn("all prices", h)
+            # And the phrase must not be duplicated on consecutive lines: the
+            # band carries the claim, the row carries the label.
+            self.assertEqual(h.count("Past results"), 1, h)
+
+    def test_card_units_are_never_labelled_roi(self):
+        """One label per quantity: ROI is a rate, units is a total.
+
+        The FOLLOW intersection line read `+4.69u` while the FADE branch
+        line beside it read `+2.58u` -- two labels for the same quantity on one
+        card, with one of them naming a rate and showing a total. It survived
+        because the two lines were written on separate operator calls and never
+        read beside each other; rendering both cards in one page is what
+        exposed it.
+
+        Pinned as a RULE over the rendered panel rather than as the two
+        instances, because pinning `+4.69u` absent would pass just as
+        happily if a third line reintroduced it somewhere else. `ROI` may still
+        appear on the grades page, where it is a rate and carries `%` -- that
+        surface is not built here and is not what this walks.
+        """
+        ctx = {
+            ("branch", "FADE"): dict(n=19, w=13, l=6, implied=.58, actual=.684,
+                                     excess=.104, excess_se=.11, roi=.136,
+                                     units=2.58),
+            ("delta_price_follow", 2, "-174 to -130"): {"model": dict(
+                n=34, w=23, l=11, implied=.60, actual=.676, excess=.076,
+                excess_se=.08, roi=.138, units=4.69)},
+        }
+        panels = [
+            b._verdict_html("LAD", dict(p_home=.70, away_ml=200, home_ml=-260),
+                            "LAD", "ARI", ctx, .005),
+            b._verdict_html("ARI", dict(p_home=.62, home_ml=-160),
+                            "LAD", "ARI", ctx, .025),
+        ]
+        for h in panels:
+            # The fixture has to reach a record line, or the rule is vacuous --
+            # the trap the key-coverage test above fell into.
+            self.assertRegex(h, r"\d+-\d+ \(\d\.\d{3}\) · [+-]\d+\.\d{2}u")
+            self.assertNotRegex(h, r"ROI\s*[+-]?\d+(\.\d+)?u")
 
     def test_verdict_panel_leaves_no_computed_key_unrendered(self):
         """Every key _lean_market_agg returns must reach a surface.
@@ -670,12 +768,16 @@ class RenderTests(unittest.TestCase):
         # The fixture must actually reach the branch line, or everything below
         # is vacuous again.
         self.assertIn("Past V12 market-side picks", h)
-        rendered = {"n", "implied", "actual", "excess", "excess_se",
-                    "w", "l", "units"}
-        # `roi` stays the calibration table's column: the card publishes the
-        # flat-stake TOTAL, which is the same information per row set and does
-        # not invite a per-game rate reading.
-        delegated = {"roi"}
+        rendered = {"n", "actual", "w", "l", "units"}
+        # `roi` was always the calibration table's column. `excess` and
+        # `excess_se` JOINED it on 2026-09-16, when the `within noise` marker
+        # was removed from the card and took the card's only reader of them
+        # with it. They are genuinely delegated, not orphaned -- verified, not
+        # assumed: `_lean_market_value_cell` renders `excess` with `excess_se`
+        # as a `±` on market-calibration.html, and the record strip prints the
+        # same pair as a z. `implied` is the branch's mean price, which left
+        # this line with the units swap and lives on the same page.
+        delegated = {"roi", "excess", "excess_se", "implied"}
         self.assertEqual(set(parts) - rendered - delegated, set())
         # Units must be RENDERED, not merely returned -- the reversal of
         # 2026-09-16. Asserted as the value reaching the surface rather than as
@@ -686,34 +788,6 @@ class RenderTests(unittest.TestCase):
         # The implied price is what the swap gave up; it must not linger in
         # the old shape, or the line carries both and says neither cleanly.
         self.assertNotIn("% priced", h)
-
-    def test_branch_read_has_no_threshold_cliff(self):
-        """One completed game must not relabel a branch's credibility.
-
-        The read is driven by the standard error, which moves continuously, so
-        holding excess and se fixed while n crosses any old boundary must
-        change nothing. Fourth instance of the threshold-cliff fix.
-        """
-        base = dict(w=0, l=0, implied=.50, actual=.60, excess=.06,
-                    excess_se=.11, roi=.0, units=.0)
-        reads = {b._branch_read(dict(base, n=n)) for n in (9, 10, 19, 20, 21)}
-        verdicts = {r.split("·")[0].strip() for r in reads}
-        self.assertEqual(len(verdicts), 1, reads)
-
-    def test_branch_read_uses_the_two_branch_familywise_bar(self):
-        """The bar must match the number of branches actually published.
-
-        The grid this replaced needed |z| >= 2.7 across 15 cells. With two
-        branches that is too strict; the ~0.05 family-wise bar is ~2.2. Pinned
-        so the constant cannot drift away from the surface it describes.
-        """
-        se = .10
-        self.assertAlmostEqual(b._BRANCH_FAMILYWISE_Z, 2.2, places=6)
-        under = dict(n=30, w=0, l=0, implied=.5, actual=.6,
-                     excess=2.1 * se, excess_se=se, roi=0, units=0)
-        over = dict(under, excess=2.4 * se)
-        self.assertIn("within noise", b._branch_read(under))
-        self.assertIn("outside noise", b._branch_read(over))
 
     def test_xwoba_side_record_intersects_delta_and_selected_price_rung(self):
         """The public rate comes from one delta-by-price population."""
@@ -727,7 +801,7 @@ class RenderTests(unittest.TestCase):
             ctx, .02)
         self.assertIn("Δ .020–.030", h)
         self.assertIn("closing ML +100 to +129 · 8 games", h)
-        self.assertIn("5-3 (0.625) · ROI +2.15u", h)
+        self.assertIn("5-3 (0.625) · +2.15u", h)
         self.assertNotIn("45\u201350%", h)
 
     def test_intersection_changes_with_the_selected_price_rung(self):
@@ -740,20 +814,26 @@ class RenderTests(unittest.TestCase):
         h = b._verdict_html(
             "ARI", dict(p_home=.52, home_ml=-108), "LAD", "ARI", ctx, .02)
         self.assertIn("closing ML -129 to -100 · 21 games", h)
-        self.assertIn("12-9 (0.571) · ROI -0.35u", h)
+        self.assertIn("12-9 (0.571) · -0.35u", h)
 
-    def test_a_thin_branch_is_marked_thin_on_its_own_row(self):
-        """A thin branch must not read as a rate you can rely on.
+    def test_a_thin_branch_still_states_its_own_sample_size(self):
+        """What is left guarding a thin branch, after THREE anchors were cut.
 
-        This was a pooled reference row: a better-estimated number beside the
-        branch so a reader would not anchor on 15 games. That row is gone, on
-        the operator's call -- the anchor is now ON the record itself, where
-        `_branch_read` marks it from the branch's own standard error. Same
-        job, one row instead of two, and in the place the reader is looking.
+        The sequence, all on the operator's call and all in one day: a pooled
+        reference ROW went first, then the `within noise` marker that had
+        replaced it, then the `not a prediction -- and not a forward test`
+        band. Each removal was defensible on its own and the cumulative result
+        should be read plainly: the card shows a record, its units, and the
+        sample count, and nothing else.
 
-        Pinned as the CLAIM (a thin branch says it is thin) rather than as the
-        row that used to carry it, and pinned in both directions so a future
-        trim cannot take the marker with it.
+        This test has now been restated twice as its subject was removed under
+        it. That is the point of keeping it rather than deleting it alongside:
+        each time, what it pins narrows to the guards that actually survive,
+        so the LAST one cannot leave silently. Today that is the heading's
+        `n`. The discovery claim itself is verified on the two pages that
+        still carry it by `test_the_discovery_claim_survives_off_the_card`,
+        because "moved, not deleted" is a statement this repo has published
+        falsely before and does not accept unchecked.
         """
         thin = {("branch", "FADE"): dict(
             n=15, w=11, l=4, implied=.586, actual=.733, excess=.147,
@@ -762,7 +842,6 @@ class RenderTests(unittest.TestCase):
             "LAD", dict(p_home=.70, away_ml=200, home_ml=-260), "LAD", "ARI",
             thin, .005)
         self.assertIn("11-4 (0.733) · +3.56u", h)
-        self.assertIn("within noise", h)
         # The pooled row itself is deliberately absent, and a `pooled` entry in
         # the context must not bring it back.
         self.assertNotIn("All V12 leans", h)
@@ -806,7 +885,7 @@ class RenderTests(unittest.TestCase):
         self.assertNotIn("prediction for this game", h)
         # The units figure is the reason the marker went; it must be present,
         # signed, and never rendered as a rate for the next game.
-        self.assertIn("ROI +4.62u", h)
+        self.assertIn("+4.62u", h)
 
     def test_verdict_never_claims_a_value_bet(self):
         """Measured walk-forward, no bucket in this ledger beats the close.

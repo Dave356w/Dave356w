@@ -4380,35 +4380,6 @@ def _model_version_short():
 # branches the ~0.05 family-wise threshold is |z| ~ 2.2. Stated as a REFERENCE
 # and not a gate -- the number and its spread always print, only the sentence
 # beside them changes.
-_BRANCH_FAMILYWISE_Z = 2.2
-
-
-def _branch_read(parts):
-    """One honest sentence about what a branch's excess can support.
-
-    Moves continuously with the standard error rather than switching on a row
-    count, which is the threshold-cliff fix this repo has now applied four
-    times. It returns the VERDICT only -- the sample size is carried by the
-    block heading above it, and printing `n` twice in six lines was one of the
-    things making this panel hard to read.
-
-    Note what it does NOT say: nothing here calls a branch profitable, because
-    a branch clearing its bar on the discovery sample is a statement about rows
-    the rule was fitted on.
-    """
-    se, excess = parts.get("excess_se"), parts.get("excess")
-    try:
-        ok = se is not None and np.isfinite(se) and se > 0
-    except TypeError:
-        ok = False
-    if not ok:
-        return "spread unavailable"
-    z = abs(float(excess) / float(se))
-    if z < _BRANCH_FAMILYWISE_Z:
-        return "within noise"
-    return "outside noise across both branches"
-
-
 _LEAN_HISTORY_BINS = (
     (0.000, 0.010),
     (0.010, 0.020),
@@ -4446,14 +4417,23 @@ def _xwoba_side_history(ctx, delta, selection_ml=None):
     historical rows themselves are still bucketed on their closing prices.
 
     The record carries FLAT-STAKE UNITS rather than a reliability marker, on
-    the operator's call. That is a deliberate reversal of the rule stated in
-    `_branch_history` -- which still holds for the branch line beside it -- so
-    read the two as different surfaces on purpose, not as one drifting: the
-    branch line keeps its record price-relative with the branch's own average
-    price, and this one does it with the units those same closing prices
-    actually returned. `units` is the sum of `_american_unit_profit` at 1u a
+    the operator's call. `units` is the sum of `_american_unit_profit` at 1u a
     game, priced at each row's own close, so it is already price-relative in
     the way a bare win rate is not: 5-5 at -200 is a loss and reads as one.
+
+    THE LABEL SAID `ROI` AND THE VALUE WAS UNITS -- fixed 2026-09-16. ROI is a
+    RATE and units is a TOTAL, so `ROI +4.69u` named one quantity and showed
+    another. It survived because the two card lines were written on separate
+    operator calls and neither was read beside the other; rendering both cards
+    from live ledger data in one page is what exposed it, not reading either
+    function. The paragraph this replaces made the divergence sound deliberate
+    -- "read the two as different surfaces on purpose, not as one drifting" --
+    which is prose defending an inconsistency rather than a design.
+
+    Both card lines now read `W-L (0.xxx) · +N.NNu`, and `ROI` survives only on
+    the grades page, where it IS a rate and prints as `+11.4%`. One label per
+    quantity; `test_card_units_are_never_labelled_roi` pins that no card line
+    pairs the word with a unit suffix.
 
     What went with the marker is a CLAIM, not decoration -- these rows are
     retrospective, the v2 gates were chosen after this sample, and the ranges
@@ -4486,7 +4466,7 @@ def _xwoba_side_history(ctx, delta, selection_ml=None):
     model_unit = "game" if model["n"] == 1 else "games"
     body = ("<div class='vline'><span class='vk'>Past results</span>"
             f"<span>{model['w']}-{model['l']} "
-            f"({model['actual']:.3f}) · ROI {model['units']:+.2f}u</span></div>")
+            f"({model['actual']:.3f}) · {model['units']:+.2f}u</span></div>")
     return (
         "<div class='vprofile'>"
         f"<div class='vprofile-title'>Past {version} XWOBA SIDE picks</div>"
@@ -4515,7 +4495,10 @@ def _branch_history(ctx, action, p_lean=None, delta=None, selection_ml=None):
         return ""
     if action == "FOLLOW":
         return _xwoba_side_history(ctx, delta, selection_ml)
-    history_branch = "model-side" if action == "FOLLOW" else "market-side"
+    # Everything below is FADE-only -- FOLLOW returned on the line above. The
+    # ternary that used to stand here, `"model-side" if action == "FOLLOW"`,
+    # could never take its first arm.
+    history_branch = "market-side"
     parts = (ctx or {}).get(("branch", action))
     if not parts:
         return ("<div class='vline hist'><span class='vk'>Track record:</span>"
@@ -4569,23 +4552,30 @@ def _branch_history(ctx, action, p_lean=None, delta=None, selection_ml=None):
     # the error bar the numbers no longer print, and at n=17 it is the only
     # thing stopping 76.5% from reading as a rate you can bank -- so dropping
     # the `±` makes it MORE load-bearing, not less.
-    # Prefer the band that contains THIS game's price. A pooled branch line
-    # mixes a .46 underdog lean with a .72 favourite -- different bets with
-    # different base rates -- so the pooled number is not the history of a
-    # game like tonight's. Falls back to the pooled branch whenever the band
-    # is missing or too thin, and SAYS which of the two it is showing, because
-    # a record under an unqualified "Won" that silently changes row set
-    # between games is the substitution this file keeps recording.
-    band, band_lab = None, None
-    if p_lean is not None:
-        for lo, hi, lab in _BRANCH_PRICE_BANDS:
-            if lo <= p_lean < hi:
-                band, band_lab = (ctx or {}).get(("band", action, lab)), lab
-                break
-    use, scope = (band, f"at {band_lab}") if band else (parts, "all prices")
-    rows = [(f"Won <span class='muted'>({_esc(scope)})</span>",
-             _wl_units(use, bold=True)
-             + f" <span class='muted'>· {_esc(_branch_read(use))}</span>")]
+    # THE PRICE-BAND SELECTION WAS REMOVED 2026-09-16 BECAUSE IT COULD NOT
+    # CHOOSE. It existed to prefer the band containing THIS game's price, on
+    # the sound reasoning that a pooled branch line mixes a .46 underdog lean
+    # with a .72 favourite. That reasoning applies to FOLLOW -- which never
+    # reaches this function, having returned to `_xwoba_side_history` above,
+    # where it bands on delta x moneyline instead.
+    #
+    # On FADE the rule fires only when the leaned side is priced below
+    # THRESHOLD, and the first band is [0, THRESHOLD), so EVERY fade row lands
+    # in it. The band was therefore always `under 45%`, its record was always
+    # bit-identical to the branch's (verified on the committed ledger, n=19,
+    # every key equal), and the label it produced -- `Won (at under 45%)` --
+    # was a qualifier that could not take another value. Same class as the
+    # calibration tile that read `50.0% vs 50.0% implied` forever: a statistic
+    # whose value is fixed by the partition rather than by the data.
+    #
+    # It also read as a second, unexplained `45%` one line under the rule's own
+    # `market gives ATL under 45%`, which is what made it confusing rather than
+    # merely redundant.
+    #
+    # The label now matches `_xwoba_side_history`'s, since both lines describe
+    # the same kind of thing and there is no longer a row set to disambiguate.
+    use = parts
+    rows = [("Past results", _wl_units(use, bold=True))]
     # The chalk control, and whether it is worth a ROW or only a clause. The
     # answer differs by branch and is checked rather than assumed:
     #
@@ -4603,8 +4593,7 @@ def _branch_history(ctx, action, p_lean=None, delta=None, selection_ml=None):
     #             beat simply backing the favourite. It stays.
     # The control must be scored on whatever rows the record above it used:
     # band chalk for a band record, branch chalk for the pooled fallback.
-    chalk = ((ctx or {}).get(("bandchalk", action, band_lab)) if band
-             else (ctx or {}).get(("chalk", action)))
+    chalk = (ctx or {}).get(("chalk", action))
     note = ""
     # Show the control when it SAYS something, and not when it is a copy of
     # the line above. Measured, and structural rather than incidental: where
@@ -4645,12 +4634,15 @@ def _branch_history(ctx, action, p_lean=None, delta=None, selection_ml=None):
     # row two rows above it is a note the reader has to hunt for.
     if note:
         body += f"<div class='vnote'>{note}</div>"
-    # The pooled reference is gone from this card, on the operator's call.
-    # It was added so a reader would not anchor on a thin branch, but that job
-    # is now done by `_branch_read` on the record row itself -- "within noise"
-    # says the same thing about the same number, in place, without a fourth
-    # row of context. It remains on grades.html, which is where a reader who
-    # wants the whole family's record is pointed.
+    # The pooled reference is gone from this card, on the operator's call, and
+    # so is the `within noise` marker that replaced it (2026-09-16). Both were
+    # anchors against reading a thin branch as reliable; what carries that now
+    # is the block's own `not a prediction -- and not a forward test` band plus
+    # the printed `n`, and the error bar itself lives on
+    # market-calibration.html, where `_lean_market_value_cell` renders the same
+    # `excess_se` as a `±`. That is the control MOVED rather than deleted --
+    # the rule `Deleting controls as clutter` states -- and it is worth being
+    # plain that the card is now the weaker of the two surfaces on reliability.
     #
     # `ctx["pooled"]` is still computed and still rendered there, so this is
     # not a value disappearing off every surface.
@@ -4658,8 +4650,25 @@ def _branch_history(ctx, action, p_lean=None, delta=None, selection_ml=None):
         "<div class='vprofile'>"
         f"<div class='vprofile-title'>Past {version} {history_branch} picks · "
         f"{n} {'game' if n == 1 else 'games'}</div>"
-        "<div class='vprofile-band'>Past results, not a prediction — "
-        "and not a forward test</div>"
+        # THE DISCOVERY BAND IS GONE FROM THIS CARD, 2026-09-16, on the
+        # operator's call -- the third guard removed from this block in one
+        # day, after the pooled reference row and the `within noise` marker.
+        # What the card retains is its own `n` in the heading above.
+        #
+        # MOVED, NOT DELETED, and verified rather than asserted because this
+        # repo has published that claim falsely before. grades.html carries
+        # "<b>Discovery</b>, not a forward test: the 45% price and .012 |Δ|
+        # gates were chosen after examining these rows", and
+        # market-calibration.html carries "<b>Retrospective</b>: both v2 gates
+        # were chosen after examining these rows; the registered forward
+        # reading starts after <date>". Both render live; a test asserts the
+        # pair so a later trim cannot take the claim off the site entirely.
+        #
+        # It also makes FADE consistent with FOLLOW, which lost its caveat
+        # line to `_xwoba_side_history` earlier on the same grounds. Worth
+        # stating plainly rather than filing as tidy-up: the branch whose
+        # gates were fitted on exactly these 19 rows is now the one surface
+        # that shows their record with no framing at all.
         f"{body}"
         "</div>"
     )
@@ -7247,11 +7256,18 @@ def _baseline_controls(g):
 
 
 # Emergency kill switch only: raise it to suppress branch records entirely.
-# It is 1 rather than a sample floor because with two branches a thin one is
-# self-describing -- the record prints its own n and its own standard error,
-# and `_branch_read` says "within noise" whenever the spread cannot support
-# more. Suppressing a number invites someone to recompute it without the
-# caveat, which is the rule this repo settled when it deleted `N_FIT_MIN`.
+# It is 1 rather than a sample floor for ONE reason now, and the other is
+# recorded because it was removed rather than found wanting: suppressing a
+# number invites someone to recompute it without the caveat, which is the rule
+# this repo settled when it deleted `N_FIT_MIN`. That stands on its own.
+#
+# What went on 2026-09-16 is the second reason -- "a thin branch is
+# self-describing, because `_branch_read` says 'within noise' whenever the
+# spread cannot support more". The marker was removed from the card on the
+# operator's call, so that clause is void and is not left here to read as
+# though it still holds. A floor is NOT the answer to its absence: a hard
+# `>= N` is the threshold cliff this repo has removed four times, and the
+# printed `n` plus the block's discovery band are what a reader has.
 BRANCH_RECORD_MIN = 1
 
 # Price bands for the per-game branch record, on the model side's own no-vig
@@ -7263,12 +7279,6 @@ BRANCH_RECORD_MIN = 1
 # A lean priced under .50 IS the underdog, so this one cut already separates
 # underdog leans from favourite leans -- crossing price with "lean type" would
 # only re-split cells that are each wholly one or the other.
-_BRANCH_PRICE_BANDS = (
-    (0.0, HYBRID_THRESHOLD, f"under {100 * HYBRID_THRESHOLD:.0f}%"),
-    (HYBRID_THRESHOLD, 0.50, f"{100 * HYBRID_THRESHOLD:.0f}–50%"),
-    (0.50, 1.0 - HYBRID_THRESHOLD, f"50–{100 * (1 - HYBRID_THRESHOLD):.0f}%"),
-    (1.0 - HYBRID_THRESHOLD, 1.01, f"{100 * (1 - HYBRID_THRESHOLD):.0f}%+"),
-)
 
 
 def hybrid_branch_records():
@@ -7330,40 +7340,6 @@ def hybrid_branch_records():
                                resid="chalk_resid", profit="chalk_profit")
         if ctl and ctl["n"] >= BRANCH_RECORD_MIN:
             out[("chalk", action)] = ctl
-        # The same branch cut by the price of the model's own side, so the
-        # card can show the rows that resemble TONIGHT'S game instead of one
-        # number pooling a .46 underdog with a .72 favourite.
-        #
-        # This is ONE axis, not a grid, and that is measured rather than
-        # assumed: a lean priced under .500 IS the underdog, so "lean type"
-        # and "price band" are the same cut. Crossing them gives cells that
-        # are each wholly dog or wholly favourite -- the 3x5 delta-by-price
-        # profile grid this panel used to publish is exactly what that
-        # produces, and it was deleted for putting n=1 cells on a public page.
-        # Four bands over 389 follow rows hold 14 / 67 / 93 / 215.
-        #
-        # The edges are not fitted. `.45` is the registered gate imported from
-        # `hybrid_test`, `.50` is the definition of a favourite and `.55` is
-        # the gate's mirror -- the same three the magnitude-by-market grid in
-        # ledger_report.txt already uses. Nothing here was chosen by looking
-        # at which split flattered the record.
-        for lo, hi, lab in _BRANCH_PRICE_BANDS:
-            band = mask & (obs["market_p"] >= lo) & (obs["market_p"] < hi)
-            got = _lean_market_agg(obs, band, won="hybrid_won", p="hybrid_p",
-                                   resid="hybrid_resid",
-                                   profit="hybrid_profit")
-            if got and got["n"] >= BRANCH_RECORD_MIN:
-                out[("band", action, lab)] = got
-                # The band's OWN chalk, from the same mask. A band record
-                # printed above the whole branch's chalk is a control on a
-                # different row set -- the defect this repo has recorded
-                # twice, and it would be invisible here because both lines
-                # look like records of "these games".
-                bc = _lean_market_agg(obs, band, won="chalk_won",
-                                      p="chalk_p", resid="chalk_resid",
-                                      profit="chalk_profit")
-                if bc and bc["n"] >= BRANCH_RECORD_MIN:
-                    out[("bandchalk", action, lab)] = bc
     return out
 
 
@@ -8105,13 +8081,14 @@ def render_grades_html(built_txt):
         # the header leads with a z-score for a rule whose threshold was
         # fitted on the very rows it is scored over.
         #
-        # The per-game card used to carry it too. It no longer does on a
-        # FOLLOW -- `_branch_history` hands that game to
-        # `_xwoba_side_history`, which now publishes flat-stake units in
-        # place of its caveat line -- so for the majority branch this note
-        # and the calibration panel are the whole of the framing. That makes
-        # it the reverse of the situation it was written for, and it is not
-        # optional copy.
+        # The per-game card used to carry it too, on BOTH branches. It no
+        # longer does on either: FOLLOW lost it when `_branch_history` began
+        # handing that game to `_xwoba_side_history`, and FADE lost it on
+        # 2026-09-16. So this note and the calibration panel are now the whole
+        # of the framing for EVERY branch, not just the majority one -- which
+        # makes it load-bearing in a way its first version only anticipated.
+        # It is not optional copy, and `test_the_discovery_claim_survives_off_
+        # the_card` pins that it and the calibration panel's twin both render.
         if not obs.empty:
             notes.append(
                 "<b>Discovery</b>, not a forward test: the 45% price and "
