@@ -1318,6 +1318,47 @@ precedent — they are how the fix is known to look.
   (`hybrid_test`'s registration, frozen for an unrelated reason); `.44` was
   chosen by looking. **Decision: unchanged.**
 
+  **Re-proposed 2026-09-16 as a ROAD-DOG rule — `q < .44` AND `|d| < .015` —
+  and it is the same cell in a costume.** The pitch is that the model's
+  plus-money away leans are a cohort worth their own gates: on the 67 such v12
+  rows, always-follow runs +13.48%, shipped v2 +20.98%, and the proposal
+  +27.99%. Every figure reproduces on the committed ledger. Four things kill
+  it, and the first two are arithmetic rather than statistics.
+
+  *The `|d|` half is inert.* Loosening .012 → .015 flips **nothing** — not on
+  the road dogs, not family-wide. All of the claimed +4.69u is the `q`
+  .45 → .44 move, so the proposal advertises two changes and makes one.
+
+  *There is no road-dog cohort to target.* Family-wide the two rules differ on
+  **4 games of 421**, and all four ARE those road dogs — because 32 of the 34
+  rows below the gate are away leans in the first place. Cutting to the cohort
+  does not isolate a sub-rule; it just re-describes where the gate already
+  lives. And a genuinely side-aware version is the variant this file already
+  records failing walk-forward at +3.90% against +10.09%.
+
+  *It fails the search test, and restricting to the cohort is what breaks it.*
+  The proposal is the argmax of the same 837-cell sweep run on those 67 rows.
+  Under "market correct at its own devigged closes" the best of 837 cells
+  averages **+18.37%** (sd 7.78), giving **P(null best ≥ +27.99%) = 0.113**.
+  The full-row-set version of this sweep cleared at 0.0155; narrowing to 67
+  rows raises the null max faster than it raises the observed, which is the
+  general hazard — *a search over a smaller cohort is a weaker test, not a
+  sharper one.*
+
+  *The control inverts it.* Fading a road dog backs the home favourite by
+  construction. Always-chalk over all 67 road dogs runs **−17.12%** (32-35);
+  over the 13 the proposal fades, **+27.70%**. The fade branch's entire value
+  on this cohort is that those 13 particular favourites won, in a cohort where
+  backing favourites loses badly.
+
+  One thing genuinely cuts the other way and is recorded because it does.
+  Walk-forward over 53 road-dog bets, the honest arm — re-pick the argmax on
+  prior slates only — returns **+11.62%** against always-follow's +10.30% and
+  shipped v2's +7.29%. That is a 1.3pp edge over doing nothing on 53 bets, and
+  the +16.15% that the FIXED proposed cell scores on the same window is not a
+  forward reading at all: the cell was chosen on a sample containing those 53
+  games. **Decision: unchanged, again.** The four games went 3-1.
+
   **Side-specific rules were tested at the same time and are the best
   cautionary instance in this file, because they passed the search test and
   then failed worse than doing nothing.** Motivated by a real structural fact
@@ -2496,20 +2537,56 @@ them cannot be smoke-tested locally; run the workflow.
   and never separates at any point on it.
 
   **The measurement that decides it is not a correlation.** The shipped form
-  predicts an SP-minus-BP phase gap of **+0.01734**, because the bullpen
+  predicts an SP-minus-BP phase gap of **+0.01730**, because the bullpen
   composite is a usage-weighted aggregate of the arms a club actually uses and
   sits 0.0183 below the league batter centre it is divided by. Full phase
   matching predicts **+0.00001**. The ledger already holds the answer:
   `act_sp_*` is the starter's allowed line and the team batting line minus it
   is the bullpen's, so the realised gap is computable from committed rows with
-  no API call and no lookahead. Over **854 sides / 429 games** it is
-  **+0.01085 ± 0.00579, CI [−0.00050, +0.02236]** (PA-weighted, game-clustered
-  bootstrap). Both candidates sit inside that interval, so the actuals do not
-  separate them either — but the gap they measure is **positive**. Relievers
-  do suppress offense. Phase matching would remove a real effect, not an
-  artifact, and the correlation that likes it has no way to tell those apart.
-  The two readings also disagree about where the optimum is: d_corr wants
-  λ = 1 and the realised gap implies **λ = 0.420**.
+  no API call and no lookahead.
+
+  **This entry shipped with that measurement scoped to the current family, and
+  the scoping was wrong — the correction is recorded here rather than
+  overwritten, because the mistake is the reusable part.** `phase_lines` reads
+  box scores. The realised gap therefore does not know which model wrote the
+  row, and restricting it to `RECORD_TAGS` threw away 537 games for no reason.
+  At the family's own 429 games the read was **+0.01085 ± 0.00579, CI
+  [−0.00050, +0.02236]**, which contains the shipped +0.0173, and this file
+  said "the actuals do not separate them". Over **every** row — 1,923 sides /
+  966 games, pooling licensed because in-family minus out-of-family is
+  **+0.00759 ± 0.00783, z +0.97** — it reads **+0.00664 ± 0.00395, CI
+  [−0.00108, +0.01446]**, and the shipped +0.0173 is **OUTSIDE** it.
+
+  So the finding is not the null it was published as. **The shipped
+  construction overstates the phase gap by ~2.6x, and that overstatement is
+  rejected at 95% on the properly-powered row set.** What is NOT established is
+  the other end: zero is inside the interval too, so the data constrains the
+  true gap to roughly [0, +0.014] and rules out +0.017 — it does not say
+  relievers suppress nothing. The correlation column is unchanged and still
+  never separates (d_corr +0.0105 ± 0.0065), and the realised gap now implies
+  **λ = 0.686** against d_corr's preference for λ = 1.
+
+  **Two things not to take from the correction.** It does not make a fitted λ
+  shippable: a λ read off the ledger is the constants-frozen-from-data entry
+  with a fresh date, it would cost a `MODEL_TAG` bump and a reset record
+  family, and the decision-level effect still does not clear its own noise bar
+  (12 flips of 444). And it does not vindicate FULL phase matching, which sets
+  the gap to zero — a value the interval contains but does not prefer over
+  half the range above it. What it does is convert this from "measured and
+  rejected" to a **measured over-dispersion with a numeric gate**, the same
+  shape as the `expected_sp_ip` deferral: the instrument prints the interval
+  and the containment every run, and the question is worth reopening when the
+  CI's upper end falls below the shipped +0.0173 by a margin rather than by a
+  hair — roughly a doubling of the sample.
+
+  **The general lesson, which is why this stayed rather than being edited
+  away: a probe's row set is a parameter, and scoping it to the model's own
+  family is the intuitive default and was the wrong one here.** The predicted
+  gap is family-scoped because it is in the family's rate units; the realised
+  gap is not, because it is arithmetic on a box score. `load_all` and
+  `pooling_licence` now separate the two halves and print the licence instead
+  of assuming it. Note which way the error cut: the under-powered row set was
+  the one that exonerated the version already shipping.
 
   A middle λ is exactly the fitted literal this file's constants entry
   forbids, and it would buy a `MODEL_TAG` bump, a reset record family and a
@@ -2733,6 +2810,14 @@ them cannot be smoke-tested locally; run the workflow.
 
 ### Rules these have earned
 
+- **A probe's ROW SET is a parameter, and the family filter is not a safe
+  default.** A statistic computed from box scores does not depend on which
+  model wrote the row, so scoping it to `RECORD_TAGS` halves the sample for
+  nothing. The phase-gap read did exactly that and the wider row set
+  reversed its verdict — from "the actuals cannot separate them" to "the
+  shipped gap is rejected". Ask of every statistic whether the family is
+  part of its definition, and print the pooling licence rather than
+  assuming it.
 - **A correlation cannot tell "removes a bias" from "removes a real effect".**
   When a proposed change makes a directly observable prediction, measure that
   first and let it decide. Phase matching scored d_corr +0.0105 (z +1.62) and

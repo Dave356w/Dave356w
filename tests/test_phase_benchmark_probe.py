@@ -47,6 +47,35 @@ def _rows(n=24, seed=0):
     return d, L
 
 
+def _with_actuals(d, sp_hits, bp_hits, ab_each=30.0, spread=2.0, seed=0):
+    """Attach starter-allowed and team batting lines so `phase_lines` resolves.
+
+    The bullpen line is the residual the module takes, so the team totals are
+    written as starter + bullpen rather than the other way round -- a negative
+    residual is refused by `phase_lines` and would silently drop every row.
+
+    `spread` jitters the hit counts per row. Without it every game is
+    identical, the bootstrap returns one value and the interval has zero
+    width -- which the module now refuses to render a verdict against, so a
+    fixture with no spread tests the refusal rather than the verdict.
+    """
+    rng = np.random.default_rng(seed)
+    out = d.copy()
+    n = len(out)
+    for side in ("away", "home"):            # PITCHING side
+        bat = "home" if side == "away" else "away"
+        for f in ("2b", "3b", "hr", "bb", "ibb", "hbp", "sf"):
+            out[f"act_sp_{f}_{side}"] = 0.0
+            out[f"act_{f}_{bat}"] = 0.0
+        sp = np.clip(np.round(rng.normal(sp_hits, spread, n)), 0, ab_each)
+        bp = np.clip(np.round(rng.normal(bp_hits, spread, n)), 0, ab_each)
+        out[f"act_sp_ab_{side}"] = ab_each
+        out[f"act_sp_h_{side}"] = sp
+        out[f"act_ab_{bat}"] = ab_each * 2
+        out[f"act_h_{bat}"] = sp + bp
+    return out
+
+
 def test_the_league_denominator_inverts_exactly_from_any_phase(tmp_path):
     d, L = _rows()
     p = tmp_path / "led.csv"
@@ -191,3 +220,84 @@ def test_the_current_family_is_derived_and_never_named():
     src = open(pbp.__file__).read()
     assert "build_site.RECORD_TAGS" in src
     assert "plat_consol_v" not in src
+
+
+def test_the_realised_gap_ignores_the_family_filter(tmp_path):
+    """The row-set defect, pinned as a property. `phase_lines` reads box
+    scores, so the realised gap must not change when the current family
+    changes -- it must be scored on every row that carries actuals. The
+    shipped version scoped it to RECORD_TAGS, which halved the sample and
+    reversed the verdict."""
+    fam, _ = _rows(n=12, seed=1)
+    fam["model_tag"] = "fam"
+    other, _ = _rows(n=12, seed=2)
+    other["model_tag"] = "other"
+    other["game_pk"] = range(100, 112)
+    # Out-of-family rows carry a very different phase gap, so a family-scoped
+    # estimator and an unfiltered one cannot agree by accident.
+    led = pd.concat([_with_actuals(fam, 14.0, 7.0, seed=1),
+                     _with_actuals(other, 7.0, 14.0, seed=2)], ignore_index=True)
+    p = tmp_path / "led.csv"
+    led.to_csv(p, index=False)
+
+    scoped = pbp.realised_phase_gap(pbp.load(p, tags=("fam",)))
+    pooled = pbp.realised_phase_gap(pbp.load_all(p))
+    assert scoped["n_games"] == 12 and pooled["n_games"] == 24
+    assert scoped["gap"] != pytest.approx(pooled["gap"])
+    # And the licence must notice that these two windows disagree.
+    lic = pbp.pooling_licence(pbp.load_all(p), ("fam",), boot=64)
+    assert abs(lic["z"]) > 2
+
+
+def test_the_containment_verdict_is_computed_not_asserted(tmp_path):
+    """The defect this module shipped with: the report stated 'both are
+    inside that interval' in prose, and a wider row set falsified it the same
+    day. The verdict must follow the numbers in both directions, so this
+    drives the realised gap to each side of the shipped prediction and reads
+    the word back out."""
+    d, _ = _rows(n=40, seed=5)
+    d["model_tag"] = "fam"
+
+    def verdict(sp_hits, bp_hits):
+        led = _with_actuals(d, sp_hits, bp_hits)
+        p = tmp_path / f"led_{sp_hits}_{bp_hits}.csv"
+        led.to_csv(p, index=False)
+        return "\n".join(pbp.report(p, tags=("fam",)))
+
+    # Starter and bullpen allow the same line: realised gap ~0, so the
+    # shipped construction's large positive gap must be rejected while the
+    # matched one survives.
+    assert "SHIPPED gap is REJECTED" in verdict(11.0, 11.0)
+    # A realised gap far wider than either candidate rejects both.
+    assert "BOTH are rejected" in verdict(22.0, 3.0)
+    # And a gap that brackets the shipped prediction separates neither.
+    assert "do not separate" in verdict(11.4, 11.0)
+
+
+def test_a_zero_width_interval_renders_no_verdict(tmp_path):
+    """`An SE of zero is never a result.` Identical games make every resample
+    return the same number, and containment against a point is not a
+    measurement -- the module must say so instead of printing OUTSIDE."""
+    d, _ = _rows(n=12, seed=17)
+    d["model_tag"] = "fam"
+    led = _with_actuals(d, 11.0, 11.0, spread=0.0)
+    p = tmp_path / "led.csv"
+    led.to_csv(p, index=False)
+    out = "\n".join(pbp.report(p, tags=("fam",)))
+    assert "ZERO-WIDTH" in out
+    assert "OUTSIDE the interval" not in out
+    assert "REJECTED" not in out
+
+
+def test_the_metric_label_is_read_off_the_rows(tmp_path):
+    """`A build-time constant must never name historical rows` -- the most
+    repeated instance in CLAUDE.md, and this module shipped with the literal
+    'xwOBA' beside a denominator recovered from whatever rows were loaded."""
+    d, _ = _rows(n=8, seed=9)
+    d["model_tag"] = "fam"
+    d["model_metric"] = "wOBA"
+    p = tmp_path / "led.csv"
+    d.to_csv(p, index=False)
+    out = "\n".join(pbp.report(p, tags=("fam",)))
+    assert "league batter wOBA" in out
+    assert "league batter xwOBA" not in out
