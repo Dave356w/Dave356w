@@ -2,6 +2,7 @@ import datetime as dt
 
 import numpy as np
 import pandas as pd
+import pytest
 
 import hybrid_test
 import hybrid_v2
@@ -183,3 +184,86 @@ def test_a_first_migration_still_mints_the_archive():
     got, _ = migrate_hybrid_v2.migrate(src)
     assert got.at[0, "hybrid_v1_selection"] == "H"
     assert got.at[0, "hybrid_v1_full"] == "W"
+
+
+def _pair(idx, q, delta, won, date, tag="xw+plat_consol_v12"):
+    r = _rows(q, delta, won=won, date=date)
+    r["game_pk"] = idx
+    r["model_tag"] = tag
+    return r
+
+
+def test_the_registered_headline_is_the_switch_delta_not_the_combined_line():
+    """v1's point 3 applies unchanged to v2: every FOLLOWED row is the model
+    untouched, so a combined ROI can only restate what the model already does.
+
+    v2 shipped without this. `apply_rule` computed `switch_delta` all along and
+    the forward block printed `combined hybrid` as its most prominent number
+    while v1, the RETIRED registration, printed the headline and the gate. The
+    assertion is on ORDER, not wording: the headline must reach the reader
+    before the line it exists to demote.
+    """
+    led = pd.concat([_pair(1, .40, .005, True, "2026-09-12"),
+                     _pair(2, .40, .005, False, "2026-09-13"),
+                     _pair(3, .60, .030, True, "2026-09-14")],
+                    ignore_index=True)
+    out = hybrid_v2.report_lines(led)
+    text = "\n".join(out)
+    assert "SWITCH DELTA (registered)" in text
+    assert "GATE:" in text
+    head = next(i for i, l in enumerate(out) if "SWITCH DELTA (registered)" in l)
+    comb = next(i for i, l in enumerate(out) if "combined hybrid" in l)
+    assert head < comb
+    assert "mostly the model, not the rule" in text
+
+
+def test_the_gate_constants_have_one_home():
+    """A second literal is the `one value, three homes` defect. v2's gate is
+    v1's arithmetic on the same effect size, so it is imported; the report says
+    in words that v2 accrues switches more slowly."""
+    assert hybrid_v2.GATE_SWITCHES is hybrid_test.GATE_SWITCHES
+    assert (hybrid_v2.GATE_SWITCHES_REALISTIC
+            is hybrid_test.GATE_SWITCHES_REALISTIC)
+    src = open(hybrid_v2.__file__).read()
+    body = src.split("GATE_SWITCHES_REALISTIC = v1.GATE_SWITCHES_REALISTIC", 1)[1]
+    assert f"= {hybrid_test.GATE_SWITCHES}" not in body
+
+
+def test_the_discovery_reference_is_scoped_to_the_rules_own_family():
+    """The gate is denominated in the CURRENT delta scale, so splitting the
+    whole ledger at the registration date reaches back through families whose
+    `xw_net` means something else -- the `_SCALE_FAMILIES` error inside one
+    number. Measured on the committed ledger when this was written, the
+    unscoped split read +0.049u over 44 switches against the family-scoped
+    +0.679u over 16: a reference 14x off, in the direction that flatters a
+    negative forward reading.
+
+    Pinned as a PROPERTY: an out-of-family row that WOULD be faded must not
+    move the figure, whatever its result.
+    """
+    pre, post = "2026-09-10", "2026-09-12"
+    base = [_pair(1, .40, .005, True, pre), _pair(2, .60, .030, True, post),
+            _pair(3, .40, .005, False, post)]
+    clean = hybrid_v2.discovery_switch_delta(pd.concat(base, ignore_index=True))
+    assert clean is not None and clean["n"] == 1
+    assert clean["families"] == ("xw+plat_consol_v12",)
+
+    # Same frame plus pre-registration rows from an older family, faded and
+    # LOSING, which would drag an unscoped mean down hard.
+    older = [_pair(10 + i, .40, .005, False, pre, tag="woba+plat_consol_v5")
+             for i in range(6)]
+    mixed = hybrid_v2.discovery_switch_delta(
+        pd.concat(base + older, ignore_index=True))
+    assert mixed["n"] == clean["n"]
+    assert mixed["mean"] == pytest.approx(clean["mean"])
+    assert mixed["families"] == ("xw+plat_consol_v12",)
+
+
+def test_no_forward_rows_means_no_discovery_reference():
+    """The figure exists to be read against a forward number. With no forward
+    rows there is nothing to read it against, and the family cannot be derived
+    from them either -- so it is withheld rather than guessed."""
+    led = _pair(1, .40, .005, True, "2026-09-10")
+    assert hybrid_v2.discovery_switch_delta(led) is None
+    text = "\n".join(hybrid_v2.report_lines(led))
+    assert "discovery was" not in text

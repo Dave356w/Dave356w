@@ -3372,6 +3372,34 @@ is +2.40u on ten games. **And the fade gate — the entire difference between v1
 and v2 — has fired exactly once.** Its n=1 line reads +73.5% ROI; that is one
 game, not a rate.
 
+**The v2 forward block shipped without a registered headline or a gate, and
+that is fixed.** `hybrid_test`'s own docstring says the registered headline is
+the paired SWITCH DELTA and never the hybrid's ROI, because every followed row
+is the model untouched and a combined line can only restate what the model
+already does. v1 printed that headline and its GATE; **v2 — the rule actually
+in production — printed `combined hybrid` as its most prominent forward
+number and no gate at all.** `apply_rule` had been computing `switch_delta` the
+whole time; only the reporting was missing. The block now leads with it, states
+the favourite-by-construction check, and carries the gate (imported from v1
+rather than restated, with the note that v2 fades strictly less often and so
+reaches it more slowly).
+
+**The discovery reference added beside it caught its own defect on the first
+run, and that instance is worth more than the line.** `decidable` applies no
+tag filter — correctly, since its production caller hands it a family-scoped
+frame — so the obvious implementation, split the ledger at `REGISTERED_ON`,
+reached back through every earlier family. The `|xw_net| < .012` gate is
+denominated in the current delta scale, so that asks a different question of a
+different statistic on a wOBA-era row. Measured: the unscoped split read
+**+0.049u per switch over 44**, the family-scoped one **+0.679u over 16** — a
+reference 14x off, in the direction that FLATTERS a negative forward reading.
+The family is derived from the forward rows (current-family by construction)
+rather than imported or named, so no literal goes stale at the next bump, and
+no forward rows means no reference rather than a guessed one. **This is the
+scale-denomination entry above, reintroduced one function away from where it
+was written, within the hour.** A rule recorded is not a rule internalised;
+the thing that caught it was printing both numbers and noticing they disagreed.
+
 Do not quote those figures, recompute them: `hybrid_v2.scored_rows()` returns
 the frame, and `hybrid_p` against `chalk_p` is the ticket-agreement split. The
 gate is the same one v1 had and it is far away — read nothing until the fade

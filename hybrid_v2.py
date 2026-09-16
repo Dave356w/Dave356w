@@ -36,6 +36,12 @@ THRESHOLD = v1.THRESHOLD
 DELTA_THRESHOLD = 0.012
 STAKE = v1.STAKE
 RULE_TAG = "xwoba_market_hybrid_v2"
+# Imported, never restated: v1's gate sizing is the same arithmetic on the same
+# effect size, and a second literal is the "one value, three homes" defect. The
+# report says in words that v2 accrues switches more slowly, since its fade
+# branch is a strict subset of v1's.
+GATE_SWITCHES = v1.GATE_SWITCHES
+GATE_SWITCHES_REALISTIC = v1.GATE_SWITCHES_REALISTIC
 PRIOR = "null"
 LEDGER = v1.LEDGER
 LOCKED_COLUMNS = v1.LOCKED_COLUMNS
@@ -124,6 +130,58 @@ def unscorable(led=None):
     return int(len(_committed(led)) - (0 if scored is None else len(scored)))
 
 
+def discovery_switch_delta(led):
+    """The switch delta over the rows the rule was FOUND on, or None.
+
+    Derived by splitting at `REGISTERED_ON` rather than frozen as a literal,
+    which is the opposite of v1's choice and deliberate: v1's discovery figure
+    was computed once, at registration, from a row set that no longer changes,
+    so a literal there is a record. v2's has never been written down, and
+    freezing one now would be a number read off today's ledger wearing a
+    registration date -- the constants-frozen-from-data entry.
+
+    Scored at the closing basis, because that is the only basis the pre-
+    registration rows have: no-lookahead keeps market columns off a pending
+    row, so a decision-time price exists only for rows captured after the
+    capture shipped. The forward line above it is on the saved-pregame basis,
+    and the two are NOT the same measurement -- which is exactly why this is
+    labelled `discovery` and printed as a reference rather than pooled.
+
+    SCOPED TO THE RULE'S OWN PREDICTION FAMILY, and the first version of this
+    function was not. `decidable` applies no tag filter -- correctly, since its
+    one production caller hands it a family-scoped frame -- so splitting the
+    whole ledger at the registration date reaches back through every earlier
+    family. The `|xw_net| < .012` gate is denominated in the CURRENT delta
+    scale (see DELTA_THRESHOLD), so applying it to a wOBA-era row asks a
+    different question of a different statistic, and pooling the answers is
+    the `_SCALE_FAMILIES` error inside a single number.
+
+    The family is read off the FORWARD rows rather than imported: every row
+    after the registration date is current-family by construction, and taking
+    the tags from there keeps this module free of a build_site import it
+    cannot safely make and free of a tag literal that would go stale at the
+    next bump. No forward rows means no reference is printed, which is correct
+    -- there is nothing yet to read against it.
+    """
+    d = decidable(led)
+    if d is None or d.empty:
+        return None
+    fwd = scored_rows(led)
+    if fwd is None or not len(fwd) or "model_tag" not in fwd.columns:
+        return None
+    fam = set(fwd["model_tag"].dropna().unique())
+    if not fam or "model_tag" not in d.columns:
+        return None
+    g = apply_rule(d[d["model_tag"].isin(fam)].copy())
+    g = g[g["game_date"].astype(str) <= REGISTERED_ON]
+    sw = g[~g["follow"]]
+    if not len(sw):
+        return None
+    return {"n": int(len(sw)), "mean": float(sw["switch_delta"].mean()),
+            "total": float(sw["switch_delta"].sum()),
+            "families": tuple(sorted(fam))}
+
+
 def report_lines(led=None):
     """Forward-only v2 report; retrospective history is printed separately."""
     out = [
@@ -151,6 +209,30 @@ def report_lines(led=None):
                    "are retrospective and do not count toward this gate.")
         return out
     sw = g[~g["follow"]]
+    n_sw = len(sw)
+    # THE REGISTERED HEADLINE, and the reason it is the switch delta rather
+    # than the combined line: v1's docstring point 3 applies unchanged to v2.
+    # The rule alters only the switched selections; every followed row is the
+    # v12 model untouched, so a combined ROI can restate what the model already
+    # does and nothing else. This block shipped WITHOUT it -- v1 printed the
+    # headline and the gate while v2, the rule actually in production, printed
+    # `combined hybrid` as its most prominent forward number. `switch_delta` was
+    # already computed by `apply_rule`; only the reporting was missing.
+    if n_sw:
+        d = sw["switch_delta"].values
+        se = float(np.std(d, ddof=1) / np.sqrt(n_sw)) if n_sw > 1 else float("nan")
+        out.append(f"    SWITCH DELTA (registered)  n={n_sw:<4d} "
+                   f"{d.mean():+.3f}u per switch  +/- {se:.3f}"
+                   + (f"   z={d.mean() / se:+.2f}" if se and se > 0 else "")
+                   + f"   total {d.sum():+.2f}u")
+    else:
+        out.append("    SWITCH DELTA (registered)    no switched selections yet")
+    disc = discovery_switch_delta(led)
+    if disc is not None:
+        out.append(f"    discovery was {disc['mean']:+.3f}u per switch over "
+                   f"{disc['n']}. Read the forward number against that, not "
+                   "against zero.")
+    out.append("")
     out.append(_line(g[g["follow"]], "follow"))
     out.append(_line(sw, "fade q<.45 & |d|<.012"))
     out.append(_line(g, "combined hybrid"))
@@ -158,5 +240,16 @@ def report_lines(led=None):
                      p_col="model_side_p", profit_col="lean_profit"))
     out.append(_line(g, "control: always-chalk", won_col="chalk_won",
                      p_col="chalk_p", profit_col="chalk_profit"))
+    if n_sw:
+        same = int((sw["bet_home"].values
+                    == (sw["pregame_p_home"] >= 0.5).values).sum())
+        out.append(f"    the fade branch backed the favourite in {same} of "
+                   f"{n_sw} switched games (construction says all of them)")
+    out.append(f"    GATE: {n_sw} of ~{GATE_SWITCHES} switches to test the "
+               f"discovery-sized effect, ~{GATE_SWITCHES_REALISTIC} for a "
+               "plausible +0.10u one. v2 fades STRICTLY less often than v1 "
+               "did, so it reaches these more slowly, not faster.")
+    out.append("    The combined-hybrid line is mostly the model, not the rule: "
+               "only the switched games are the hypothesis. See hybrid_v2.py.")
     return out
 
