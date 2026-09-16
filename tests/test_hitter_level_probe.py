@@ -397,3 +397,162 @@ class CeilingAndGateTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _moderation_frame(n_players=150, games=5, b3=0.0, seed=11):
+    """Hitter-games whose slope varies with PA by a known amount.
+
+    Built so `b3` is the thing being recovered rather than a by-product of the
+    shrinkage: the outcome is generated from the SHRUNK rate the composite
+    consumes, which is the regressor `beta_moderation` fits.
+    """
+    rng = np.random.default_rng(seed)
+    rows = []
+    for p in range(n_players):
+        pa = int(rng.integers(50, 650))
+        theta = 0.315 + 0.030 * rng.standard_normal()
+        z = (pa - 350) / 180.0
+        for g in range(games):
+            x = theta + rng.standard_normal() * 0.52 / np.sqrt(pa)
+            shrunk = (pa * x + 100 * 0.315) / (pa + 100)
+            act = 0.315 + (1.0 + b3 * z) * (shrunk - 0.315) \
+                + rng.standard_normal() * 0.25
+            rows.append({"game_pk": g, "batting_side": "home", "player_id": p,
+                         "batting_order": (p % 9) + 1, "PA": pa,
+                         "slot_weight": 4.6 - 0.09 * ((p % 9) + 1),
+                         "xwoba_raw": x, "xwoba_shrunk": shrunk,
+                         "act": act, "n_pa": 4})
+    return pd.DataFrame(rows)
+
+
+class BetaModerationTests(unittest.TestCase):
+    """The weights are DERIVED from the slope, so the slope is what is fitted.
+
+    `w_i` proportional to `E[PA_i] * beta_i` is algebra, not a hypothesis: the
+    slot weights already estimate `E[PA_i]`, so the only open term is whether
+    `beta` varies. These pin the estimator recovers a planted `b3` and that the
+    panel says what it cannot do, never a measured value -- the probe has no
+    live reading in this sandbox and freezing one would be the test that
+    memorises an artifact.
+    """
+
+    def test_it_recovers_a_planted_moderation(self):
+        got = hp.beta_moderation(_moderation_frame(b3=0.7), n_boot=150)
+        pa = [t for t in got["terms"] if t["label"].startswith("PA")][0]
+        flat = hp.beta_moderation(_moderation_frame(b3=0.0), n_boot=150)
+        pa0 = [t for t in flat["terms"] if t["label"].startswith("PA")][0]
+        self.assertGreater(pa["b3"], pa0["b3"])
+        self.assertGreater(pa["b3"] - pa0["b3"], 0.3)
+
+    def test_a_flat_slope_reads_flat(self):
+        got = hp.beta_moderation(_moderation_frame(b3=0.0), n_boot=200)
+        pa = [t for t in got["terms"] if t["label"].startswith("PA")][0]
+        self.assertLess(abs(pa["b3"] / pa["se"]), 2.5)
+
+    def test_the_pooled_slope_is_the_one_the_weights_read(self):
+        """beta is a SLOPE, not the correlation rescaled: a composite weights
+        rates, and the weight that minimises error reads the slope."""
+        m = _moderation_frame(b3=0.0)
+        got = hp.beta_moderation(m, n_boot=100)
+        x = m["xwoba_shrunk"].to_numpy()
+        y = m["act"].to_numpy()
+        expected = np.polyfit(x, y, 1)[0]
+        self.assertAlmostEqual(got["beta"], expected, places=6)
+
+    def test_the_interval_is_clustered_on_the_player(self):
+        """One hitter recurs across his games, so a row-wise interval is
+        optimistic exactly where a borderline b3 would be read."""
+        m = _moderation_frame(games=6)
+        got = hp.beta_moderation(m, n_boot=300)
+        naive = 1.0 / np.sqrt(len(m))
+        self.assertTrue(np.isfinite(got["se_beta"]))
+        self.assertGreater(got["se_beta"], naive)
+
+    def test_the_shrinkage_weight_is_not_counted_as_a_fourth_moderator(self):
+        """PA/(PA+K) is strictly increasing in PA, so it is the PA row
+        relabelled; counting it twice would inflate the search correction."""
+        cols = [c for _l, c, _n in hp.MODERATORS]
+        self.assertIn("PA", cols)
+        self.assertEqual(len(cols), len(set(cols)))
+        self.assertEqual(len(hp.MODERATORS), 3)
+
+    def test_the_bar_is_the_expected_maximum_not_zero(self):
+        got = hp.beta_moderation(_moderation_frame(), n_boot=60)
+        self.assertAlmostEqual(got["expected_max_z"],
+                               float(np.sqrt(2 * np.log(got["k"]))), places=9)
+
+    def test_the_materiality_bar_is_the_slot_weights_own_spread(self):
+        """Derived, not chosen. A round number here would be the frozen
+        constant this repo files under `constants frozen from data`."""
+        m = _moderation_frame()
+        got = hp.beta_moderation(m, n_boot=60)
+        w = m[m.game_pk == 0]["slot_weight"]
+        self.assertAlmostEqual(got["slot_cv"], float(w.std(ddof=1) / w.mean()),
+                               places=9)
+
+    def test_too_few_rows_returns_none_rather_than_a_slope(self):
+        self.assertIsNone(hp.beta_moderation(_moderation_frame().head(10)))
+
+    def test_a_constant_rate_returns_none_rather_than_a_fabricated_fit(self):
+        m = _moderation_frame()
+        m["xwoba_shrunk"] = 0.31
+        self.assertIsNone(hp.beta_moderation(m))
+
+    def test_a_missing_moderator_is_named_rather_than_dropped(self):
+        m = _moderation_frame().drop(columns=["batting_order"])
+        got = hp.beta_moderation(m, n_boot=60)
+        slot = [t for t in got["terms"] if t["label"] == "batting slot"][0]
+        self.assertTrue(np.isnan(slot["b3"]))
+        self.assertIn("column absent", slot["reason"])
+        self.assertEqual(got["k"], 2)
+
+
+class ModerationReportTests(unittest.TestCase):
+    def _report(self, **kw):
+        """The outcome half comes from the PA rows, as it does in production:
+        `report` joins and derives `act` itself, so a fixture that carried its
+        own would be testing a shape the probe never sees."""
+        m = _moderation_frame(**kw).drop(columns=["act", "n_pa"])
+        m["faced_pitcher"] = "X"
+        m["snapshot_utc"] = "2026-09-06T20:00:00Z"
+        m["savant_backfill"] = False
+        m["model_tag"] = "tag"
+        m["model_metric"] = "xwOBA"
+        rng = np.random.default_rng(5)
+        cats = ["out", "1b", "bb", "hr", "2b"]
+        pa = pd.concat(
+            [_pa(int(r.game_pk), int(r.player_id),
+                 list(rng.choice(cats, size=4, p=[.62, .18, .10, .05, .05])))
+             for r in m.itertuples()], ignore_index=True)
+        old = hp.CLUSTER_BOOT
+        hp.CLUSTER_BOOT = 60
+        try:
+            return "\n".join(hp.report(m, pa, ledger="no_such_ledger.csv"))
+        finally:
+            hp.CLUSTER_BOOT = old
+
+    def test_the_report_states_the_derivation_before_any_number(self):
+        text = self._report()
+        self.assertIn("E[PA_i] * beta_i", text)
+        self.assertIn("algebra, not a hypothesis", text)
+
+    def test_the_report_warns_that_the_pa_term_measures_k_first(self):
+        """On the shrunk rate the slope is (PA+K)/(PA+K*), flat only when K is
+        calibrated -- so a material PA term is a statement about K before it is
+        one about hitters, and the fix there is K, not the weights."""
+        text = self._report()
+        self.assertIn("(PA+K)/(PA+K*)", text)
+        self.assertIn("worse copy of the shrinkage", text)
+
+    def test_the_report_carries_the_search_bar_and_the_materiality_bar(self):
+        text = self._report()
+        self.assertIn("under pure noise", text)
+        self.assertIn("MATERIALITY", text)
+
+    def test_an_unreachable_bar_is_reported_as_the_answer(self):
+        """A bar that needs decades is not a reason to wait: a beta that
+        cannot be shown to vary by more than the slot weights' own CV cannot
+        move the composite further than the weight family's own span."""
+        text = self._report()
+        self.assertIn("that IS the", text)
+        self.assertIn("lineup_agg_probe", text)

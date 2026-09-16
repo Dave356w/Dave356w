@@ -2415,7 +2415,7 @@ registered pregame scorer excludes and counts malformed locked commitments;
 close-scored sections exclude missing `close_p_home` and their rule-specific
 inputs, while relying on the market join to supply the paired moneylines.
 
-**Probes run on demand.** Fifteen read committed artifacts and need no live API.
+**Probes run on demand.** Sixteen read committed artifacts and need no live API.
 All run anywhere with one qualification, stated in its own row:
 `hitter_level_probe` executes but cannot produce a reading without the
 collector's per-PA CSV. Recount this list when you add a probe: the lead
@@ -2434,6 +2434,7 @@ the count is the one thing here a reader cannot check without counting:
 | `hfa_probe.py` | does adding a home-field term to the lean improve it? (no) |
 | `lineup_window_probe.py` | is the negative lineup component slope an artifact of the SP/BP scoring window? (no) |
 | `hitter_level_probe.py` | does a hitter's predicted xwOBA predict his OWN plate appearances? (forward only; runs anywhere and reads the committed `hitters_*` frames, but scores nothing without the collector's per-PA CSV passed to `--pa` — that CSV needs `batter_id` from `lineup_window_collect.py`, and StatsAPI is unreachable from the dev environment, so the `lineup-window-collect` workflow is the only place it produces a reading) |
+| `lineup_agg_probe.py` | which composite of the nine hitters, if any — closes the weight family and the log-odds variant by arithmetic, then scores only what is left, paired against what ships |
 | `interaction_probe.py` | do single signals or other combiners beat `B·P/L`? |
 | `dispersion_probe.py` | does a concentrated lineup beat the mean it is averaged into? |
 | `bp_ablation.py` | does removing the bullpen term change any decision? |
@@ -2675,6 +2676,21 @@ them cannot be smoke-tested locally; run the workflow.
   path.** The `xwoba` selection name reached the primary build only after the
   arm resolved it against the live endpoint, where being wrong cost a log line
   instead of a slate.
+- **Close what arithmetic closes before searching, and pair before you power
+  up.** Seven lineup composites "all inside one standard error" was a true
+  null over the least powerful statistic available: the variants share their
+  games and 99%+ of their spread, so the paired difference has a standard
+  error 26x smaller, and the family they belong to can be bounded on paper
+  before any of them is scored. A search over candidates a derivation could
+  have eliminated is how a repo ends up ranking noise — and comparing raw
+  correlations across predictors of different spread compares headroom, so
+  normalise by each one's own ceiling or do not rank at all.
+- **"Closed" and "indistinguishable" are different claims, and the tighter
+  your pairing the further apart they get.** The log-odds composite is the
+  linear one to three decimals AND separates from it at z = +2.20, because
+  pairing predictors that agree to 0.9996 leaves an interval below their
+  difference. Say which one you mean; a docstring that said the stronger thing
+  was falsified by its own module's first run.
 - **A probe that hardcodes a model constant goes stale and starts benchmarking
   the model against an old copy of itself.** `interaction_probe` froze the IP
   calibration slope at `0.756` and, once v12 shipped a per-build fit, would have
@@ -2887,6 +2903,86 @@ Do not re-derive these by hand; they have readouts.
   consistent with this file's own note that two turns through the order makes
   the weights near-uniform. Savant backfill is ruled out as a contaminant on
   the current frames: 5 of 2,088 hitter rows (0.2%).
+
+  **Both of those paragraphs are a SEARCH, and `lineup_agg_probe.py` is what
+  replaces them.** "Seven variants, all inside one standard error of ±0.070"
+  is a true sentence and the wrong test: the variants share their games and
+  almost all of their spread, so the standalone correlation is the statistic
+  with the least power available, and comparing raw correlations across
+  composites of different spread compares HEADROOM rather than skill. The
+  paired difference against what ships is the statistic the question actually
+  asks for, and on the current frames its standard error is **26x smaller**
+  for family members — 0.0044 against a standalone 0.1155 over 78 sides.
+  The panel is built derivation-first for that reason: it closes what
+  arithmetic closes and measures only what is left.
+
+  **Closed by arithmetic, half one — the weight family.** Perturbing nine
+  weights at a coefficient of variation `c` moves a mean of nine rates whose
+  within-lineup spread is `s` by about `c·s/√9`. Measured on the committed
+  frames: `c` = 0.0692 (the slot weights' own), `s` = 0.0249, so the shift is
+  0.00057 against a composite spread of 0.00706 — and the two ends of the
+  family correlate **0.99879**. Every weighting in it is one predictor. What
+  that does NOT close is the difference in their correlations: correlation is
+  scale-free, so the 4.9% of spread a reweighting moves could in principle
+  carry the signal, and the worst case on |d_corr| is that same 0.049, the
+  size of the whole ceiling. Arithmetic narrows "which of seven" to "is the
+  moved sliver better aligned than the rest"; the paired column is what can
+  answer that, and it needs ~944 sides to.
+
+  **Closed by arithmetic, half two — the log-odds composite, and this is the
+  entry to read rather than the number.** Over the range these rates occupy
+  the logit is near-linear, so the logit composite and the linear one agree to
+  max |Δ| 0.00118 on a 0.00725 spread, pearson 0.99963. A draft of the
+  module's docstring wrote that up as "not a candidate, and no sample will
+  make it one." **The panel's own first run falsified it**: paired, the two
+  separate at +0.0047 ± 0.0021, z = +2.20 against a 7-comparison bar of 1.97.
+  Both statements are true and they are about different things — CLOSED means
+  closed as a candidate, because a change that size cannot be worth a
+  `MODEL_TAG` bump, and it does not mean indistinguishable. Pairing two
+  predictors that agree to 0.9996 leaves an interval far below their
+  difference. The claim went and the measurement stayed, and a test pins that
+  the retracted sentence does not come back.
+
+  **What the panel can already say, and it is not a null.** Every standalone
+  correlation on it is UNUSABLE at n=78 — se 0.1155 against ceilings of
+  0.08–0.21, so no row could reach |z| = 2 even if its composite were perfect,
+  and the panel prints that per row instead of an ordering. The paired column
+  is readable now for the variants that LEAVE the family by discarding
+  hitters: best bat −0.1835 ± 0.0613 (z −2.99) clears the bar, top-four slots
+  −0.0984 ± 0.0507 (z −1.94) does not. So discarding hitters is measurably
+  worse than averaging all nine, while reweighting them has little room to
+  matter however it lands. Recompute all of it; these move every slate.
+
+  **The per-hitter half is now derived rather than searched.** If a hitter's
+  rate predicts his own plate appearances with slope `β_i`, the linear
+  composite minimising squared error is `Σ w_i x_i` with `w_i ∝ E[PA_i]·β_i` —
+  algebra, not a hypothesis. The slot weights already estimate `E[PA_i]`, so
+  the one open term is whether `β` varies, and `hitter_level_probe`'s WEIGHTS
+  block fits it as an interaction (no median split, no cut point chosen by
+  looking) with the interval clustered on `player_id`. Its materiality bar is
+  derived rather than picked: `β` must vary by more than the slot weights' own
+  CV before re-weighting on it changes the composite more than the weighting
+  it would sit on. If that bar needs decades — and on the arithmetic above it
+  may — **that is the answer and not a reason to wait**, because a `β` varying
+  by less than 0.069 cannot move the composite further than the weight family
+  already spans.
+
+  **One trap inside that, and it is the reason the PA row is labelled.** On
+  the SHRUNK rate the slope is `β(PA) = (PA+K)/(PA+K*)` with `K* = σ²/τ²`, so
+  it is flat at 1 for every PA exactly when `K` is calibrated and tilts
+  otherwise. A material PA moderation is therefore a statement about `K`
+  BEFORE it is one about hitters, and the fix there is `K`, never the weights
+  — re-weighting on a `β` that is really an un-shrunk residual is a second,
+  worse copy of the shrinkage. This does not reopen the standing note above
+  that `K` cannot fix the lineup CORRELATION: shrinkage is affine, so it moves
+  the composite's spread and its slope and never its ORDER. The correlation
+  cannot depend on `K`; the weights read the slope, which can. Both sentences
+  are true and neither implies the other.
+
+  No live reading for the `β` half exists in this repo yet: it needs the
+  collector's per-PA rows, and StatsAPI is unreachable from the dev
+  environment, so the `lineup-window-collect` workflow is the only place it
+  produces one.
 
 - **The metric question** — the shadow arm, running wOBA under an xwOBA
   primary. Needs roughly 18 paired slates for 80% power on a 0.09 gap.

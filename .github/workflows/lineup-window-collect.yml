@@ -15,6 +15,14 @@ name: Lineup window collect
 # per-hitter RATE or the AGGREGATION that averages nine of them into one
 # number. Both are diagnostic; neither feeds a lean, a delta or a grade.
 #
+# It then runs `lineup_agg_probe`, the team-level half of the same question.
+# That one needs no live API at all -- it reads the committed frames and the
+# committed ledger -- but it belongs beside the other half rather than in
+# build.yml, because the two are read together: the per-hitter probe DERIVES
+# the weights a composite should use, and the panel bounds how much any
+# weighting could matter. A reader given one without the other reaches for a
+# ranking of correlations none of which is readable yet.
+#
 # Backfill, not lookahead. A finished game's play-by-play is immutable in the
 # same sense `actuals_backfill`'s box scores are; nothing here touches the
 # prediction side, which is what `.savant_cache/` being gitignored forbids
@@ -37,6 +45,7 @@ on:
     paths:
       - 'lineup_window_collect.py'
       - 'hitter_level_probe.py'
+      - 'lineup_agg_probe.py'
       - '.github/workflows/lineup-window-collect.yml'
   workflow_dispatch:
     inputs:
@@ -72,7 +81,8 @@ jobs:
       - name: Verify the event map, the window logic and the hitter join
         run: |
           python -m pytest tests/test_lineup_window_collect.py \
-                           tests/test_hitter_level_probe.py -q
+                           tests/test_hitter_level_probe.py \
+                           tests/test_lineup_agg_probe.py -q
 
       - name: Collect
         run: |
@@ -100,6 +110,21 @@ jobs:
             --hitters data \
             | tee hitter_level_probe_report.txt
 
+      # The team-level half of the same question, and the only half that can
+      # run without the collector: it reads the committed frames and the
+      # committed ledger. It is here rather than in build.yml because the two
+      # halves are read together -- the per-hitter probe derives the weights
+      # a composite should use, this one bounds how much any weighting could
+      # matter -- and a reader who has one without the other will reach for a
+      # ranking of unreadable correlations. `if: always()` because it needs no
+      # PA rows: a failed collect must not also cost the half that does not
+      # depend on it.
+      - name: Score the aggregation panel on the committed frames
+        if: always()
+        run: |
+          set -o pipefail
+          python lineup_agg_probe.py | tee lineup_agg_probe_report.txt
+
       - name: Confirm nothing was written to data/
         run: |
           if ! git diff --quiet -- data/; then
@@ -118,4 +143,5 @@ jobs:
             lineup_window_collect_report.txt
             lineup_window_pa.csv
             hitter_level_probe_report.txt
+            lineup_agg_probe_report.txt
           if-no-files-found: warn
