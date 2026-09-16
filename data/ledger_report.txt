@@ -1,28 +1,28 @@
-LEAN LEDGER — 431 graded games (423 with a lean, 8 abstained)  [xw+plat_consol_v12]
-xwOBA lean   full: 261-162  (0.617)   F5: 200-165-58  (0.548)
-hybrid v2 rule  full: 267-156  (0.631)   vs price z=+2.88  +40.06u   (n=423, 20 faded)
-  always chalk, same 423 rows: 250-173  (0.591)   vs price z=+0.61
+LEAN LEDGER — 433 graded games (425 with a lean, 8 abstained)  [xw+plat_consol_v12]
+xwOBA lean   full: 261-164  (0.614)   F5: 200-167-58  (0.545)
+hybrid v2 rule  full: 267-158  (0.628)   vs price z=+2.77  +38.06u   (n=425, 20 faded)
+  always chalk, same 425 rows: 251-174  (0.591)   vs price z=+0.60
   price source — selection/eligibility and market comparison: closing close_p_home;
                  returns: closing close_home_ml/close_away_ml. No saved-pregame fallback.
   missing prices — no close_p_home or lean: excluded. Paired close MLs are not a separate filter.
   RETROSPECTIVE: the q < 45% AND |xw_net| < .012 fade gate was chosen after examining these rows. Registered v2 starts after 2026-09-11 and is reported below.
-hybrid v2 ledger fields (row basis): 268-155  (0.634)   vs price z=+3.00  +42.38u   (n=423, 19 faded)
-  price source — 223 closing, 200 saved pregame; no cross-snapshot fallback. This mixed-basis reconciliation is not the uniform closing-price retrospective above.
-REGISTRATIONS (retrospective, n=423: 261 discovery rows + 162 since 2026-09-03) — in sample, NOT the forward reading:
+hybrid v2 ledger fields (row basis): 268-157  (0.631)   vs price z=+2.89  +40.38u   (n=425, 19 faded)
+  price source — 223 closing, 202 saved pregame; no cross-snapshot fallback. This mixed-basis reconciliation is not the uniform closing-price retrospective above.
+REGISTRATIONS (retrospective, n=425: 261 discovery rows + 164 since 2026-09-03) — in sample, NOT the forward reading:
   price source — all retrospectives: closing close_p_home for eligibility, selection, and implied probabilities;
                  closing close_home_ml/close_away_ml for returns. No saved-pregame fallback.
   missing prices — no close_p_home or lean: excluded; |Δ| also requires xw_net. Paired close MLs are not a separate filter.
   |Δ| filter   dropped-game excess  +4.80pp +/- 4.14  (n=143; discovery +5.53). NEGATIVE would vindicate the rule.
   abstain      fade-minus-abstain -0.050u/declined game +/- 0.141  (n=35; discovery +0.175). POSITIVE keeps the shipped fade branch.
-  dog contrast above-minus-below +13.84pp +/- 10.32  (n=67 above, 35 below; discovery +27.59).
+  dog contrast above-minus-below +12.94pp +/- 10.29  (n=68 above, 35 below; discovery +27.59).
   Each was FOUND on the discovery rows above, so none of these is evidence for itself. The registered forward readings are further down this report.
-platoon lean full: 200-127  (0.612)   F5: 167-115-45  (0.592)   (reliable-only, n=327)
-xwOBA on same subset  full: 205-122  (0.627)   F5: 155-127-45  (0.550)
+platoon lean full: 200-129  (0.608)   F5: 167-117-45  (0.588)   (reliable-only, n=329)
+xwOBA on same subset  full: 205-124  (0.623)   F5: 155-129-45  (0.546)
 xwOBA fixed |delta| bands (current record family; descriptive)
   Fixed cutoffs: .010 / .020 / .030 / .050; lower inclusive, upper exclusive.
   Introduced after inspecting history; not a registered test or calibrated confidence scale.
   Rates exclude ties; intervals are Wilson 95% CIs assuming independent games.
-  Included 423 of 431 graded rows; excluded 8 without a lean, full decision, or finite xw_net.
+  Included 425 of 433 graded rows; excluded 8 without a lean, full decision, or finite xw_net.
   Favorite comparison: closing close_p_home; no pregame fallback. Both records use the same valid-price, non-tied full-score rows.
   [0.000, 0.010) n=119
     full 70-49  (0.588); decisions=119; 95% CI [0.498, 0.673]
@@ -36,12 +36,12 @@ xwOBA fixed |delta| bands (current record family; descriptive)
     closing-price paired n=111; excluded=0
       xwOBA 63-48  (0.568); decisions=111; 95% CI [0.475, 0.656]
       favorite 58-53  (0.523); decisions=111; 95% CI [0.430, 0.613]
-  [0.020, 0.030) n=86
-    full 54-32  (0.628); decisions=86; 95% CI [0.522, 0.723]
-    F5   38-38-10  (0.500); decisions=76; 95% CI [0.390, 0.610]
-    closing-price paired n=86; excluded=0
-      xwOBA 54-32  (0.628); decisions=86; 95% CI [0.522, 0.723]
-      favorite 52-34  (0.605); decisions=86; 95% CI [0.499, 0.701]
+  [0.020, 0.030) n=88
+    full 54-34  (0.614); decisions=88; 95% CI [0.509, 0.709]
+    F5   38-40-10  (0.487); decisions=78; 95% CI [0.379, 0.596]
+    closing-price paired n=88; excluded=0
+      xwOBA 54-34  (0.614); decisions=88; 95% CI [0.509, 0.709]
+      favorite 53-35  (0.602); decisions=88; 95% CI [0.498, 0.698]
   [0.030, 0.050) n=77
     full 51-26  (0.662); decisions=77; 95% CI [0.551, 0.758]
     F5   38-24-15  (0.613); decisions=62; 95% CI [0.488, 0.724]
@@ -62,7 +62,7 @@ xwOBA |delta| x saved-pregame market probability (current record family; descrip
     A cell's rate is what past leans in it did; it is not this model's probability for the next game in that cell.
   The q column is what makes the rate readable: a band can win 77% because the model is right or because it leaned
     expensive favourites, and only the gap against each game's own price separates those. Full-game only; ties excluded.
-  Included 200 of 431 graded rows; earliest saved pregame price 2026-09-01.
+  Included 202 of 433 graded rows; earliest saved pregame price 2026-09-01.
     Excluded, each counted from its own column rather than by subtraction, so a row failing two conditions appears twice:
          8  no lean, or a lean naming neither club
          8  no W/L full-game decision
@@ -80,12 +80,12 @@ xwOBA |delta| x saved-pregame market probability (current record family; descrip
     q .500-.550    n= 15       7-8 (0.467)   mean q .530   excess   -6.3 +- 12.9 pp
     q .550+        n= 23      14-9 (0.609)   mean q .587   excess   +2.2 +- 10.2 pp
     all q          n= 49     25-24 (0.510)   mean q .540   excess   -2.9 +-  7.1 pp
-  |delta| [0.020, 0.030)  n=36
+  |delta| [0.020, 0.030)  n=38
     q <.450        n=  4       3-1 (0.750)   mean q .419   excess  +33.1 +- 24.7 pp
-    q .450-.500    n=  5       4-1 (0.800)   mean q .471   excess  +32.9 +- 22.3 pp
+    q .450-.500    n=  6       4-2 (0.667)   mean q .469   excess  +19.8 +- 20.4 pp
     q .500-.550    n=  8       7-1 (0.875)   mean q .530   excess  +34.5 +- 17.6 pp
-    q .550+        n= 19      11-8 (0.579)   mean q .609   excess   -3.0 +- 11.2 pp
-    all q          n= 36     25-11 (0.694)   mean q .551   excess  +14.3 +-  8.2 pp
+    q .550+        n= 20      11-9 (0.550)   mean q .608   excess   -5.8 +- 10.9 pp
+    all q          n= 38     25-13 (0.658)   mean q .550   excess  +10.8 +-  8.0 pp
   |delta| [0.030, 0.050)  n=41
     q <.450        n=  1       1-0 (1.000)   mean q .417   excess  +58.3 +- 49.3 pp
     q .450-.500    n=  1       0-1 (0.000)   mean q .483   excess  -48.3 +- 50.0 pp
@@ -101,14 +101,14 @@ xwOBA |delta| x saved-pregame market probability (current record family; descrip
       (this band occupies one column, so the margin above can only repeat that cell)
   all |delta| bands
     q <.450        n= 19      10-9 (0.526)   mean q .417   excess  +10.9 +- 11.3 pp
-    q .450-.500    n= 27      18-9 (0.667)   mean q .474   excess  +19.3 +-  9.6 pp
+    q .450-.500    n= 28     18-10 (0.643)   mean q .473   excess  +17.0 +-  9.4 pp
     q .500-.550    n= 45     23-22 (0.511)   mean q .524   excess   -1.3 +-  7.4 pp
-    q .550+        n=109     71-38 (0.651)   mean q .613   excess   +3.8 +-  4.6 pp
-    all q          n=200    122-78 (0.610)   mean q .555   excess   +5.5 +-  3.5 pp
-  best-cell reference: the best of these 17 non-empty cells averages +48.2 pp of excess under 'every game settles at its own price';
+    q .550+        n=110     71-39 (0.645)   mean q .613   excess   +3.3 +-  4.6 pp
+    all q          n=202    122-80 (0.604)   mean q .555   excess   +4.9 +-  3.5 pp
+  best-cell reference: the best of these 17 non-empty cells averages +48.5 pp of excess under 'every game settles at its own price';
     the observed best is +58.3 pp, |delta| [0.030, 0.050) q <.450 (n=1). A grid is a search, so a cell is read against that reference, never against zero.
 xwOBA |delta| x SELECTED-side closing price (hybrid v2 FOLLOW branch; the grid the game card shows one cell of)
-  rows: 403 followed of 423 decidable; 20 faded rows excluded (a fade backs the favourite by construction, so it is a different bet).
+  rows: 405 followed of 425 decidable; 20 faded rows excluded (a fade backs the favourite by construction, so it is a different bet).
   Price basis: the selection's own CLOSING moneyline -- not the saved pregame price the block above uses, so the two grids score different row sets on purpose.
   Retrospective: both v2 gates were chosen on these rows. Cells are descriptive history, not a validated mapping from |delta| to a win probability, and no cell is a registered rule.
   n and W-L
@@ -116,55 +116,55 @@ xwOBA |delta| x SELECTED-side closing price (hybrid v2 FOLLOW branch; the grid t
     ---------------------------------------------------------------------------------------------------------------------------
     [0.000, 0.010)            ·      11:6-5     27:18-9    37:22-15     26:17-9           ·           ·           ·   101:63-38
     [0.010, 0.020)        1:1-0     15:11-4    35:21-14    40:20-20      14:7-7       4:3-1           ·           ·   109:63-46
-    [0.020, 0.030)        3:2-1     15:10-5    34:23-11     21:12-9       8:5-3       5:2-3           ·           ·    86:54-32
+    [0.020, 0.030)        3:2-1     15:10-5    35:23-12     21:12-9       9:5-4       5:2-3           ·           ·    88:54-34
     [0.030, 0.050)        3:3-0     27:21-6     30:21-9      12:4-8       5:2-3           ·           ·           ·    77:51-26
     [0.050, inf)          7:6-1     14:10-4       8:6-2       1:1-0           ·           ·           ·           ·     30:23-7
-    COLUMN              14:12-2    82:58-24   134:89-45   111:59-52    53:31-22       9:5-4           ·           · 403:254-149
+    COLUMN              14:12-2    82:58-24   135:89-46   111:59-52    54:31-23       9:5-4           ·           · 405:254-151
   flat-stake units (1u a game, at each row's own close)
     |delta|               ≤-250   -249/-175   -174/-130   -129/-100   +100/+129   +130/+174   +175/+249       ≥+250         ROW
     ---------------------------------------------------------------------------------------------------------------------------
     [0.000, 0.010)            ·       -1.94       +3.21       +4.62       +9.49           ·           ·           ·      +15.38
     [0.010, 0.020)        +0.36       +1.76       +0.34       -1.81       +0.48       +3.27           ·           ·       +4.41
-    [0.020, 0.030)        -0.21       +0.10       +4.69       +1.57       +2.58       +0.04           ·           ·       +8.77
+    [0.020, 0.030)        -0.21       +0.10       +3.69       +1.57       +1.58       +0.04           ·           ·       +6.77
     [0.030, 0.050)        +0.98       +4.24       +5.24       -4.53       -0.63           ·           ·           ·       +5.30
     [0.050, inf)          +1.12       +0.91       +1.78       +0.82           ·           ·           ·           ·       +4.62
-    COLUMN                +2.25       +5.07      +15.26       +0.67      +11.92       +3.31           ·           ·      +38.48
+    COLUMN                +2.25       +5.07      +14.26       +0.67      +10.92       +3.31           ·           ·      +36.48
   beat its own price (pp +- se)
     |delta|               ≤-250   -249/-175   -174/-130   -129/-100   +100/+129   +130/+174   +175/+249       ≥+250         ROW
     ---------------------------------------------------------------------------------------------------------------------------
     [0.000, 0.010)            ·       -9±14        +9±9        +8±8      +19±10           ·           ·           ·        +9±5
     [0.010, 0.020)       +28±45       +9±12        +3±8        -2±8       +3±13      +35±24           ·           ·        +3±5
-    [0.020, 0.030)        -3±27       +2±12       +10±8       +5±11      +17±18       +0±22           ·           ·        +7±5
+    [0.020, 0.030)        -3±27       +2±12        +8±8       +5±11      +10±17       +0±22           ·           ·        +6±5
     [0.030, 0.050)       +28±26       +13±9       +12±9      -18±14       -6±22           ·           ·           ·        +7±6
     [0.050, inf)         +14±17       +7±13      +15±17      +46±50           ·           ·           ·           ·       +12±9
-    COLUMN               +15±12        +6±5        +8±4        +1±5       +12±7      +16±16           ·           ·        +7±2
-  best-cell reference: the best of these 25 non-empty cells averages +39.9 pp of excess under 'every game settles at its own price'; the observed best is +46.0 pp, |delta| [0.050, inf) -129 to -100 (n=1). A grid is a search, so a cell is read against that reference, never against zero.
-  pooled over all 403 followed rows: 254-149 (0.630)   excess +6.9 +- 2.4 pp   +38.48u. The margins are better estimated than any cell; read them first.
+    COLUMN               +15±12        +6±5        +8±4        +1±5       +11±7      +16±16           ·           ·        +7±2
+  best-cell reference: the best of these 25 non-empty cells averages +40.3 pp of excess under 'every game settles at its own price'; the observed best is +46.0 pp, |delta| [0.050, inf) -129 to -100 (n=1). A grid is a search, so a cell is read against that reference, never against zero.
+  pooled over all 405 followed rows: 254-151 (0.627)   excess +6.6 +- 2.4 pp   +36.48u. The margins are better estimated than any cell; read them first.
 xwOBA F5 by |Δ| tercile:
-  low  66-62-13  (0.516)   (Δ 0.000–0.012, n=141)
-  mid  53-63-25  (0.457)   (Δ 0.012–0.025, n=141)
-  hi   81-40-20  (0.669)   (Δ 0.025–0.101, n=141)
+  low  66-62-14  (0.516)   (Δ 0.000–0.012, n=142)
+  mid  54-63-24  (0.462)   (Δ 0.012–0.025, n=141)
+  hi   80-42-20  (0.656)   (Δ 0.025–0.101, n=142)
 DIVERGE h2h (F5): xwOBA 25 — platoon 37  (n=75)
-home F5 baseline: 0.524  (n=372)
-weight fit: 372 usable F5 decisions (gate 30)
-  b_lineup=+0.231±0.109  b_sp=+0.325±0.110  HFA=+0.099  (per sd)
-  symmetry test  b_lineup - b_sp*(sd_lu/sd_sp) = +0.132 ± 0.117  z=+1.13  (no departure from equal weight)
+home F5 baseline: 0.527  (n=374)
+weight fit: 374 usable F5 decisions (gate 30)
+  b_lineup=+0.214±0.108  b_sp=+0.316±0.110  HFA=+0.110  (per sd)
+  symmetry test  b_lineup - b_sp*(sd_lu/sd_sp) = +0.117 ± 0.117  z=+1.01  (no departure from equal weight)
   (equal first-order weight is what the symmetric multiplicative matchup implies; z is the evidence against it. Diagnostic only -- nothing here feeds back into a lean, a delta or a grade.)
 predicted vs actual (backfilled box scores)
   starter IP calibration (bias = actual - estimate; positive means the starter lasted longer than estimated)
-  pooled raw-with-fallback, all historical model families: n=1466 slope 0.772 ± 0.031  MAE 0.944 IP  bias -0.007 IP
-  current family raw [xw+plat_consol_v12; expected_sp_ip_raw_*]: n=862  slope 0.798 ± 0.040  MAE 0.921 IP  bias -0.067 IP
-  current family adjusted [xw+plat_consol_v12; expected_sp_ip_*]: n=862  slope 1.040 ± 0.052  MAE 0.918 IP  bias -0.098 IP
+  pooled raw-with-fallback, all historical model families: n=1470 slope 0.772 ± 0.031  MAE 0.943 IP  bias -0.007 IP
+  current family raw [xw+plat_consol_v12; expected_sp_ip_raw_*]: n=866  slope 0.798 ± 0.040  MAE 0.920 IP  bias -0.066 IP
+  current family adjusted [xw+plat_consol_v12; expected_sp_ip_*]: n=866  slope 1.040 ± 0.052  MAE 0.916 IP  bias -0.097 IP
     slope 1.00 means calibrated dispersion; below 1.00 is over-dispersed and above 1.00 is compressed.
     Pooled uses raw estimates where available and otherwise stored estimates; it does not describe the current family's adjusted estimates. Missing values are excluded separately from each displayed n. (IP drives phase weight q.)
-  offense wOBA n=854  pred mean 0.3093  actual mean 0.3115  (+0.0022)
+  offense wOBA n=858  pred mean 0.3093  actual mean 0.3113  (+0.0020)
     field pairing: Home offense vs away pitching (mx_xwoba_away -> act_woba_home);
                    Away offense vs home pitching (mx_xwoba_home -> act_woba_away).
-    calibration slope +0.80 +/- 0.18 (1.00 = calibrated)
-    skill vs league-rate baseline +0.0236 (ceiling ~0.04; per-game noise dominates)
-  lineup dispersion n=854  residual slope -0.80 +/- 0.45 (> 0 = concentrated lineups beat their mean)
-  lean delta   n=423  calibration slope +0.78 +/- 0.23 (1.00 = calibrated; < 1 = over-dispersed)
-    corr +0.159  sign agreement 0.544  (the lean's own hit rate against its target)
+    calibration slope +0.79 +/- 0.17 (1.00 = calibrated)
+    skill vs league-rate baseline +0.0230 (ceiling ~0.04; per-game noise dominates)
+  lineup dispersion n=858  residual slope -0.81 +/- 0.45 (> 0 = concentrated lineups beat their mean)
+  lean delta   n=425  calibration slope +0.76 +/- 0.23 (1.00 = calibrated; < 1 = over-dispersed)
+    corr +0.157  sign agreement 0.541  (the lean's own hit rate against its target)
   by prediction family (never pooled — different inputs, different scale against an observed-wOBA actual):
   v2/v3      net n=188 slope +0.51±0.17
   v4         net n= 14 slope -0.36±0.81
@@ -178,26 +178,26 @@ predicted vs actual (backfilled box scores)
   wOBA v4    wOBA n= 22 pred 0.3084 act 0.2639 (-0.0445) slope -2.10±1.76  SP IP n= 22 bias +0.31  net n= 11 slope -4.82±2.53
   wOBA v5    wOBA n=236 pred 0.3077 act 0.3090 (+0.0013) slope +0.65±0.36  SP IP n=238 bias +0.00  net n=117 slope +0.01±0.50
   split v1   wOBA n= 14 pred 0.3221 act 0.3514 (+0.0294) slope -0.78±1.58  SP IP n= 14 bias +0.05  net n=  7 slope -1.18±0.89
-  v12        wOBA n=854 pred 0.3093 act 0.3115 (+0.0022) slope +0.80±0.18  SP IP n=862 bias -0.07  net n=423 slope +0.78±0.23
+  v12        wOBA n=858 pred 0.3093 act 0.3113 (+0.0020) slope +0.79±0.17  SP IP n=866 bias -0.07  net n=425 slope +0.76±0.23
   xw+plat_consol_v1  net n=  1
 component error (each scored against its own realised phase)
   pitching-side suffixes: Home offense vs away pitching; Away offense vs home pitching.
   Starter and bullpen actuals, and starter IP, retain same-team pairing.
-  SP      n=862  pred 0.3121 act 0.3238 (+0.0117)  MAE 0.0966  slope +0.74±0.19  corr +0.133
-  BP      n=858  pred 0.2966 act 0.2945 (-0.0021)  MAE 0.1077  slope +0.95±0.36  corr +0.089
-  lineup  n=862  pred 0.3180 act 0.3110 (-0.0070)  MAE 0.0725  slope -0.36±0.43  corr -0.029
-           within-starter slope -0.158±0.501  (n=819, 176 starters absorbed; a correctly scaled composite implies +1.000)
+  SP      n=866  pred 0.3121 act 0.3235 (+0.0114)  MAE 0.0966  slope +0.73±0.19  corr +0.131
+  BP      n=862  pred 0.2965 act 0.2943 (-0.0022)  MAE 0.1074  slope +0.95±0.36  corr +0.089
+  lineup  n=866  pred 0.3180 act 0.3109 (-0.0072)  MAE 0.0724  slope -0.39±0.43  corr -0.031
+           within-starter slope -0.173±0.496  (n=823, 176 starters absorbed; a correctly scaled composite implies +1.000)
            the line above ignores who was faced; this one holds the starter fixed. Read the difference, not either alone -- and neither is interpretable unless the lineup row of the target-reliability block clears F=1.
 target reliability (can the ACTUAL tell this component's units apart?)
   Pools every family: the realised rate is metric-free, so the component block's tag scope cannot apply here.
   One-way ANOVA on the actual, grouped by unit, min 8 observations per unit.
   F is judged against its own null, not against 1.0: with 30 units the null sd of F is ~0.26, so a bare threshold calls noise a finding. Not separated => no attainable slope, and the component's fitted slope is undefined rather than null.
-  SP      by starter        units=112  n=1026  F=1.402 (p=0.006)  ICC=+0.0421  true between-unit sd 0.02402  -> measurable
-  BP      by pitching club  units=30   n=1457  F=1.173 (p=0.242)  ICC=+0.0035  true between-unit sd 0.00829  -> UNMEASURABLE -- not separated from chance
-  lineup  by batting club   units=30   n=1370  F=0.892 (p=0.632)  ICC=-0.0024  true between-unit sd 0 (negative variance component)  -> UNMEASURABLE -- units differ less than chance
+  SP      by starter        units=112  n=1029  F=1.406 (p=0.006)  ICC=+0.0423  true between-unit sd 0.02408  -> measurable
+  BP      by pitching club  units=30   n=1461  F=1.184 (p=0.230)  ICC=+0.0038  true between-unit sd 0.00853  -> UNMEASURABLE -- not separated from chance
+  lineup  by batting club   units=30   n=1374  F=0.895 (p=0.627)  ICC=-0.0023  true between-unit sd 0 (negative variance component)  -> UNMEASURABLE -- units differ less than chance
 by slate (most recent 14 of 57; monitoring, not trend)
-  scale: per-side rate error sd 0.0897 over 1360 paired side-games — read gross outliers, not drift
-  2026-09-16  xwOBA       15g  rate n=  4 pred 0.3073 act 0.3009 (-0.0064) MAE 0.0505  SP IP n=  4 bias +0.41 MAE 0.82
+  scale: per-side rate error sd 0.0896 over 1364 paired side-games — read gross outliers, not drift
+  2026-09-16  xwOBA       15g  rate n=  8 pred 0.3094 act 0.2847 (-0.0246) MAE 0.0495  SP IP n=  8 bias +0.24 MAE 0.74
   2026-09-15  xwOBA       15g  rate n= 30 pred 0.3088 act 0.2975 (-0.0113) MAE 0.0738  SP IP n= 30 bias -0.09 MAE 0.76
   2026-09-14  xwOBA       10g  rate n= 20 pred 0.3125 act 0.3203 (+0.0078) MAE 0.0554  SP IP n= 20 bias +0.02 MAE 1.01
   2026-09-13  xwOBA       15g  rate n= 30 pred 0.3082 act 0.3265 (+0.0183) MAE 0.0705  SP IP n= 30 bias -0.28 MAE 0.74
@@ -224,28 +224,28 @@ model-family history (never pooled into the current-family fit):
   wOBA v4 n= 11  wOBA full 5-6  (0.455)  F5 4-4-3  (0.500)
   wOBA v5 n=119  (2 abstained)  wOBA full 52-65  (0.444)  F5 46-50-21  (0.479)
   split v1 n=  7  wOBA/xwOBA full 4-3  (0.571)  F5 3-4  (0.429)
-  v12     n=431  (8 abstained)  xwOBA full 261-162  (0.617)  F5 200-165-58  (0.548)
+  v12     n=433  (8 abstained)  xwOBA full 261-164  (0.614)  F5 200-167-58  (0.545)
   xw+plat_consol_v1 n=  1  xwOBA full 0-1  (0.000)  F5 0-0-1
 
 pre-registered forward test  (registered 2026-08-29; fade the lean when gap > 0.06)
     price source — selection/eligibility: closing close_p_home; market comparison: closing close_p_home;
                    returns: closing close_home_ml/close_away_ml. No pregame fallback.
     missing prices — no close_p_home, lean, or delta: excluded. Paired closing MLs are not a separate filter.
-    eligible rows since registration: 226 over 18 slates
+    eligible rows since registration: 228 over 18 slates
     PRIMARY         n=18   7-11    -6.73u  ROI  -37.4%   vs price z=-1.67
-    secondary >0.00  n=80   34-46   -16.62u  ROI  -20.8%   vs price z=-1.61
-    secondary >0.02  n=48   20-28   -12.35u  ROI  -25.7%   vs price z=-1.68
-    secondary >0.04  n=27   12-15    -6.49u  ROI  -24.0%   vs price z=-1.22
+    secondary >0.00  n=81   35-46   -15.86u  ROI  -19.6%   vs price z=-1.50
+    secondary >0.02  n=49   21-28   -11.58u  ROI  -23.6%   vs price z=-1.53
+    secondary >0.04  n=28   13-15    -5.73u  ROI  -20.4%   vs price z=-1.02
     secondary >0.10  n=6    3-3    -1.23u  ROI  -20.4%   vs price z=-0.48
     GATE: 18 of ~1300 bets needed to separate a +5% ROI from zero. Read nothing before then.
     Prior is NEGATIVE by construction (see forward_test.py); a positive run here is a hypothesis, not a result.
 
   arm 2 — model leans a plus-money dog (registered 2026-08-29, unbanded)
-    REGISTERED          n=41   25-16   +13.10u  ROI  +32.0%   vs price z=+2.18
-    +100..+130          n=26   17-9    +9.30u  ROI  +35.8%   vs price z=+1.97
+    REGISTERED          n=42   25-17   +12.10u  ROI  +28.8%   vs price z=+2.01
+    +100..+130          n=27   17-10    +8.30u  ROI  +30.7%   vs price z=+1.76
     +130..+175          n=15   8-7    +3.80u  ROI  +25.3%   vs price z=+1.00
     +175 or longer        no qualifying bets yet
-    GATE: 41 of ~1200 bets. Prior is NULL, not negative — directionally the best cut measured, and still indistinguishable from zero.
+    GATE: 42 of ~1200 bets. Prior is NULL, not negative — directionally the best cut measured, and still indistinguishable from zero.
     Bands are context only; the registered rule is unbanded, because the band was chosen after seeing it.
 
 pre-registered hybrid market-direction test  (registered 2026-09-01; follow the lean at q >= 0.45, fade below)
@@ -269,15 +269,15 @@ pre-registered hybrid v2 test  (registered 2026-09-11; fade only when q < 0.45 A
     price source — selection/eligibility: saved pregame_p_home + locked action/selection;
                    market comparison: hybrid_p/pregame_p_home; returns: hybrid_ml/pregame MLs. No close fallback.
     missing inputs — malformed locked selection, grade, probability, moneyline, or xw_net: excluded and counted as unscorable.
-    eligible rows since registration: 57 over 5 slates
+    eligible rows since registration: 59 over 5 slates
     SWITCH DELTA (registered)  n=4    -1.244u per switch  +/- 0.994   z=-1.25   total -4.97u
     discovery was +0.679u per switch over 16. Read the forward number against that, not against zero.
 
-    follow                  n=53   32-21    +1.73u  ROI   +3.3%   vs price z=+0.63
+    follow                  n=55   32-23    -0.27u  ROI   -0.5%   vs price z=+0.33
     fade q<.45 & |d|<.012   n=4    1-3    -2.26u  ROI  -56.6%   vs price z=-1.28
-    combined hybrid         n=57   33-24    -0.53u  ROI   -0.9%   vs price z=+0.27
-    plain xwOBA lean        n=57   35-22    +4.44u  ROI   +7.8%   vs price z=+0.95
-    control: always-chalk   n=57   34-23    -1.30u  ROI   -2.3%   vs price z=+0.18
+    combined hybrid         n=59   33-26    -2.53u  ROI   -4.3%   vs price z=-0.02
+    plain xwOBA lean        n=59   35-24    +2.44u  ROI   +4.1%   vs price z=+0.66
+    control: always-chalk   n=59   35-24    -1.53u  ROI   -2.6%   vs price z=+0.15
     the fade branch backed the favourite in 4 of 4 switched games (construction says all of them)
     GATE: 4 of ~41 switches to test the discovery-sized effect, ~1420 for a plausible +0.10u one. v2 fades STRICTLY less often than v1 did, so it reaches these more slowly, not faster.
     The combined-hybrid line is mostly the model, not the rule: only the switched games are the hypothesis. See hybrid_v2.py.
@@ -286,16 +286,16 @@ pre-registered |delta| filter test  (registered 2026-09-03; abstain when |xw_net
     price source — selection: |xw_net| only; price eligibility and market comparison: closing close_p_home;
                    returns: closing close_home_ml/close_away_ml. No pregame fallback.
     missing prices — no close_p_home, lean, or delta: excluded. Paired closing MLs are not a separate filter.
-    eligible rows since registration: 162 over 13 slates
+    eligible rows since registration: 164 over 13 slates
     DROPPED-GAME EXCESS (registered)  n=59   +3.85pp +/- 6.45   z=+0.60
       vs always-chalk on the same games: -7.82pp; model-minus-chalk +11.67pp (discovery +6.37)
     discovery was +5.53pp +/- 5.47 over 82. The rule is VINDICATED only if this goes NEGATIVE; positive means it is discarding winning bets.
 
-    kept    |d|>=0.012        n=103  67-36   +6.9pp +/-  4.8  z=+1.45    +7.76u  ROI   +7.5%
+    kept    |d|>=0.012        n=105  67-38   +5.8pp +/-  4.8  z=+1.22    +5.76u  ROI   +5.5%
     dropped |d|< 0.012        n=59   33-26   +3.8pp +/-  6.5  z=+0.60    +1.95u  ROI   +3.3%
-    unfiltered lean           n=162  100-62   +5.8pp +/-  3.9  z=+1.51    +9.71u  ROI   +6.0%
-    control: always-chalk     n=162  94-68   -0.0pp +/-  3.9  z=-0.00    -8.59u  ROI   -5.3%
-    contrast kept-minus-dropped +3.10pp +/- 8.04  z=+0.38   (discovery +1.77 +/- 6.63)
+    unfiltered lean           n=164  100-64   +5.1pp +/-  3.8  z=+1.33    +7.71u  ROI   +4.7%
+    control: always-chalk     n=164  95-69   -0.1pp +/-  3.8  z=-0.03    -8.82u  ROI   -5.4%
+    contrast kept-minus-dropped +1.96pp +/- 8.02  z=+0.24   (discovery +1.77 +/- 6.63)
     GATE: 59 of ~393 dropped games to test the discovery-sized effect, ~1090 for a plausible 3pp one (~253 slates at 0.33 of a slate).
     Search test at registration put P(null best >= observed) = 0.693 -- the discovery gap is SMALLER than a sweep over noise typically returns. See delta_filter_test.py.
 
