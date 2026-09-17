@@ -87,7 +87,7 @@ import pandas as pd
 
 # One home for "which side is chalk", so this control and the site's cannot
 # answer it differently on a game with no favourite. See market_backfill.
-from market_backfill import chalk_is_home
+from market_backfill import chalk_is_home, row_supply_line
 
 # ---------------------------------------------------------------------------
 # FROZEN REGISTRATION BLOCK. Changing any value below invalidates the test and
@@ -267,8 +267,7 @@ def report_lines(led=None):
     if g is None:
         out.append("    ledger unavailable or missing columns -- not scored")
         return out
-    slates = g["game_date"].nunique() if len(g) else 0
-    out.append(f"    eligible rows since registration: {len(g)} over {slates} slates")
+    out.append(row_supply_line(g))
     if not len(g):
         out.append(f"    nothing to score yet. Prior is {PRIOR.upper()}: on the "
                    "discovery rows the model beat always-chalk by MORE on the "

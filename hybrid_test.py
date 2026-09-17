@@ -192,7 +192,7 @@ import pandas as pd
 
 # One home for "which side is chalk", so this control and the site's cannot
 # answer it differently on a game with no favourite. See market_backfill.
-from market_backfill import chalk_is_home
+from market_backfill import chalk_is_home, row_supply_line
 
 # ---------------------------------------------------------------------------
 # FROZEN REGISTRATION BLOCK. Changing any value below invalidates the test and
@@ -234,6 +234,45 @@ GATE_SWITCHES_REALISTIC = 1420
 PRIOR = "null"
 
 LEDGER = os.path.join("data", "mlb_lean_ledger.csv")
+
+
+def locked_v1_decision(lean, home, away, p_home, home_ml, away_ml):
+    """The v1 rule's decision from a row's own locked pregame market.
+
+    Returns ``(action, selection, p, ml)``, or None when the row carries no
+    usable two-sided pregame market or no lean naming one of the two clubs.
+
+    THE ONE HOME for this arithmetic. It was spelled inline in
+    `migrate_hybrid_v2` while `THRESHOLD` lived here, which is the "one value,
+    three homes" defect with the gate in one module and the rule that reads it
+    in another: a later edit to either could publish a v1 archive the v1 scorer
+    disagrees with. `grade_leans` mints the archive from this at ingest and the
+    migration repairs from the same call, so the two cannot drift.
+
+    Every input is write-once once a row grades, so this is a pure
+    re-derivation of a decision-time quantity and never lookahead. Verified
+    rather than argued: re-running it over the 141 archives that were minted
+    live reproduces all four fields on every one of them.
+    """
+    if not isinstance(lean, str) or lean not in (home, away):
+        return None
+    try:
+        ph, hml, aml = float(p_home), float(home_ml), float(away_ml)
+    except (TypeError, ValueError):
+        return None
+    if not (np.isfinite(ph) and 0.0 < ph < 1.0):
+        return None
+    if not (np.isfinite(hml) and np.isfinite(aml)
+            and abs(hml) >= 100 and abs(aml) >= 100):
+        return None
+    q = ph if lean == home else 1.0 - ph
+    # v1 is UNCONDITIONAL on the delta: q alone decides. That is the whole
+    # difference from the shipped v2 gate, and the reason abstain_test's
+    # declined set is a superset of what v2 fades.
+    action = "FOLLOW" if q >= THRESHOLD else "FADE"
+    selection = lean if action == "FOLLOW" else (away if lean == home else home)
+    p = q if action == "FOLLOW" else 1.0 - q
+    return action, selection, p, (hml if selection == home else aml)
 
 
 def _payout(ml):
@@ -483,8 +522,7 @@ def report_lines(led=None):
     if g is None:
         out.append("    ledger unavailable or missing columns -- not scored")
         return out
-    slates = g["game_date"].nunique() if len(g) else 0
-    out.append(f"    eligible rows since registration: {len(g)} over {slates} slates")
+    out.append(row_supply_line(g))
     dropped = unscorable(led)
     if dropped:
         out.append(f"    WARNING: {dropped} committed row(s) in the window carry "

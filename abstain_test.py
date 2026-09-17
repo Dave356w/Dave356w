@@ -147,6 +147,7 @@ import pandas as pd
 
 import hybrid_test
 import hybrid_v2
+from market_backfill import row_supply_line
 
 # ---------------------------------------------------------------------------
 # FROZEN REGISTRATION BLOCK. tests/test_abstain_test.py pins every value.
@@ -454,8 +455,7 @@ def report_lines(led=None):
     if g is None:
         out.append("    ledger unavailable or missing columns -- not scored")
         return out
-    slates = g["game_date"].nunique() if len(g) else 0
-    out.append(f"    eligible rows since registration: {len(g)} over {slates} slates")
+    out.append(row_supply_line(g))
     if not len(g):
         out.append(f"    nothing to score yet. Prior is {PRIOR.upper()}: every "
                    "faded bet is a favourite bet and the discovery window "

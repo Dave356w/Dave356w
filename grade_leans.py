@@ -627,10 +627,58 @@ def ingest(led):
                 for k in MODEL_FIELDS:                    # refresh scratches pre-lock
                     led.at[hit[0], k] = row[k]
                 n_ref += 1
+    n_v1 = _mint_v1_archive(led)
     print(f"ingest: +{n_new} new, {n_ref} pending refreshed, "
           f"{n_late} late snapshots rejected, {n_legacy} legacy refreshes skipped "
-          f"({len(led)} total)")
+          f"({len(led)} total); {n_v1} pending v1 archive row(s) written")
     return led
+
+
+def _mint_v1_archive(led):
+    """Write each PENDING current-family row's v1 hybrid decision. Returns n.
+
+    `hybrid_v1_*` is the archived q-gate selection. Its registration is
+    retired, but it is still the ROW SELECTOR that `abstain_test` and
+    `dog_contrast_test` delegate to, so a row that never receives one drops out
+    of two LIVE registrations with open gates -- silently, because it is
+    filtered inside `hybrid_test._committed`, one step before the `unscorable`
+    counter that exists to make a shrinking forward denominator visible. That
+    is how both froze at 2026-09-11 when `migrate_hybrid_v2` stopped minting:
+    the guard was pointed at the rows the denominator drops, not at the
+    denominator itself. Minting here is what stops the gap reopening; the
+    migration only repairs the rows written while it was open.
+
+    PENDING ONLY. A graded row's archive is immutable, for the same reason
+    `xw_full` is. Refreshing a pending one is required rather than optional:
+    `MODEL_FIELDS` rebuilds `xw_lean` and `pregame_p_home` on every pregame
+    poll, and the 2026-09-11 slate showed 2 rows whose LEAN flipped between the
+    first snapshot and the lock, so an archive minted once at insert would name
+    a selection nobody locked.
+    """
+    import hybrid_test                    # local, matching this module's others
+    cols = ("xw_lean", "home", "away", "pregame_p_home",
+            "pregame_home_ml", "pregame_away_ml", "status", "model_tag")
+    if any(c not in led.columns for c in cols):
+        return 0
+    n = 0
+    # `load_ledger` already casts these, but a caller holding a frame built
+    # some other way hands us all-NaN float columns, and writing a string into
+    # one warns on pandas 2 and RAISES on 3.
+    for c in ("hybrid_v1_action", "hybrid_v1_selection"):
+        led[c] = led[c].astype(object)
+    pending = led.index[led["status"].eq("pending")
+                        & led["model_tag"].astype(str).eq(MODEL_TAG)]
+    for idx in pending:
+        v1 = hybrid_test.locked_v1_decision(
+            led.at[idx, "xw_lean"], led.at[idx, "home"], led.at[idx, "away"],
+            led.at[idx, "pregame_p_home"], led.at[idx, "pregame_home_ml"],
+            led.at[idx, "pregame_away_ml"])
+        if v1 is None:
+            continue
+        (led.at[idx, "hybrid_v1_action"], led.at[idx, "hybrid_v1_selection"],
+         led.at[idx, "hybrid_v1_p"], led.at[idx, "hybrid_v1_ml"]) = v1
+        n += 1
+    return n
 
 # ---- GRADE -------------------------------------------------------------
 def _linescores_for(day):
@@ -1602,7 +1650,17 @@ def _registration_retrospective_lines(g):
                 f"  abstain      fade-minus-abstain {m:+.3f}u/declined game "
                 f"+/- {se:.3f}  (n={n_d}; discovery "
                 f"{abstain_test.DISCOVERY_FADE_MINUS_ABSTAIN:+.3f}). "
-                "POSITIVE keeps the shipped fade branch.")
+                # NOT "the shipped fade branch". The declined set is the
+                # q-gate's -- v1's unconditional q < .45 -- and v2 fades a
+                # strict subset of it, following 16 of these 37. The 2026-09-17
+                # correction that established this rewrote every copy of the
+                # claim inside `abstain_test` and missed this one, which is the
+                # MORE prominent of the two: the forward block carries the
+                # corrected wording 310 lines further down a file most readers
+                # skim from the top. A caveat travels with the line someone
+                # wrote it on, not with the statistic.
+                "POSITIVE keeps the q-gate fade branch, which v2 fades a "
+                "strict subset of.")
     except Exception as _exc:                      # noqa: BLE001
         out.append(f"  abstain      unavailable ({type(_exc).__name__})")
 

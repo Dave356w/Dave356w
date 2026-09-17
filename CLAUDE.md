@@ -541,6 +541,92 @@ precedent — they are how the fix is known to look.
 
 **Resolved — keep as precedent**
 
+- **A retirement that silently retired two tests nobody retired.** From
+  2026-09-12 to 2026-09-17 three of the five registrations accrued no forward
+  rows at all, and every one of them went on printing a gate. `hybrid_test`
+  froze at 126 rows over 10 slates, `abstain_test` at 103 over 8, and
+  `dog_contrast_test` at 16 dog leans over 7, while `forward_test` and
+  `delta_filter_test` ran on to 2026-09-16. Found by arithmetic on the report
+  rather than in the code: saved pregame prices cover every slate from
+  2026-09-01, so a saved-pregame test reporting 8 slates where the
+  closing-price one beside it reports 13 is missing 5, and the missing 5 were
+  exactly the slates after v1's migration.
+
+  The mechanism is one filter. `hybrid_test._committed` selects on
+  `hybrid_v1_action`, and `migrate_hybrid_v2` carried
+  `minting = not out["hybrid_v1_action"].notna().any()` -- mint only if NO row
+  anywhere has an archive -- so it was False from the first migration onward
+  and `grade_leans` wrote NaN into the column on every insert after it. The
+  comment above that flag argued the case correctly for the module it was
+  looking at: v1 is a retired registration and widening a frozen test's row
+  set is not a repair. **What it did not ask is who else reads the column.**
+  `abstain_test` and `dog_contrast_test` are live registrations with open
+  gates and both delegate row selection to `hybrid_test.scored_rows`, so
+  retiring v1's archive retired them too. The cost, measured over 09-12..09-16
+  alone: 11 declined games and 18 dog leans, more than doubling both samples.
+  Worse, `abstain_test`'s decision was PRE-COMMITTED on 2026-09-16 -- five days
+  after the rows stopped -- at a gate of 82 declined games it could never
+  reach, and the report printed `not at the gate: 5 of 82` as though it might.
+
+  **The guard written for exactly this could not see it, and that is the
+  reusable half.** `hybrid_test.unscorable()` exists because "a forward sample
+  whose denominator can shrink invisibly is worse, because nobody is watching
+  a number that is not printed". It counts rows dropped BY the filters below
+  `_committed`; the freeze happened INSIDE `_committed`, so the denominator
+  itself stopped growing and `unscorable` read 0 throughout. A counter aimed
+  at a denominator's contents cannot see the denominator move.
+
+  Four parts to the fix:
+
+  * **The v1 decision got one home**, `hybrid_test.locked_v1_decision`. The
+    gate lived in `hybrid_test` while the arithmetic reading it was spelled
+    inline in `migrate_hybrid_v2` -- "one value, three homes" across a module
+    boundary. All three writers now call it and a test forbids a second
+    spelling in either file.
+  * **The writer, not the repair, is where the gap closes.**
+    `grade_leans._mint_v1_archive` writes the archive for every PENDING
+    current-family row at ingest, so the column can no longer gap; the
+    migration only repairs the 80 rows written while it was open. Pending
+    only: a graded archive is immutable, and a pending one must be re-derived
+    every poll because `MODEL_FIELDS` rebuilds the lean and the price under it.
+  * **Backfilling is a re-derivation, not new evidence, and that was checked
+    rather than argued.** Every input is write-once once a row grades, so
+    re-running the derivation over the 141 archives that WERE minted live
+    reproduces all four fields on all 141. Nothing already written changed:
+    392 cells, all previously empty.
+  * **A repair's diff has to be reviewable, so `to_csv` is not good enough.**
+    `write_changed_cells` writes only the cells whose value moved, at
+    `migrate`'s own tolerance so the row count it reports and the cells it
+    writes cannot disagree. The first attempt rewrote 989 of 997 lines for 80
+    changed rows, on two pre-existing quirks neither of which is a migration's
+    to commit: `gamePk` carries NaN so `read_csv` gives float64 and a plain
+    rewrite renders `822884.0`, where the build gets `Int64` from
+    `attach_market`; and **`read_csv`'s default float parser is inexact**,
+    reading this ledger's `0.0008232366754536979` as `...4536`, so any rewrite
+    truncates a cell `build_site` wrote at full repr and nothing has
+    round-tripped yet. That second one is every reader in this repo, not this
+    one -- `float_precision="round_trip"` at the reads is the fix, with the
+    whole ledger downstream of it, and it is NOT attempted here.
+
+  Two smaller things found in the same pass. The 2026-09-17 correction naming
+  the q-gate rather than the shipped branch had rewritten every copy inside
+  `abstain_test` and missed the retrospective line in `grade_leans`, which is
+  the MORE prominent of the two -- it prints near the top of the report while
+  the corrected wording sits 300 lines below. Third instance of a caveat
+  travelling with the line someone wrote it on rather than with the statistic,
+  and the test now asserts the property on both surfaces at once. And the
+  `eligible rows since registration` line was spelled six times in six
+  modules; it is `market_backfill.row_supply_line` now, and it names the last
+  slate the registration actually scored, so the NEXT stall is visible on the
+  artifact instead of waiting to be found by hand.
+
+  What this does NOT do is re-point any registration's selector.
+  `abstain_test` still declines the q-gate's fades rather than v2's, which is
+  the mismatch its own 2026-09-17 note records; re-aiming it mid-registration
+  restarts the test. Only the row SUPPLY was restored, and the rule it feeds
+  is untouched. No lean, delta, grade, `xw_full` or registered constant moves,
+  and `MODEL_TAG` is unchanged.
+
 - **A tie-break, not a row set: the same control published two records.** On
   2026-09-17 `data/ledger_report.txt` said always-chalk went **257-179** over
   the current family's 436 rows and `grades.html` said **256-180** over the

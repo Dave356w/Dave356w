@@ -53,3 +53,65 @@ def test_historical_sections_name_closing_prices():
     text = grade_leans.report_text(ledger)
     assert "price source — all retrospectives: closing close_p_home" in text
     assert "price source — selection/eligibility and market comparison: closing" in text
+
+
+def test_every_registration_prints_the_slate_it_last_scored():
+    """A forward sample reads as accruing, so a stalled one has to be visible.
+
+    Three of the five stopped dead on 2026-09-11 -- `hybrid_test` and, through
+    its delegated row selector, `abstain_test` and `dog_contrast_test` -- and
+    every block went on printing gates that implied rows were still arriving.
+    Nothing on any surface carried the one fact that would have shown it.
+
+    Pinned across ALL SIX registrations rather than the three that stalled,
+    because the next stall will be somewhere else, and pinned through
+    `row_supply_line` so the clause has one home: six modules spelled this line
+    six times, and a seventh copy is how one of them goes stale unnoticed.
+    """
+    import hybrid_v2
+    import market_backfill
+    modules = (forward_test, delta_filter_test, hybrid_test, hybrid_v2,
+               abstain_test, dog_contrast_test)
+    led = pd.read_csv("data/mlb_lean_ledger.csv", low_memory=False)
+    for module in modules:
+        src = open(module.__name__ + ".py", encoding="utf-8").read()
+        assert "row_supply_line" in src, module.__name__
+        assert "since registration: {len(g)}" not in src, module.__name__
+        text = "\n".join(module.report_lines(led))
+        assert "since registration:" in text, module.__name__
+        assert "(last scored 2026-" in text, module.__name__
+
+    # The clause says what it claims to: the LAST slate in the scored frame.
+    g = pd.DataFrame({"game_date": ["2026-09-04", "2026-09-16", "2026-09-04"]})
+    line = market_backfill.row_supply_line(g)
+    assert "3 over 2 slates (last scored 2026-09-16)" in line
+    assert market_backfill.row_supply_line(g, "dog leans").startswith(
+        "    dog leans since registration:")
+    # An empty sample has no last slate to name and must not invent one.
+    for empty in (None, pd.DataFrame({"game_date": []})):
+        assert "last scored" not in market_backfill.row_supply_line(empty)
+
+
+def test_both_surfaces_naming_the_abstain_branch_name_the_same_one():
+    """The registered declined set is the Q-GATE fade, not the shipped rule's.
+
+    v2 added a delta gate on 2026-09-11 and fades a strict subset of what this
+    registration declines -- 16 of the 37 current-family q-gate fades are games
+    the shipped rule FOLLOWS. The 2026-09-17 correction that established this
+    rewrote every copy of the claim inside `abstain_test` and missed the one in
+    `grade_leans`'s retrospective block, which is the MORE prominent of the
+    two: it prints near the top of the report while the corrected wording sits
+    300 lines below. A caveat travels with the line someone wrote it on, so
+    this asserts the property on BOTH surfaces at once -- a test naming one
+    would pass while the other drifted, which is exactly what happened.
+    """
+    import grade_leans
+    led = pd.read_csv("data/mlb_lean_ledger.csv", low_memory=False)
+    g = led[led["model_tag"].astype(str).eq(grade_leans.MODEL_TAG)]
+    surfaces = {
+        "retrospective": "\n".join(grade_leans._registration_retrospective_lines(g)),
+        "forward": "\n".join(abstain_test.report_lines(led)),
+    }
+    for name, text in surfaces.items():
+        assert "q-gate fade branch" in text, name
+        assert "shipped fade branch" not in text, name
