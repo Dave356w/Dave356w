@@ -158,10 +158,28 @@ def fetch_box_tb(game_pk):
     return out
 
 
+def dedupe_games(games):
+    """One row per game_pk, keeping its earliest listed date.
+
+    The schedule serves a resumed or rescheduled game under MORE THAN ONE date,
+    so a raw concat carries the same game_pk twice. That is not a cosmetic
+    duplicate: `team_logs` is built from this frame, so a doubled game enters
+    every 60-day window twice and skews the context of every LATER game, not
+    only its own row. It then fans out the ledger join, inflating n and
+    understating every standard error on the report.
+
+    Caught by the report's own coverage line reading `996 of 982` -- a join that
+    returns more rows than the frame it joins into cannot be right, which is why
+    that line is printed rather than assumed and why the merge below validates.
+    """
+    g = games.sort_values(["date", "game_pk"])
+    return g.drop_duplicates(subset="game_pk", keep="first").reset_index(drop=True)
+
+
 def fetch_tb_games(seasons, workers=16, progress=True):
     """Schedule + box scores for whole seasons, as one frame of team totals."""
     frames = [fetch_schedule(s) for s in seasons]
-    games = pd.concat(frames, ignore_index=True).sort_values(["date", "game_pk"])
+    games = dedupe_games(pd.concat(frames, ignore_index=True))
     pks = games["game_pk"].tolist()
     with ThreadPoolExecutor(max_workers=workers) as pool:
         boxes = list(pool.map(fetch_box_tb, pks))
@@ -189,7 +207,7 @@ def tb_features(games, only_game_pks=None):
     early dates where the window holds too little to mean anything, which is why
     the probe reports its own coverage rather than assuming the ledger's.
     """
-    games = games.copy()
+    games = dedupe_games(games.copy())
     games["date"] = pd.to_datetime(games["date"]).dt.normalize()
     logs = team_logs(games)
     rows = []
@@ -244,7 +262,10 @@ def load_tb_csv(path):
     if "abs_tb" not in f.columns:
         f["abs_tb"] = f["tb_delta"].abs()
     f["game_pk"] = pd.to_numeric(f["game_pk"], errors="coerce").astype("Int64")
-    return f.dropna(subset=["game_pk"])[["game_pk", "tb_delta", "abs_tb"]]
+    f = f.dropna(subset=["game_pk"])[["game_pk", "tb_delta", "abs_tb"]]
+    # Same hazard from the other direction: a frame built elsewhere may carry a
+    # game twice, and the join would then double those rows silently.
+    return f.drop_duplicates(subset="game_pk", keep="first").reset_index(drop=True)
 
 
 def load_ledger(path=LEDGER):
@@ -375,7 +396,11 @@ def tier_rows(f, p50):
 def report(led, tb, tags, basis, p50, out=sys.stdout):
     """Every arm, each naming its own row set and price basis."""
     say = lambda s="": print(s, file=out)
-    f = led.merge(tb, on="game_pk", how="inner")
+    # `one_to_one` rather than a post-hoc row count: pandas raises on a
+    # duplicate key in EITHER frame, so a fan-out is impossible rather than
+    # merely detectable. The coverage line below is then a real coverage
+    # figure and can never again exceed its own denominator.
+    f = led.merge(tb, on="game_pk", how="inner", validate="one_to_one")
     f = attach_price(f, basis)
     f = f[f["p_home"].notna()].copy()
 
