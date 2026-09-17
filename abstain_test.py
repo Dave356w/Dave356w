@@ -64,6 +64,55 @@ separate them by looking. If the forward reading cannot separate the two --
 which the gate below says is the likely outcome -- that is itself the argument
 for the simpler rule.
 
+INDEPENDENT CORROBORATION OF THE DIRECTION, 2026-09-17 -- AND WHY IT IS NOT
+EVIDENCE FOR THIS REGISTRATION. A separate question (can +EV sides be read off
+a model x market band matrix?) produced a walk-forward that happens to bear on
+the abstain-versus-fade asymmetry registered here. Over the 33 v12 slates,
+fitting only on prior slates, scored at the close on the 410 rows of slates
+2..33:
+
+    rule                                  bets      ROI     profit
+    decline the cells that lost            274   +9.08%   +24.88u
+    bet AGAINST those same cells           410   +1.54%    +6.33u
+    plain lean                             410   +8.00%   +32.80u
+    shipped hybrid v2                      410   +9.00%   +36.92u
+
+Declining is roughly neutral against the plain lean; opposing is clearly bad.
+That is the same SIGN as DECISION_LIVE_FORWARD and DECISION_LIVE_RETROSPECTIVE,
+reached by a different route -- worth recording because the pre-committed rule
+retires the branch under exactly that sign, so a later reader should be able to
+see that the direction had support from outside the registration as well as
+inside it.
+
+Deliberately prose and not a frozen constant. Every literal in the block below
+is part of the registration and is pinned; this is an outside measurement of a
+different rule, and giving it the same shape would invite it being read as a
+fifth registered figure.
+
+It corroborates the DIRECTION and nothing else. Four reasons it is not evidence
+for this registration:
+
+  * IT IS NOT THIS RULE. Those 136 declined rows are picked by a per-cell
+    criterion refitted every slate; this module declines the ~20 games the
+    shipped hybrid fades, picked by the frozen threshold. The two sets overlap
+    only partly, and a rule that declines a third of the book is not the one
+    registered here.
+  * IT IS NOT FORWARD. The window spans the discovery sample, and a selector
+    refitted per slate carries its own fitting noise into whatever it picks --
+    the defect that killed `forward_test`'s first arm.
+  * IT DOES NOT ESTIMATE THE HEADLINE. `fade_minus_abstain` is a paired
+    per-declined-game quantity on the registered set. Nothing in that table
+    computes it.
+  * IT IS THE SAME GAMES AGAIN. These are largely the rows the discovery
+    figures were read off. Three readings of one small set of games are three
+    readings, not three samples.
+
+Nor is it an argument for declining broadly. The abstain arm LOSES units to the
+plain lean (+24.88u against +32.80u), buying about a point of ROI by declining a
+third of the book, and it beats the shipped rule on neither axis. What it says
+is narrow -- opposing the model's own weak leans is worse than standing aside --
+and that is the only part this module needs.
+
 WHAT IT CANNOT DO.
   * It cannot make the discovery sample count. Rows on or before the
     registration date are excluded by construction.
