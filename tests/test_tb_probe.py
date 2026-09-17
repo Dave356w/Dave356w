@@ -114,6 +114,128 @@ class NoLookaheadTests(unittest.TestCase):
                                 g["date"].min() + pd.Timedelta(days=9))
 
 
+class AlignmentTests(unittest.TestCase):
+    """TB's SIGN against the lean's sign -- corroboration, not magnitude.
+
+    The arm most likely to produce a false positive, because an AGREE/DIVERGE
+    split is also a price split unless it is checked: this repo's OPS
+    `consensus` arm looked alive at z = +1.32 and was mostly reliability and
+    base rate. So the tests plant corroboration that is REAL and corroboration
+    that is ONLY price, and require the arm to tell them apart.
+    """
+
+    def _frame(self, n=1500, seed=0, align_edge=0.0, price_confound=False,
+               favourite_edge=0.0):
+        rng = np.random.default_rng(seed)
+        q = np.clip(rng.beta(5, 5, n) * 0.5 + 0.25, 0.1, 0.9)
+        lean_home = rng.random(n) < 0.5
+        xw = np.where(lean_home, 1, -1) * (rng.random(n) * 0.04 + 0.001)
+        tb = rng.normal(0, 0.2, n)
+        if price_confound:
+            # TB agrees with the lean exactly when the lean is the favourite,
+            # so the split carries no information of its own.
+            tb = np.where(q >= 0.5, 1, -1) * np.abs(tb) * np.where(lean_home, 1, -1)
+        aligned = tb * np.sign(xw)
+        # `favourite_edge` makes favourites beat their price, which is the only
+        # world in which a price confound is VISIBLE at all: under correct
+        # pricing every cell's excess is zero and the chalk column says nothing.
+        p = np.clip(q + align_edge * (aligned > 0)
+                    + favourite_edge * (q >= 0.5), 0.01, 0.99)
+        won = (rng.random(n) < p).astype(float)
+        home_won = np.where(lean_home, won, 1 - won)
+        p_home = np.where(lean_home, q, 1 - q)
+        return pd.DataFrame({
+            "game_date": pd.to_datetime("2026-05-01") + pd.to_timedelta(np.arange(n) // 12, "D"),
+            "tb_delta": tb, "abs_tb": np.abs(tb), "xw_net": xw,
+            "q_lean": q, "lean_won": won, "home_won": home_won,
+            "chalk_won": np.where(p_home >= 0.5, home_won, 1 - home_won),
+            "chalk_p": np.maximum(p_home, 1 - p_home),
+            "lean_ml": np.where(q >= 0.5, -100 * q / (1 - q), 100 * (1 - q) / q),
+        })
+
+    def test_tb_aligned_is_positive_exactly_when_tb_backs_the_leaned_side(self):
+        """The orientation, pinned directly -- getting it backwards inverts the
+        whole arm and every number below it would still look plausible."""
+        f = pd.DataFrame({"tb_delta": [0.3, 0.3, -0.3, -0.3],
+                          "xw_net": [0.02, -0.02, 0.02, -0.02]})
+        a = P.alignment_frame(f)
+        # xw_net > 0 leans HOME and tb_delta > 0 favours HOME, so those agree.
+        self.assertEqual(list(a["tb_aligned"] > 0), [True, False, False, True])
+        self.assertEqual(list(a["agrees"]), [True, False, False, True])
+
+    def test_a_planted_corroboration_effect_is_recovered(self):
+        f = self._frame(align_edge=0.10, seed=1)
+        rows = P.alignment_rows(P.alignment_frame(f))
+        c = P.alignment_contrast(rows)
+        self.assertGreater(c["diff"], 5.0)
+        self.assertGreater(c["z"], 2.0)
+
+    def test_a_pure_price_confound_is_cancelled_by_the_chalk_contrast(self):
+        """The failure mode the OPS arm hit: an AGREE split that is a price split.
+
+        TB here agrees with the lean exactly when the lean is the favourite and
+        carries nothing of its own, while favourites beat their price by 5pp. A
+        reader taking the model's contrast alone sees a large positive effect;
+        the headline nets chalk's contrast off it and lands near zero, which is
+        the whole reason that subtraction is printed rather than left to the
+        reader.
+        """
+        f = self._frame(align_edge=0.0, price_confound=True,
+                        favourite_edge=0.05, n=3000, seed=2)
+        c = P.alignment_contrast(P.alignment_rows(P.alignment_frame(f)))
+        self.assertGreater(c["diff"], 3.0, "the naive contrast should look alive")
+        self.assertLess(abs(c["net_of_chalk"]), 2.0,
+                        "and netting chalk off it should kill it")
+
+    def test_a_real_effect_survives_the_chalk_subtraction(self):
+        """The other direction, so the subtraction is not simply destroying
+        everything: a genuine corroboration effect must survive it."""
+        f = self._frame(align_edge=0.10, favourite_edge=0.05, n=3000, seed=8)
+        c = P.alignment_contrast(P.alignment_rows(P.alignment_frame(f)))
+        self.assertGreater(c["net_of_chalk"], 4.0)
+
+    def test_no_planted_effect_reads_null(self):
+        zs = []
+        for seed in range(8):
+            f = self._frame(align_edge=0.0, seed=20 + seed)
+            zs.append(P.alignment_contrast(P.alignment_rows(P.alignment_frame(f)))["z"])
+        self.assertLessEqual(sum(abs(z) > 2 for z in zs), 1, f"z values {zs}")
+
+    def test_the_contrast_se_is_of_the_difference(self):
+        f = self._frame(seed=3)
+        rows = P.alignment_rows(P.alignment_frame(f))
+        c = P.alignment_contrast(rows)
+        self.assertGreater(c["se"], max(r["se"] for r in rows))
+
+    def test_a_tie_is_dropped_rather_than_called_agreement(self):
+        f = pd.DataFrame({"tb_delta": [0.0, 0.2], "xw_net": [0.01, 0.01]})
+        a = P.alignment_frame(f)
+        self.assertIsNone(a["agrees"].iloc[0])
+        self.assertTrue(a["agrees"].iloc[1])
+
+    def test_per_team_nets_survive_the_feature_builder(self):
+        """`tb_home`/`tb_away` must reach the frame: the difference cannot be
+        decomposed back into its halves, so a per-club reading needs both."""
+        rng = np.random.default_rng(3)
+        rows, pk = [], 0
+        for day in range(30):
+            for _ in range(8):
+                pk += 1
+                rows.append({"game_pk": pk, "season": 2026,
+                             "date": pd.Timestamp("2026-05-01") + pd.Timedelta(days=day),
+                             "home_id": int(rng.integers(1, 31)),
+                             "away_id": int(rng.integers(1, 31)),
+                             "home_tb": float(rng.integers(4, 20)),
+                             "away_tb": float(rng.integers(4, 20))})
+        g = pd.DataFrame(rows)
+        g = g[g["home_id"] != g["away_id"]]
+        feats = P.tb_features(g)
+        for col in ("tb_home", "tb_away"):
+            self.assertIn(col, feats.columns)
+        np.testing.assert_allclose(feats["tb_home"] - feats["tb_away"],
+                                   feats["tb_delta"], atol=1e-12)
+
+
 class RoiSearchTests(unittest.TestCase):
     """The ROI arm must find a planted edge and must NOT find an absent one.
 
@@ -361,7 +483,8 @@ class OfflinePathTests(unittest.TestCase):
             try:
                 pd.DataFrame(cols).to_csv(path, index=False)
                 f = P.load_tb_csv(path)
-                self.assertEqual(list(f.columns), ["game_pk", "tb_delta", "abs_tb"])
+                self.assertEqual(list(f.columns),
+                                 ["game_pk", "tb_delta", "abs_tb", "tb_home", "tb_away"])
                 np.testing.assert_allclose(f["abs_tb"], [0.1, 0.3])
             finally:
                 os.unlink(path)

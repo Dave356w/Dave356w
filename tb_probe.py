@@ -256,9 +256,14 @@ def tb_features(games, only_game_pks=None):
             pk = int(gm["game_pk"])
             if only_game_pks is not None and pk not in only_game_pks:
                 continue
-            delta = (net(int(gm["home_id"])) - net(int(gm["away_id"]))) / lg
+            h, a = net(int(gm["home_id"])) / lg, net(int(gm["away_id"])) / lg
+            delta = h - a
+            # Each side's own net is kept, not just the difference, because the
+            # question "does TB give a TEAM's delta context" is asked per club
+            # and the difference cannot be decomposed back into its halves.
             rows.append({"game_pk": pk, "tb_delta": float(delta),
-                         "abs_tb": abs(float(delta))})
+                         "abs_tb": abs(float(delta)),
+                         "tb_home": float(h), "tb_away": float(a)})
     return pd.DataFrame(rows)
 
 
@@ -283,7 +288,11 @@ def load_tb_csv(path):
     if "abs_tb" not in f.columns:
         f["abs_tb"] = f["tb_delta"].abs()
     f["game_pk"] = pd.to_numeric(f["game_pk"], errors="coerce").astype("Int64")
-    f = f.dropna(subset=["game_pk"])[["game_pk", "tb_delta", "abs_tb"]]
+    for side in ("tb_home", "tb_away"):
+        if side not in f.columns:
+            f[side] = np.nan
+    f = f.dropna(subset=["game_pk"])[["game_pk", "tb_delta", "abs_tb",
+                                      "tb_home", "tb_away"]]
     # Same hazard from the other direction: a frame built elsewhere may carry a
     # game twice, and the join would then double those rows silently.
     return f.drop_duplicates(subset="game_pk", keep="first").reset_index(drop=True)
@@ -466,6 +475,82 @@ def correlation_rows(fam, pooled):
             _partial_corr(pooled["tb_delta"], pooled["home_won"], ph), len(pooled),
             "pooled, metric-free")
     return rows
+
+
+def alignment_frame(fam):
+    """TB oriented to the side the model leans, plus the AGREE/DIVERGE split.
+
+    Verified on the committed ledger rather than recalled, because the suffix
+    convention in this repo names the PITCHING side faced and getting it
+    backwards would invert the whole arm: `xw_net == edge_xwoba_away -
+    edge_xwoba_home` exactly on 439 of 439 v12 rows, and a positive `xw_net`
+    leans HOME on 218 of 218. `tb_delta` is home-oriented too, so the two share
+    a sign convention and alignment needs no flip.
+
+    `tb_aligned` is TB signed toward the model's own pick: positive means the
+    60-day run-differential read CORROBORATES this team's lean delta, negative
+    means it contradicts it.
+
+    Why this is asked at the GAME level and not per club, which is the shape the
+    question invites: the two sides of one game are complements -- their devigged
+    prices sum to 1 and exactly one of them wins -- so stacking both sides is one
+    observation dressed as two, and any pooled figure over them is fixed by the
+    partition rather than by the data. That is this repo's own degenerate-tile
+    defect, and the oriented game-level form is the non-degenerate version of the
+    same question.
+    """
+    f = fam.copy()
+    f["tb_aligned"] = pd.to_numeric(f["tb_delta"], errors="coerce") * np.sign(
+        pd.to_numeric(f["xw_net"], errors="coerce"))
+    f["agrees"] = np.where(f["tb_aligned"] > 0, True,
+                           np.where(f["tb_aligned"] < 0, False, None))
+    return f
+
+
+def alignment_rows(f):
+    """AGREE vs DIVERGE, each with the price and chalk controls beside it.
+
+    The mean implied price is printed per cell on purpose: the OPS `consensus`
+    arm this repo already measured looked alive at z = +1.32 and turned out to
+    be mostly reliability and price, so a cell's own price is what lets a reader
+    see a base-rate split before reading it as corroboration.
+    """
+    rows = []
+    for name, mask in (("TB AGREES with lean", f["agrees"] == True),      # noqa: E712
+                       ("TB CONTRADICTS lean", f["agrees"] == False)):    # noqa: E712
+        d = f[mask]
+        if not len(d):
+            continue
+        rate, imp = d["lean_won"].mean(), d["q_lean"].mean()
+        ch, chp = d["chalk_won"].mean(), d["chalk_p"].mean()
+        rows.append({"cell": name, "n": len(d),
+                     "record": f"{int(d['lean_won'].sum())}-{int((1 - d['lean_won']).sum())}",
+                     "raw": rate, "implied": imp,
+                     "excess": 100 * (rate - imp),
+                     "se": 100 * excess_se(d["q_lean"]),
+                     "chalk": 100 * (ch - chp)})
+    return rows
+
+
+def alignment_contrast(rows):
+    """AGREE minus DIVERGE, with the SE OF THE DIFFERENCE.
+
+    The contrast is the claim -- "TB tells you when to trust this team's delta"
+    is a statement about the gap between the two cells, not about either one.
+    """
+    if len(rows) != 2:
+        return None
+    a, d = rows[0], rows[1]
+    se = math.sqrt(a["se"] ** 2 + d["se"] ** 2)
+    diff = a["excess"] - d["excess"]
+    chalk_diff = a["chalk"] - d["chalk"]
+    # The headline is the model's contrast NET OF CHALK's on the identical
+    # split. A pure price confound moves both cells together -- and only where
+    # favourites actually beat their price, which is why chalk's own contrast
+    # cannot be read alone: in a correctly-priced world it is zero in both
+    # cells and reveals nothing. The difference is the part that is about TB.
+    return {"diff": diff, "se": se, "z": diff / se if se > 0 else float("nan"),
+            "chalk_diff": chalk_diff, "net_of_chalk": diff - chalk_diff}
 
 
 def _search_verdict(p):
@@ -880,7 +965,63 @@ def report(led, tb, tags, basis, p50, out=sys.stdout):
         say(f"   SKIPPED: n={len(priced)} priced family rows, below {N_FIT_MIN}.")
     say()
 
-    say("6. OUT-OF-SAMPLE LOG LOSS (pooled, walk-forward; lower is better)")
+    say("6. DOES TB GIVE A TEAM'S LEAN DELTA CONTEXT? (direction, not magnitude)")
+    say("   Every arm above reads TB's MAGNITUDE. This one reads its SIGN against")
+    say("   the model's: `tb_aligned` is TB oriented to the side the lean picks,")
+    say("   so positive means the 60-day run-differential read corroborates this")
+    say("   team's delta and negative means it contradicts it.")
+    say("   Asked at the GAME level, not per club: the two sides of a game are")
+    say("   complements -- prices summing to 1, exactly one winner -- so stacking")
+    say("   them is one observation dressed as two.")
+    al = alignment_frame(fam)
+    al = al[al["agrees"].notna() & al["q_lean"].notna() & al["lean_won"].notna()]
+    if len(al) >= N_FIT_MIN:
+        overlap = _corr(al["tb_delta"], al["xw_net"])
+        lo, hi, z = _fisher_ci(overlap, len(al))
+        say(f"   corr(TB delta, xw_net) = {overlap:+.4f}  [{lo:+.3f}, {hi:+.3f}]  "
+            f"z={z:+.2f}   <- how much the two reads already overlap")
+        say(f"   they agree on {100 * (al['agrees'] == True).mean():.1f}% of "  # noqa: E712
+            f"{len(al)} rows")
+        rows = alignment_rows(al)
+        say(f"   {'':<22}{'n':>5}{'record':>10}{'raw':>8}{'implied':>9}"
+            f"{'vs price':>11}{'+/-':>7}{'chalk':>9}")
+        for r in rows:
+            say(f"   {r['cell']:<22}{r['n']:>5}{r['record']:>10}{r['raw']:>8.3f}"
+                f"{r['implied']:>9.3f}{r['excess']:>+11.2f}{r['se']:>7.2f}{r['chalk']:>+9.2f}")
+        c = alignment_contrast(rows)
+        if c:
+            say(f"   AGREE minus DIVERGE     {c['diff']:+.2f}pp +/- {c['se']:.2f}   "
+                f"z={c['z']:+.2f}")
+            say(f"   the same split for chalk {c['chalk_diff']:+.2f}pp")
+            say(f"   TB's own contribution   {c['net_of_chalk']:+.2f}pp  <- the headline")
+            say("   A pure price confound moves both cells together, so the")
+            say("   difference is the part that is about TB rather than about")
+            say("   which side happened to be favoured.")
+
+        say()
+        say("   THE CONTINUOUS FORM, which is what the sign split is a coarse")
+        say("   version of -- and better powered, since it uses how much TB agrees")
+        say("   rather than only whether it does:")
+        zal, zd = _z(al["tb_aligned"]), _z(al["xw_net"].abs())
+        arms = [("price + z(TB aligned)", [logit(al["q_lean"].values), zal],
+                 ["market logit", "z(TB aligned)"]),
+                ("price + |xw_net| + z(TB aligned)",
+                 [logit(al["q_lean"].values), zd, zal],
+                 ["market logit", "z(|xw_net|)", "z(TB aligned)"]),
+                ("... plus the interaction",
+                 [logit(al["q_lean"].values), zd, zal, zd * zal],
+                 ["market logit", "z(|xw_net|)", "z(TB aligned)", "interaction"])]
+        for label, cols, names in arms:
+            say(f"   {label}  (n={len(al)})")
+            for nm, b, se, zz in fit_arm(al["lean_won"], cols, names):
+                say(f"     {nm:<16}{b:+8.3f} +/- {se:.3f}   z={zz:+.2f}")
+        say("   The interaction is the sharpest form of the question: it asks")
+        say("   whether TB's corroboration matters MORE when the delta is large.")
+    else:
+        say(f"   SKIPPED: n={len(al)} rows carry both a signed TB and a price.")
+    say()
+
+    say("7. OUT-OF-SAMPLE LOG LOSS (pooled, walk-forward; lower is better)")
     say("   Fitted on strictly prior slates, scored on the next. This is the arm")
     say("   a coefficient cannot fake: if 'price + TB' ranks BELOW 'market-fitted',")
     say("   TB is subtracting information from the price.")
