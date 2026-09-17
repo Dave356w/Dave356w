@@ -1024,6 +1024,177 @@ def _magnitude_price_grid_lines(g):
     return out
 
 
+def _percentile_price_edges(ml, bands=8):
+    """Nearest-rank equal-count upper bounds, ties kept whole.
+
+    Derived from the rows the block scores, never frozen: a literal copied off
+    one price distribution is the constants-frozen-from-data entry, and this
+    one would re-stale as the book moves. The cost is that the labels are a
+    property of the build -- see the caveat the block prints.
+    """
+    s = np.sort(np.asarray(ml, dtype=float))
+    if not s.size:
+        return []
+    out = []
+    for k in range(1, bands):
+        e = float(s[int(np.ceil(k * s.size / bands)) - 1])
+        if not out or e > out[-1]:
+            out.append(e)
+    return out
+
+
+def _percentile_band_index(ml, edges):
+    ml = np.asarray(ml, dtype=float)
+    idx = np.zeros(ml.size, dtype=int)
+    for i, e in enumerate(edges):
+        idx[ml > e] = i + 1
+    return idx
+
+
+def _market_percentile_band_lines(led, bands=8):
+    """Market calibration over EQUAL-COUNT price bands. Whole ledger.
+
+    Why it exists. The fixed `ODDS_LADDER` is the axis every market surface
+    here shares, and it is deliberately a-priori: round-number rungs chosen for
+    no data reason, so a rung means the same thing on the card, on the
+    calibration page and in this file. What it is not is balanced. On the rows
+    it scores its coverage runs 11 to 510 sides, so its SE runs ~1.5 to ~13 pp
+    and the extreme rungs are unreadable while the middle ones are precise.
+    This block asks the same question of the same rows on a partition that
+    equalises n instead, and prints both so the ladder can be read against it.
+
+    It REPLACES nothing. The ladder stays the shared axis precisely because its
+    labels do not move, and these bands are the complement: balanced, and for
+    that reason not comparable across builds or across surfaces.
+
+    WHOLE LEDGER, not RECORD_TAGS, and that is the point rather than an
+    oversight. A realised rate against a devigged close is arithmetic on a box
+    score and a price; it does not know which model wrote the row, so scoping
+    it to the current family would halve the sample for nothing. That is the
+    row-set rule CLAUDE.md records from the phase-gap read, where the narrower
+    row set was the one that flattered the shipped version. The licence for
+    pooling is measured and printed rather than assumed.
+
+    WHAT IT DOES NOT PRINT is a pooled both-sides total. The two devigged sides
+    of a game sum to 1 and exactly one of them wins, so that number is forced
+    to 50.0 vs 50.0 whatever the market does -- an identity published with the
+    tightest error bar on the page, which is a defect this repo has already had
+    once. The per-band figures are not degenerate because a band holds only
+    some of each game's sides.
+
+    THE SE IS `market_backfill.excess_se`, the one home, which assumes the
+    observations are independent. Within a band they are not quite: where both
+    sides of one game land in the same band their outcomes are complementary,
+    which makes the true variance SMALLER than the printed one. So the bar is
+    conservative, never flattering, and each band prints how many such pairs it
+    holds so the reader can see where that bites.
+    """
+    if led is None or not len(led):
+        return []
+    need = {"status", "close_p_home", "close_home_ml", "close_away_ml",
+            "full_home", "full_away", "game_pk"}
+    if not need.issubset(led.columns):
+        return ["market percentile bands: unavailable (missing report inputs)"]
+    g = led[led["status"] == "graded"]
+    fa = pd.to_numeric(g.get("full_away"), errors="coerce")
+    fh = pd.to_numeric(g.get("full_home"), errors="coerce")
+    ph = pd.to_numeric(g.get("close_p_home"), errors="coerce")
+    hml = pd.to_numeric(g.get("close_home_ml"), errors="coerce")
+    aml = pd.to_numeric(g.get("close_away_ml"), errors="coerce")
+    ok = (fa.notna() & fh.notna() & (fa != fh) & ph.notna()
+          & ph.gt(0) & ph.lt(1) & hml.notna() & aml.notna())
+    if int(ok.sum()) < bands * 4:
+        return [f"market percentile bands: {int(ok.sum())} usable games, "
+                f"fewer than the {bands * 4} this partition needs."]
+    gk = g.loc[ok, "game_pk"].to_numpy()
+    home_won = (fh[ok] > fa[ok]).to_numpy()
+    ml = np.concatenate([hml[ok].to_numpy(), aml[ok].to_numpy()])
+    p = np.concatenate([ph[ok].to_numpy(), 1.0 - ph[ok].to_numpy()])
+    won = np.concatenate([home_won, ~home_won])
+    game = np.concatenate([gk, gk])
+    fam = np.concatenate([g.loc[ok, "model_tag"].isin(RECORD_TAGS).to_numpy()] * 2)
+
+    edges = _percentile_price_edges(ml, bands)
+    idx = _percentile_band_index(ml, edges)
+    lo_hi = [(None, edges[0])] + [(edges[i], edges[i + 1])
+                                  for i in range(len(edges) - 1)] + [(edges[-1], None)]
+
+    out = [f"market calibration on equal-count price bands "
+           f"({len(np.unique(idx))} of {bands} populated; whole ledger, every graded family)",
+           f"  {int(ok.sum())} games / {len(ml)} team-side closing prices. "
+           f"Bands are nearest-rank, recomputed from THESE rows every build.",
+           "  Edges move as the book does, so a band label is NOT comparable "
+           "across builds or with the fixed ladder above;",
+           "    the ladder is the stable axis, this is the balanced one. "
+           "Read a row against its own SE, never against another build's.",
+           f"  {'band':>16} {'n':>5} {'pair':>4} {'act':>6} {'imp':>6} "
+           f"{'gap':>7} {'se':>6} {'z':>6}"]
+    cells, zs, labels = [], [], {}
+    for i in range(len(lo_hi)):
+        m = idx == i
+        if not m.any():
+            continue
+        # Labelled from the band's OWN observed prices, never from the edge
+        # arithmetic: an edge plus one can name a price American odds cannot
+        # take (nothing lies strictly between -100 and +100), and a label that
+        # names an impossible price is a label a reader cannot check.
+        b_lo, b_hi = int(ml[m].min()), int(ml[m].max())
+        lab = f"{b_lo:+d}..{b_hi:+d}" if b_lo != b_hi else f"{b_lo:+d}"
+        labels[i] = lab
+        _, counts = np.unique(game[m], return_counts=True)
+        pairs = int((counts == 2).sum())
+        se = excess_se(p[m])
+        gap = float(won[m].mean() - p[m].mean())
+        z = gap / se if se and np.isfinite(se) and se > 0 else float("nan")
+        zs.append(abs(z))
+        cells.append(p[m])
+        out.append(f"  {lab:>16} {int(m.sum()):5d} {pairs:4d} "
+                   f"{100 * won[m].mean():6.1f} {100 * p[m].mean():6.1f} "
+                   f"{100 * gap:+7.1f} {100 * se:6.1f} {z:+6.2f}")
+    # A partition is a search over its own bands, so the best one is a maximum.
+    if len(cells) > 1:
+        null_best = _grid_null_best_excess(cells)
+        best = max(range(len(cells)),
+                   key=lambda j: float(won[idx == j].mean() - p[idx == j].mean()))
+        obs = float(won[idx == best].mean() - p[idx == best].mean())
+        out.append(f"  best-band reference: the best of {len(cells)} bands averages "
+                   f"{100 * null_best:+.1f} pp under 'every game settles at its own "
+                   f"price'; observed best {100 * obs:+.1f} pp.")
+        out.append(f"    Max |z| across the bands is {max(zs):.2f} against the "
+                   f"{np.sqrt(2 * np.log(len(cells))):.2f} a search this wide "
+                   "typically returns from noise.")
+    # Pooling licence, per band: the pooled both-sides form is the identity
+    # above and cannot answer this, so the families are compared within bands.
+    lz, lab_of = [], {}
+    for i in range(len(lo_hi)):
+        a, b = (idx == i) & fam, (idx == i) & ~fam
+        if a.sum() < 5 or b.sum() < 5:
+            continue
+        lab_of[len(lz)] = labels[i]
+        sa, sb = excess_se(p[a]), excess_se(p[b])
+        d = float((won[a].mean() - p[a].mean()) - (won[b].mean() - p[b].mean()))
+        s = float(np.sqrt(sa ** 2 + sb ** 2))
+        if s > 0:
+            lz.append(abs(d) / s)
+    if lz:
+        exp = float(np.sqrt(2 * np.log(len(lz))))
+        # The verdict is DERIVED, never asserted. The largest of k comparisons
+        # is a maximum, so it is read against what k nulls typically return and
+        # not against zero -- and when it lands above that, the line has to say
+        # so. A licence sentence that reads "no sign" beside a number saying
+        # otherwise is the publishing-a-claim-the-data-cannot-support entry.
+        verdict = ("at or below what a search this wide returns from noise, so "
+                   "pooling the families is licensed."
+                   if max(lz) <= exp else
+                   f"ABOVE it, in band '{lab_of[int(np.argmax(lz))]}'. One band at "
+                   "the noise maximum is not a finding, but the licence is not "
+                   "clean either -- read the pooled rows knowing that.")
+        out.append(f"  pooling licence: current family against the rest, within bands, "
+                   f"max |z| {max(lz):.2f} over {len(lz)} comparable bands,")
+        out.append(f"    against {exp:.2f} expected from noise -- {verdict}")
+    return out
+
+
 def _selection_price_matrix_lines(g):
     """|xw_net| bands x the SELECTED side's closing price rung, FOLLOW only.
 
@@ -1624,6 +1795,16 @@ def report_text(led):
     # landed, on exactly the slates a per-slate check exists to watch.
     for _ln in slate_lines(led):
         say(_ln)
+
+    # Same whole-ledger licence as the block above, for the same reason: a
+    # realised rate against a devigged close is arithmetic on a box score and a
+    # price, so the prediction family is not part of its definition. Wrapped
+    # because this file's blocks never take the report down with them.
+    try:
+        for _ln in _market_percentile_band_lines(led):
+            say(_ln)
+    except Exception as _exc:                      # noqa: BLE001 - see above
+        say(f"market percentile bands unavailable ({type(_exc).__name__})")
 
     families = _model_family_grades(led)
     if families:

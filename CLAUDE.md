@@ -2450,13 +2450,38 @@ v12" is a MIXTURE of the rows a rule was found on and the rows that arrived
 after. **Watching a retrospective grow is not watching evidence accumulate.**
 `data/ledger_report.txt` carries the current-family record and F5, the |Δ|
 terciles, the fixed |Δ| bands and their crossing with the market's probability
-of the leaned side, the per-family and per-slate predicted-vs-actual, the component error
+of the leaned side, the equal-count market calibration bands, the per-family
+and per-slate predicted-vs-actual, the component error
 (SP / BP / lineup each against its own realised phase), the IP calibration
-slope, the SP-vs-lineup coefficients and their symmetry contrast, and the two
+slope, the SP-vs-lineup coefficients and their symmetry contrast, and the five
 pre-registered forward tests (`forward_test.py`, `hybrid_test.py`,
-`delta_filter_test.py`, `abstain_test.py`, `dog_contrast_test.py`). The grades
+`delta_filter_test.py`, `abstain_test.py`, `dog_contrast_test.py` — the count
+read "two" beside a list of five until 2026-09-17, which is the same recount
+this file demands of the probe table below). The grades
 page carries the baseline controls and the lock provenance. Read these before
 writing a new probe.
+
+The equal-count band block is the ONE market surface not on the fixed
+`ODDS_LADDER`, and it does not replace it. The ladder is a-priori and its rungs
+mean the same thing on the per-game card, on `market-calibration.html` and in
+`_selection_price_matrix_lines`, which is why it is shared and why its labels
+must not move; what it is not is balanced, and on the current rows its coverage
+runs 11 to 510 sides, so its SE runs ~1.5 to ~13pp. The new block asks the same
+question on a partition that equalises n (~±3pp throughout) and states in its
+own copy that its labels are a property of the build and are comparable neither
+across builds nor with the ladder. **Do not "fix" the ladder by percentiling
+it**: the edges move — all 7 shifted, by up to 12 cents, between the first and
+second halves of one season — and because percentile edges are a function of
+the row set, four call sites reading different row sets would publish different
+prices under one label, which is the artifacts-disagreeing defect the shared
+ladder exists to prevent. Measured at the fix, neither partition detects
+anything (max |z| 1.07 fixed, 0.92 percentile), so the balance buys readability
+and not a finding. Scoped to the WHOLE ledger rather than `RECORD_TAGS`,
+because a realised rate against a devigged close is arithmetic on a box score
+and a price and does not know which model wrote the row; the pooling licence is
+printed, not assumed — and it is printed as a DERIVED verdict, so when the
+per-band max |z| lands above what a search that wide returns from noise the
+line says so rather than asserting "no sign".
 
 **Ledger-report field and price conventions.** Matchup-rate suffixes identify
 the pitching side faced: `mx_xwoba_away` is Home offense vs away pitching and
