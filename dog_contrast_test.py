@@ -75,6 +75,7 @@ import numpy as np
 import pandas as pd
 
 import hybrid_test
+from market_backfill import row_supply_line
 
 # ---------------------------------------------------------------------------
 # FROZEN REGISTRATION BLOCK. tests/test_dog_contrast_test.py pins every value.
@@ -210,8 +211,7 @@ def report_lines(led=None):
     if g is None:
         out.append("    ledger unavailable or missing columns -- not scored")
         return out
-    slates = g["game_date"].nunique() if len(g) else 0
-    out.append(f"    dog leans since registration: {len(g)} over {slates} slates")
+    out.append(row_supply_line(g, "dog leans"))
     if not len(g):
         out.append(f"    nothing to score yet. Prior is {PRIOR.upper()}: found by "
                    f"slicing a price axis, and P(null >= observed) = "

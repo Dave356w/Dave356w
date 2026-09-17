@@ -54,6 +54,8 @@ import os
 import numpy as np
 import pandas as pd
 
+from market_backfill import row_supply_line
+
 # ---------------------------------------------------------------------------
 # FROZEN REGISTRATION BLOCK. Changing any value below invalidates the test and
 # restarts it from zero: the numbers are only meaningful because they were
@@ -212,8 +214,7 @@ def report_lines(led=None):
     if g is None:
         out.append("    ledger unavailable or missing columns -- not scored")
         return out
-    slates = g["game_date"].nunique() if len(g) else 0
-    out.append(f"    eligible rows since registration: {len(g)} over {slates} slates")
+    out.append(row_supply_line(g))
     if not len(g):
         out.append("    nothing to score yet. Arm 1's prior is NEGATIVE "
                    f"({-4.2:+.1f}% at the primary threshold) -- it tracks a "

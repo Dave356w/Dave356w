@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 
 import hybrid_test as v1
+from market_backfill import row_supply_line
 
 REGISTERED_ON = "2026-09-11"      # slates STRICTLY after this date are scored
 THRESHOLD = v1.THRESHOLD
@@ -199,8 +200,7 @@ def report_lines(led=None):
     g = None if led is None else scored_rows(led)
     if g is None:
         return out + ["    ledger unavailable or missing columns -- not scored"]
-    slates = g["game_date"].nunique() if len(g) else 0
-    out.append(f"    eligible rows since registration: {len(g)} over {slates} slates")
+    out.append(row_supply_line(g))
     dropped = unscorable(led)
     if dropped:
         out.append(f"    WARNING: {dropped} committed row(s) are unscorable.")

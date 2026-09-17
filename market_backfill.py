@@ -421,6 +421,38 @@ def excess_se(probs):
     return float(np.sqrt(float((p * (1.0 - p)).sum())) / p.size)
 
 
+def row_supply_line(g, noun="eligible rows"):
+    """The `<noun> since registration: N over S slates` line, plus its LAST.
+
+    ONE home for the line every registration prints, for the reason
+    `chalk_is_home` and `excess_se` are here: six modules spelled it six times,
+    and the clause added below has to appear in all six or the one that lacks
+    it is the one that goes stale unnoticed.
+
+    The clause is the last slate the registration actually scored. A forward
+    sample is read as accruing, and nothing on any block said when it last
+    did. Three of the five stopped dead on 2026-09-11 -- `hybrid_test` and,
+    through its delegated row selector, `abstain_test` and
+    `dog_contrast_test` -- while continuing to print gates (5 of 82 declined
+    games, 16 of 88 dog leans) that implied rows were still arriving. The cause
+    is fixed at the writer, in `grade_leans._mint_v1_archive`; this is the
+    instrument that makes the NEXT stall visible instead of leaving it to be
+    found by hand, whatever stops the rows. Read it against the ledger's own
+    most recent graded slate -- if it trails, the registration is not accruing.
+
+    Deliberately not a staleness VERDICT. This module cannot know the ledger's
+    latest slate without taking an argument that every caller would have to
+    supply correctly, and a threshold in days would be a constant frozen off
+    an operating cadence that already runs 5 to 16 games a slate.
+    """
+    n = 0 if g is None else len(g)
+    if not n or "game_date" not in getattr(g, "columns", ()):
+        return f"    {noun} since registration: {n} over 0 slates"
+    dates = g["game_date"].astype(str)
+    return (f"    {noun} since registration: {n} over {dates.nunique()} "
+            f"slates (last scored {dates.max()})")
+
+
 def is_pickem(p_home):
     """True where the devigged home price is exactly .500. Vectorised.
 

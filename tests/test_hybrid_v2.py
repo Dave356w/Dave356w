@@ -145,15 +145,24 @@ def test_grading_a_pending_row_grades_its_v1_archive_too(monkeypatch):
     assert (got["status"] == "graded").all()
 
 
-def test_a_migration_rerun_refreshes_its_archive_and_mints_no_new_one():
+def test_a_migration_rerun_refreshes_its_archive_and_mints_the_missing_ones():
     """The archive describes the row, so a re-run re-derives it from the row.
 
     A pending row's lean and pregame price are rebuilt by every pregame poll
     (grade_leans.MODEL_FIELDS), which carries no hybrid_v1_* entry -- so an
     archive written mid-slate can name a side the final lock never chose. A
-    re-run must fix that. It must equally NOT mint an archive for a row that
-    has none: v1 is retired, and widening a frozen registration's row set is
-    not a repair.
+    re-run must fix that.
+
+    THE SECOND HALF IS THE REVERSE OF WHAT IT ASSERTED UNTIL 2026-09-17, and
+    the reversal is deliberate rather than a loosened assertion. It used to
+    pin that a row with NO archive is left alone, on the ground that v1 is a
+    retired registration and widening it is not a repair. True of v1's own
+    headline and false of everything downstream: the archive is also the row
+    SELECTOR that `abstain_test` and `dog_contrast_test` delegate to, and both
+    are live registrations with open gates, so leaving the row alone dropped
+    it out of two tests that are not retired. Both froze at 2026-09-11 with no
+    surface saying so. Minting is a pure re-derivation from write-once locked
+    columns -- `hybrid_test.locked_v1_decision` -- not new evidence.
     """
     stale = _rows(.60, .020, date="2026-09-11")
     stale["hybrid_v1_action"] = "FOLLOW"
@@ -172,8 +181,27 @@ def test_a_migration_rerun_refreshes_its_archive_and_mints_no_new_one():
     assert got.at[0, "hybrid_v1_selection"] == "H"   # re-derived from the lock
     assert got.at[0, "hybrid_v1_p"] == .60
     assert got.at[0, "hybrid_v1_full"] == "W"        # graded, no longer orphaned
-    assert got.loc[1, migrate_hybrid_v2.V1_ARCHIVE].isna().all()
-    assert changed == 1
+    assert got.at[1, "hybrid_v1_selection"] == "H"   # minted, not skipped
+    assert got.at[1, "hybrid_v1_full"] == "W"
+    assert changed == 2
+
+
+def test_a_migration_never_overwrites_an_archive_it_can_reproduce():
+    """Minting must not become mutation of immutable history.
+
+    The v1 decision is a function of `xw_lean` and the locked pregame market,
+    all write-once once a row grades, so a re-derivation of a row that already
+    carries an archive has to return that archive unchanged. Asserted rather
+    than assumed, because minting-where-absent and rewriting-what-is-there are
+    one line apart: on the real ledger this was checked over all 141 archives
+    minted live and reproduced every field on every one.
+    """
+    src = _rows(.60, .020, date="2026-09-11")
+    first, _ = migrate_hybrid_v2.migrate(src)
+    second, changed = migrate_hybrid_v2.migrate(first)
+    for col in migrate_hybrid_v2.V1_ARCHIVE:
+        assert str(second.at[0, col]) == str(first.at[0, col])
+    assert changed == 0
 
 
 def test_a_first_migration_still_mints_the_archive():
@@ -267,3 +295,146 @@ def test_no_forward_rows_means_no_discovery_reference():
     assert hybrid_v2.discovery_switch_delta(led) is None
     text = "\n".join(hybrid_v2.report_lines(led))
     assert "discovery was" not in text
+
+
+# --------------------------------------------------------------------------
+# The v1 archive as a ROW SELECTOR: the mechanism that froze three
+# registrations on 2026-09-11, and the three places that now stop it.
+# --------------------------------------------------------------------------
+
+def test_the_v1_decision_has_exactly_one_derivation():
+    """`locked_v1_decision` is the rule; no caller may respell it.
+
+    The gate lived in `hybrid_test` while the arithmetic reading it lived
+    inline in `migrate_hybrid_v2`, which is "one value, three homes" across a
+    module boundary -- a later edit to either could publish an archive the v1
+    scorer disagrees with. Pinned as a property of the SOURCE rather than of
+    one output, because a second copy passes every value test until it drifts.
+    """
+    import re
+    for mod in ("migrate_hybrid_v2.py", "grade_leans.py"):
+        src = open(mod, encoding="utf-8").read()
+        assert "hybrid_test.THRESHOLD" not in src, mod
+        assert not re.search(r'hybrid_v1_action"?\]?\s*=\s*\(?"(FOLLOW|FADE)"',
+                             src), mod
+
+
+def test_the_v1_decision_follows_at_the_threshold_and_refuses_bad_input():
+    at = hybrid_test.locked_v1_decision("H", "H", "A", hybrid_test.THRESHOLD,
+                                        -150, 130)
+    assert at[0] == "FOLLOW" and at[1] == "H"        # `>=` follows, exactly
+    below = hybrid_test.locked_v1_decision("H", "H", "A", .30, 130, -150)
+    assert below[0] == "FADE" and below[1] == "A"    # fade backs the other side
+    assert below[2] == pytest.approx(.70)            # p is the BET's price
+    assert below[3] == -150
+    # An AWAY lean reads q off the other side of the same price.
+    assert hybrid_test.locked_v1_decision("A", "H", "A", .40, 130, -150) \
+        == ("FOLLOW", "A", pytest.approx(.60), -150)
+    # v1 is unconditional on the delta: it is not even an argument.
+    import inspect
+    assert "delta" not in inspect.signature(
+        hybrid_test.locked_v1_decision).parameters
+    for bad in (dict(lean="X"), dict(p_home=float("nan")), dict(p_home=0.0),
+                dict(p_home=1.0), dict(home_ml=50), dict(away_ml=None)):
+        kw = dict(lean="H", home="H", away="A", p_home=.60,
+                  home_ml=-150, away_ml=130)
+        kw.update(bad)
+        assert hybrid_test.locked_v1_decision(**kw) is None, bad
+
+
+def test_ingest_mints_the_archive_for_pending_rows_and_never_for_graded_ones():
+    """The writer-side fix. A graded archive is immutable; a pending one is
+    re-derived, because MODEL_FIELDS rebuilds the lean and the price under it.
+    """
+    pending = _rows(.60, .020, date="2026-09-20")
+    pending["status"] = "pending"
+    for col in migrate_hybrid_v2.V1_ARCHIVE:
+        pending[col] = np.nan
+    graded = _rows(.60, .020, date="2026-09-19")
+    graded["game_pk"] = 2
+    for col in migrate_hybrid_v2.V1_ARCHIVE:
+        graded[col] = np.nan
+    led = pd.concat([pending, graded], ignore_index=True)
+
+    assert grade_leans._mint_v1_archive(led) == 1
+    assert led.at[0, "hybrid_v1_action"] == "FOLLOW"
+    assert led.at[0, "hybrid_v1_selection"] == "H"
+    assert pd.isna(led.at[1, "hybrid_v1_action"])   # graded: left alone
+
+    # A pending row whose lean flipped on a later poll is re-derived from it.
+    # At this price the flipped lean is a sub-.45 dog, so v1 fades it back --
+    # a different ACTION off the same market, which is the thing a once-only
+    # mint at insert would have missed.
+    led.at[0, "xw_lean"] = "A"
+    grade_leans._mint_v1_archive(led)
+    assert led.at[0, "hybrid_v1_action"] == "FADE"
+    assert led.at[0, "hybrid_v1_selection"] == "H"
+
+
+def test_the_archive_is_minted_for_every_family_row_a_live_test_selects():
+    """The regression this whole change exists for, stated as a property.
+
+    `abstain_test` and `dog_contrast_test` are LIVE registrations that select
+    rows through `hybrid_test.scored_rows`, which requires the archive. So a
+    current-family row carrying a usable locked market and no archive silently
+    leaves two open gates -- and invisibly, because it is dropped inside
+    `_committed`, one step before the `unscorable` counter that exists to make
+    a shrinking forward denominator visible.
+    """
+    led = pd.read_csv(grade_leans.LEDGER_PATH, low_memory=False)
+    cur = led[led["model_tag"].astype(str).eq(grade_leans.MODEL_TAG)]
+    usable = cur[[hybrid_test.locked_v1_decision(
+        r.xw_lean, r.home, r.away, r.pregame_p_home,
+        r.pregame_home_ml, r.pregame_away_ml) is not None
+        for r in cur.itertuples()]]
+    assert len(usable)
+    assert usable["hybrid_v1_action"].notna().all(), (
+        sorted(usable.loc[usable["hybrid_v1_action"].isna(), "game_date"]
+               .unique()))
+    # And the scored window reaches the ledger's own latest graded slate.
+    scored = hybrid_test.scored_rows(led)
+    latest = cur.loc[cur["status"].eq("graded"), "game_date"].max()
+    assert scored["game_date"].max() == latest
+
+
+def test_a_migration_leaves_every_cell_it_did_not_change_byte_identical(tmp_path):
+    """A repair's diff has to be reviewable, so `to_csv` is not good enough.
+
+    A read/write round-trip of this ledger rewrites cells the migration never
+    touched: `read_csv`'s default float parser is inexact, and pandas renders
+    floats to fewer digits than `build_site` writes. Both are pre-existing and
+    neither belongs in a backfill's commit. Pinned with a literal `read_csv`
+    provably cannot round-trip -- it parses this one two digits short -- so the
+    test fails if the writer ever reaches for the frame's value instead of the
+    file's bytes.
+    """
+    src = _rows(.60, .020, date="2026-09-13")
+    src["d_lineup"] = 0.0
+    # Canonical column order first: `migrate` reorders to the persisted list,
+    # and a header that moves is the one case with no cell-for-cell
+    # correspondence, where the writer correctly falls back to a whole file.
+    src, _ = migrate_hybrid_v2.migrate(src)
+    for col in migrate_hybrid_v2.V1_ARCHIVE:
+        src[col] = np.nan
+    path = tmp_path / "led.csv"
+    src.to_csv(path, index=False)
+    precise = "0.0008232366754536979"
+    lines = path.read_text().splitlines()
+    cells = lines[1].split(",")
+    cells[lines[0].split(",").index("d_lineup")] = precise
+    lines[1] = ",".join(cells)
+    path.write_text("\n".join(lines) + "\n")
+    assert repr(pd.read_csv(path)["d_lineup"].iloc[0]) != precise   # the hazard
+
+    before = path.read_text().splitlines()
+    led = pd.read_csv(path, low_memory=False)
+    migrated, changed = migrate_hybrid_v2.migrate(led)
+    migrate_hybrid_v2.write_changed_cells(str(path), migrated)
+    after = path.read_text().splitlines()
+
+    assert changed == 1
+    hdr = before[0].split(",")
+    a, b = before[1].split(","), after[1].split(",")
+    assert b[hdr.index("d_lineup")] == precise      # untouched, not truncated
+    moved = {hdr[i] for i, (x, y) in enumerate(zip(a, b)) if x != y}
+    assert moved == set(migrate_hybrid_v2.V1_ARCHIVE)
