@@ -1,6 +1,6 @@
 # The pre-registered forward tests
 
-Seven registrations across six modules. This file explains their **logic** —
+Eight registrations across seven modules. This file explains their **logic** —
 what each rule does, what number decides it, and why that number rather than
 the obvious one.
 
@@ -14,7 +14,7 @@ registration actually stands.
 
 ---
 
-## The one idea behind all seven
+## The one idea behind all eight
 
 **A registration's headline is deliberately not the number you would want to
 look at.** The obvious number — the rule's ROI, the filtered record, the
@@ -255,13 +255,77 @@ register and far better than the delta filter's, but short of the hybrid's and
 of any conventional bar: **it does not clear 0.05**, which is why the prior is
 null rather than positive.
 
-Its gate is the most reachable of the seven, and deliberately **not** sized to
+Its gate is the most reachable of the eight, and deliberately **not** sized to
 the discovery effect: a selected maximum reproducing itself over a handful of
 slates would prove nothing.
 
 ---
 
-## These are not seven independent samples
+## `tb_divergence_probe.py` — team total-bases form divergence
+
+*Registered 2026-09-17. Prior: **negative**.*
+
+Rates each club only at the venue it is about to play — its own total bases
+plus its opponent's allowed, over the league split for that venue — on a
+60-day and a 15-day window, and backs the side whose slow window exceeds its
+fast one. A mean-reversion bet on team form. It reads no pitcher and no price.
+
+**The prior is negative because the supporting evidence has already been
+explained away, not merely doubted.** It arrived as 41-21 (66.1%) at this
+threshold, +26.2% ROI, and three separate defects account for it: the
+threshold was one of eight swept on the same 100 games it was scored on
+(Holm-adjusted across the eight, the best p in that table is **0.16**, not
+0.02); the ROI was computed at a flat −110 on both sides, a price the rule
+never reads and the book does not offer; and the 100 games were about seven
+slate-days, so the binomial test assumed an independence the sample did not
+have. This is `forward_test` arm 1's situation exactly — a discovery traced to
+its own machinery — and it is registered the same way, so that a good forward
+run reads as a hypothesis rather than as a confirmation.
+
+**The threshold is frozen at the value the discovery sweep chose**, not
+re-chosen here. Re-sweeping forward would repeat the original defect with a
+longer sample. The other seven thresholds print as secondary context and carry
+no claim — and they are worth looking at exactly once, because the effect in
+the retrospective block is nearly flat across all of them, which says the
+*direction* of the feature is doing the work and the magnitude gate is close
+to decoration.
+
+**This is the one registration whose rows are not the model's selections.** It
+scores every decided game in the ledger, so its denominator is the slate rather
+than the lean. That makes it independent of the model in a way the other seven
+are not — and it is why the always-chalk control matters more here, not less: a
+form rule that leans the better club backs the favourite by default.
+
+**The headline is the excess against the ledger's own devigged close**, in
+percentage points, with always-chalk and always-home scored on the identical
+rows. Never a flat-price ROI: the whole reason the discovery number looked the
+way it did is that it was measured against a book that does not exist.
+
+Two gates, sized the usual way. The near one is the observed excess, which
+clearing means only that the rule has not disqualified itself; the far one is a
+plausible +2.0pp against a devigged close, and is on the order of ten seasons.
+
+**The retrospective block overlaps the discovery sample and is not evidence.**
+The rule was found on the most recent games in this ledger, and after a 60-day
+warm-up those are most of what the retrospective block can score. The module
+prints that warning above the block rather than leaving it to a reader. Only
+the forward block counts.
+
+Two construction defects are measured rather than fixed, because they are
+properties of the rule as proposed. Thin venue splits inflate the feature —
+an empty split falls back to the league mean, pulling the fast window toward
+zero and pushing `|div_delta|` up — so the gate can select for missing evidence
+rather than for divergence; the module prints the correlation every run. And a
+home club that wins does not bat in the ninth, which depresses the total bases
+it *scores* while never truncating what it *allows*, biasing the rating against
+good home teams in a way that cancels between windows only if the club's home
+win rate is stable — the very thing the rule claims to detect a change in.
+`--per-pa` prints the rate-denominated version as context, not as the
+registration.
+
+---
+
+## These are not eight independent samples
 
 `forward_test` arm 2, `abstain_test`, and `dog_contrast_test`'s below-split half
 all read the same small set of games. The report says so on its own line every
@@ -272,6 +336,13 @@ header rather than discovered later.
 samples.** A reader tallying the registrations as independent pieces of
 evidence is the error this note exists to prevent.
 
+`tb_divergence_probe` is the partial exception and should not be read as a
+clean one. Its rows are every decided game rather than the model's selections,
+so it does not share the others' *selection*; it still shares their *games*,
+their slates and their prices, and a stretch in which favourites run hot lifts
+it and the always-chalk control together. Independent of the model is not
+independent of the sample.
+
 ## How to read a forward block
 
 1. **Find the registered headline.** It is the line marked as such, not the
@@ -280,7 +351,7 @@ evidence is the error this note exists to prevent.
    zero. Every one of these rules was found on rows that already existed; the
    forward question is whether the effect survived, not whether it is positive.
 3. **Check the gate before reading anything at all.** Each block prints how far
-   it is from the count that could separate its own claimed effect. All seven
+   it is from the count that could separate its own claimed effect. All eight
    are currently a long way short.
 4. **Read the always-chalk control on the same rows.** On any fade branch it is
    the same bet by construction, so a branch beating its price is only
