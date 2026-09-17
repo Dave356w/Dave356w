@@ -85,6 +85,10 @@ import os
 import numpy as np
 import pandas as pd
 
+# One home for "which side is chalk", so this control and the site's cannot
+# answer it differently on a game with no favourite. See market_backfill.
+from market_backfill import chalk_is_home
+
 # ---------------------------------------------------------------------------
 # FROZEN REGISTRATION BLOCK. Changing any value below invalidates the test and
 # restarts it from zero: the numbers are only meaningful because they were
@@ -189,7 +193,7 @@ def apply_filter(g, threshold=DELTA_THRESHOLD):
     # Always-chalk on the same rows. Not decoration: the entire case against
     # this rule is that the kept half is favourite-heavy, so a forward run that
     # looks good has to be read against what chalk did on the identical games.
-    chalk_home = (g["close_p_home"] >= 0.5).values
+    chalk_home = chalk_is_home(g["close_p_home"])
     g["chalk_won"] = np.where(chalk_home, home_won, ~home_won)
     g["chalk_p"] = np.where(chalk_home, g["close_p_home"], 1 - g["close_p_home"])
     chalk_ml = np.where(chalk_home, g["close_home_ml"], g["close_away_ml"])

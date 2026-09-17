@@ -14,6 +14,8 @@ gate meant to catch it.
 """
 import unittest
 
+import os
+
 import numpy as np
 import pandas as pd
 
@@ -217,6 +219,74 @@ class TargetReliabilityReportTests(unittest.TestCase):
         lu = [l for l in lines if l.strip().startswith("lineup")][0]
         self.assertNotIn("UNMEASURABLE", lu)
         self.assertIn("measurable", lu)
+
+    def test_every_unmeasurable_component_is_marked_on_its_own_slope(self):
+        """The marker travels with the statistic, not with one component.
+
+        The caveat was prose under the LINEUP row only, so BP's slope printed
+        bare under an UNMEASURABLE verdict of its own -- live on 2026-09-17 at
+        F = 1.131 (p = 0.288). This asserts the RULE: for every component, the
+        component block marks its slope if and only if the reliability block
+        calls that component's target unmeasurable.
+        """
+        # The COMMITTED ledger, because the constructed frames here carry a
+        # lineup component only and the defect was on BP. Nothing about a
+        # verdict is pinned -- those move with the data -- only that the two
+        # blocks agree, which cannot go stale.
+        led = pd.read_csv(os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "data", "mlb_lean_ledger.csv"))
+        rel = ab.reliability_verdicts(led)
+        comp = ab.components_summary(led)
+        self.assertGreaterEqual(len(rel), 2)
+        for name, (_r, verdict) in rel.items():
+            row = [l for l in comp if l.strip().startswith(name)]
+            if not row:
+                continue
+            with self.subTest(component=name):
+                marked = "target UNMEASURABLE" in row[0]
+                self.assertEqual(
+                    marked, bool(verdict and verdict.startswith("UNMEASURABLE")),
+                    f"{name}: slope marker disagrees with its own verdict")
+
+    def test_the_caveat_no_longer_names_F_equals_1_as_the_test(self):
+        """"Clears F=1" is the wrong bar and it passed the component that
+        needed it most: F = 1.131 clears 1 and still fails on p. The caveat
+        must point at the verdict rather than restate half of it."""
+        led = self._led([0.20 + 0.01 * (i // 30) for i in range(900)])
+        body = "\n".join(ab.components_summary(led))
+        self.assertNotIn("clears F=1", body)
+        self.assertIn("target-reliability block", body)
+
+    def test_both_failure_modes_earn_the_marker_not_just_the_F_under_1_one(self):
+        """F <= 1 and F > 1 with p above alpha are different facts and the
+        same consequence. A marker keyed on F alone would catch one."""
+        self.assertTrue(ab._reliability_verdict(
+            dict(f=0.9, p=0.6)).startswith("UNMEASURABLE"))
+        self.assertTrue(ab._reliability_verdict(
+            dict(f=1.131, p=0.288)).startswith("UNMEASURABLE"))
+        self.assertEqual(ab._reliability_verdict(dict(f=1.36, p=0.011)),
+                         "measurable")
+        self.assertIsNone(ab._reliability_verdict(None))
+
+    def test_the_marker_is_scoped_to_every_family_while_the_row_is_not(self):
+        """The component row is family-scoped and its marker deliberately is
+        not: the target is metric-free, so scoping the ANOVA would discard
+        rows for a reason that cannot apply to it. Half the frame is retagged,
+        so the scoped row carries half the games while the marker still comes
+        from all of them."""
+        led = self._led([0.20 + 0.01 * (i // 30) for i in range(900)])
+        led.loc[led.index[:450], "model_tag"] = "other"
+        row = [l for l in ab.components_summary(led, tags={"t"})
+               if l.strip().startswith("lineup")][0]
+        self.assertIn("n=450", row)          # the row saw half the rows
+        unscoped = ab.reliability_verdicts(led)["lineup"][1]
+        self.assertEqual("target UNMEASURABLE" in row,
+                         unscoped.startswith("UNMEASURABLE"))
+        # ... and the verdict genuinely came from 900 rows, not 450.
+        self.assertEqual(ab.reliability_verdicts(led)["lineup"][0]["n_obs"],
+                         ab.reliability_verdicts(
+                             led.assign(model_tag="t"))["lineup"][0]["n_obs"])
 
     def test_it_pools_families_because_the_actual_is_metric_free(self):
         """Scoping this to RECORD_TAGS would discard rows for a reason that

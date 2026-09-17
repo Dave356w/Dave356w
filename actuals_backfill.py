@@ -688,6 +688,49 @@ def one_way_icc(labels, values, min_per_group=RELIABILITY_MIN_PER_UNIT):
     }
 
 
+def _reliability_verdict(r):
+    """One `one_way_icc` result -> its verdict string, or None if unfitted.
+
+    Two ways to fail and they are NOT the same statement, which is the whole
+    reason this is a function rather than an `f > 1` test at each call site:
+    F <= 1 says the units differ less than chance, while F > 1 with p above
+    alpha says they differ by no more than a search this size returns from
+    noise. A component can clear the first and fail the second -- BP did, at
+    F = 1.131 (p = 0.288) on 2026-09-17 -- so a reader handed only "clears
+    F=1" as the test reads that row as measurable while this block calls it
+    unmeasurable.
+    """
+    if r is None:
+        return None
+    if r["f"] <= 1.0:
+        return "UNMEASURABLE -- units differ less than chance"
+    if r["p"] >= RELIABILITY_ALPHA:
+        return "UNMEASURABLE -- not separated from chance"
+    return "measurable"
+
+
+def reliability_verdicts(df, min_per_group=RELIABILITY_MIN_PER_UNIT):
+    """{component: (icc result or None, verdict or None)} for every component.
+
+    Deliberately UNSCOPED by model tag, for the reason `target_reliability`
+    gives: the realised rate is metric-free, so a family filter would discard
+    rows for a reason that cannot apply to the target. The component block IS
+    family-scoped and calls this anyway -- the two denominators differ on
+    purpose and each prints its own.
+    """
+    p = paired_components(df)
+    out = {}
+    if p.empty or "unit" not in p.columns:
+        return out
+    for comp in ("SP", "BP", "lineup"):
+        s = p[p.component == comp]
+        if s.empty:
+            continue
+        r = one_way_icc(s["unit"], s["act"], min_per_group)
+        out[comp] = (r, _reliability_verdict(r))
+    return out
+
+
 def target_reliability(df, min_per_group=RELIABILITY_MIN_PER_UNIT):
     """Can each component's ACTUAL tell its own units apart? Lines, or [].
 
@@ -722,23 +765,13 @@ def target_reliability(df, min_per_group=RELIABILITY_MIN_PER_UNIT):
         "fitted slope is undefined rather than null.",
     ]
     any_row = False
-    for comp in ("SP", "BP", "lineup"):
-        s = p[p.component == comp]
-        if s.empty:
-            continue
-        r = one_way_icc(s["unit"], s["act"], min_per_group)
+    for comp, (r, verdict) in reliability_verdicts(df, min_per_group).items():
         label = COMPONENT_UNIT_LABEL.get(comp, "unit")
         if r is None:
             lines.append(f"  {comp:<7s} by {label:<14s} too few units with "
                          f"{min_per_group}+ observations")
             any_row = True
             continue
-        if r["f"] <= 1.0:
-            verdict = "UNMEASURABLE -- units differ less than chance"
-        elif r["p"] >= RELIABILITY_ALPHA:
-            verdict = "UNMEASURABLE -- not separated from chance"
-        else:
-            verdict = "measurable"
         sd = ("0 (negative variance component)" if r["negative_variance"]
               else f"{r['between_sd']:.5f}")
         lines.append(
@@ -804,6 +837,11 @@ def components_summary(df, tags=None):
     observed wOBA, and the actual is observed wOBA either way, so pooling them
     would describe a model that never ran.
     """
+    # The reliability verdicts come from the UNSCOPED frame, before the tag
+    # filter below: a realised rate does not know which model wrote the row
+    # beside it, and this block needs them for every component, not just the
+    # one whose caveat happened to be written out in prose.
+    verdicts = reliability_verdicts(df)
     if tags is not None and "model_tag" in getattr(df, "columns", []):
         df = df[df["model_tag"].astype(str).isin(set(tags))]
     p = paired_components(df)
@@ -826,6 +864,16 @@ def components_summary(df, tags=None):
         if cal:
             r = float(np.corrcoef(s["pred"], s["act"])[0, 1])
             bit += f"  slope {cal['slope']:+.2f}±{cal['se_slope']:.2f}  corr {r:+.3f}"
+        # The marker is DERIVED from the same ANOVA the block below prints,
+        # per component. It used to be one sentence of prose under the lineup
+        # row, which left BP's slope bare under an UNMEASURABLE verdict of its
+        # own -- and phrased the test as "clears F=1", which BP's 1.131 does
+        # while still failing on p. A fitted slope against a target that
+        # cannot tell its units apart is undefined, not null, whichever
+        # component it belongs to.
+        _r, _verdict = verdicts.get(comp, (None, None))
+        if _verdict and _verdict.startswith("UNMEASURABLE"):
+            bit += "   [target UNMEASURABLE: this slope is undefined, not null]"
         lines.append(bit)
         if comp == "lineup":
             fe = lineup_within_pitcher_slope(p)
@@ -836,10 +884,11 @@ def components_summary(df, tags=None):
                     f"(n={n_obs}, {n_pit} starters absorbed; a correctly "
                     f"scaled composite implies +1.000)")
                 lines.append(
-                    "           the line above ignores who was faced; this one "
-                    "holds the starter fixed. Read the difference, not either "
-                    "alone -- and neither is interpretable unless the lineup "
-                    "row of the target-reliability block clears F=1.")
+                    "           the line above ignores who was faced; this "
+                    "one holds the starter fixed. Read the difference, not "
+                    "either alone -- and see the lineup row's own verdict in "
+                    "the target-reliability block for whether either is "
+                    "interpretable at all.")
     return lines
 
 

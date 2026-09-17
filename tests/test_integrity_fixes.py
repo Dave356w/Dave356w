@@ -3097,6 +3097,8 @@ class LeanMarketValueTests(unittest.TestCase):
         "hybrid_ml":     "input to hybrid_profit; the price a selection is at",
         "hybrid_resid":  "agg excess -> branch 'actual vs implied' cell",
         "hybrid_profit": "agg roi / units -> branch 'flat close ROI' cell",
+        "lean_is_home":  "which side the chalk/home controls take, and the "
+                         "home price _pickem_note counts .500s from",
         "chalk_won":     "agg w / actual for the always-chalk control",
         "chalk_p":       "agg implied and the SE for the chalk control",
         "chalk_resid":   "agg excess -> chalk control 'actual vs implied'",
@@ -3142,7 +3144,12 @@ class LeanMarketValueTests(unittest.TestCase):
     # price. `opp_ml` in particular is what makes a faded row scoreable at all
     # -- the rule bets the other side. Stated as exemptions rather than left to
     # look like consumed columns.
-    RETAINED_INPUT_COLUMNS = {"close_ml", "opp_ml", "hybrid_ml"}
+    # `lean_is_home` joins them for the same reason one level up: the controls
+    # are derived from it inside `_lean_market_observations`, so the analysis
+    # never reads it back. It is on the frame rather than left a local because
+    # the renderer needs the home price to count pick'ems, and because every
+    # post-filter use of the local was a length mismatch waiting to happen.
+    RETAINED_INPUT_COLUMNS = {"close_ml", "opp_ml", "hybrid_ml", "lean_is_home"}
 
     def test_every_declared_observation_column_is_actually_read(self):
         """The allowlist is a claim about consumption; hold it to that.

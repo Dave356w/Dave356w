@@ -88,12 +88,45 @@ class MarketPercentileBandTests(unittest.TestCase):
         got = float(head[0].split("max |z|")[1].split()[0].rstrip(","))
         exp = float(tail[0].strip().split()[1])
         text = head[0] + " " + tail[0]
-        if got <= exp:
+        if abs(exp - got) < 0.005:
+            self.assertIn("level with it", text)
+        elif got <= exp:
             self.assertIn("licensed", text)
             self.assertNotIn("ABOVE", text)
         else:
             self.assertIn("ABOVE", text)
             self.assertNotIn("no sign", text)
+
+    def test_a_licence_that_clears_by_a_rounding_error_is_called_a_tie(self):
+        """The live instance: max |z| 2.038953 against a bar of 2.039334.
+
+        Printed at two decimals both sides read 2.04, so the sentence said
+        "at or below ... licensed" off a margin of 0.0004 -- a verdict that
+        turned on the fourth decimal of a MEAN of simulated maxima, rendered
+        as a clean pass. The margin is now named and the reading is a tie.
+        """
+        lines = gl._market_percentile_band_lines(
+            pd.read_csv(gl.LEDGER_PATH))
+        tail = [l for l in lines if "expected from noise" in l]
+        self.assertTrue(tail)
+        head = [l for l in lines if "pooling licence" in l][0]
+        got = float(head.split("max |z|")[1].split()[0].rstrip(","))
+        exp = float(tail[0].strip().split()[1])
+        if abs(exp - got) < 0.005:
+            self.assertIn("level with it", tail[0])
+            self.assertIn("tie rather than a licence", tail[0])
+
+    def test_both_sides_of_the_licence_print_enough_digits_to_compare(self):
+        """A verdict is unreadable when its two inputs round to each other."""
+        lines = gl._market_percentile_band_lines(pd.read_csv(gl.LEDGER_PATH))
+        head = [l for l in lines if "pooling licence" in l]
+        tail = [l for l in lines if "expected from noise" in l]
+        if not (head and tail):
+            self.skipTest("one family in the ledger; no licence line")
+        for s in (head[0].split("max |z|")[1].split()[0].rstrip(","),
+                  tail[0].strip().split()[1]):
+            with self.subTest(value=s):
+                self.assertGreaterEqual(len(s.split(".")[1]), 3)
 
     def test_a_band_label_never_names_an_impossible_moneyline(self):
         """Nothing lies strictly between -100 and +100; a label must be checkable."""
