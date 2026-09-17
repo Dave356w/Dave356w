@@ -63,7 +63,8 @@ import pandas as pd
 import requests
 
 from market_backfill import (MARKET_COLS, ODDS_LADDER, attach_market,
-                             excess_se, ladder_rung, metric_label)
+                             breakeven_prob, excess_se, ladder_rung,
+                             metric_label)
 from actuals_backfill import (ACTUAL_COLS, attach_actuals, actuals_summary,
                               actuals_family_line, components_summary,
                               target_reliability,
@@ -836,14 +837,42 @@ def _price_column_labels(edges):
     return out
 
 
-def _grid_cell_line(label, won, q, width=14):
-    """One cell: size, record, its own mean price, the gap, and the gap's SE.
+def _grid_cell_line(label, won, q, width=14, breakeven=None):
+    """One cell: size, record, its own mean price, the gap, the SE, and EV.
 
     The SE is never suppressed and the cell is never gated on n. A one-game
     cell prints sqrt(p(1-p)) -- up to 50 points, at a coin-flip price -- which
     is exactly what it should say; gating it would leave a reader to recompute
     the rate without the caveat, and grading it THIN/DEVELOPING/LARGER would be
     the credibility-tier cliff this repo has already removed twice.
+
+    TWO price-relative numbers, and they answer different questions. `excess`
+    is the realised rate against the DEVIGGED price: a calibration statistic,
+    and the one every other block here prints. `EV` is the same rate against
+    the POSTED price's breakeven, which is what a bet actually has to clear.
+    The two differ by the cell's own hold, so a cell can beat its devigged
+    price and still lose money. Deliberately no cell is named here: which ones
+    flip moves with the rows, and a worked example frozen into a comment is the
+    constants-from-data entry in prose. Compare the two columns on the block
+    itself. Printing only the first is the defect this argument names; printing
+    only the second would drop the calibration read the rest of the report is
+    built on.
+
+    Note which prices these are. This block reads the PREGAME snapshot, whose
+    hold runs materially wider than the closes the rest of the report scores --
+    books tighten toward first pitch -- so the gap between the two columns here
+    is larger than a closing-basis version of the same cell would show. That is
+    a property of the snapshot, not of the model.
+
+    One `+-` serves both, and that is arithmetic rather than economy: the
+    breakeven is fixed by the market exactly as `q` is, never estimated from
+    the outcomes under test, so the two statistics differ by a constant and
+    share a sampling SE. What they do NOT share is a null -- `excess` is
+    centred on zero when the market is right, `EV` on minus the hold.
+
+    `breakeven` is optional and is dropped for the whole cell unless every row
+    in it carries one. A partial column would quietly change the denominator
+    between the two numbers on one line, which is the harder error to see.
     """
     n = int(np.asarray(q).size)
     if not n:
@@ -851,9 +880,14 @@ def _grid_cell_line(label, won, q, width=14):
     w = int(np.asarray(won).sum())
     rate = w / n
     mkt = float(np.asarray(q).mean())
-    return (f"    {label:<{width}} n={n:>3}   {f'{w}-{n - w}':>7} ({rate:.3f})   "
+    line = (f"    {label:<{width}} n={n:>3}   {f'{w}-{n - w}':>7} ({rate:.3f})   "
             f"mean q {_p3(mkt)}   excess {100 * (rate - mkt):+6.1f}"
             f" +- {100 * excess_se(q):4.1f} pp")
+    if breakeven is not None:
+        be = np.asarray(breakeven, dtype=float)
+        if be.size == n and np.isfinite(be).all():
+            line += f"   EV {100 * (rate - float(be.mean())):+6.1f} pp"
+    return line
 
 
 def _grid_null_best_excess(cells, draws=2000, seed=0):
@@ -945,7 +979,13 @@ def _magnitude_price_grid_lines(g):
         "    taken from the pregame snapshot the decision was locked against "
         "(pregame_p_home; NO close fallback).",
         "  Cell: n; record; mean q; excess = realised rate - mean q, in points; "
-        "+- Poisson-binomial SE at the cell's own prices.",
+        "+- Poisson-binomial SE at the cell's own prices;",
+        "    EV = the same rate against the POSTED price's breakeven, which is what "
+        "a bet has to clear. The two differ by the",
+        "    cell's own hold, so a cell can beat its devigged q and still lose money. "
+        "One SE serves both: the breakeven is fixed",
+        "    by the market exactly as q is. Their NULLS differ though -- excess is "
+        "centred on zero when the market is right, EV on minus the hold.",
         "  Magnitude is an xwOBA difference, not a win probability, and this repo has "
         "no validated mapping between the two.",
         "    A cell's rate is what past leans in it did; it is not this model's "
@@ -975,6 +1015,19 @@ def _magnitude_price_grid_lines(g):
     lean_home_k = lean[keep].eq(kept["home"].astype(str).str.strip()).to_numpy(bool)
     ph_k = p_home[keep].to_numpy(float)
     q = np.where(lean_home_k, ph_k, 1.0 - ph_k)
+    # The leaned side's own posted price, for the EV column. Deliberately the
+    # PREGAME moneylines rather than the closes: this block is built on the
+    # pregame snapshot the decision was locked against, and pairing a pregame
+    # probability with a closing payout would be the mixed basis the rest of
+    # the report refuses. Absent columns give an all-NaN array, which
+    # `_grid_cell_line` drops per cell rather than filling.
+    if {"pregame_home_ml", "pregame_away_ml"}.issubset(kept.columns):
+        ml_k = np.where(lean_home_k,
+                        pd.to_numeric(kept["pregame_home_ml"], errors="coerce"),
+                        pd.to_numeric(kept["pregame_away_ml"], errors="coerce"))
+        be_k = breakeven_prob(ml_k)
+    else:
+        be_k = np.full(q.shape, np.nan)
     won = kept["xw_full"].eq("W").to_numpy(bool)
     edges = _fixed_price_edges()
     cells = _magnitude_price_cells(mag_k, q, edges)
@@ -985,8 +1038,10 @@ def _magnitude_price_grid_lines(g):
         out.append(f"  |delta| {band}  n={int(row.sum())}")
         for band_label, name, mask in cells:
             if band_label == band:
-                out.append(_grid_cell_line(name, won[mask], q[mask]))
-        out.append(_grid_cell_line("all q", won[row], q[row]))
+                out.append(_grid_cell_line(name, won[mask], q[mask],
+                                           breakeven=be_k[mask]))
+        out.append(_grid_cell_line("all q", won[row], q[row],
+                                   breakeven=be_k[row]))
         # A band confined to one column has a margin that CANNOT differ from
         # that column -- two identical lines with nothing saying why, which is
         # how a reader gets duplicated data or a suspected bug instead of a
@@ -998,8 +1053,9 @@ def _magnitude_price_grid_lines(g):
     out.append("  all |delta| bands")
     for name, (clo, chi) in zip(cols, zip(edges, edges[1:])):
         col = (q >= clo) & (q < chi)
-        out.append(_grid_cell_line(name, won[col], q[col]))
-    out.append(_grid_cell_line("all q", won, q))
+        out.append(_grid_cell_line(name, won[col], q[col],
+                                   breakeven=be_k[col]))
+    out.append(_grid_cell_line("all q", won, q, breakeven=be_k))
     filled = [(b, c, m) for b, c, m in cells if m.any()]
     # With one non-empty cell there is no maximum to correct for: the null best
     # of a single cell is its own null mean, which is zero by construction, so

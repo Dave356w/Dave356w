@@ -421,6 +421,33 @@ def excess_se(probs):
     return float(np.sqrt(float((p * (1.0 - p)).sum())) / p.size)
 
 
+def breakeven_prob(mls):
+    """Win rate a bet at these American prices must clear to be +EV.
+
+    This is the RAW implied probability, `_imp` vectorised and nothing more --
+    one formula, because a second copy of an odds conversion is the "one value,
+    three homes" defect in arithmetic. The name exists because the QUANTITY is
+    easy to confuse with the devigged price beside it, and the confusion runs
+    one way: a cell can beat its devigged `q` and still lose money.
+
+    The gap between the two IS the per-side hold. A bet at ml with decimal
+    profit b returns `p(1+b) - 1`, so it breaks even at `p = 1/(1+b)`, which is
+    exactly `_imp(ml)`. Every `excess` in this file is measured against the
+    DEVIGGED price and is therefore a calibration statistic; realised rate
+    minus this is the EV one. On the current ledger the two differ by ~1.7 pp
+    on average and by more on favourites, which is enough to flip a band's
+    sign -- so they are printed side by side rather than either alone.
+
+    NaN in, NaN out: a row with no usable price gets no breakeven, and the
+    caller decides what to do about it rather than being handed a guess.
+    """
+    out = []
+    for ml in np.asarray(mls, dtype=float).ravel():
+        out.append(float("nan") if not np.isfinite(ml) or ml == 0
+                   else float(_imp(float(ml))))
+    return np.asarray(out, dtype=float)
+
+
 def vs_market_summary(df, col=COL, verbose=True):
     """Vs-market scoreboard for both models. Returns dict for grades.html chips."""
     d = df[df["close_p_home"].notna()].copy()
