@@ -220,7 +220,7 @@ def team_logs(games):
     return pd.concat([h, a], ignore_index=True).sort_values(["date", "game_pk"])
 
 
-def tb_features(games, only_game_pks=None):
+def tb_features(games, only_game_pks=None, lookback=LOOKBACK_DAYS):
     """Strict prior-date, same-season, 60-day TB deltas. Home-oriented.
 
     A game's feature reads only team-games dated STRICTLY BEFORE it, so the row
@@ -240,7 +240,7 @@ def tb_features(games, only_game_pks=None):
         hist = logs[(logs["season"] == season) & (logs["date"] < day)]
         if len(hist) < BURNIN_LOG_ROWS:
             continue
-        win = hist[hist["date"] >= day - pd.Timedelta(days=LOOKBACK_DAYS)]
+        win = hist[hist["date"] >= day - pd.Timedelta(days=lookback)]
         lg = float(win["tb"].mean()) if len(win) else np.nan
         if not np.isfinite(lg) or lg <= 0:
             lg = LEAGUE_TB_FALLBACK
@@ -477,6 +477,85 @@ def correlation_rows(fam, pooled):
     return rows
 
 
+
+def _residualise(y, X):
+    """y with X projected out. The score contribution a logit coefficient reads."""
+    X = np.column_stack([np.ones(len(X)), X])
+    return np.asarray(y, float) - X @ np.linalg.lstsq(X, np.asarray(y, float), rcond=None)[0]
+
+
+def window_sweep(led, games, tags, basis, windows, draws=20000, seed=NULL_SEED):
+    """Does a DIFFERENT lookback separate where 60 days does not?
+
+    A legitimate question with a real mechanism -- recency against stability --
+    and also a SEARCH over the feature's own specification, which the module
+    docstring already says is not a-priori. So it is scored the way this repo
+    scores searches, with two things established before any coefficient is read.
+
+    What arithmetic closes, and what it does not. Nested windows share their
+    most recent games, so under pure noise corr(mean_a, mean_b) = sqrt(n_a/n_b):
+    roughly 0.41 between 10d and 60d, 0.82 between 20d and 30d, rising toward 1
+    with persistent team quality. So these are NOT one predictor the way the
+    lineup weight family was at 0.9988 -- the sweep is worth running. They are
+    also nowhere near independent, so sqrt(2 ln k) = 1.67 for four tests is the
+    WRONG bar: it assumes independence the design does not have. The null
+    maximum is therefore simulated from the OBSERVED correlation of the
+    residualised predictors, which is the correlation the z-statistics actually
+    have under the null.
+
+    Attenuation is the reason to expect less rather than more: a shorter window
+    is a noisier estimate of the same quantity, so its coefficient is pulled
+    toward zero unless recency itself carries signal. A short window reading
+    STRONGER than 60d is the only outcome that means anything here.
+
+    Only the continuous arms are run. The frozen p50 belongs to the 60-day
+    feature and no other window has one, so a tier arm elsewhere would need a
+    threshold fitted on these rows -- which is exactly what the tier arm exists
+    to avoid.
+    """
+    rows, cols, pks = [], {}, set(led["game_pk"].dropna().astype(int))
+    for w in windows:
+        tb = tb_features(games, only_game_pks=pks, lookback=w)
+        tb = tb.rename(columns={"tb_delta": "tb_delta", "abs_tb": "abs_tb"})
+        f = attach_price(led.merge(tb, on="game_pk", how="inner",
+                                   validate="one_to_one"), basis)
+        f = f[f["model_tag"].isin(tags) & f["q_lean"].notna()
+              & f["lean_won"].notna() & f["tb_delta"].notna()].copy()
+        if len(f) < N_FIT_MIN:
+            rows.append({"w": w, "n": len(f), "b": float("nan"), "se": float("nan"),
+                         "z": float("nan")})
+            continue
+        f["tb_aligned"] = f["tb_delta"] * np.sign(f["xw_net"])
+        arm = fit_arm(f["lean_won"],
+                      [logit(f["q_lean"].values), _z(f["xw_net"].abs()), _z(f["tb_aligned"])],
+                      ["market logit", "z(|xw_net|)", "z(TB aligned)"])
+        _, b, se, z = arm[2]
+        rows.append({"w": w, "n": len(f), "b": b, "se": se, "z": z})
+        cols[w] = pd.Series(
+            _residualise(_z(f["tb_aligned"]),
+                         np.column_stack([logit(f["q_lean"].values), _z(f["xw_net"].abs())])),
+            index=f.index)
+
+    corr, null_max, p = None, float("nan"), float("nan")
+    live = [r for r in rows if np.isfinite(r["z"])]
+    if len(cols) >= 2 and live:
+        M = pd.DataFrame(cols).dropna()
+        corr = M.corr()
+        R = corr.to_numpy(float)
+        # Under the null the z-vector is asymptotically MVN with exactly this
+        # correlation, so the null maximum is drawn rather than assumed -- and
+        # it lands BELOW the independent-case sqrt(2 ln k) by construction.
+        try:
+            Lc = np.linalg.cholesky(R + 1e-9 * np.eye(len(R)))
+            rng = np.random.default_rng(seed)
+            sims = np.abs(rng.standard_normal((draws, len(R))) @ Lc.T).max(axis=1)
+            null_max = float(sims.mean())
+            obs = max(abs(r["z"]) for r in live)
+            p = float(np.mean(sims >= obs))
+        except np.linalg.LinAlgError:
+            pass
+    return {"rows": rows, "corr": corr, "null_max": null_max, "p": p}
+
 def alignment_frame(fam):
     """TB oriented to the side the model leans, plus the AGREE/DIVERGE split.
 
@@ -608,7 +687,7 @@ def _search_verdict(p):
         return "     verdict: not computable."
     if p >= 0.5:
         return ("     verdict: the observed best is WORSE than a search this wide\n"
-                "     typically returns from noise -- no ROI context to find here.")
+                "     typically returns from noise -- nothing here to find.")
     if p >= 0.05:
         return ("     verdict: inside what the search returns from noise. NOT a\n"
                 "     finding, and NOT evidence of absence either -- this bar is high\n"
@@ -844,7 +923,7 @@ def tier_rows(f, p50):
     return pd.DataFrame(rows)
 
 
-def report(led, tb, tags, basis, p50, out=sys.stdout):
+def report(led, tb, tags, basis, p50, out=sys.stdout, sweep=None):
     """Every arm, each naming its own row set and price basis."""
     say = lambda s="": print(s, file=out)
     # `one_to_one` rather than a post-hoc row count: pandas raises on a
@@ -1075,7 +1154,39 @@ def report(led, tb, tags, basis, p50, out=sys.stdout):
         say(f"   SKIPPED: n={len(al)} rows carry both a signed TB and a price.")
     say()
 
-    say("7. OUT-OF-SAMPLE LOG LOSS (pooled, walk-forward; lower is better)")
+    if sweep is not None:
+        say("7. DOES A DIFFERENT LOOKBACK SEPARATE WHERE 60 DAYS DOES NOT?")
+        say("   A search over the feature's own specification, scored as one.")
+        say("   Continuous arms only: the frozen p50 belongs to the 60-day feature")
+        say("   and no other window has one, so a tier elsewhere would need a")
+        say("   threshold fitted on these rows.")
+        say("   Attenuation is why LESS is expected: a shorter window is a noisier")
+        say("   estimate of the same quantity, so its coefficient is pulled toward")
+        say("   zero unless recency itself carries signal. A SHORT window reading")
+        say("   stronger than 60d is the only outcome here that means anything.")
+        say(f"   {'window':>8}{'n':>6}{'z(TB aligned)':>16}{'+/-':>8}{'z':>8}")
+        for r in sweep["rows"]:
+            if not np.isfinite(r["z"]):
+                say(f"   {r['w']:>7}d{r['n']:>6}       (too few rows)")
+                continue
+            say(f"   {r['w']:>7}d{r['n']:>6}{r['b']:>+16.3f}{r['se']:>8.3f}{r['z']:>+8.2f}")
+        if sweep["corr"] is not None:
+            say("   observed correlation of the residualised predictors --")
+            say("   how much the windows are one predictor rather than several:")
+            c = sweep["corr"]
+            say("        " + "".join(f"{int(w):>8d}d" for w in c.columns))
+            for w in c.index:
+                say(f"   {int(w):>4d}d " + "".join(f"{c.loc[w, x]:>9.3f}" for x in c.columns))
+        if np.isfinite(sweep["p"]):
+            say(f"   null max |z| from that correlation   {sweep['null_max']:+.2f}")
+            say(f"   P(null max >= observed max |z|)      {sweep['p']:.4f}")
+            say(_search_verdict(sweep["p"]))
+            say("   The bar is DRAWN from the observed correlation, not assumed:")
+            say("   sqrt(2 ln 4) = 1.67 would be the independent-case bar and these")
+            say("   windows are nested, so the true bar sits below it.")
+        say()
+
+    say("8. OUT-OF-SAMPLE LOG LOSS (pooled, walk-forward; lower is better)")
     say("   Fitted on strictly prior slates, scored on the next. This is the arm")
     say("   a coefficient cannot fake: if 'price + TB' ranks BELOW 'market-fitted',")
     say("   TB is subtracting information from the price.")
@@ -1117,6 +1228,9 @@ def main(argv=None):
     ap.add_argument("--p50", type=float, default=TB_P50_FROZEN)
     ap.add_argument("--tb-out", default=None, help="write the computed TB frame here")
     ap.add_argument("--out", default=None, help="write the report here as well as stdout")
+    ap.add_argument("--windows", default=None,
+                    help="also sweep these lookbacks, e.g. 10,20,30,60. Needs the "
+                         "fetch path: one --tb-csv carries one window only.")
     a = ap.parse_args(argv)
 
     led = load_ledger(a.ledger)
@@ -1126,8 +1240,12 @@ def main(argv=None):
         from build_site import RECORD_TAGS
         tags = tuple(RECORD_TAGS)
 
+    sweep = None
     if a.tb_csv:
         tb = load_tb_csv(a.tb_csv)
+        if a.windows:
+            print("[tb] --windows needs the fetch path; one CSV carries one window.",
+                  file=sys.stderr)
     else:
         seasons = ([int(s) for s in a.seasons.split(",")] if a.seasons
                    else sorted({d.year for d in led["game_date"].dropna()}))
@@ -1135,11 +1253,14 @@ def main(argv=None):
         tb = tb_features(games, only_game_pks=set(led["game_pk"].dropna().astype(int)))
         if a.tb_out:
             tb.to_csv(a.tb_out, index=False)
+        if a.windows:
+            ws = [int(w) for w in a.windows.split(",") if w.strip()]
+            sweep = window_sweep(led, games, tags, a.basis, ws)
 
-    report(led, tb, tags, a.basis, a.p50)
+    report(led, tb, tags, a.basis, a.p50, sweep=sweep)
     if a.out:
         with open(a.out, "w", encoding="utf-8") as fh:
-            report(led, tb, tags, a.basis, a.p50, out=fh)
+            report(led, tb, tags, a.basis, a.p50, out=fh, sweep=sweep)
     return 0
 
 

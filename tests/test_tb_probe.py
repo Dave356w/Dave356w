@@ -114,6 +114,66 @@ class NoLookaheadTests(unittest.TestCase):
                                 g["date"].min() + pd.Timedelta(days=9))
 
 
+class WindowSweepTests(unittest.TestCase):
+    """The sweep is a search over the feature's specification, so its bar must
+    be DRAWN from the candidates' correlation rather than assumed."""
+
+    def test_the_lookback_actually_changes_the_feature(self):
+        """A parameter nothing reads would make the whole sweep theatre."""
+        rng = np.random.default_rng(5)
+        rows, pk = [], 0
+        for day in range(70):
+            for _ in range(8):
+                pk += 1
+                rows.append({"game_pk": pk, "season": 2026,
+                             "date": pd.Timestamp("2026-05-01") + pd.Timedelta(days=day),
+                             "home_id": int(rng.integers(1, 31)),
+                             "away_id": int(rng.integers(1, 31)),
+                             "home_tb": float(rng.integers(4, 20)),
+                             "away_tb": float(rng.integers(4, 20))})
+        g = pd.DataFrame(rows)
+        g = g[g["home_id"] != g["away_id"]].reset_index(drop=True)
+        short = P.tb_features(g, lookback=10).set_index("game_pk")["tb_delta"]
+        long = P.tb_features(g, lookback=60).set_index("game_pk")["tb_delta"]
+        both = pd.concat([short, long], axis=1, join="inner").dropna()
+        self.assertGreater(len(both), 50)
+        self.assertFalse(np.allclose(both.iloc[:, 0], both.iloc[:, 1]))
+        # Nested windows share their recent games, so they correlate but are
+        # not the same predictor -- the fact that licenses the sweep at all.
+        r = float(np.corrcoef(both.iloc[:, 0], both.iloc[:, 1])[0, 1])
+        self.assertGreater(r, 0.1)
+        self.assertLess(r, 0.99)
+
+    def test_the_null_max_sits_below_the_independent_case_bar(self):
+        """Correlated candidates make the maximum SMALLER than sqrt(2 ln k).
+
+        Assuming independence would set the bar too high and hide a real
+        effect; assuming one predictor would set it too low. Drawn from the
+        observed correlation, it must land between the two.
+        """
+        rng = np.random.default_rng(1)
+        for rho in (0.4, 0.8):
+            R = np.full((4, 4), rho); np.fill_diagonal(R, 1.0)
+            L = np.linalg.cholesky(R)
+            sims = np.abs(rng.standard_normal((20000, 4)) @ L.T).max(axis=1)
+            self.assertLess(sims.mean(), np.sqrt(2 * np.log(4)) + 0.35)
+            self.assertGreater(sims.mean(), 0.7)
+        # and more correlation must mean a lower bar
+        def bar(rho):
+            R = np.full((4, 4), rho); np.fill_diagonal(R, 1.0)
+            L = np.linalg.cholesky(R)
+            g = np.random.default_rng(2).standard_normal((20000, 4))
+            return float(np.abs(g @ L.T).max(axis=1).mean())
+        self.assertLess(bar(0.9), bar(0.2))
+
+    def test_residualising_removes_what_it_is_given(self):
+        rng = np.random.default_rng(7)
+        x = rng.normal(size=300)
+        y = 3.0 * x + rng.normal(size=300)
+        r = P._residualise(y, x.reshape(-1, 1))
+        self.assertLess(abs(float(np.corrcoef(r, x)[0, 1])), 1e-9)
+
+
 class AlignmentTests(unittest.TestCase):
     """TB's SIGN against the lean's sign -- corroboration, not magnitude.
 
@@ -394,6 +454,13 @@ class RoiSearchTests(unittest.TestCase):
         f = self._frame(edge=0.0, seed=7)
         r = P.filter_contrast(f, 0.2)
         self.assertGreater(r["se"], max(r["kept"]["se"], r["dropped"]["se"]))
+
+    def test_the_search_verdict_wording_is_not_specific_to_one_block(self):
+        """`_search_verdict` is shared by the ROI sweep and the window sweep, so
+        its copy may not name either one -- it read 'no ROI context to find
+        here' under a window table for one run."""
+        for pv in (0.7, 0.2, 0.01):
+            self.assertNotIn("ROI", P._search_verdict(pv))
 
     def test_the_search_verdict_has_three_branches_and_never_calls_a_pass_a_result(self):
         self.assertIn("WORSE", P._search_verdict(0.7))

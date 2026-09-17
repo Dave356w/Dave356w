@@ -42,6 +42,10 @@ on:
         description: 'Model tags for the family arms (default: RECORD_TAGS)'
         required: false
         default: ''
+      windows:
+        description: 'Also sweep these lookbacks, e.g. 10,20,30,60 (fetch path only)'
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -77,6 +81,7 @@ jobs:
             ${{ inputs.tb_csv && format('--tb-csv {0}', inputs.tb_csv) || format('--seasons {0}', inputs.seasons || '2026') }} \
             ${{ inputs.basis && format('--basis {0}', inputs.basis) || '' }} \
             ${{ inputs.tags && format('--tags {0}', inputs.tags) || '' }} \
+            ${{ inputs.windows && format('--windows {0}', inputs.windows) || '' }} \
             --tb-out tb_features.csv \
             --out tb_probe_report.txt
 
