@@ -220,7 +220,7 @@ def team_logs(games):
     return pd.concat([h, a], ignore_index=True).sort_values(["date", "game_pk"])
 
 
-def tb_features(games, only_game_pks=None):
+def tb_features(games, only_game_pks=None, lookback=LOOKBACK_DAYS):
     """Strict prior-date, same-season, 60-day TB deltas. Home-oriented.
 
     A game's feature reads only team-games dated STRICTLY BEFORE it, so the row
@@ -240,7 +240,7 @@ def tb_features(games, only_game_pks=None):
         hist = logs[(logs["season"] == season) & (logs["date"] < day)]
         if len(hist) < BURNIN_LOG_ROWS:
             continue
-        win = hist[hist["date"] >= day - pd.Timedelta(days=LOOKBACK_DAYS)]
+        win = hist[hist["date"] >= day - pd.Timedelta(days=lookback)]
         lg = float(win["tb"].mean()) if len(win) else np.nan
         if not np.isfinite(lg) or lg <= 0:
             lg = LEAGUE_TB_FALLBACK
@@ -256,9 +256,14 @@ def tb_features(games, only_game_pks=None):
             pk = int(gm["game_pk"])
             if only_game_pks is not None and pk not in only_game_pks:
                 continue
-            delta = (net(int(gm["home_id"])) - net(int(gm["away_id"]))) / lg
+            h, a = net(int(gm["home_id"])) / lg, net(int(gm["away_id"])) / lg
+            delta = h - a
+            # Each side's own net is kept, not just the difference, because the
+            # question "does TB give a TEAM's delta context" is asked per club
+            # and the difference cannot be decomposed back into its halves.
             rows.append({"game_pk": pk, "tb_delta": float(delta),
-                         "abs_tb": abs(float(delta))})
+                         "abs_tb": abs(float(delta)),
+                         "tb_home": float(h), "tb_away": float(a)})
     return pd.DataFrame(rows)
 
 
@@ -283,7 +288,11 @@ def load_tb_csv(path):
     if "abs_tb" not in f.columns:
         f["abs_tb"] = f["tb_delta"].abs()
     f["game_pk"] = pd.to_numeric(f["game_pk"], errors="coerce").astype("Int64")
-    f = f.dropna(subset=["game_pk"])[["game_pk", "tb_delta", "abs_tb"]]
+    for side in ("tb_home", "tb_away"):
+        if side not in f.columns:
+            f[side] = np.nan
+    f = f.dropna(subset=["game_pk"])[["game_pk", "tb_delta", "abs_tb",
+                                      "tb_home", "tb_away"]]
     # Same hazard from the other direction: a frame built elsewhere may carry a
     # game twice, and the join would then double those rows silently.
     return f.drop_duplicates(subset="game_pk", keep="first").reset_index(drop=True)
@@ -468,6 +477,205 @@ def correlation_rows(fam, pooled):
     return rows
 
 
+
+def _residualise(y, X):
+    """y with X projected out. The score contribution a logit coefficient reads."""
+    X = np.column_stack([np.ones(len(X)), X])
+    return np.asarray(y, float) - X @ np.linalg.lstsq(X, np.asarray(y, float), rcond=None)[0]
+
+
+def window_sweep(led, games, tags, basis, windows, draws=20000, seed=NULL_SEED):
+    """Does a DIFFERENT lookback separate where 60 days does not?
+
+    A legitimate question with a real mechanism -- recency against stability --
+    and also a SEARCH over the feature's own specification, which the module
+    docstring already says is not a-priori. So it is scored the way this repo
+    scores searches, with two things established before any coefficient is read.
+
+    What arithmetic closes, and what it does not. Nested windows share their
+    most recent games, so under pure noise corr(mean_a, mean_b) = sqrt(n_a/n_b):
+    roughly 0.41 between 10d and 60d, 0.82 between 20d and 30d, rising toward 1
+    with persistent team quality. So these are NOT one predictor the way the
+    lineup weight family was at 0.9988 -- the sweep is worth running. They are
+    also nowhere near independent, so sqrt(2 ln k) = 1.67 for four tests is the
+    WRONG bar: it assumes independence the design does not have. The null
+    maximum is therefore simulated from the OBSERVED correlation of the
+    residualised predictors, which is the correlation the z-statistics actually
+    have under the null.
+
+    Attenuation is the reason to expect less rather than more: a shorter window
+    is a noisier estimate of the same quantity, so its coefficient is pulled
+    toward zero unless recency itself carries signal. A short window reading
+    STRONGER than 60d is the only outcome that means anything here.
+
+    Only the continuous arms are run. The frozen p50 belongs to the 60-day
+    feature and no other window has one, so a tier arm elsewhere would need a
+    threshold fitted on these rows -- which is exactly what the tier arm exists
+    to avoid.
+    """
+    rows, cols, pks = [], {}, set(led["game_pk"].dropna().astype(int))
+    for w in windows:
+        tb = tb_features(games, only_game_pks=pks, lookback=w)
+        tb = tb.rename(columns={"tb_delta": "tb_delta", "abs_tb": "abs_tb"})
+        f = attach_price(led.merge(tb, on="game_pk", how="inner",
+                                   validate="one_to_one"), basis)
+        f = f[f["model_tag"].isin(tags) & f["q_lean"].notna()
+              & f["lean_won"].notna() & f["tb_delta"].notna()].copy()
+        if len(f) < N_FIT_MIN:
+            rows.append({"w": w, "n": len(f), "b": float("nan"), "se": float("nan"),
+                         "z": float("nan")})
+            continue
+        f["tb_aligned"] = f["tb_delta"] * np.sign(f["xw_net"])
+        arm = fit_arm(f["lean_won"],
+                      [logit(f["q_lean"].values), _z(f["xw_net"].abs()), _z(f["tb_aligned"])],
+                      ["market logit", "z(|xw_net|)", "z(TB aligned)"])
+        _, b, se, z = arm[2]
+        rows.append({"w": w, "n": len(f), "b": b, "se": se, "z": z})
+        cols[w] = pd.Series(
+            _residualise(_z(f["tb_aligned"]),
+                         np.column_stack([logit(f["q_lean"].values), _z(f["xw_net"].abs())])),
+            index=f.index)
+
+    corr, null_max, p = None, float("nan"), float("nan")
+    live = [r for r in rows if np.isfinite(r["z"])]
+    if len(cols) >= 2 and live:
+        M = pd.DataFrame(cols).dropna()
+        corr = M.corr()
+        R = corr.to_numpy(float)
+        # Under the null the z-vector is asymptotically MVN with exactly this
+        # correlation, so the null maximum is drawn rather than assumed -- and
+        # it lands BELOW the independent-case sqrt(2 ln k) by construction.
+        try:
+            Lc = np.linalg.cholesky(R + 1e-9 * np.eye(len(R)))
+            rng = np.random.default_rng(seed)
+            sims = np.abs(rng.standard_normal((draws, len(R))) @ Lc.T).max(axis=1)
+            null_max = float(sims.mean())
+            obs = max(abs(r["z"]) for r in live)
+            p = float(np.mean(sims >= obs))
+        except np.linalg.LinAlgError:
+            pass
+    return {"rows": rows, "corr": corr, "null_max": null_max, "p": p}
+
+def alignment_frame(fam):
+    """TB oriented to the side the model leans, plus the AGREE/DIVERGE split.
+
+    Verified on the committed ledger rather than recalled, because the suffix
+    convention in this repo names the PITCHING side faced and getting it
+    backwards would invert the whole arm: `xw_net == edge_xwoba_away -
+    edge_xwoba_home` exactly on 439 of 439 v12 rows, and a positive `xw_net`
+    leans HOME on 218 of 218. `tb_delta` is home-oriented too, so the two share
+    a sign convention and alignment needs no flip.
+
+    `tb_aligned` is TB signed toward the model's own pick: positive means the
+    60-day run-differential read CORROBORATES this team's lean delta, negative
+    means it contradicts it.
+
+    Why this is asked at the GAME level and not per club, which is the shape the
+    question invites: the two sides of one game are complements -- their devigged
+    prices sum to 1 and exactly one of them wins -- so stacking both sides is one
+    observation dressed as two, and any pooled figure over them is fixed by the
+    partition rather than by the data. That is this repo's own degenerate-tile
+    defect, and the oriented game-level form is the non-degenerate version of the
+    same question.
+    """
+    f = fam.copy()
+    f["tb_aligned"] = pd.to_numeric(f["tb_delta"], errors="coerce") * np.sign(
+        pd.to_numeric(f["xw_net"], errors="coerce"))
+    f["agrees"] = np.where(f["tb_aligned"] > 0, True,
+                           np.where(f["tb_aligned"] < 0, False, None))
+    return f
+
+
+def alignment_rows(f):
+    """AGREE vs DIVERGE, each with the price and chalk controls beside it.
+
+    The mean implied price is printed per cell on purpose: the OPS `consensus`
+    arm this repo already measured looked alive at z = +1.32 and turned out to
+    be mostly reliability and price, so a cell's own price is what lets a reader
+    see a base-rate split before reading it as corroboration.
+    """
+    rows = []
+    for name, mask in (("TB AGREES with lean", f["agrees"] == True),      # noqa: E712
+                       ("TB CONTRADICTS lean", f["agrees"] == False)):    # noqa: E712
+        d = f[mask]
+        if not len(d):
+            continue
+        rate, imp = d["lean_won"].mean(), d["q_lean"].mean()
+        ch, chp = d["chalk_won"].mean(), d["chalk_p"].mean()
+        rows.append({"cell": name, "n": len(d),
+                     "record": f"{int(d['lean_won'].sum())}-{int((1 - d['lean_won']).sum())}",
+                     "raw": rate, "implied": imp,
+                     "excess": 100 * (rate - imp),
+                     "se": 100 * excess_se(d["q_lean"]),
+                     "chalk": 100 * (ch - chp),
+                     # Share of the cell where the model and chalk back the SAME
+                     # side. Printed because `model - chalk` is NOT one statistic
+                     # across the price range: measured on the committed ledger,
+                     # the two are the identical bet on 100% of rows above
+                     # q = .55 and opposite bets on 100% below q = .50. So the
+                     # difference is ~0 by construction in one region and ~2x the
+                     # model's own excess in the other, and a cell's value for it
+                     # is set by its price composition before TB says anything.
+                     "same_bet": 100 * float(
+                         (d["lean_won"].to_numpy() == d["chalk_won"].to_numpy()).mean())})
+    return rows
+
+
+def _did(f):
+    """The difference-in-differences: (model - chalk) in AGREE minus in DIVERGE."""
+    a = f[f["agrees"] == True]                                        # noqa: E712
+    d = f[f["agrees"] == False]                                       # noqa: E712
+    if not len(a) or not len(d):
+        return float("nan")
+    def cell(x):
+        return ((x["lean_won"].mean() - x["q_lean"].mean())
+                - (x["chalk_won"].mean() - x["chalk_p"].mean()))
+    return 100.0 * (cell(a) - cell(d))
+
+
+def alignment_contrast(rows, f=None, draws=4000, seed=0):
+    """AGREE minus DIVERGE, with the SE OF THE DIFFERENCE, and the DiD headline.
+
+    The contrast is the claim -- "TB tells you when to trust this team's delta"
+    is a statement about the gap between the two cells, not about either one.
+
+    The headline is the model's contrast NET OF CHALK's on the identical split.
+    A pure price confound moves both cells together -- and only where favourites
+    actually beat their price, which is why chalk's own contrast cannot be read
+    alone: in a correctly-priced world it is zero in both cells and reveals
+    nothing. The difference is the part that is about TB.
+
+    That headline is a difference-in-differences over two cells sharing no rows
+    but two controls measured on the SAME rows as the thing they control, so its
+    variance is NOT the sum of the parts' and cannot be written down from the
+    printed SEs. The first version of this function published it bare, which is
+    the one rule this repo states without exception -- print the standard error,
+    never the number alone. It is bootstrapped over games instead.
+    """
+    if len(rows) != 2:
+        return None
+    a, d = rows[0], rows[1]
+    se = math.sqrt(a["se"] ** 2 + d["se"] ** 2)
+    diff = a["excess"] - d["excess"]
+    chalk_diff = a["chalk"] - d["chalk"]
+    out = {"diff": diff, "se": se, "z": diff / se if se > 0 else float("nan"),
+           "chalk_diff": chalk_diff, "net_of_chalk": diff - chalk_diff,
+           "net_lo": float("nan"), "net_hi": float("nan")}
+    if f is None or len(f) < 8:
+        return out
+    rng = np.random.default_rng(seed)
+    idx = np.arange(len(f))
+    boots = []
+    for _ in range(draws):
+        b = _did(f.iloc[rng.choice(idx, len(idx), replace=True)])
+        if np.isfinite(b):
+            boots.append(b)
+    if len(boots) > 20:
+        out["net_lo"] = float(np.quantile(boots, 0.025))
+        out["net_hi"] = float(np.quantile(boots, 0.975))
+    return out
+
+
 def _search_verdict(p):
     """One home for the clause a searched maximum has to carry.
 
@@ -479,7 +687,7 @@ def _search_verdict(p):
         return "     verdict: not computable."
     if p >= 0.5:
         return ("     verdict: the observed best is WORSE than a search this wide\n"
-                "     typically returns from noise -- no ROI context to find here.")
+                "     typically returns from noise -- nothing here to find.")
     if p >= 0.05:
         return ("     verdict: inside what the search returns from noise. NOT a\n"
                 "     finding, and NOT evidence of absence either -- this bar is high\n"
@@ -715,7 +923,7 @@ def tier_rows(f, p50):
     return pd.DataFrame(rows)
 
 
-def report(led, tb, tags, basis, p50, out=sys.stdout):
+def report(led, tb, tags, basis, p50, out=sys.stdout, sweep=None):
     """Every arm, each naming its own row set and price basis."""
     say = lambda s="": print(s, file=out)
     # `one_to_one` rather than a post-hoc row count: pandas raises on a
@@ -880,7 +1088,105 @@ def report(led, tb, tags, basis, p50, out=sys.stdout):
         say(f"   SKIPPED: n={len(priced)} priced family rows, below {N_FIT_MIN}.")
     say()
 
-    say("6. OUT-OF-SAMPLE LOG LOSS (pooled, walk-forward; lower is better)")
+    say("6. DOES TB GIVE A TEAM'S LEAN DELTA CONTEXT? (direction, not magnitude)")
+    say("   Every arm above reads TB's MAGNITUDE. This one reads its SIGN against")
+    say("   the model's: `tb_aligned` is TB oriented to the side the lean picks,")
+    say("   so positive means the 60-day run-differential read corroborates this")
+    say("   team's delta and negative means it contradicts it.")
+    say("   Asked at the GAME level, not per club: the two sides of a game are")
+    say("   complements -- prices summing to 1, exactly one winner -- so stacking")
+    say("   them is one observation dressed as two.")
+    al = alignment_frame(fam)
+    al = al[al["agrees"].notna() & al["q_lean"].notna() & al["lean_won"].notna()]
+    if len(al) >= N_FIT_MIN:
+        overlap = _corr(al["tb_delta"], al["xw_net"])
+        lo, hi, z = _fisher_ci(overlap, len(al))
+        say(f"   corr(TB delta, xw_net) = {overlap:+.4f}  [{lo:+.3f}, {hi:+.3f}]  "
+            f"z={z:+.2f}   <- how much the two reads already overlap")
+        say(f"   they agree on {100 * (al['agrees'] == True).mean():.1f}% of "  # noqa: E712
+            f"{len(al)} rows")
+        rows = alignment_rows(al)
+        say(f"   {'':<22}{'n':>5}{'record':>10}{'raw':>8}{'implied':>9}"
+            f"{'vs price':>11}{'+/-':>7}{'chalk':>9}{'same bet':>10}")
+        for r in rows:
+            say(f"   {r['cell']:<22}{r['n']:>5}{r['record']:>10}{r['raw']:>8.3f}"
+                f"{r['implied']:>9.3f}{r['excess']:>+11.2f}{r['se']:>7.2f}"
+                f"{r['chalk']:>+9.2f}{r['same_bet']:>9.0f}%")
+        c = alignment_contrast(rows, al, seed=NULL_SEED)
+        if c:
+            say(f"   AGREE minus DIVERGE     {c['diff']:+.2f}pp +/- {c['se']:.2f}   "
+                f"z={c['z']:+.2f}")
+            say(f"   the same split for chalk {c['chalk_diff']:+.2f}pp")
+            ci = (f"  [{c['net_lo']:+.2f}, {c['net_hi']:+.2f}]"
+                  if np.isfinite(c["net_lo"]) else "  (no interval: too few rows)")
+            say(f"   net of chalk            {c['net_of_chalk']:+.2f}pp{ci}")
+            say("   DO NOT read that last line as TB's contribution -- it was")
+            say("   labelled that way for one run and the label was wrong.")
+            say("   `model - chalk` is not one statistic across the price range:")
+            say("   measured on this ledger the two are the IDENTICAL bet on 100%")
+            say("   of rows above q=.55 and OPPOSITE bets on 100% below q=.50, so")
+            say("   the difference is ~0 by construction in one region and ~2x the")
+            say("   model's own excess in the other. The `same bet` column above")
+            say("   shows each cell's mix. A split that sorts on price -- which")
+            say("   this one does -- therefore moves it from composition alone.")
+            say("   The statistic that DOES condition on price is the logit below.")
+
+        say()
+        say("   THE CONTINUOUS FORM, which is what the sign split is a coarse")
+        say("   version of -- and better powered, since it uses how much TB agrees")
+        say("   rather than only whether it does:")
+        zal, zd = _z(al["tb_aligned"]), _z(al["xw_net"].abs())
+        arms = [("price + z(TB aligned)", [logit(al["q_lean"].values), zal],
+                 ["market logit", "z(TB aligned)"]),
+                ("price + |xw_net| + z(TB aligned)",
+                 [logit(al["q_lean"].values), zd, zal],
+                 ["market logit", "z(|xw_net|)", "z(TB aligned)"]),
+                ("... plus the interaction",
+                 [logit(al["q_lean"].values), zd, zal, zd * zal],
+                 ["market logit", "z(|xw_net|)", "z(TB aligned)", "interaction"])]
+        for label, cols, names in arms:
+            say(f"   {label}  (n={len(al)})")
+            for nm, b, se, zz in fit_arm(al["lean_won"], cols, names):
+                say(f"     {nm:<16}{b:+8.3f} +/- {se:.3f}   z={zz:+.2f}")
+        say("   The interaction is the sharpest form of the question: it asks")
+        say("   whether TB's corroboration matters MORE when the delta is large.")
+    else:
+        say(f"   SKIPPED: n={len(al)} rows carry both a signed TB and a price.")
+    say()
+
+    if sweep is not None:
+        say("7. DOES A DIFFERENT LOOKBACK SEPARATE WHERE 60 DAYS DOES NOT?")
+        say("   A search over the feature's own specification, scored as one.")
+        say("   Continuous arms only: the frozen p50 belongs to the 60-day feature")
+        say("   and no other window has one, so a tier elsewhere would need a")
+        say("   threshold fitted on these rows.")
+        say("   Attenuation is why LESS is expected: a shorter window is a noisier")
+        say("   estimate of the same quantity, so its coefficient is pulled toward")
+        say("   zero unless recency itself carries signal. A SHORT window reading")
+        say("   stronger than 60d is the only outcome here that means anything.")
+        say(f"   {'window':>8}{'n':>6}{'z(TB aligned)':>16}{'+/-':>8}{'z':>8}")
+        for r in sweep["rows"]:
+            if not np.isfinite(r["z"]):
+                say(f"   {r['w']:>7}d{r['n']:>6}       (too few rows)")
+                continue
+            say(f"   {r['w']:>7}d{r['n']:>6}{r['b']:>+16.3f}{r['se']:>8.3f}{r['z']:>+8.2f}")
+        if sweep["corr"] is not None:
+            say("   observed correlation of the residualised predictors --")
+            say("   how much the windows are one predictor rather than several:")
+            c = sweep["corr"]
+            say("        " + "".join(f"{int(w):>8d}d" for w in c.columns))
+            for w in c.index:
+                say(f"   {int(w):>4d}d " + "".join(f"{c.loc[w, x]:>9.3f}" for x in c.columns))
+        if np.isfinite(sweep["p"]):
+            say(f"   null max |z| from that correlation   {sweep['null_max']:+.2f}")
+            say(f"   P(null max >= observed max |z|)      {sweep['p']:.4f}")
+            say(_search_verdict(sweep["p"]))
+            say("   The bar is DRAWN from the observed correlation, not assumed:")
+            say("   sqrt(2 ln 4) = 1.67 would be the independent-case bar and these")
+            say("   windows are nested, so the true bar sits below it.")
+        say()
+
+    say("8. OUT-OF-SAMPLE LOG LOSS (pooled, walk-forward; lower is better)")
     say("   Fitted on strictly prior slates, scored on the next. This is the arm")
     say("   a coefficient cannot fake: if 'price + TB' ranks BELOW 'market-fitted',")
     say("   TB is subtracting information from the price.")
@@ -922,6 +1228,9 @@ def main(argv=None):
     ap.add_argument("--p50", type=float, default=TB_P50_FROZEN)
     ap.add_argument("--tb-out", default=None, help="write the computed TB frame here")
     ap.add_argument("--out", default=None, help="write the report here as well as stdout")
+    ap.add_argument("--windows", default=None,
+                    help="also sweep these lookbacks, e.g. 10,20,30,60. Needs the "
+                         "fetch path: one --tb-csv carries one window only.")
     a = ap.parse_args(argv)
 
     led = load_ledger(a.ledger)
@@ -931,8 +1240,12 @@ def main(argv=None):
         from build_site import RECORD_TAGS
         tags = tuple(RECORD_TAGS)
 
+    sweep = None
     if a.tb_csv:
         tb = load_tb_csv(a.tb_csv)
+        if a.windows:
+            print("[tb] --windows needs the fetch path; one CSV carries one window.",
+                  file=sys.stderr)
     else:
         seasons = ([int(s) for s in a.seasons.split(",")] if a.seasons
                    else sorted({d.year for d in led["game_date"].dropna()}))
@@ -940,11 +1253,14 @@ def main(argv=None):
         tb = tb_features(games, only_game_pks=set(led["game_pk"].dropna().astype(int)))
         if a.tb_out:
             tb.to_csv(a.tb_out, index=False)
+        if a.windows:
+            ws = [int(w) for w in a.windows.split(",") if w.strip()]
+            sweep = window_sweep(led, games, tags, a.basis, ws)
 
-    report(led, tb, tags, a.basis, a.p50)
+    report(led, tb, tags, a.basis, a.p50, sweep=sweep)
     if a.out:
         with open(a.out, "w", encoding="utf-8") as fh:
-            report(led, tb, tags, a.basis, a.p50, out=fh)
+            report(led, tb, tags, a.basis, a.p50, out=fh, sweep=sweep)
     return 0
 
 
