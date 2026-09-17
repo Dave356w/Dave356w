@@ -204,6 +204,38 @@ class AlignmentTests(unittest.TestCase):
             zs.append(P.alignment_contrast(P.alignment_rows(P.alignment_frame(f)))["z"])
         self.assertLessEqual(sum(abs(z) > 2 for z in zs), 1, f"z values {zs}")
 
+    def test_the_cells_report_how_degenerate_their_chalk_control_is(self):
+        """`model - chalk` is price-structured, so each cell must show its mix.
+
+        Above q=.55 the model's lean IS the favourite, so model and chalk are
+        the same bet and their difference is zero by construction; below q=.50
+        they are opposite bets and the difference is twice the model's excess.
+        Without the `same_bet` share a reader cannot see that a price-sorted
+        split moves the net-of-chalk figure with no model behaviour involved.
+        """
+        rng = np.random.default_rng(31)
+        n = 400
+        q = np.where(rng.random(n) < 0.5, 0.60, 0.47)      # two clean regions
+        lean_home = rng.random(n) < 0.5
+        won = (rng.random(n) < q).astype(float)
+        p_home = np.where(lean_home, q, 1 - q)
+        home_won = np.where(lean_home, won, 1 - won)
+        f = pd.DataFrame({
+            "tb_delta": rng.normal(0, 0.2, n), "xw_net": np.where(lean_home, 1, -1) * 0.01,
+            "q_lean": q, "lean_won": won,
+            "chalk_won": np.where(p_home >= 0.5, home_won, 1 - home_won),
+            "chalk_p": np.maximum(p_home, 1 - p_home)})
+        rows = P.alignment_rows(P.alignment_frame(f))
+        for r in rows:
+            self.assertIn("same_bet", r)
+            self.assertGreaterEqual(r["same_bet"], 0.0)
+            self.assertLessEqual(r["same_bet"], 100.0)
+        # On the q=.60 rows the model's lean is the favourite, so a cell made
+        # only of those must read 100%.
+        hi = f[f["q_lean"] > 0.55].assign(agrees=True)
+        only_hi = P.alignment_rows(hi)
+        self.assertAlmostEqual(only_hi[0]["same_bet"], 100.0, places=6)
+
     def test_the_headline_carries_an_interval(self):
         """A difference-in-differences published bare is the one thing this
         repo forbids without exception. Its variance is not the sum of the

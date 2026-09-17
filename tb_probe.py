@@ -528,7 +528,17 @@ def alignment_rows(f):
                      "raw": rate, "implied": imp,
                      "excess": 100 * (rate - imp),
                      "se": 100 * excess_se(d["q_lean"]),
-                     "chalk": 100 * (ch - chp)})
+                     "chalk": 100 * (ch - chp),
+                     # Share of the cell where the model and chalk back the SAME
+                     # side. Printed because `model - chalk` is NOT one statistic
+                     # across the price range: measured on the committed ledger,
+                     # the two are the identical bet on 100% of rows above
+                     # q = .55 and opposite bets on 100% below q = .50. So the
+                     # difference is ~0 by construction in one region and ~2x the
+                     # model's own excess in the other, and a cell's value for it
+                     # is set by its price composition before TB says anything.
+                     "same_bet": 100 * float(
+                         (d["lean_won"].to_numpy() == d["chalk_won"].to_numpy()).mean())})
     return rows
 
 
@@ -1018,10 +1028,11 @@ def report(led, tb, tags, basis, p50, out=sys.stdout):
             f"{len(al)} rows")
         rows = alignment_rows(al)
         say(f"   {'':<22}{'n':>5}{'record':>10}{'raw':>8}{'implied':>9}"
-            f"{'vs price':>11}{'+/-':>7}{'chalk':>9}")
+            f"{'vs price':>11}{'+/-':>7}{'chalk':>9}{'same bet':>10}")
         for r in rows:
             say(f"   {r['cell']:<22}{r['n']:>5}{r['record']:>10}{r['raw']:>8.3f}"
-                f"{r['implied']:>9.3f}{r['excess']:>+11.2f}{r['se']:>7.2f}{r['chalk']:>+9.2f}")
+                f"{r['implied']:>9.3f}{r['excess']:>+11.2f}{r['se']:>7.2f}"
+                f"{r['chalk']:>+9.2f}{r['same_bet']:>9.0f}%")
         c = alignment_contrast(rows, al, seed=NULL_SEED)
         if c:
             say(f"   AGREE minus DIVERGE     {c['diff']:+.2f}pp +/- {c['se']:.2f}   "
@@ -1029,10 +1040,17 @@ def report(led, tb, tags, basis, p50, out=sys.stdout):
             say(f"   the same split for chalk {c['chalk_diff']:+.2f}pp")
             ci = (f"  [{c['net_lo']:+.2f}, {c['net_hi']:+.2f}]"
                   if np.isfinite(c["net_lo"]) else "  (no interval: too few rows)")
-            say(f"   TB's own contribution   {c['net_of_chalk']:+.2f}pp{ci}  <- the headline")
-            say("   A pure price confound moves both cells together, so the")
-            say("   difference is the part that is about TB rather than about")
-            say("   which side happened to be favoured.")
+            say(f"   net of chalk            {c['net_of_chalk']:+.2f}pp{ci}")
+            say("   DO NOT read that last line as TB's contribution -- it was")
+            say("   labelled that way for one run and the label was wrong.")
+            say("   `model - chalk` is not one statistic across the price range:")
+            say("   measured on this ledger the two are the IDENTICAL bet on 100%")
+            say("   of rows above q=.55 and OPPOSITE bets on 100% below q=.50, so")
+            say("   the difference is ~0 by construction in one region and ~2x the")
+            say("   model's own excess in the other. The `same bet` column above")
+            say("   shows each cell's mix. A split that sorts on price -- which")
+            say("   this one does -- therefore moves it from composition alone.")
+            say("   The statistic that DOES condition on price is the logit below.")
 
         say()
         say("   THE CONTINUOUS FORM, which is what the sign split is a coarse")
