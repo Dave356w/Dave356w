@@ -1,0 +1,36 @@
+name: Win probability validation
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'win_probability.py'
+      - 'tests/test_win_probability.py'
+      - '.github/workflows/win-probability.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt pytest
+      - name: Test probability and chronology invariants
+        run: python -m pytest tests/test_win_probability.py -q
+      - name: Evaluate frozen ledger
+        run: python win_probability.py
+      - name: Verify tracked inputs are unchanged
+        run: git diff --exit-code
+      - uses: actions/upload-artifact@v4
+        with:
+          name: win-probability-validation
+          path: win_probability_output/
+          if-no-files-found: error

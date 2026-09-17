@@ -18,6 +18,7 @@ abstention, and calibrated expected starter IP.
 | [`MATCHUP_SITE.md`](MATCHUP_SITE.md) | The model. Start at §"The current model" for what the code does today; everything after it is a version changelog. |
 | [`CLAUDE.md`](CLAUDE.md) | Working standards, the `RECORD_TAGS`/`SCALE_TAGS` family table, and the anti-pattern catalogue. |
 | [`REGISTRATIONS.md`](REGISTRATIONS.md) | The seven pre-registered forward tests: what each rule does, what number decides it, and why that number rather than the obvious one. Logic only — live readings are in `data/ledger_report.txt`. |
+| [`docs/win_probability.md`](docs/win_probability.md) | Regularized home-win probability mapping, chronological evaluation, and comparison with the saved pregame market. |
 | [`docs/build_logic_validation.md`](docs/build_logic_validation.md) | Historical xwOBA review; its structural checks still describe the inherited v10 construction. |
 | [`docs/f5_market_validation.md`](docs/f5_market_validation.md) | First-5-innings market capture and its data-quality audit. |
 | [`docs/pitch_mix_theory.md`](docs/pitch_mix_theory.md) | Design notes for the pitch-type-conditioned matchup (shadow-only, not shipped). |
@@ -27,6 +28,7 @@ pip install -r requirements.txt
 python build_site.py          # writes public/index.html for today's ET slate
 
 python shadow_report.py       # paired wOBA-vs-xwOBA read on the shadow dumps
+python win_probability.py     # probability audit; writes win_probability_output/
 
 pip install pytest            # deliberately not in requirements.txt
 python validate_data_files.py # run both before opening a PR

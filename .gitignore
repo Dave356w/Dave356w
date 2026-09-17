@@ -1,6 +1,9 @@
 # build output (regenerated each run / deployed to Pages)
 public/
 
+# Reproducible probability evaluation, uploaded by its dedicated workflow.
+win_probability_output/
+
 # Savant CSV leaderboard cache (restored from actions/cache in CI)
 .savant_cache/
 savant_cache_*.csv
