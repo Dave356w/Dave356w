@@ -211,6 +211,23 @@ by slate (most recent 14 of 57; monitoring, not trend)
   2026-09-05  xwOBA       15g  rate n= 30 pred 0.3106 act 0.3145 (+0.0039) MAE 0.0600  SP IP n= 30 bias +0.07 MAE 0.80
   2026-09-04  xwOBA       16g  rate n= 32 pred 0.3116 act 0.3110 (-0.0007) MAE 0.0644  SP IP n= 32 bias -0.15 MAE 0.97
   2026-09-03  xwOBA        9g  rate n= 18 pred 0.3037 act 0.2974 (-0.0063) MAE 0.0632  SP IP n= 18 bias -0.03 MAE 0.72
+market calibration on equal-count price bands (8 of 8 populated; whole ledger, every graded family)
+  970 games / 1940 team-side closing prices. Bands are nearest-rank, recomputed from THESE rows every build.
+  Edges move as the book does, so a band label is NOT comparable across builds or with the fixed ladder above;
+    the ladder is the stable axis, this is the balanced one. Read a row against its own SE, never against another build's.
+              band     n pair    act    imp     gap     se      z
+        -373..-165   245    0   65.3   64.5    +0.8    3.0  +0.26
+        -164..-138   241    0   61.0   58.1    +2.9    3.2  +0.92
+        -137..-122   242    0   52.1   54.4    -2.3    3.2  -0.73
+        -121..-108   242   31   49.6   51.4    -1.8    3.2  -0.56
+        -107..+104   243   31   51.0   48.6    +2.4    3.2  +0.76
+        +105..+120   251    0   47.4   45.5    +1.9    3.1  +0.60
+        +121..+144   242    0   38.8   41.8    -2.9    3.2  -0.92
+        +145..+303   234    0   34.2   35.3    -1.1    3.1  -0.34
+  best-band reference: the best of 8 bands averages +4.5 pp under 'every game settles at its own price'; observed best +2.9 pp.
+    Max |z| across the bands is 0.92 against the 2.04 a search this wide typically returns from noise.
+  pooling licence: current family against the rest, within bands, max |z| 2.09 over 8 comparable bands,
+    against 2.04 expected from noise -- ABOVE it, in band '-107..+104'. One band at the noise maximum is not a finding, but the licence is not clean either -- read the pooled rows knowing that.
 model-family history (never pooled into the current-family fit):
   v2/v3   n=189  xwOBA full 110-79  (0.582)  F5 89-75-25  (0.543)
   v4      n= 14  xwOBA full 8-6  (0.571)  F5 6-7-1  (0.462)
