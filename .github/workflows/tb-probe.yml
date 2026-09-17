@@ -1,0 +1,91 @@
+name: TB context probe
+
+# Manual only. Asks whether 60-day team total-bases context carries anything
+# the closing price does not, by conditional logit rather than by a median
+# split -- the split form has 80% power only against a 13.4pp gap and reads
+# z = +0.99 at the current sample, so it cannot answer its own question.
+#
+# The runner is the point: StatsAPI is denied by the network policy of some dev
+# environments (it answers 403 to CONNECT), so the box scores this needs can
+# only be pulled here. A session that has already computed the TB walk-forward
+# elsewhere can skip the fetch entirely with `tb_csv`.
+#
+# Touches nothing: no build, no lean, no ledger, no commit, no Pages deploy. It
+# reads the committed ledger, pulls box scores, prints a report and uploads it.
+# `contents: read` makes that structural.
+#
+# Deliberately outside the `site-build` concurrency group -- it never writes to
+# data/, so it has no reason to queue behind a build.
+on:
+  # Runs itself on any PR that changes the probe, so a probe nobody has
+  # executed cannot merge. Path-filtered, so unrelated PRs are unaffected.
+  pull_request:
+    paths:
+      - 'tb_probe.py'
+      - 'tests/test_tb_probe.py'
+      - '.github/workflows/tb-probe.yml'
+  workflow_dispatch:
+    inputs:
+      seasons:
+        description: 'Seasons to fetch box scores for (comma-separated)'
+        required: false
+        default: '2026'
+      basis:
+        description: 'Price basis: closing (most rows) or pregame (obtainable)'
+        required: false
+        default: 'closing'
+      tb_csv:
+        description: 'Path to a pre-computed TB frame; skips every network call'
+        required: false
+        default: ''
+      tags:
+        description: 'Model tags for the family arms (default: RECORD_TAGS)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30        # one boxscore call per game of each season fetched
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest
+
+      # The arms are checked against slates with a planted TB coefficient before
+      # the probe is allowed to report on real ones. A logit that returns a
+      # confident number for a variable carrying nothing prints a report
+      # indistinguishable from a correct one, so this gate runs first and the
+      # fit never runs without it.
+      - name: Verify the arms recover a planted effect and report null on noise
+        run: python -m pytest tests/test_tb_probe.py -q
+
+      - name: Run probe
+        run: |
+          python tb_probe.py \
+            ${{ inputs.tb_csv && format('--tb-csv {0}', inputs.tb_csv) || format('--seasons {0}', inputs.seasons || '2026') }} \
+            ${{ inputs.basis && format('--basis {0}', inputs.basis) || '' }} \
+            ${{ inputs.tags && format('--tags {0}', inputs.tags) || '' }} \
+            --tb-out tb_features.csv \
+            --out tb_probe_report.txt
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tb-probe
+          path: |
+            tb_probe_report.txt
+            tb_features.csv
+          if-no-files-found: warn

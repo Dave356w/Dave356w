@@ -2728,13 +2728,16 @@ the count is the one thing here a reader cannot check without counting:
 | `compare_v8_v9.py` | what the v9 sequential form changed against v8 |
 | `shadow_report.py` | what the paired metric arm can and cannot settle |
 | `phase_benchmark_probe.py` | should each phase's ratio have its own peer benchmark? Closes the hitter half and the uniform-centre case by arithmetic, then decides the rest on the realised SP-minus-BP gap rather than on a correlation |
+| `tb_probe.py` | does 60-day team total-bases context add anything to the closing price, and anything on top of `\|xw_net\|`? Conditional logit, because the proposed median split has 80% power only against a 13.4pp gap. Needs StatsAPI for the feature, or a pre-computed frame via `--tb-csv` |
 
-Seven need a live API and therefore a GitHub runner — `espn_403_probe`,
+Eight need a live API and therefore a GitHub runner — `espn_403_probe`,
 `matchup_form_probe`, `phase_actuals_probe`, `pitch_arsenal_probe`,
-`player_prior_probe`, `pythag_control_probe`, `reliever_shrink_probe`. Each has
-a workflow under `.github/workflows/` and each says so in its own header. Savant
-and StatsAPI are unreachable from the dev environment, so a probe that needs
-them cannot be smoke-tested locally; run the workflow.
+`player_prior_probe`, `pythag_control_probe`, `reliever_shrink_probe`,
+`tb_probe`. Each has a workflow under `.github/workflows/` and each says so in
+its own header. Savant and StatsAPI are unreachable from the dev environment —
+the proxy answers 403 to CONNECT on `statsapi.mlb.com`, which is what the
+`--tb-csv` path exists for — so a probe that needs them cannot be smoke-tested
+locally; run the workflow.
 
 ### Measured and rejected
 
