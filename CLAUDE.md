@@ -91,8 +91,12 @@ between the same two phases, so the units are untouched.
 **v11 reverts the metric to xwOBA and `K` to 100 and the shrinkage target to the
 population centre, and this table's job is to stop that being read as a
 finding.** No measurement said xwOBA beat wOBA: the paired shadow arm exists
-because the era comparison cannot answer it, and at six slates it reports
-d_corr +0.008 with CI [-0.108, +0.128]. No measurement said K=100 beat K=400 —
+because the era comparison cannot answer it, and at six slates it reported
+d_corr +0.008 with CI [-0.108, +0.128]. (At 40 slates it reports d_corr +0.0001
+with CI [-0.047, +0.047] on correlation and p = 0.029 for xwOBA on the sign
+criterion — see the shadow-arm section, and note that a measurement arriving
+five weeks later does not turn a prior decision into an evidence-based one.)
+No measurement said K=100 beat K=400 —
 `reliever_shrink_probe` fits K three ways on n=53,464 and every interval
 excludes 100. No measurement said the population centre beat personal priors —
 the out-of-sample probe says the opposite, the forward lineup-component read
@@ -2589,13 +2593,34 @@ Real, and not evidence: the eras were *different games* — always-home ran .515
 over the xwOBA rows and .604 over the wOBA ones — and five things changed in
 six days, of which only wOBA v1+v2 isolates the metric, at n=16.
 
-**What the arm has actually measured, which is the number to quote:** 6 paired
-slates, 68 graded with both arms decided, metrics correlating +0.91 on net, 9
-of 77 leans flipped, **d_corr +0.008 with CI [-0.108, +0.128]**. It does not
-separate. Sequentially over those same 68 games the records read wOBA 29-39
-against xwOBA 34-34 — a five-game gap on identical schedules, which is the
-illusion pairing exists to remove. Pairing buys ~2x on se; the projection is
-se ~0.045 at ~9 more slates and 80% power on a 0.09 gap at ~18.
+**The arm has passed its own power gate, and the figures this file used to
+quote are five weeks stale.** It read "6 paired slates, 68 graded, d_corr
++0.008 with CI [-0.108, +0.128]" and projected 80% power on a 0.09 gap at ~18
+slates. As of 2026-09-17 it holds **40 paired slates and 517 graded games with
+both arms decided**, metrics correlating **+0.84** on net (not +0.91 — that was
+68 games), **93 of 517 leans flipped (18.0%)**, and **d_corr +0.0001 with CI
+[-0.047, +0.047]**. Recompute rather than quoting any of that; the point is the
+reading, which has changed category. The projection was met: the interval is
+now half-width 0.047, so **a 0.09 metric gap is excluded in both directions**.
+"It does not separate" is no longer a statement about an underpowered sample —
+on this criterion the two metrics are measurably close.
+
+**On the OTHER criterion they are not, and that is the part to carry forward.**
+Over those same 517 games the records read wOBA 286-231 (.553) against xwOBA
+307-210 (.594) — a 21-game gap on identical schedules, which this file has
+always read as the illusion pairing exists to remove. Paired properly it is not
+purely that. The arms disagree on 93 games and xwOBA takes **57 of them to
+wOBA's 36**, McNemar **z = +2.18, p = 0.029**. So `d_corr` reads +0.0001 while
+the sign criterion reads p = 0.029 on the same rows, and both are correct: a
+correlation is magnitude-weighted, while a lean is a SIGN and the record and
+every registered rule key off nothing else. **`shadow_report` reports only
+`d_corr`, so the arm has been under-reading its own sample** —
+`blend_probe.sign_contrast` is where the paired sign test lives until that is
+fixed. Two caveats and they are load-bearing: the sign criterion was reached by
+noticing the record gap rather than registered in advance, so its p carries a
+second look and lands near 0.06 corrected; and none of this retroactively makes
+v11 a finding — it was an operator decision taken with no such measurement on
+the table, and a result arriving afterwards does not convert it into one.
 
 So v11 reverted the metric **without** the arm having answered the question,
 and the arm keeps running so the question keeps accumulating a paired answer
@@ -2702,7 +2727,10 @@ registered pregame scorer excludes and counts malformed locked commitments;
 close-scored sections exclude missing `close_p_home` and their rule-specific
 inputs, while relying on the market join to supply the paired moneylines.
 
-**Probes run on demand.** Seventeen read committed artifacts and need no live API.
+**Probes run on demand.** Eighteen read committed artifacts and need no live
+API. The table below has NINETEEN rows and that is not a miscount: `tb_probe`
+appears in both lists, because it needs StatsAPI for its feature but runs off a
+pre-computed frame via `--tb-csv`. Say which set a count is over.
 All run anywhere with one qualification, stated in its own row:
 `hitter_level_probe` executes but cannot produce a reading without the
 collector's per-PA CSV. Recount this list when you add a probe: the lead
@@ -2727,6 +2755,7 @@ the count is the one thing here a reader cannot check without counting:
 | `bp_ablation.py` | does removing the bullpen term change any decision? |
 | `compare_v8_v9.py` | what the v9 sequential form changed against v8 |
 | `shadow_report.py` | what the paired metric arm can and cannot settle |
+| `blend_probe.py` | does a 50/50 wOBA+xwOBA blend beat either alone? Reconstructs a blended build exactly from the paired dumps (self-checked bitwise against each arm's published edge), and reports the sign criterion `shadow_report` omits |
 | `phase_benchmark_probe.py` | should each phase's ratio have its own peer benchmark? Closes the hitter half and the uniform-centre case by arithmetic, then decides the rest on the realised SP-minus-BP gap rather than on a correlation |
 | `tb_probe.py` | does 60-day team total-bases context add anything to the closing price, and anything on top of `\|xw_net\|`? Conditional logit, because the proposed median split has 80% power only against a 13.4pp gap. Needs StatsAPI for the feature, or a pre-computed frame via `--tb-csv` |
 
@@ -2740,6 +2769,77 @@ the proxy answers 403 to CONNECT on `statsapi.mlb.com`, which is what the
 locally; run the workflow.
 
 ### Measured and rejected
+
+- **The 50/50 wOBA+xwOBA blend, and the identity that makes it unshippable.**
+  Proposed as a balance between surface results and contact quality: average
+  the two rates, and the lean reads neither pure luck nor pure expectation.
+  Measured 2026-09-17 by `blend_probe.py` over the 40 paired shadow slates
+  (517 graded games, all three arms decided). Not shipped, `MODEL_TAG`
+  unchanged, and the reason is arithmetic rather than a thin sample.
+
+  **The reconstruction is exact, which is what makes this cheap.** A blended
+  build is a deterministic function of the two committed dumps: shrinkage is
+  affine in the raw rate at the same `n` and `K`, lineup aggregation is a
+  weighted mean, and `sp_share` is a workload share that reads no rate (bitwise
+  equal across arms on every paired side-row). So blend-then-shrink and
+  shrink-then-blend agree identically, and only `matchup_value` — a ratio,
+  therefore bilinear — has to be recomputed from blended components rather than
+  averaged. The probe rebuilds each shipped arm's own published `edge_xwOBA`
+  from its own persisted components first and **refuses to report unless that
+  is exact**; it is, on all 2,226 side-rows. No Savant call, no rebuilt slate,
+  no lookahead.
+
+  **The whole measured gain is the noise-averaging identity.** For two
+  standardised predictors the equal-weight average correlates
+  `(r_w + r_x)/sqrt(2 + 2*rho)` with the outcome. The arms score +0.1541 and
+  +0.1542 and correlate +0.8396 on net, so the formula returns **+0.1607**; the
+  reconstructed blend scores **+0.1606**, a difference of 0.00009. That gain
+  would be there for ANY two predictors this correlated and this equally good
+  — it is a statement about `rho`, not about wOBA or xwOBA — and it is bounded
+  above by `1/sqrt((1+rho)/2)`, i.e. **+0.0066 on a correlation of 0.154**.
+
+  **So the effect is half its own measurement error, by construction.** Paired
+  bootstrap se is 0.0124 at n=517, so the CEILING is 0.53 se. This is not a
+  wait-and-see: separating the maximum possible effect from zero at 2 se needs
+  **~7,400 games, about 570 slates**. An instrument whose best case cannot
+  clear its own noise for three seasons is answering the question now.
+
+  **And on the criterion the site actually publishes it is behind.** `d_corr`
+  is magnitude-weighted; a lean is a SIGN, and the record and all five
+  registrations key off nothing else. McNemar over the games the arms call
+  differently: the blend goes **20/25 against the shipped xwOBA arm
+  (z = −0.75)** while going 32/16 against wOBA (z = +2.31). Its record is
+  302-215 where the shipped arm is 307-210. **The only criterion on which the
+  blend leads is the one the site does not use, and on that criterion the lead
+  is exactly the arithmetic above.**
+
+  **The distribution argument behind the proposal inverts once the baseline is
+  right.** The pitcher-level table offered with it reads sd .0292 (wOBA) →
+  .0269 (blend) as "compression of spread, softening luck-driven spikes" — true
+  against wOBA, and wOBA is not what ships. Against xwOBA's own .0267 the blend
+  is marginally WIDER, and its own numbers imply `rho ≈ 0.85`, which is the
+  same place the gain comes from. At the level that matters the sign is the
+  same: median `|net|` runs .01755 shipped → **.01833** blended, +4.4%, which
+  is a `_SCALE_FAMILIES` question and not a reduction in anything.
+
+  **The cost is the part no correlation could have paid for.** A rate change
+  bumps `MODEL_TAG`, and at the time of measuring that resets a **448-row
+  graded current-family line over 34 slates**, plus — via a new
+  `_SCALE_FAMILIES` entry, which the +4.4% median move argues for — **every
+  delta-gated registration's forward window**: `hybrid_v2` 74 rows,
+  `delta_filter_test` 179, `abstain_test` 179, `dog_contrast_test` 36,
+  `forward_test` 243. It also re-stales `LEAN_STRENGTH_FALLBACK`, re-derived
+  only two days earlier at n=519. Paying that for 45 flipped leans of 517
+  (8.7%) on a correlation gain that is provably an identity is the trade this
+  entry exists to refuse.
+
+  **One thing genuinely cuts the other way and is recorded because it does.**
+  The weight sweep's best RECORD is not at 0.5 but at λ=0.1 (310-207, .600
+  against the shipped 307-210), while the best CORRELATION is at 0.5. Two
+  criteria disagreeing about where the optimum sits, across a curve that moves
+  by three games, is what noise looks like — and picking either would be the
+  fitted-literal defect. `BLEND_LAMBDA` is fixed at the proposal's own 0.5 and
+  the sweep is printed as context registering nothing.
 
 - **Phase-matched peer benchmarks, and the correlation that preferred
   deleting a real effect.** Proposed as a well-specification fix: give every
@@ -3081,6 +3181,25 @@ locally; run the workflow.
   shipped gap is rejected". Ask of every statistic whether the family is
   part of its definition, and print the pooling licence rather than
   assuming it.
+- **Ask what a change's effect is BOUNDED by before measuring whether it
+  helps.** An equal-weight average of two predictors correlating `rho` scores
+  `(r_1 + r_2)/sqrt(2+2*rho)` — an identity, so the blend's whole headroom over
+  the better arm is `1/sqrt((1+rho)/2)`. At `rho = 0.84` that is +0.0066 on a
+  correlation of 0.154, half the paired se at n=517 and three seasons from
+  resolvable. The ceiling was computable before any scoring and it, not the
+  sample, is what decides the question. Same shape as the phase-benchmark
+  closure: derive first, score only what is left.
+- **A gain that any two equally-good correlated predictors would show is not a
+  finding about these two.** The blend's +0.0064 matched its closed form to
+  0.00009. Before reading an improvement, ask what the number would have been
+  under no effect at all — the analogue of the null-maximum test for a search,
+  applied to a construction.
+- **`d_corr` is not the criterion this site publishes, and the two can
+  disagree sharply on one sample.** Over 517 paired games the metrics read
+  d_corr +0.0001 while the sign criterion read p = 0.029, because a
+  correlation is magnitude-weighted and a lean is a sign. Score a proposed
+  change on the criterion the artifact keys off — record, selection, units —
+  and report the other beside it rather than instead of it.
 - **A correlation cannot tell "removes a bias" from "removes a real effect".**
   When a proposed change makes a directly observable prediction, measure that
   first and let it decide. Phase matching scored d_corr +0.0105 (z +1.62) and
@@ -3536,7 +3655,14 @@ Do not re-derive these by hand; they have readouts.
   produces one.
 
 - **The metric question** — the shadow arm, running wOBA under an xwOBA
-  primary. Needs roughly 18 paired slates for 80% power on a 0.09 gap.
+  primary. **The 18-slate power target has been met and passed: 40 paired
+  slates, 517 graded games.** On correlation the arms are indistinguishable and
+  a 0.09 gap is now excluded (d_corr +0.0001, CI [-0.047, +0.047]); on the sign
+  criterion xwOBA leads at p = 0.029, un-registered and therefore worth roughly
+  p = 0.06 corrected. What is still waiting is not power but a REGISTRATION:
+  the sign test was reached by looking, so the honest next step is to freeze it
+  and score forward, not to accumulate more of the sample it was found on. Read
+  both criteria off `shadow_report.py` and `blend_probe.py`, never from here.
 - **`LEAN_STRENGTH_FALLBACK`** — recompute from whatever `SCALE_TAGS` resolves
   to rather than quoting any number in this file. Re-derived 2026-09-15 to
   0.0120 / 0.0345 against an n=519 pool whose bootstrap CIs excluded the old

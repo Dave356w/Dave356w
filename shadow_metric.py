@@ -7,19 +7,24 @@ xwOBA, so the arm swapped sides and now runs wOBA. Its purpose is unchanged and
 so is its argument: the metric question cannot be settled by comparing the two
 ERAS, only by running both metrics over the SAME games.
 
-That is not a stale caution -- it is what the arm measured. Over its first six
-paired slates (68 graded, both arms decided) the two metrics correlate +0.91 on
-net, flip 9 of 77 leans, and separate by d_corr +0.008 with a 95% CI of
-[-0.108, +0.128]. The sequential records over the same period looked far more
-decisive than that (wOBA 29-39 against xwOBA 34-34 on identical games), which is
-exactly the illusion pairing exists to remove. The revert to xwOBA was an
-operator decision taken with that CI on the table, not a finding that xwOBA won.
+That is not a stale caution -- it is what the arm measured. Its first six
+paired slates gave d_corr +0.008 with a 95% CI of [-0.108, +0.128], and the
+revert to xwOBA was an operator decision taken with that CI on the table, not a
+finding that xwOBA won.
 
-So the arm keeps running, pointed the other way, and the question keeps
-accumulating a paired answer. If wOBA is genuinely better, this is the surface
-that will say so -- se ~0.045 at ~9 more slates, 80% power on a 0.09 gap at ~18.
-If it is not, that is worth knowing too, and neither answer comes from the
-win-loss line on the front page.
+The arm has since passed its own power target. Do not quote a figure from this
+docstring -- run `shadow_report.py` -- but the READING has changed category and
+that is worth stating here: at 40 paired slates and 517 graded games the
+interval is roughly half-width 0.047, so a 0.09 metric gap is now excluded in
+both directions rather than merely unresolved.
+
+One thing the arm reports and one thing it does not. It scores `d_corr`, which
+is magnitude-weighted. A lean is a SIGN, and the record plus every registered
+rule key off nothing else -- and on that criterion the same games do NOT read
+null (McNemar favours xwOBA at roughly p = 0.03, un-registered, so worth about
+p = 0.06 once the second look is counted). `blend_probe.sign_contrast` carries
+that test until this arm's own report grows one. Neither number is a reason to
+retire the arm, and neither converts v11 into an evidence-based decision.
 
 WHAT THE ARM ALREADY PAID FOR
 -----------------------------
