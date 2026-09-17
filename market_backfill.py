@@ -421,6 +421,53 @@ def excess_se(probs):
     return float(np.sqrt(float((p * (1.0 - p)).sum())) / p.size)
 
 
+def is_pickem(p_home):
+    """True where the devigged home price is exactly .500. Vectorised.
+
+    A pick'em has NO favourite, so every always-chalk record and every
+    favourite comparison in this repo rests on a tie-break convention for
+    these rows, and a convention that differs between two surfaces makes them
+    publish different numbers off the same games. 12 of the graded ledger's
+    rows are here as of 2026-09-17; the count is small and the failure it
+    caused was not.
+    """
+    return np.asarray(p_home, dtype=float) == 0.5
+
+
+def chalk_is_home(p_home):
+    """Does the always-chalk control back the HOME side? Vectorised.
+
+    ONE home for the convention, for the reason `excess_se` and `ladder_rung`
+    are here: grade_leans cannot import build_site, so a rule both need has to
+    live in this module or be spelled twice -- and spelled twice it drifted.
+    Before 2026-09-17 there were three spellings of "which side is chalk":
+
+      * `p_home > .5`, dropping pick'ems, on the favourite tile of
+        `market-calibration.html`. Correct there and deliberately left alone:
+        that tile is a one-observation-per-game POOL, so a game with no
+        favourite can simply leave it and nothing is unpaired;
+      * `p_home >= .5`, tie to home, in the band block, hybrid_test and the
+        delta filter;
+      * `market_p >= .50` on the LEANED side's price, in build_site's
+        always-chalk control -- which made the control back the model's own
+        pick on a pick'em, i.e. defined the control in terms of the thing it
+        controls. The two live spellings published 257-179 in
+        `ledger_report.txt` and 256-180 on `grades.html` over the same 436
+        rows on 2026-09-17.
+
+    The tie goes to HOME. It is arbitrary, and that is the point: it must be
+    arbitrary WITH RESPECT TO THE MODEL, because this is the control the
+    model's record is read against. Dropping the row instead is the other
+    defensible answer and is wrong HERE for a reason specific to a control --
+    `a control is only a control if it is scored on the rows the model was
+    scored on`, so a chalk record over n-2 beside a model record over n is
+    exactly the defect CLAUDE.md records the grades page having had. Surfaces
+    that publish a chalk record state the pick'em count instead, so the reader
+    knows how many rows rest on the convention rather than on a price.
+    """
+    return np.asarray(p_home, dtype=float) >= 0.5
+
+
 def breakeven_prob(mls):
     """Win rate a bet at these American prices must clear to be +EV.
 

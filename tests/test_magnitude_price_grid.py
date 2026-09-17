@@ -280,3 +280,65 @@ def test_a_one_column_band_names_the_margin_it_cannot_differ_from():
     spread = grade_leans._magnitude_price_grid_lines(
         _frame([0.060, 0.060], "HOME", ["W", "L"], [0.70, 0.47]))
     assert not any("can only repeat" in l for l in spread)
+
+# ---------------------------------------------------------------------------
+# Every grid that prints a null-maximum reference must also READ it.
+#
+# Two of the three did not. `_magnitude_price_grid_lines` and
+# `_selection_price_matrix_lines` both printed `observed best` beside `the best
+# of N cells averages`, told the reader a cell is read against that reference
+# and never against zero, and then left the comparison itself undone -- while
+# both observed bests were ABOVE their reference on the committed ledger. The
+# market-band block had derived its verdict since it shipped; `_search_verdict`
+# is that clause with one home.
+# ---------------------------------------------------------------------------
+
+def test_the_three_search_outcomes_are_distinguished():
+    assert "ABOVE it" in grade_leans._search_verdict(20.0, 10.0)
+    assert grade_leans._search_verdict(5.0, 10.0) == "at or below it"
+    assert "AT that reference" in grade_leans._search_verdict(10.01, 10.0)
+
+
+def test_the_tie_branch_asks_the_rendering_rather_than_a_tolerance():
+    """The rule is "can the reader see the difference", so it is decided by
+    the format the line prints at -- not by a second number that could
+    disagree with what is shown. 2.038953 vs 2.039334 is the live case."""
+    assert grade_leans._prints_the_same(2.038953, 2.039334, ".3f")
+    assert not grade_leans._prints_the_same(2.038953, 2.039334, ".4f")
+    assert "AT that reference" in grade_leans._search_verdict(
+        2.038953, 2.039334, ".3f")
+    assert "at or below it" == grade_leans._search_verdict(
+        2.038953, 2.039334, ".4f")
+
+
+def test_prints_the_same_never_raises_on_junk():
+    assert not grade_leans._prints_the_same(None, 1.0, ".3f")
+    assert not grade_leans._prints_the_same("x", 1.0, ".3f")
+
+
+def test_above_the_reference_is_not_reported_as_a_finding():
+    """The reference is the MEAN of the null maximum, so a search clears it
+    about half the time with nothing there. A bare "ABOVE it" would read as
+    the discovery this line exists to prevent."""
+    assert "not a finding" in grade_leans._search_verdict(20.0, 10.0)
+
+
+def test_a_missing_reference_never_produces_a_verdict():
+    assert grade_leans._search_verdict(float("nan"), 1.0) == "no reference"
+    assert grade_leans._search_verdict(1.0, float("nan")) == "no reference"
+
+
+@pytest.mark.parametrize("fn", [grade_leans._magnitude_price_grid_lines,
+                                grade_leans._selection_price_matrix_lines])
+def test_both_delta_grids_read_their_own_reference(fn):
+    """Asserted on the RENDERED block, because printing a reference and never
+    reading it is exactly what was wrong -- a test on the function alone would
+    have passed throughout."""
+    led = pd.read_csv(grade_leans.LEDGER_PATH)
+    g = led[led["status"].eq("graded")
+            & led["model_tag"].isin(grade_leans.RECORD_TAGS)]
+    body = "\n".join(fn(g))
+    assert "best-cell reference" in body
+    assert any(v in body for v in ("ABOVE it", "at or below it",
+                                   "AT that reference")), \
+        "a reference is printed and never read"

@@ -173,8 +173,18 @@ failed search test is evidence and deserves to be as durable as a passed one.
 
 *Registered 2026-09-03. Prior: **null**. Decision pre-committed 2026-09-16.*
 
-Identical to the shipped hybrid on the follow side; where the hybrid fades onto
-the opposing side, this one makes **no bet**.
+Back the lean where the q-gate follows it; where the q-gate would fade onto the
+opposing side, this one makes **no bet**.
+
+**The declined set is the q-gate's fade set, not the shipped rule's** — a
+correction made 2026-09-17. At registration the two were the same games,
+because the shipped hybrid then faded whenever `q < .45`. Hybrid v2 shipped on
+2026-09-11 with a second gate, and 43% of the q-gate's fades (16 of 37 on the
+current family; 2 of 5 forward) are now games the shipped rule FOLLOWS — two of
+them visible in the ledger as `hybrid_action=FOLLOW` on rows this module counts
+as declined. The selector is deliberately **not** re-pointed: it is the
+registered rule's row selection and re-aiming it mid-registration restarts the
+test. `declined_but_followed()` prints the split every build instead.
 
 **The headline is fade-minus-abstain per declined game** — what betting those
 games earns over not betting them. Positive keeps the shipped fade branch;
@@ -187,14 +197,19 @@ genuinely anti-signal and opposing it is informative. This module is the
 instrument that can eventually tell them apart — and if the forward reading
 cannot separate them, that is itself the argument for the simpler rule.
 
-It borrows `hybrid_test`'s row selector so the declined set can never disagree
-with the set the shipped rule fades — but deliberately **not** its registration
-date. Borrowing that wholesale was a real trap on its first run: it inherited
-an earlier date and scored two slates from its own discovery sample as though
-they were forward rows.
+It borrows `hybrid_test`'s row selector so the q-gate cannot be spelled twice —
+but deliberately **not** its registration date. Borrowing that wholesale was a
+real trap on its first run: it inherited an earlier date and scored two slates
+from its own discovery sample as though they were forward rows. The borrow has
+now failed in a second way, one level out: what it guaranteed was agreement
+with `hybrid_test`, and the module read that as agreement with what ships.
+Those stopped being the same thing when v2 shipped, and nothing raised, because
+the fixture behind every test of the borrow carried no `xw_net` and so compared
+v1 against v1. **A delegated selector pins you to the module you delegate to,
+not to production.**
 
 **The decision is pre-committed**, which is the part worth copying. At the
-declined-game gate, retire the shipped fade branch unless the headline is
+declined-game gate, retire the q-gate fade branch unless the headline is
 strictly positive — a point estimate, with no significance requirement. The
 asymmetry is deliberate: the prior is null, fading pays vig and publishes an
 always-chalk ticket as a model selection while abstaining costs nothing, and
@@ -207,6 +222,15 @@ set to a bar the branch was already failing, in the direction the
 recommendation already favoured, stated in advance rather than discovered
 afterwards. `decision()` returns None below the gate so it cannot fire early,
 and nothing in shipping code consults it.
+
+What the criterion can and cannot retire, given the correction above: retiring
+the q-gate fade is implementable and v2's branch sits inside it, so the verdict
+is actionable. It is not a measurement *of v2's branch* — the extra games are
+exactly the higher-conviction ones v2's delta gate was written to keep, so
+evidence against fading on the union does not transfer to the subset. Aiming a
+decision at v2's branch needs its own registration. The threshold and the gate
+are not moved for this; re-aiming a pre-commitment at a number already on the
+screen is what the freeze exists to prevent.
 
 ## `dog_contrast_test.py` — the underdog sign flip
 

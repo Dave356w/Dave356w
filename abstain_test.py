@@ -4,11 +4,30 @@
 REGISTERED 2026-09-03. Every parameter below is FROZEN. Nothing is fitted at
 run time and only slates STRICTLY AFTER the registration date are scored.
 
-THE RULE. Identical to the published hybrid on the FOLLOW side -- back the
-xwOBA lean when its locked no-vig price q >= the registered threshold -- but
-where the hybrid FADES onto the opposing side, this one makes NO BET. Flat one
-unit. It is the shipped rule with its only active branch replaced by an
-abstention.
+THE RULE. Back the xwOBA lean when its locked no-vig price q >= the registered
+threshold; where the q-gate would FADE onto the opposing side, this one makes
+NO BET. Flat one unit.
+
+WHICH FADE BRANCH THAT IS, AND WHY THE ANSWER CHANGED (corrected 2026-09-17).
+As registered this WAS the shipped rule with its only active branch replaced by
+an abstention: on 2026-09-03 the shipped hybrid faded whenever q < 0.45, so the
+declined set and the shipped fade set were the same games and the module could
+call them interchangeably. Hybrid v2 shipped on 2026-09-11 and fades only when
+q < 0.45 AND |xw_net| < 0.012, so the two sets came apart the moment it did.
+Measured on the committed ledger at the correction: of the 436 decidable
+current-family rows the q-gate fades 37 and the shipped rule fades 21, so 16 of
+the q-gate's fades -- 43% -- are games the shipped rule FOLLOWS. Forward the
+split is 2 of 5, and both are visible in the ledger itself: 2026-09-08 pk
+824714 and 2026-09-11 pk 824631 carry hybrid_action=FOLLOW on LAA and PIT while
+this module counts them as games the shipped rule fades onto BOS and CHC.
+
+THE SELECTOR IS NOT RE-POINTED AT v2, deliberately. It is the registered rule's
+row selection, and re-pointing it mid-registration would restart the test from
+zero -- the one property the module has. So the q-gate set stays, every claim
+that it IS the shipped fade set is corrected, and `declined_but_followed()`
+measures the drift on every build so it cannot go quiet again. What follows
+from that for the pre-committed decision is stated in the decision block, which
+was frozen one day before this was noticed and is NOT edited here.
 
 WHY IT EXISTS. Fading a lean priced under 0.45 means backing a side priced
 over 0.55, which is always the favourite -- so every faded bet is a favourite
@@ -34,8 +53,8 @@ separates them happens on the 20 declined ones, which is what this module
 scores and nothing else.
 
 THE REGISTERED HEADLINE IS FADE-MINUS-ABSTAIN PER DECLINED GAME -- what
-betting those games earns over not betting them. POSITIVE keeps the shipped
-rule; NEGATIVE says decline. Discovery: +0.1754u per declined game over 20,
+betting those games earns over not betting them. POSITIVE keeps the q-gate
+fade; NEGATIVE says decline. Discovery: +0.1754u per declined game over 20,
 sd 0.7918, z = +0.99, bootstrap 95% CI [-0.168, +0.503] with P(<= 0) = 0.152.
 
 WHY THE PRIOR IS NULL RATHER THAN POSITIVE, despite that +0.18u. Every faded
@@ -93,10 +112,9 @@ It corroborates the DIRECTION and nothing else. Four reasons it is not evidence
 for this registration:
 
   * IT IS NOT THIS RULE. Those 136 declined rows are picked by a per-cell
-    criterion refitted every slate; this module declines the ~20 games the
-    shipped hybrid fades, picked by the frozen threshold. The two sets overlap
-    only partly, and a rule that declines a third of the book is not the one
-    registered here.
+    criterion refitted every slate; this module declines the games the frozen
+    q-gate fades. The two sets overlap only partly, and a rule that declines a
+    third of the book is not the one registered here.
   * IT IS NOT FORWARD. The window spans the discovery sample, and a selector
     refitted per slate carries its own fitting noise into whatever it picks --
     the defect that killed `forward_test`'s first arm.
@@ -128,14 +146,17 @@ import numpy as np
 import pandas as pd
 
 import hybrid_test
+import hybrid_v2
 
 # ---------------------------------------------------------------------------
 # FROZEN REGISTRATION BLOCK. tests/test_abstain_test.py pins every value.
 # ---------------------------------------------------------------------------
 REGISTERED_ON = "2026-09-03"      # slates STRICTLY after this date are scored
-# NOT a second copy of 0.45. The declined set must be exactly the set the
-# shipped rule fades, or this stops being a comparison and becomes a different
-# rule -- the "one value, three homes" defect that put v10 math under a v9 tag.
+# NOT a second copy of 0.45: it is `hybrid_test`'s own object, so the q-gate
+# cannot drift between the two modules -- the "one value, three homes" defect
+# that put v10 math under a v9 tag. What it does NOT guarantee any more is that
+# the declined set equals the SHIPPED fade set; v2 added a second gate this
+# import knows nothing about. See the docstring, and `declined_but_followed`.
 THRESHOLD = hybrid_test.THRESHOLD
 STAKE = 1.0
 RULE_TAG = "xwoba_market_abstain_v1"
@@ -163,8 +184,24 @@ PRIOR = "null"
 # about, which is the only moment a criterion is cheap. Deciding at n = 82 with
 # the figure already on the screen is how a gate gets re-litigated.
 #
-# THE RULE: at GATE_DECLINED declined games, retire the shipped fade branch --
+# THE RULE: at GATE_DECLINED declined games, retire the q-gate fade branch --
 # ship abstention as v3 -- UNLESS `fade_minus_abstain` is strictly POSITIVE.
+#
+# WHICH BRANCH THAT RETIRES (added 2026-09-17; no constant above or below this
+# note is edited). The criterion was frozen on 2026-09-16 naming "the shipped
+# fade branch", on the understanding that the declined set was the shipped fade
+# set. It is not, and has not been since v2 shipped on 2026-09-11: the shipped
+# branch fades a strict SUBSET, 21 of the q-gate's 37 on the current family.
+# So what this criterion can retire is the q-gate fade -- fading a sub-.45 lean
+# at all -- which remains an implementable action, since v2's branch is inside
+# it. What it cannot do is measure v2's branch: the extra games are exactly the
+# higher-conviction ones v2's delta gate was written to keep, so evidence
+# against fading on the union does not transfer to the subset. A decision aimed
+# at v2's branch specifically needs its own registration and its own gate.
+# `declined_but_followed` prints the split every build so the reading at the
+# gate carries it. The threshold and the gate are NOT moved: re-aiming a
+# pre-commitment at a number that was already on the screen is the thing the
+# freeze exists to prevent.
 #
 # A point estimate, with no significance requirement, and that asymmetry is
 # deliberate rather than lax. The prior here is NULL, the two arms differ by
@@ -236,17 +273,52 @@ def scored_rows(led=None):
 
 
 def declined(g):
-    """The rows where this rule and the shipped hybrid differ. Pure."""
+    """The registered declined set: rows the q-gate fades. Pure.
+
+    This is NOT the set on which this rule and the shipped hybrid differ. It
+    was, at registration; v2's delta gate ended that, and the shipped rule
+    follows 43% of these. `declined_but_followed` counts them every build.
+    """
     if g is None or not len(g):
         return g
     return g[~g["follow"].astype(bool)]
 
 
 def kept(g):
-    """The rows where the two rules are the same bet. Pure."""
+    """Rows the q-gate follows, where this rule bets the lean. Pure."""
     if g is None or not len(g):
         return g
     return g[g["follow"].astype(bool)]
+
+
+def shipped_also_fades(g):
+    """Declined rows the SHIPPED rule fades too. Pure, and NOT registered.
+
+    `hybrid_v2.follows` is called rather than restated, for the reason
+    `THRESHOLD` is imported rather than copied: a second spelling of the gate
+    would let this diagnostic and the live rule disagree about the very thing
+    it exists to measure.
+    """
+    d = declined(g)
+    if d is None or not len(d) or "xw_net" not in d.columns:
+        return None          # unanswerable, never silently "no drift"
+    return d[~hybrid_v2.follows(d["model_side_p"], d["xw_net"])]
+
+
+def declined_but_followed(g):
+    """Declined rows the SHIPPED rule FOLLOWS -- the registered set's drift.
+
+    Empty until 2026-09-11 and non-empty since, by construction: v2 kept the
+    q-gate and added `|xw_net| >= DELTA_THRESHOLD` as a reason to follow, so
+    every row in here is one the site published as a FOLLOW while this module
+    scored it as a game the rule declines. That is a real disagreement between
+    an artifact and a registration, not a rounding difference, which is why it
+    is counted from the rows rather than asserted in prose.
+    """
+    d = declined(g)
+    if d is None or not len(d) or "xw_net" not in d.columns:
+        return None          # unanswerable, never silently "no drift"
+    return d[hybrid_v2.follows(d["model_side_p"], d["xw_net"])]
 
 
 def fade_minus_abstain(g):
@@ -307,11 +379,54 @@ def decision(g):
     return ("KEEP" if m > DECISION_KEEP_THRESHOLD else "RETIRE"), n_d, m
 
 
+def _drift_lines(g):
+    """How far the registered declined set has drifted from the shipped rule.
+
+    Printed under the headline rather than left to a reader who knows the
+    history, because the headline's name for its own row set -- games the rule
+    declines instead of fading -- silently stopped matching what the site does
+    on 2026-09-11 and nothing in this report said so for six days.
+    """
+    d, f = declined(g), declined_but_followed(g)
+    n_d = 0 if d is None else len(d)
+    if not n_d:
+        return []
+    if f is None:
+        # No `xw_net`, so v2's second gate cannot be evaluated. Say that
+        # rather than printing "all shared", which would assert the very
+        # thing this block exists to stop being assumed.
+        return ["      declined set vs the SHIPPED rule: not computable on "
+                "this frame (no xw_net); do not read it as agreement."]
+    n_f = len(f)
+    if not n_f:
+        return ["      declined set vs the SHIPPED rule: all "
+                f"{n_d} are games hybrid v2 fades too."]
+    out = [f"      declined set vs the SHIPPED rule: {n_f} of {n_d} are games "
+           "hybrid v2 FOLLOWS (q < .45 but |xw_net| >= .012),",
+           "        so the registered quantity is the q-gate fade, not v2's "
+           "branch, which fades a strict subset. Not a fixable"]
+    m, se, _ = fade_minus_abstain(g)
+    sub_rows = shipped_also_fades(g)
+    n_s = 0 if sub_rows is None else len(sub_rows)
+    if n_s:
+        v = sub_rows["profit"].to_numpy(dtype=float)
+        out.append("        mismatch mid-registration -- re-pointing the "
+                   "selector restarts the test. UNREGISTERED context, on the "
+                   f"{n_s} shared rows only:")
+        out.append(f"        fade-minus-abstain {v.mean():+.3f}u over {n_s} "
+                   f"against the registered {m:+.3f}u over {n_d}. Carries no "
+                   "decision; the gate is the registered set's.")
+    else:
+        out.append("        mismatch mid-registration -- re-pointing the "
+                   "selector restarts the test. No shared rows yet.")
+    return out
+
+
 def decision_lines(g):
     """The pre-commitment, printed every build whether or not it can fire."""
     m, _se, n_d = fade_minus_abstain(g)
     out = [f"    PRE-COMMITTED {DECISION_PRE_COMMITTED_ON} (at n={DECISION_AT_N}): "
-           f"at {GATE_DECLINED} declined games, RETIRE the shipped fade branch "
+           f"at {GATE_DECLINED} declined games, RETIRE the q-gate fade branch "
            f"unless this is > {DECISION_KEEP_THRESHOLD:+.1f}."]
     d = decision(g)
     if d is None:
@@ -358,18 +473,19 @@ def report_lines(led=None):
         out.append(f"    FADE MINUS ABSTAIN (registered)  n={n_d:<4d} "
                    f"{m:+.3f}u per declined game +/- {se:.3f}"
                    + (f"   z={m / se:+.2f}" if se and se > 0 else ""))
-        out.append("      positive keeps the shipped fade branch; negative says "
+        out.append("      positive keeps the q-gate fade branch; negative says "
                    "decline. Discovery "
                    f"{DISCOVERY_FADE_MINUS_ABSTAIN:+.3f}u over "
                    f"{DISCOVERY_DECLINED}, CI [{DISCOVERY_CI[0]:+.3f}, "
                    f"{DISCOVERY_CI[1]:+.3f}].")
     else:
         out.append("    FADE MINUS ABSTAIN (registered)    no declined games yet")
+    out.extend(_drift_lines(g))
     out.extend(decision_lines(g))
 
     out.append("")
     out.append(_line(kept(g), "this rule (declined out)"))
-    out.append(_line(g, "shipped hybrid (fades)"))
+    out.append(_line(g, "q-gate hybrid (fades)"))
     out.append(_line(declined(g), "the declined games only"))
     out.append(_line(g, "control: always-chalk", won_col="chalk_won",
                      p_col="chalk_p", profit_col="chalk_profit"))

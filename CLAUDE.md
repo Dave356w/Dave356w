@@ -541,6 +541,116 @@ precedent — they are how the fix is known to look.
 
 **Resolved — keep as precedent**
 
+- **A tie-break, not a row set: the same control published two records.** On
+  2026-09-17 `data/ledger_report.txt` said always-chalk went **257-179** over
+  the current family's 436 rows and `grades.html` said **256-180** over the
+  identical 436. Every control note on the site promises the controls are
+  scored on the model's own rows, and they were; what differed was what each
+  surface does with a game priced at exactly .500, which has no favourite for
+  always-chalk to back.
+
+  Three conventions were live, in one repo and two of them in one file:
+
+  * `p_home > .5`, **dropping** the game, on the favourite tile of
+    `market-calibration.html` — with the reasoning written out in a comment
+    beside it, and correct there;
+  * `close_p_home >= .5`, **tie to home**, in the band block, `hybrid_test`,
+    `delta_filter_test` and `_baseline_controls`;
+  * `market_p >= .50` — the **LEANED side's** price — in build_site's
+    always-chalk control, 150 lines below the comment explaining the first.
+    On a pick'em that hands the row to whichever side the model picked, so
+    **the control was defined in terms of the thing it controls**, on exactly
+    the near-pick'em games where this file's own measurements put most of the
+    model's contribution. Live cost: both current-family pick'ems were model
+    losses, so the control was charged two it never chose, and the two
+    artifacts disagreed by one game.
+
+  Fixed by giving the convention one home, `market_backfill.chalk_is_home`,
+  for the reason `excess_se` and `ladder_rung` are already there: grade_leans
+  cannot import build_site, so a rule both need is either in that module or
+  spelled twice — and spelled twice, it drifted. Four things in it are the
+  reusable part:
+
+  * **The tie goes to home, and the point is that it is arbitrary WITH RESPECT
+    TO THE MODEL.** Any model-independent answer would do; the one thing a
+    control may not do is consult the lean.
+  * **The row is kept, not dropped, and that is a fact about CONTROLS
+    specifically.** A chalk record over n−2 beside a model record over n is
+    the defect the grades page already shipped once. The favourite POOL on the
+    calibration page keeps dropping them and is untouched: one observation per
+    game, so a game with no favourite can leave and nothing is unpaired. Two
+    right answers to one question, distinguished by what the denominator has
+    to line up with.
+  * **The footprint is printed rather than absorbed.** Both surfaces now say
+    how many rows closed at exactly even money, when any did. A shared
+    convention is only auditable if its size is visible.
+  * **The tests ask each module the question rather than grepping for the
+    spelling**, and they were checked against the old code: reverting the one
+    line turns four of them red, including on the committed ledger.
+
+  One latent bug fell out of it. `lean_is_home` was a local computed BEFORE
+  the observation frame was filtered and read three times after, so the first
+  row that filter ever dropped would have raised on a shape mismatch. It is a
+  column now.
+
+  Display-only: no lean, delta, grade or ledger row moves, so no `MODEL_TAG`
+  implication. What changed is that two artifacts publishing the same control
+  now publish the same number.
+
+- **A caveat that covered one component and named the wrong test.** The
+  component block's interpretability note — "neither is interpretable unless
+  the lineup row of the target-reliability block clears F=1" — sat inside
+  `if comp == "lineup"`. The reliability block beside it has TWO failure
+  modes, and BP fails the second: `F=1.131 (p=0.288)` reads **UNMEASURABLE —
+  not separated from chance**, while BP's `slope +0.94±0.36` printed bare. So
+  a reader applying the caveat to BP by analogy gets the wrong answer twice
+  over — no marker on the row, and a stated test (`clears F=1`) that 1.131
+  passes.
+
+  Fixed by deriving the marker per component from the same ANOVA the block
+  below prints, via `_reliability_verdict` / `reliability_verdicts`, and by
+  pointing the lineup caveat at that row's own verdict instead of restating
+  half of it. The verdicts are computed on the UNSCOPED frame while the
+  component rows stay family-scoped — the realised rate is metric-free, so
+  scoping the ANOVA would discard rows for a reason that cannot apply, which
+  is the `a probe's row set is a parameter` rule applied inside one block.
+
+  The test is the property — for every component, marked if and only if its
+  own verdict says unmeasurable — asserted against the committed ledger,
+  because the constructed frames in that suite carry a lineup component only
+  and the defect was on BP. **A caveat does not travel with the statistic; it
+  travels with the line someone wrote it on.** Third instance in this file.
+  Diagnostic only.
+
+- **A verdict that turned on the fourth decimal and printed as a clean pass.**
+  The market-band block's pooling licence read `max |z| 2.04 over 8 comparable
+  bands, against 2.04 expected from noise -- at or below what a search this
+  wide returns from noise, so pooling the families is licensed.` It cleared by
+  **0.00038** (2.038953 against 2.039334) in the `-107..+105` band — a margin
+  both figures round away, on a bar that is the MEAN of simulated maxima
+  rather than a threshold. The code was right; the rendering turned a coin
+  flip into a licence.
+
+  Fixed with a third branch — `level with it`, naming the margin and reading
+  it as a tie — and by printing three decimals so a reader can do the
+  comparison the line asks them to. **A derived verdict needs a rendering its
+  own inputs can be told apart in**; two decimals is not a display choice when
+  the verdict is a comparison between the two numbers being displayed. Note
+  that three decimals does not rescue this one either — 2.039 against 2.039 —
+  which is why the tie test is `_prints_the_same`, asking the line's OWN
+  format whether the two render identically, rather than a tolerance. A
+  tolerance is a second number to justify and it can disagree with what the
+  line shows; the rendering cannot.
+
+  The same audit found the other half: `_magnitude_price_grid_lines` and
+  `_selection_price_matrix_lines` both printed a null-maximum reference, told
+  the reader a cell is read against it and never against zero, and then left
+  the comparison undone — while both observed bests were ABOVE their reference
+  on the committed ledger. `_search_verdict` is now one home for that clause,
+  and its ABOVE branch says in full that a search clears the null maximum's
+  mean about half the time under no effect, so the reading cannot be quoted as
+  a finding. Diagnostic only.
+
 - **The one surface that recomputed its own published decision.** The lean
   page card derives `net = a["xw_edge"] - h["xw_edge"]` from the live build on
   every run. That is right up to first pitch and wrong after it: from then on
@@ -2860,6 +2970,20 @@ them cannot be smoke-tested locally; run the workflow.
 
 ### Rules these have earned
 
+- **A delegated row selector pins you to the module you delegate to, not to
+  production.** `abstain_test` borrows `hybrid_test`'s follow/fade split so
+  the two can never disagree, and read that as agreement with what ships.
+  Those stopped being the same thing the day v2 shipped, and the borrow went
+  on working — 43% of the "games the shipped rule fades" are games it
+  follows. When you delegate a selector, say which module it tracks, and test
+  the delegation against a fixture that can REPRESENT the disagreement: the
+  three tests that pinned this borrow all passed, because the frame they used
+  carried none of the column the new gate reads.
+- **A derived verdict needs a rendering its own inputs can be told apart in.**
+  The pooling licence compared 2.038953 against 2.039334 and printed
+  "2.04 against 2.04 ... licensed". Two decimals is not a display choice when
+  the verdict is a comparison between the two numbers displayed; print the
+  margin, and give a tie its own branch.
 - **A probe's ROW SET is a parameter, and the family filter is not a safe
   default.** A statistic computed from box scores does not depend on which
   model wrote the row, so scoping it to `RECORD_TAGS` halves the sample for
@@ -3433,8 +3557,9 @@ did, so it accrues one MORE slowly, not less.
 
 **The abstain decision is pre-committed, 2026-09-16, at n = 5.**
 `abstain_test.DECISION_*` freezes it: at `GATE_DECLINED` (82) declined games,
-RETIRE the shipped fade branch unless `fade_minus_abstain` is strictly
-positive. A point estimate with no significance requirement, and the asymmetry
+RETIRE the q-gate fade branch unless `fade_minus_abstain` is strictly
+positive. (It read "the shipped fade branch" for one day; the correction is
+the entry below, and no frozen constant moved with it.) A point estimate with no significance requirement, and the asymmetry
 is deliberate — the prior is NULL, the two arms differ by 0.25pp
 retrospectively, fading pays vig and publishes an always-chalk ticket as a
 model selection while abstaining costs nothing, and this file's standing
@@ -3453,6 +3578,41 @@ favoured, stated in advance rather than discovered afterwards. `decision()`
 returns None below the gate so it cannot fire early, and nothing in shipping
 code consults it: it decides nothing, it records what the number was agreed to
 mean before anyone could see it.
+
+**And its subject is NOT the branch that ships — corrected 2026-09-17, one day
+after the freeze.** `abstain_test` declines the games `hybrid_test`'s selector
+fades, which is v1's unconditional `q < .45` gate. That WAS the shipped fade
+set when the module was registered on 2026-09-03 and stopped being it on
+2026-09-11, when v2 added `|xw_net| < .012` as a second condition. Measured on
+the committed ledger: the q-gate fades **37** of the 436 decidable
+current-family rows against the shipped rule's **21**, so **16 — 43% — are
+games the shipped rule FOLLOWS**, and forward the split is 2 of 5. Both forward
+cases are visible in the ledger rather than only by recomputation: 2026-09-08
+`pk 824714` and 2026-09-11 `pk 824631` carry `hybrid_action=FOLLOW` on LAA and
+PIT while this registration counts them as games the rule fades onto BOS and
+CHC.
+
+The selector is deliberately **not** re-pointed at v2: it is the registered
+rule's row selection and re-aiming it mid-registration restarts the test, which
+is the module's only property. So the q-gate set stays, every claim that it is
+the shipped fade set is corrected, and `declined_but_followed()` prints the
+split under the headline every build. What the criterion can retire is the
+q-gate fade — an implementable action, since v2's branch sits inside it — and
+what it cannot do is measure v2's branch, because the extra games are exactly
+the higher-conviction ones v2's delta gate was written to keep. A decision
+aimed at v2's branch needs its own registration.
+
+**Why it survived six days is the reusable half, and it is not "nobody
+looked".** Three tests asserted the borrow and all three passed, because the
+fixture behind them carried no `xw_net` — so every test of "the declined set
+is the hybrid's fade set" compared v1 against v1 and could not represent the
+disagreement. **A delegated row selector pins you to the module you delegate
+to, not to production**; when the thing you delegate to is superseded, the
+delegation keeps working and the claim about it quietly stops being true. The
+fixture now carries the column, and `DriftFromTheShippedRuleTests` asserts the
+property in both directions plus the unanswerable case. Same category as the
+`_record_grades()` note and the "a note on the grades page" that did not exist:
+prose in a docstring is not evidence about the code.
 
 **The per-game branch line publishes flat-stake units, reversing the
 2026-09-15 call.** `13-6 (68.4%) vs 58.0% priced` is now

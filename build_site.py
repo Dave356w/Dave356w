@@ -45,6 +45,8 @@ import numpy as np
 import pandas as pd
 
 from market_backfill import (ODDS_LADDER as _mb_odds_ladder,
+                             chalk_is_home as _mb_chalk_is_home,
+                             is_pickem as _mb_is_pickem,
                              ladder_rung as _mb_ladder_rung)
 import requests
 
@@ -6719,6 +6721,11 @@ def _lean_market_observations(led):
     obs = pd.DataFrame({
         "delta": dv,
         "market_p": market_p,
+        # On the FRAME rather than left in `hv`, for two reasons. It is the
+        # chalk control's input (see below), and every later use of `hv` was
+        # indexed against a frame that had already been filtered two lines
+        # down -- a length mismatch waiting for the first row this drops.
+        "lean_is_home": hv,
         "close_ml": close_ml,
         "opp_ml": opp_ml,
         "won": won.astype(float),
@@ -6759,7 +6766,16 @@ def _lean_market_observations(led):
     # That is not hypothetical: this page once scored its controls on every
     # graded row while scoring the model on the decided ones, and the `n=`
     # marker written to catch exactly that was blind to it.
-    chalk_is_lean = obs["market_p"].to_numpy(dtype=float) >= 0.50
+    #
+    # Which side is chalk is decided from the HOME price through the one home
+    # for that convention, never from `market_p >= .50`. The two differ only
+    # on a pick'em -- and there the old form handed the row to the model's own
+    # lean, making the control agree with the thing it controls by fiat. It
+    # cost exactly one win: on 2026-09-17 this page published 256-180 while
+    # `ledger_report.txt` published 257-179 over the identical 436 rows.
+    lean_home = obs["lean_is_home"].to_numpy(dtype=bool)
+    p_home = np.where(lean_home, obs["market_p"], 1.0 - obs["market_p"])
+    chalk_is_lean = _mb_chalk_is_home(p_home) == lean_home
     obs["chalk_won"] = np.where(chalk_is_lean, lean_won, 1.0 - lean_won)
     obs["chalk_p"] = np.where(chalk_is_lean, obs["market_p"], 1.0 - obs["market_p"])
     chalk_ml = np.where(chalk_is_lean, obs["close_ml"], obs["opp_ml"])
@@ -6769,9 +6785,9 @@ def _lean_market_observations(led):
         for ml, w in zip(chalk_ml, obs["chalk_won"])
     ]
 
-    obs["home_won"] = np.where(hv, lean_won, 1.0 - lean_won)
-    obs["home_p"] = np.where(hv, obs["market_p"], 1.0 - obs["market_p"])
-    home_ml = np.where(hv, obs["close_ml"], obs["opp_ml"])
+    obs["home_won"] = np.where(lean_home, lean_won, 1.0 - lean_won)
+    obs["home_p"] = np.where(lean_home, obs["market_p"], 1.0 - obs["market_p"])
+    home_ml = np.where(lean_home, obs["close_ml"], obs["opp_ml"])
     obs["home_resid"] = obs["home_won"] - obs["home_p"]
     obs["home_profit"] = [
         _american_unit_profit(ml, bool(w))
@@ -7166,13 +7182,36 @@ def _render_lean_market_value_panel(led):
         f"<div class='gr-note'>The last row must equal <b>"
         f"{hybrid_public_label('FADE')}</b> above: on rows below both gates "
         "the other side is always the favourite, "
-        "so the two are the same bet. A difference is a bug.</div>"
+        "so the two are the same bet. A difference is a bug."
+        + _pickem_note(a["obs"]) + "</div>"
     )
     return (summary + note + branch_head
             + _lean_market_value_table(a["branch_rows"], first_head="Branch")
             + control_head
             + _lean_market_value_table(a["control_rows"], first_head="Control")
             + control_note)
+
+
+def _pickem_note(obs):
+    """How many chalk rows rest on the tie-break, or "" when none do.
+
+    A game priced at exactly .500 has no favourite, so always-chalk has no
+    side to take and the record rests on a convention instead of a price. The
+    control keeps the row -- dropping it would score the control over fewer
+    games than the model beside it, which is the defect this page already had
+    once -- so the honest alternative is to say how many rows are in that
+    position. Rendered only when there are any: a clause that always reads
+    "0 rows" is one a reader learns to skip.
+    """
+    if obs is None or obs.empty or "lean_is_home" not in obs.columns:
+        return ""
+    lean_home = obs["lean_is_home"].to_numpy(dtype=bool)
+    p_home = np.where(lean_home, obs["market_p"], 1.0 - obs["market_p"])
+    n = int(_mb_is_pickem(p_home).sum())
+    if not n:
+        return ""
+    return (f" {n} of {len(obs)} games closed at exactly even money and have "
+            "no favourite; always chalk takes the home side on those.")
 
 
 def _record_grades(led):
@@ -7250,7 +7289,10 @@ def _baseline_controls(g):
     p_home = col("close_p_home")
     m = played & p_home.notna()
     if m.any():
-        hit = ((p_home >= 0.5) == home_won) & m
+        # `chalk_is_home`, not a fourth copy of `>= 0.5`: this control and the
+        # one on the calibration page must answer "which side is chalk" the
+        # same way on a pick'em or the page disagrees with itself.
+        hit = (_mb_chalk_is_home(p_home) == home_won) & m
         out.append(("market", int(hit.sum()), int((m & ~hit).sum())))
     return out
 

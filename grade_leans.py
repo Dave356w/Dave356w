@@ -63,8 +63,8 @@ import pandas as pd
 import requests
 
 from market_backfill import (MARKET_COLS, ODDS_LADDER, attach_market,
-                             breakeven_prob, excess_se, ladder_rung,
-                             metric_label)
+                             breakeven_prob, chalk_is_home, excess_se,
+                             is_pickem, ladder_rung, metric_label)
 from actuals_backfill import (ACTUAL_COLS, attach_actuals, actuals_summary,
                               actuals_family_line, components_summary,
                               target_reliability,
@@ -775,6 +775,15 @@ def _fixed_magnitude_lines(g):
         "  Favorite comparison: closing close_p_home; no pregame fallback. "
         "Both records use the same valid-price, non-tied full-score rows.",
     ]
+    # Same convention, same reason, same one home as the always-chalk control
+    # above -- and the same disclosure, because a band's favourite record is
+    # what the model's record in that band is read against.
+    n_pk = int(is_pickem(pd.to_numeric(
+        g.loc[eligible, "close_p_home"], errors="coerce")).sum()) \
+        if "close_p_home" in g.columns else 0
+    if n_pk:
+        out.append(f"  {n_pk} of those rows closed at exactly .500 and have no "
+                   "favourite; the comparison breaks the tie toward home.")
     price_columns = {"close_p_home", "full_home", "full_away"}
     for lower, upper in zip(FIXED_MAGNITUDE_EDGES, FIXED_MAGNITUDE_EDGES[1:]):
         band = g[eligible & magnitude.ge(lower) & magnitude.lt(upper)]
@@ -792,7 +801,8 @@ def _fixed_magnitude_lines(g):
                  & np.isfinite(home) & np.isfinite(away) & home.ne(away))
         paired = band[valid]
         favorite = pd.Series(
-            np.where(p[valid].ge(0.5).eq(home[valid].gt(away[valid])), "W", "L"),
+            np.where(chalk_is_home(p[valid]) == home[valid].gt(away[valid]),
+                     "W", "L"),
             index=paired.index,
         )
         out.append(f"    closing-price paired n={len(paired)}; excluded={len(band) - len(paired)}")
@@ -1075,9 +1085,60 @@ def _magnitude_price_grid_lines(g):
                    f"cells averages {100 * null_best:+.1f} pp of excess under "
                    "'every game settles at its own price';")
         out.append(f"    the observed best is {100 * observed:+.1f} pp, |delta| {band} "
-                   f"{name} (n={int(mask.sum())}). A grid is a search, so a cell is "
-                   "read against that reference, never against zero.")
+                   f"{name} (n={int(mask.sum())}) -- "
+                   f"{_search_verdict(100 * observed, 100 * null_best)}. A grid is a "
+                   "search, so a cell is read against that reference, never "
+                   "against zero.")
     return out
+
+
+def _prints_the_same(a, b, fmt):
+    """Do two figures render identically at the precision they are printed at?
+
+    The tie test for every derived verdict in this report, and deliberately
+    not a tolerance. A tolerance is a second number to justify and it can
+    disagree with what the line actually shows; this cannot, because it asks
+    the rendering itself. The pooling licence is the case that earned it:
+    2.038953 against 2.039334 is a real ordering and an invisible one, so a
+    verdict that reported it as a clean pass was describing a comparison the
+    reader could not make.
+    """
+    try:
+        return format(float(a), fmt) == format(float(b), fmt)
+    except (TypeError, ValueError):
+        return False
+
+
+def _search_verdict(observed, reference, fmt="+.1f"):
+    """Derived reading of a searched maximum against its own null maximum.
+
+    Takes the figures AS PRINTED -- already scaled to the units on the line --
+    with their format, so the tie branch can ask whether the two render the
+    same rather than carry a tolerance of its own.
+
+    The three grids in this report all print `observed` beside `reference`
+    and, until 2026-09-17, two of them stopped there -- leaving the reader to
+    do the comparison the line itself says is the only valid one. Both were
+    ABOVE their reference at the time and neither said so. The market-band
+    block already derived its verdict; this is that clause with one home, so a
+    fourth grid cannot arrive without one.
+    """
+    if not np.isfinite(observed) or not np.isfinite(reference):
+        return "no reference"
+    gap = observed - reference
+    if _prints_the_same(observed, reference, fmt):
+        # The bar is the MEAN of simulated maxima, not a threshold, so
+        # clearing it by less than the line's own precision is not clearing
+        # it -- and saying otherwise reports an ordering nobody can see.
+        return "AT that reference, not clear of it"
+    if gap > 0:
+        # Said in full every time rather than left to the reader: the
+        # reference is the MEAN of the null maximum, so a searched best clears
+        # it roughly half the time with nothing there at all. "ABOVE it" alone
+        # would read as the finding this line exists to prevent.
+        return ("ABOVE it, which a search returns about half the time under "
+                "no effect, so it is not a finding either")
+    return "at or below it"
 
 
 def _percentile_price_edges(ml, bands=8):
@@ -1215,7 +1276,8 @@ def _market_percentile_band_lines(led, bands=8):
         obs = float(won[idx == best].mean() - p[idx == best].mean())
         out.append(f"  best-band reference: the best of {len(cells)} bands averages "
                    f"{100 * null_best:+.1f} pp under 'every game settles at its own "
-                   f"price'; observed best {100 * obs:+.1f} pp.")
+                   f"price'; observed best {100 * obs:+.1f} pp -- "
+                   f"{_search_verdict(100 * obs, 100 * null_best)}.")
         out.append(f"    Max |z| across the bands is {max(zs):.2f} against the "
                    f"{np.sqrt(2 * np.log(len(cells))):.2f} a search this wide "
                    "typically returns from noise.")
@@ -1239,15 +1301,31 @@ def _market_percentile_band_lines(led, bands=8):
         # not against zero -- and when it lands above that, the line has to say
         # so. A licence sentence that reads "no sign" beside a number saying
         # otherwise is the publishing-a-claim-the-data-cannot-support entry.
-        verdict = ("at or below what a search this wide returns from noise, so "
-                   "pooling the families is licensed."
-                   if max(lz) <= exp else
-                   f"ABOVE it, in band '{lab_of[int(np.argmax(lz))]}'. One band at "
-                   "the noise maximum is not a finding, but the licence is not "
-                   "clean either -- read the pooled rows knowing that.")
+        # Three outcomes, not two. `max(lz) <= exp` is a knife edge and it
+        # landed on the knife: 2.038953 against 2.039334 on 2026-09-17, a
+        # margin of 0.0004 that both sides of the comparison round away, so
+        # the line read "2.04 ... against 2.04 ... licensed". A verdict whose
+        # two inputs print identically has to say it is a tie; otherwise the
+        # reader is told the licence is clean when it turned on the fourth
+        # decimal of a simulated bar.
+        worst = lab_of[int(np.argmax(lz))]
+        margin = exp - max(lz)
+        if _prints_the_same(max(lz), exp, ".3f"):
+            verdict = (f"level with it, in band '{worst}' -- a margin of "
+                       f"{margin:+.4f}, which both figures above round away. "
+                       "Read this as a tie rather than a licence: the bar is "
+                       "the MEAN of simulated maxima, so landing on it is not "
+                       "clearing it.")
+        elif max(lz) <= exp:
+            verdict = ("at or below what a search this wide returns from "
+                       "noise, so pooling the families is licensed.")
+        else:
+            verdict = (f"ABOVE it, in band '{worst}'. One band at "
+                       "the noise maximum is not a finding, but the licence is "
+                       "not clean either -- read the pooled rows knowing that.")
         out.append(f"  pooling licence: current family against the rest, within bands, "
-                   f"max |z| {max(lz):.2f} over {len(lz)} comparable bands,")
-        out.append(f"    against {exp:.2f} expected from noise -- {verdict}")
+                   f"max |z| {max(lz):.3f} over {len(lz)} comparable bands,")
+        out.append(f"    against {exp:.3f} expected from noise -- {verdict}")
     return out
 
 
@@ -1366,7 +1444,8 @@ def _selection_price_matrix_lines(g):
     out.append(
         f"  best-cell reference: the best of these {len(cell_p)} non-empty cells averages "
         f"{100 * ref:+.1f} pp of excess under 'every game settles at its own price'; "
-        f"the observed best is {100 * best:+.1f} pp, {best_lab}. "
+        f"the observed best is {100 * best:+.1f} pp, {best_lab} -- "
+        f"{_search_verdict(100 * best, 100 * ref)}. "
         f"A grid is a search, so a cell is read against that reference, never against zero.")
     out.append(
         f"  pooled over all {n_all} followed rows: {w_all}-{n_all - w_all} "
@@ -1596,8 +1675,18 @@ def _hybrid_retrospective_lines(g):
     ]
     out[0] += (f"   vs price z={z:+.2f}  {units:+.2f}u   "
                f"(n={n}, {n_fade} faded)")
-    out.append(f"  always chalk, same {n} rows: {cw}-{n - cw}  "
-               f"({cw / n:.3f})   vs price z={cz:+.2f}")
+    chalk_line = (f"  always chalk, same {n} rows: {cw}-{n - cw}  "
+                  f"({cw / n:.3f})   vs price z={cz:+.2f}")
+    # A game at exactly .500 has no favourite, so these rows sit on the
+    # tie-break rather than on a price. Stated rather than absorbed: the
+    # convention lives in `market_backfill.chalk_is_home` precisely so this
+    # line and the grades page cannot answer it differently, and a shared
+    # convention is only auditable if its footprint is printed.
+    n_pk = int(is_pickem(pd.to_numeric(h["close_p_home"], errors="coerce")).sum())
+    if n_pk:
+        chalk_line += (f"   ({n_pk} priced exactly .500: no favourite, "
+                       "tie to home)")
+    out.append(chalk_line)
     out.append("  price source — selection/eligibility and market comparison: "
                "closing close_p_home;")
     out.append("                 returns: closing close_home_ml/close_away_ml. "

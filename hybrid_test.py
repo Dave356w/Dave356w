@@ -190,6 +190,10 @@ import os
 import numpy as np
 import pandas as pd
 
+# One home for "which side is chalk", so this control and the site's cannot
+# answer it differently on a game with no favourite. See market_backfill.
+from market_backfill import chalk_is_home
+
 # ---------------------------------------------------------------------------
 # FROZEN REGISTRATION BLOCK. Changing any value below invalidates the test and
 # restarts it from zero: the numbers are only meaningful because they were
@@ -305,7 +309,7 @@ def apply_rule(g):
     # Always-chalk on the same rows. Not decoration: the fade branch is
     # chalk-identical by construction, so this is the control that says whether
     # anything beyond "back the favourite" is happening.
-    chalk_home = (g["close_p_home"] >= 0.5).values
+    chalk_home = chalk_is_home(g["close_p_home"])
     g["chalk_won"] = np.where(chalk_home, home_won, ~home_won)
     g["chalk_p"] = np.where(chalk_home, g["close_p_home"], 1 - g["close_p_home"])
     chalk_ml = np.where(chalk_home, g["close_home_ml"], g["close_away_ml"])
@@ -335,7 +339,7 @@ def apply_locked_rule(g):
         g["lean_won"], STAKE * _payout(g["lean_ml"]), -STAKE)
     g["switch_delta"] = g["profit"] - g["lean_profit"]
 
-    chalk_home = (g["pregame_p_home"] >= 0.5).to_numpy()
+    chalk_home = chalk_is_home(g["pregame_p_home"])
     g["chalk_won"] = np.where(chalk_home, home_won, ~home_won)
     g["chalk_p"] = np.where(
         chalk_home, g["pregame_p_home"], 1 - g["pregame_p_home"])

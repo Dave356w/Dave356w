@@ -4,16 +4,22 @@ Same reasoning as the other three registration tests, and the same deliberate
 exception to the rule against freezing measured numbers: the literals ARE the
 subject.
 
-Two properties get more attention than the constants, because this module is
+Three properties get more attention than the constants, because this module is
 the only registration that DELEGATES part of its row selection:
 
-  * it must share `hybrid_test`'s declined set exactly -- the two rules are the
-    same decision on every followed game, so if they disagreed about which
-    games are declined this would stop being a comparison;
+  * it must share `hybrid_test`'s declined set exactly -- that IS the
+    registered rule, and deriving the q-gate twice is how the two would come
+    to disagree about which games this test is about;
   * it must NOT share `hybrid_test`'s registration date. That bug shipped for
     one run: delegating wholesale scored two slates that are part of THIS
     module's discovery sample, and both numbers looked like forward rows. The
-    date-bound tests below are the ones that would have caught it.
+    date-bound tests below are the ones that would have caught it;
+  * it must not CLAIM that set is the set the SHIPPED rule fades. It was, at
+    registration, and stopped being so when hybrid v2 shipped on 2026-09-11
+    and added a second gate -- 43% of the q-gate's fades are games v2 follows.
+    The claim survived six days because the fixture below carried no `xw_net`,
+    so every test of the borrow compared v1 against v1 and could not see the
+    difference. `DriftFromTheShippedRuleTests` is what closes that.
 """
 
 import datetime as _dt
@@ -24,9 +30,11 @@ import pandas as pd
 
 import abstain_test as at
 import hybrid_test as ht
+import hybrid_v2 as hv2
 
 
-def _locked(p_home, lean_home=True, home_won=True, date="2026-09-20"):
+def _locked(p_home, lean_home=True, home_won=True, date="2026-09-20",
+            xw_net=0.001):
     """A graded ledger frame carrying the locked pregame columns."""
     p_home = np.asarray(p_home, dtype=float)
     n = len(p_home)
@@ -37,12 +45,18 @@ def _locked(p_home, lean_home=True, home_won=True, date="2026-09-20"):
     away_ml = np.where(p_home >= .5, np.round(100 * p_home / (1 - p_home)),
                        -np.round(100 * (1 - p_home) / p_home))
     model_p = np.where(lean_home, p_home, 1 - p_home)
+    # `xw_net` is what v2's second gate reads. The fixture carried none, which
+    # is precisely why the v1/v2 divergence was invisible to these tests; it
+    # defaults BELOW the delta gate so the two rules agree unless a caller
+    # asks for disagreement.
+    xw_net = np.broadcast_to(np.asarray(xw_net, dtype=float), (n,))
     follow = model_p >= ht.THRESHOLD
     bet_home = np.where(follow, lean_home, ~lean_home)
     bet_won = np.where(bet_home, home_won, ~home_won)
     return pd.DataFrame({
         "status": "graded", "game_date": date, "home": "H", "away": "A",
         "close_p_home": p_home,
+        "xw_net": xw_net,
         "xw_lean": np.where(lean_home, "H", "A"),
         "full_home": np.where(home_won, 1, 0),
         "full_away": np.where(home_won, 0, 1),
@@ -100,8 +114,9 @@ class RegistrationFrozenTests(unittest.TestCase):
 
 class OneThresholdTests(unittest.TestCase):
     def test_the_threshold_is_hybrid_tests_own_object(self):
-        """Not a second 0.45. The declined set must be the set the shipped
-        rule fades, or this stops being a comparison."""
+        """Not a second 0.45. The declined set IS the q-gate's fade set, and
+        two spellings of that gate would let the two modules disagree about
+        which games this registration is even about."""
         self.assertIs(at.THRESHOLD, ht.THRESHOLD)
 
     def test_no_standalone_threshold_assignment_in_the_source(self):
@@ -109,7 +124,7 @@ class OneThresholdTests(unittest.TestCase):
         src = open(at.__file__).read()
         self.assertNotRegex(src, r"(?m)^_?[A-Z_]*THRESHOLD[A-Z_]*\s*=\s*0\.45")
 
-    def test_the_declined_set_is_exactly_the_hybrids_fade_set(self):
+    def test_the_declined_set_is_exactly_the_q_gates_fade_set(self):
         led = _locked([0.62, 0.38, 0.55, 0.47], lean_home=True, date=AFTER)
         g = at.scored_rows(led)
         mine = set(at.declined(g).index)
@@ -121,6 +136,74 @@ class OneThresholdTests(unittest.TestCase):
         g = at.scored_rows(led)
         self.assertEqual(len(at.kept(g)) + len(at.declined(g)), len(g))
         self.assertFalse(set(at.kept(g).index) & set(at.declined(g).index))
+
+
+class DriftFromTheShippedRuleTests(unittest.TestCase):
+    """The registered declined set is NOT the shipped rule's fade set.
+
+    It was at registration and stopped being so on 2026-09-11. These assert the
+    PROPERTY -- a q-gate fade that v2 follows is counted and named -- rather
+    than today's 2-of-5, which moves with every slate.
+    """
+
+    def _frame(self, xw_net):
+        # q = .38 is under the q-gate on a home lean, so the q-gate fades it
+        # whatever the delta is; the delta alone decides what v2 does.
+        return at.scored_rows(_locked([0.38], lean_home=True, date=AFTER,
+                                      xw_net=xw_net))
+
+    def test_a_strong_delta_under_the_q_gate_is_declined_here_but_followed_there(self):
+        g = self._frame(hv2.DELTA_THRESHOLD + 0.01)
+        self.assertEqual(len(at.declined(g)), 1)
+        self.assertEqual(len(at.declined_but_followed(g)), 1)
+        self.assertEqual(len(at.shipped_also_fades(g)), 0)
+
+    def test_a_weak_delta_under_the_q_gate_is_declined_by_both(self):
+        g = self._frame(hv2.DELTA_THRESHOLD - 0.01)
+        self.assertEqual(len(at.declined(g)), 1)
+        self.assertEqual(len(at.declined_but_followed(g)), 0)
+        self.assertEqual(len(at.shipped_also_fades(g)), 1)
+
+    def test_the_two_subsets_partition_the_declined_set(self):
+        led = pd.concat([_locked([0.38], date=AFTER, xw_net=0.05),
+                         _locked([0.38], date=AFTER, xw_net=0.001)],
+                        ignore_index=True)
+        g = at.scored_rows(led)
+        self.assertEqual(len(at.declined_but_followed(g))
+                         + len(at.shipped_also_fades(g)), len(at.declined(g)))
+
+    def test_the_report_names_the_drift_rather_than_leaving_it_to_be_found(self):
+        body = "\n".join(at.report_lines(
+            _locked([0.38], date=AFTER, xw_net=hv2.DELTA_THRESHOLD + 0.01)))
+        self.assertIn("hybrid v2 FOLLOWS", body)
+        self.assertIn("1 of 1", body)
+
+    def test_the_report_says_so_when_there_is_no_drift(self):
+        body = "\n".join(at.report_lines(
+            _locked([0.38], date=AFTER, xw_net=0.001)))
+        self.assertIn("hybrid v2 fades too", body)
+        self.assertNotIn("hybrid v2 FOLLOWS", body)
+
+    def test_a_frame_without_xw_net_reports_unanswerable_not_agreement(self):
+        """The old fixture's blind spot, pinned so it cannot come back: a
+        frame that cannot evaluate v2's second gate must SAY that rather than
+        print the all-shared line, which is the claim being retracted."""
+        led = _locked([0.38], date=AFTER).drop(columns=["xw_net"])
+        g = at.scored_rows(led)
+        self.assertIsNone(at.declined_but_followed(g))
+        body = "\n".join(at.report_lines(led))
+        self.assertIn("not computable", body)
+        self.assertNotIn("hybrid v2 fades too", body)
+
+    def test_the_retracted_claim_does_not_come_back(self):
+        """`declined()` is the q-gate's set. Any sentence in the module saying
+        it is the SHIPPED rule's fade set is the six-day-old error returning,
+        so the two phrasings that carried it are forbidden outright."""
+        src = open(at.__file__).read()
+        for banned in ("the declined set must be exactly the set the",
+                       "rows where this rule and the shipped hybrid differ"):
+            with self.subTest(banned=banned):
+                self.assertNotIn(banned, src)
 
 
 class DateBoundTests(unittest.TestCase):
@@ -218,7 +301,7 @@ class ReportTests(unittest.TestCase):
     def test_the_report_states_which_direction_keeps_the_shipped_rule(self):
         body = "\n".join(at.report_lines(
             _locked([0.62, 0.38], lean_home=False, date=AFTER)))
-        self.assertIn("positive keeps the shipped fade branch", body)
+        self.assertIn("positive keeps the q-gate fade branch", body)
         self.assertIn("negative says", body)
 
     def test_the_report_carries_the_chalk_control(self):
