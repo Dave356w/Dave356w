@@ -114,6 +114,67 @@ class NoLookaheadTests(unittest.TestCase):
                                 g["date"].min() + pd.Timedelta(days=9))
 
 
+class CorrelationTests(unittest.TestCase):
+    """Marginal and partial correlations must recover what was planted.
+
+    The block exists because a MARGINAL correlation with winning and a
+    CONDITIONAL one can disagree for a magnitude variable, so both are
+    published. A partial correlation that silently returned the marginal --
+    or an interval that did not widen with a smaller sample -- would print a
+    report indistinguishable from a correct one.
+    """
+
+    def test_a_variable_that_only_proxies_price_reads_null_once_conditioned(self):
+        """The exact confound the block is written to expose: a predictor with
+        NO own effect, correlated with price, must show marginally and vanish
+        conditionally."""
+        rng = np.random.default_rng(5)
+        n = 4000
+        p_home = np.clip(rng.beta(5, 5, n) * 0.6 + 0.2, 0.05, 0.95)
+        lg = np.log(p_home / (1 - p_home))
+        proxy = lg + rng.normal(0, 0.5, n)          # correlated with price only
+        home_won = (rng.random(n) < p_home).astype(float)
+        marginal = P._corr(proxy, home_won)
+        partial = P._partial_corr(proxy, home_won, lg)
+        self.assertGreater(abs(marginal), 0.10, "planted proxy should show marginally")
+        self.assertLess(abs(partial), 0.04, "and should vanish once price is removed")
+
+    def test_a_real_effect_survives_conditioning_on_price(self):
+        rng = np.random.default_rng(6)
+        n = 4000
+        p_home = np.clip(rng.beta(5, 5, n) * 0.6 + 0.2, 0.05, 0.95)
+        lg = np.log(p_home / (1 - p_home))
+        x = rng.normal(0, 1, n)
+        home_won = (rng.random(n) < 1 / (1 + np.exp(-(lg + 0.6 * x)))).astype(float)
+        self.assertGreater(P._partial_corr(x, home_won, lg), 0.08)
+
+    def test_the_interval_widens_as_the_sample_shrinks(self):
+        wide = P._fisher_ci(0.05, 40)
+        tight = P._fisher_ci(0.05, 4000)
+        self.assertGreater(wide[1] - wide[0], tight[1] - tight[0])
+        for lo, hi, _ in (wide, tight):
+            self.assertLess(lo, 0.05)
+            self.assertGreater(hi, 0.05)
+
+    def test_a_constant_column_returns_nan_rather_than_a_divide_by_zero(self):
+        """`np.corrcoef` returns a silent nan from a zero-variance column; this
+        repo has an entry for exactly that, so the guard is explicit."""
+        self.assertTrue(np.isnan(P._corr(np.ones(50), np.arange(50.0))))
+        self.assertTrue(np.isnan(P._fisher_ci(float("nan"), 100)[0]))
+
+    def test_the_binary_tier_correlation_matches_the_closed_form(self):
+        """Point-biserial has an exact form from the 2x2, so the block can be
+        checked against arithmetic rather than against itself."""
+        rng = np.random.default_rng(9)
+        tier = (rng.random(600) < 0.39).astype(float)
+        won = (rng.random(600) < np.where(tier > 0, 0.643, 0.596)).astype(float)
+        r = P._corr(tier, won)
+        p, s_ = won.mean(), won.std()
+        q = tier.mean()
+        closed = ((won[tier > 0].mean() - won[tier == 0].mean()) / s_) * np.sqrt(q * (1 - q))
+        self.assertAlmostEqual(r, closed, places=6)
+
+
 class DuplicateGameTests(unittest.TestCase):
     """A game listed twice must not reach the window, the feature or the join.
 

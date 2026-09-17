@@ -64,6 +64,7 @@ second copy of the estimator.
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 from concurrent.futures import ThreadPoolExecutor
 
@@ -365,6 +366,79 @@ def oos_log_loss(g, use_market, use_tb, train_min=80):
     return float(np.concatenate(losses).mean()) if losses else float("nan")
 
 
+def _fisher_ci(r, n):
+    """95% interval for a correlation, and the z its own SE implies.
+
+    Printed with every correlation below for the reason this repo prints every
+    SE: a bare r invites a reading its sample cannot support, and at these n a
+    correlation of 0.05 and one of 0.00 are the same statement.
+    """
+    if not np.isfinite(r) or n < 4 or abs(r) >= 1:
+        return float("nan"), float("nan"), float("nan")
+    se = 1.0 / math.sqrt(n - 3)
+    zf = 0.5 * math.log((1 + r) / (1 - r))
+    return math.tanh(zf - 1.96 * se), math.tanh(zf + 1.96 * se), r * math.sqrt(n - 1)
+
+
+def _corr(a, b):
+    a, b = np.asarray(a, dtype=float), np.asarray(b, dtype=float)
+    if a.std() <= 0 or b.std() <= 0:
+        return float("nan")
+    return float(np.corrcoef(a, b)[0, 1])
+
+
+def _partial_corr(a, b, given):
+    """corr(a, b) with `given` regressed out of both.
+
+    The distinction this block exists to draw: TB magnitude sorts games onto
+    the price axis, so a marginal correlation with winning is partly the market
+    speaking. Residualising on the price is the correlation-language form of
+    the logit arm below, and the two should agree.
+    """
+    g = np.column_stack([np.ones(len(given)), np.asarray(given, dtype=float)])
+    ra = np.asarray(a, float) - g @ np.linalg.lstsq(g, np.asarray(a, float), rcond=None)[0]
+    rb = np.asarray(b, float) - g @ np.linalg.lstsq(g, np.asarray(b, float), rcond=None)[0]
+    return _corr(ra, rb)
+
+
+def correlation_rows(fam, pooled):
+    """The two questions a reader actually asks, answered as correlations.
+
+    "Does TB magnitude correlate with V12 wins?" is MARGINAL and "does TB give
+    the lean context?" is CONDITIONAL, and on this data they do not have the
+    same answer sign-for-sign -- which is the whole reason both are printed
+    rather than one standing in for the other.
+
+    The last two rows are the decomposition: how much of TB is the price
+    restated, and how much of it the model already carries in `xw_net`.
+    """
+    rows = []
+
+    def add(label, r, n, note=""):
+        lo, hi, z = _fisher_ci(r, n)
+        rows.append({"label": label, "r": r, "n": n, "lo": lo, "hi": hi,
+                     "z": z, "note": note})
+
+    q = logit(fam["q_lean"].values)
+    add("|TB| vs V12 win (marginal)", _corr(fam["abs_tb"], fam["lean_won"]), len(fam))
+    add("|TB| vs V12 win | price", _partial_corr(fam["abs_tb"], fam["lean_won"], q), len(fam),
+        "the context question")
+    add("TB tier vs V12 win (marginal)",
+        _corr((fam["abs_tb"] >= TB_P50_FROZEN).astype(float), fam["lean_won"]), len(fam))
+    add("|TB| vs |price - .5|", _corr(fam["abs_tb"], (fam["p_home"] - 0.5).abs()), len(fam),
+        "how much of TB is the price restated")
+    add("|TB| vs |xw_net|", _corr(fam["abs_tb"], fam["xw_net"].abs()), len(fam),
+        "how much of TB the model already carries")
+    if pooled["tb_delta"].notna().any():
+        ph = logit(pooled["p_home"].values)
+        add("TB signed vs home win (marginal)",
+            _corr(pooled["tb_delta"], pooled["home_won"]), len(pooled))
+        add("TB signed vs home win | price",
+            _partial_corr(pooled["tb_delta"], pooled["home_won"], ph), len(pooled),
+            "pooled, metric-free")
+    return rows
+
+
 def tier_rows(f, p50):
     """Per-tier record WITH its two controls, because the raw rate is base rate.
 
@@ -418,6 +492,8 @@ def report(led, tb, tags, basis, p50, out=sys.stdout):
     say(f"family rows   : {len(fam)} under {sorted(tags)}")
     say()
 
+    pooled = f[f["p_home"].notna()]
+
     say("1. TIER RECORDS, WITH THE TWO CONTROLS THE MEDIAN SPLIT OMITS")
     say("   Raw rate over a magnitude tier is mostly base rate. Read the last two")
     say("   columns: what the tier beat its OWN prices by, and whether backing the")
@@ -434,12 +510,27 @@ def report(led, tb, tags, basis, p50, out=sys.stdout):
         say("   no family rows carry both a TB feature and a price on this basis.")
     say()
 
-    say("2. DOES TB ADD ANYTHING TO THE PRICE? (pooled, metric-free)")
+    say("2. THE TWO QUESTIONS AS CORRELATIONS")
+    say("   MARGINAL asks 'does TB magnitude correlate with V12 wins'. CONDITIONAL")
+    say("   asks 'does TB give the lean context the price does not already give'.")
+    say("   They are different questions and a magnitude variable is exactly the")
+    say("   case where they can disagree, because magnitude sorts games onto the")
+    say("   price axis. The last rows size that directly.")
+    if len(fam) >= 4:
+        say(f"   {'':<34}{'n':>5}{'r':>9}{'95% CI':>20}{'z':>7}")
+        for row in correlation_rows(fam, pooled):
+            ci = f"[{row['lo']:+.3f}, {row['hi']:+.3f}]"
+            say(f"   {row['label']:<34}{row['n']:>5}{row['r']:>+9.4f}{ci:>20}{row['z']:>+7.2f}"
+                + (f"   <- {row['note']}" if row["note"] else ""))
+    else:
+        say("   SKIPPED: too few family rows.")
+    say()
+
+    say("3. DOES TB ADD ANYTHING TO THE PRICE? (pooled, metric-free)")
     say("   P(home wins) ~ logit(close p_home) + z(signed TB delta), EVERY graded")
     say("   family. The outcome is a box score and the price is a price, so neither")
     say("   knows which model wrote the row -- scoping this to one family would")
     say("   halve the sample for a reason that cannot apply.")
-    pooled = f[f["p_home"].notna()]
     if has_dir and len(pooled) >= N_FIT_MIN:
         arm = fit_arm(pooled["home_won"], [logit(pooled["p_home"].values),
                                            _z(pooled["tb_delta"])],
@@ -454,7 +545,7 @@ def report(led, tb, tags, basis, p50, out=sys.stdout):
         say(f"   SKIPPED: n={len(pooled)} below the convergence floor of {N_FIT_MIN}.")
     say()
 
-    say("3. DOES TB MAGNITUDE SAY WHEN TO TRUST THE LEAN? (current family)")
+    say("4. DOES TB MAGNITUDE SAY WHEN TO TRUST THE LEAN? (current family)")
     say("   P(lean wins) ~ logit(leaned side's price) + z(|TB delta|). A positive")
     say("   TB coefficient is the proposal's claim: the lean is likelier right when")
     say("   the TB mismatch is large, over and above the price already saying so.")
@@ -476,7 +567,7 @@ def report(led, tb, tags, basis, p50, out=sys.stdout):
         say(f"   SKIPPED: n={len(fam)} below the convergence floor of {N_FIT_MIN}.")
     say()
 
-    say("4. OUT-OF-SAMPLE LOG LOSS (pooled, walk-forward; lower is better)")
+    say("5. OUT-OF-SAMPLE LOG LOSS (pooled, walk-forward; lower is better)")
     say("   Fitted on strictly prior slates, scored on the next. This is the arm")
     say("   a coefficient cannot fake: if 'price + TB' ranks BELOW 'market-fitted',")
     say("   TB is subtracting information from the price.")
