@@ -114,6 +114,71 @@ class NoLookaheadTests(unittest.TestCase):
                                 g["date"].min() + pd.Timedelta(days=9))
 
 
+class DuplicateGameTests(unittest.TestCase):
+    """A game listed twice must not reach the window, the feature or the join.
+
+    Found in production, not in review: the first runner report printed
+    `TB coverage: 996 of 982 graded decided ledger rows`, which cannot be true
+    of an inner join. The schedule serves resumed and rescheduled games under
+    more than one date, and a doubled game enters every later 60-day window
+    twice -- so this is a wrong-feature bug, not only a wrong-n bug.
+    """
+
+    def _games(self, dup=False):
+        rng = np.random.default_rng(11)
+        rows, pk = [], 0
+        for day in range(30):
+            for _ in range(8):
+                pk += 1
+                rows.append({
+                    "game_pk": pk, "season": 2026,
+                    "date": pd.Timestamp("2026-05-01") + pd.Timedelta(days=day),
+                    "home_id": int(rng.integers(1, 31)), "away_id": int(rng.integers(1, 31)),
+                    "home_tb": float(rng.integers(4, 20)), "away_tb": float(rng.integers(4, 20)),
+                })
+        g = pd.DataFrame(rows)
+        g = g[g["home_id"] != g["away_id"]].reset_index(drop=True)
+        if dup:
+            # The real shape: same game_pk, a LATER date -- a resumed game.
+            again = g.iloc[[3, 17]].copy()
+            again["date"] = again["date"] + pd.Timedelta(days=2)
+            g = pd.concat([g, again], ignore_index=True)
+        return g
+
+    def test_a_duplicated_game_changes_no_other_games_feature(self):
+        clean = P.tb_features(self._games(False))
+        dirty = P.tb_features(self._games(True))
+        self.assertEqual(len(clean), len(dirty))
+        m = clean.merge(dirty, on="game_pk", suffixes=("_c", "_d"))
+        self.assertEqual(len(m), len(clean))
+        np.testing.assert_allclose(m["tb_delta_c"], m["tb_delta_d"], atol=0, rtol=0)
+
+    def test_the_feature_frame_is_unique_on_game_pk(self):
+        f = P.tb_features(self._games(True))
+        self.assertFalse(f["game_pk"].duplicated().any())
+
+    def test_the_join_refuses_to_fan_out(self):
+        """The guard is structural: pandas raises rather than the report
+        printing a coverage figure above its own denominator."""
+        led = pd.DataFrame({"game_pk": [1, 2, 3]})
+        tb = pd.DataFrame({"game_pk": [1, 1, 2], "tb_delta": [0.1, 0.2, 0.3]})
+        with self.assertRaises(Exception):
+            led.merge(tb, on="game_pk", how="inner", validate="one_to_one")
+
+    def test_load_tb_csv_deduplicates(self):
+        import tempfile, os
+        fd, path = tempfile.mkstemp(suffix=".csv")
+        os.close(fd)
+        try:
+            pd.DataFrame({"game_pk": [1, 1, 2],
+                          "delta_tb_60": [0.1, 0.9, -0.2]}).to_csv(path, index=False)
+            f = P.load_tb_csv(path)
+            self.assertEqual(len(f), 2)
+            self.assertFalse(f["game_pk"].duplicated().any())
+        finally:
+            os.unlink(path)
+
+
 class OfflinePathTests(unittest.TestCase):
     def test_either_column_spelling_loads(self):
         import tempfile, os
