@@ -165,8 +165,9 @@ class AlignmentTests(unittest.TestCase):
 
     def test_a_planted_corroboration_effect_is_recovered(self):
         f = self._frame(align_edge=0.10, seed=1)
-        rows = P.alignment_rows(P.alignment_frame(f))
-        c = P.alignment_contrast(rows)
+        al = P.alignment_frame(f)
+        rows = P.alignment_rows(al)
+        c = P.alignment_contrast(rows, al, draws=400)
         self.assertGreater(c["diff"], 5.0)
         self.assertGreater(c["z"], 2.0)
 
@@ -182,7 +183,8 @@ class AlignmentTests(unittest.TestCase):
         """
         f = self._frame(align_edge=0.0, price_confound=True,
                         favourite_edge=0.05, n=3000, seed=2)
-        c = P.alignment_contrast(P.alignment_rows(P.alignment_frame(f)))
+        al = P.alignment_frame(f)
+        c = P.alignment_contrast(P.alignment_rows(al), al, draws=400)
         self.assertGreater(c["diff"], 3.0, "the naive contrast should look alive")
         self.assertLess(abs(c["net_of_chalk"]), 2.0,
                         "and netting chalk off it should kill it")
@@ -191,7 +193,8 @@ class AlignmentTests(unittest.TestCase):
         """The other direction, so the subtraction is not simply destroying
         everything: a genuine corroboration effect must survive it."""
         f = self._frame(align_edge=0.10, favourite_edge=0.05, n=3000, seed=8)
-        c = P.alignment_contrast(P.alignment_rows(P.alignment_frame(f)))
+        al = P.alignment_frame(f)
+        c = P.alignment_contrast(P.alignment_rows(al), al, draws=400)
         self.assertGreater(c["net_of_chalk"], 4.0)
 
     def test_no_planted_effect_reads_null(self):
@@ -201,10 +204,32 @@ class AlignmentTests(unittest.TestCase):
             zs.append(P.alignment_contrast(P.alignment_rows(P.alignment_frame(f)))["z"])
         self.assertLessEqual(sum(abs(z) > 2 for z in zs), 1, f"z values {zs}")
 
+    def test_the_headline_carries_an_interval(self):
+        """A difference-in-differences published bare is the one thing this
+        repo forbids without exception. Its variance is not the sum of the
+        printed SEs -- the controls share rows with what they control -- so it
+        is bootstrapped, and the interval must contain the point estimate."""
+        f = self._frame(align_edge=0.0, n=800, seed=12)
+        al = P.alignment_frame(f)
+        c = P.alignment_contrast(P.alignment_rows(al), al, draws=600)
+        self.assertTrue(np.isfinite(c["net_lo"]) and np.isfinite(c["net_hi"]))
+        self.assertLessEqual(c["net_lo"], c["net_of_chalk"])
+        self.assertGreaterEqual(c["net_hi"], c["net_of_chalk"])
+        self.assertLess(c["net_lo"], 0.0)
+        self.assertGreater(c["net_hi"], 0.0)
+
+    def test_the_interval_is_omitted_rather_than_faked_on_a_tiny_frame(self):
+        f = self._frame(n=6, seed=13)
+        al = P.alignment_frame(f)
+        c = P.alignment_contrast(P.alignment_rows(al), al, draws=50)
+        if c is not None:
+            self.assertTrue(np.isnan(c["net_lo"]))
+
     def test_the_contrast_se_is_of_the_difference(self):
         f = self._frame(seed=3)
-        rows = P.alignment_rows(P.alignment_frame(f))
-        c = P.alignment_contrast(rows)
+        al = P.alignment_frame(f)
+        rows = P.alignment_rows(al)
+        c = P.alignment_contrast(rows, al, draws=400)
         self.assertGreater(c["se"], max(r["se"] for r in rows))
 
     def test_a_tie_is_dropped_rather_than_called_agreement(self):

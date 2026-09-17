@@ -532,11 +532,36 @@ def alignment_rows(f):
     return rows
 
 
-def alignment_contrast(rows):
-    """AGREE minus DIVERGE, with the SE OF THE DIFFERENCE.
+def _did(f):
+    """The difference-in-differences: (model - chalk) in AGREE minus in DIVERGE."""
+    a = f[f["agrees"] == True]                                        # noqa: E712
+    d = f[f["agrees"] == False]                                       # noqa: E712
+    if not len(a) or not len(d):
+        return float("nan")
+    def cell(x):
+        return ((x["lean_won"].mean() - x["q_lean"].mean())
+                - (x["chalk_won"].mean() - x["chalk_p"].mean()))
+    return 100.0 * (cell(a) - cell(d))
+
+
+def alignment_contrast(rows, f=None, draws=4000, seed=0):
+    """AGREE minus DIVERGE, with the SE OF THE DIFFERENCE, and the DiD headline.
 
     The contrast is the claim -- "TB tells you when to trust this team's delta"
     is a statement about the gap between the two cells, not about either one.
+
+    The headline is the model's contrast NET OF CHALK's on the identical split.
+    A pure price confound moves both cells together -- and only where favourites
+    actually beat their price, which is why chalk's own contrast cannot be read
+    alone: in a correctly-priced world it is zero in both cells and reveals
+    nothing. The difference is the part that is about TB.
+
+    That headline is a difference-in-differences over two cells sharing no rows
+    but two controls measured on the SAME rows as the thing they control, so its
+    variance is NOT the sum of the parts' and cannot be written down from the
+    printed SEs. The first version of this function published it bare, which is
+    the one rule this repo states without exception -- print the standard error,
+    never the number alone. It is bootstrapped over games instead.
     """
     if len(rows) != 2:
         return None
@@ -544,13 +569,22 @@ def alignment_contrast(rows):
     se = math.sqrt(a["se"] ** 2 + d["se"] ** 2)
     diff = a["excess"] - d["excess"]
     chalk_diff = a["chalk"] - d["chalk"]
-    # The headline is the model's contrast NET OF CHALK's on the identical
-    # split. A pure price confound moves both cells together -- and only where
-    # favourites actually beat their price, which is why chalk's own contrast
-    # cannot be read alone: in a correctly-priced world it is zero in both
-    # cells and reveals nothing. The difference is the part that is about TB.
-    return {"diff": diff, "se": se, "z": diff / se if se > 0 else float("nan"),
-            "chalk_diff": chalk_diff, "net_of_chalk": diff - chalk_diff}
+    out = {"diff": diff, "se": se, "z": diff / se if se > 0 else float("nan"),
+           "chalk_diff": chalk_diff, "net_of_chalk": diff - chalk_diff,
+           "net_lo": float("nan"), "net_hi": float("nan")}
+    if f is None or len(f) < 8:
+        return out
+    rng = np.random.default_rng(seed)
+    idx = np.arange(len(f))
+    boots = []
+    for _ in range(draws):
+        b = _did(f.iloc[rng.choice(idx, len(idx), replace=True)])
+        if np.isfinite(b):
+            boots.append(b)
+    if len(boots) > 20:
+        out["net_lo"] = float(np.quantile(boots, 0.025))
+        out["net_hi"] = float(np.quantile(boots, 0.975))
+    return out
 
 
 def _search_verdict(p):
@@ -988,12 +1022,14 @@ def report(led, tb, tags, basis, p50, out=sys.stdout):
         for r in rows:
             say(f"   {r['cell']:<22}{r['n']:>5}{r['record']:>10}{r['raw']:>8.3f}"
                 f"{r['implied']:>9.3f}{r['excess']:>+11.2f}{r['se']:>7.2f}{r['chalk']:>+9.2f}")
-        c = alignment_contrast(rows)
+        c = alignment_contrast(rows, al, seed=NULL_SEED)
         if c:
             say(f"   AGREE minus DIVERGE     {c['diff']:+.2f}pp +/- {c['se']:.2f}   "
                 f"z={c['z']:+.2f}")
             say(f"   the same split for chalk {c['chalk_diff']:+.2f}pp")
-            say(f"   TB's own contribution   {c['net_of_chalk']:+.2f}pp  <- the headline")
+            ci = (f"  [{c['net_lo']:+.2f}, {c['net_hi']:+.2f}]"
+                  if np.isfinite(c["net_lo"]) else "  (no interval: too few rows)")
+            say(f"   TB's own contribution   {c['net_of_chalk']:+.2f}pp{ci}  <- the headline")
             say("   A pure price confound moves both cells together, so the")
             say("   difference is the part that is about TB rather than about")
             say("   which side happened to be favoured.")
