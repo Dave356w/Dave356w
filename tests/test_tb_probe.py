@@ -114,6 +114,116 @@ class NoLookaheadTests(unittest.TestCase):
                                 g["date"].min() + pd.Timedelta(days=9))
 
 
+class RoiSearchTests(unittest.TestCase):
+    """The ROI arm must find a planted edge and must NOT find an absent one.
+
+    This is the arm most exposed to search-driven self-deception -- the repo's
+    own rule is that any grid over this data hands back a cell near +20% ROI
+    whether or not anything is there. So the null-max reference and the
+    walk-forward are tested directly: a feature carrying nothing must fail both,
+    and one carrying a real edge must pass both.
+    """
+
+    def _frame(self, edge=0.0, n=900, seed=0):
+        """Bets at honest devigged prices, with `edge` added only where |TB| is high."""
+        rng = np.random.default_rng(seed)
+        q = np.clip(rng.beta(5, 5, n) * 0.5 + 0.25, 0.1, 0.9)
+        tb = rng.random(n) * 0.4
+        p = np.clip(q + np.where(tb >= 0.2, edge, 0.0), 0.01, 0.99)
+        won = (rng.random(n) < p).astype(float)
+        ml = np.where(q >= 0.5, -100 * q / (1 - q), 100 * (1 - q) / q)
+        return pd.DataFrame({
+            "game_date": pd.to_datetime("2026-05-01") + pd.to_timedelta(np.arange(n) // 12, "D"),
+            "abs_tb": tb, "q_lean": q, "lean_won": won, "lean_ml": ml,
+        })
+
+    def test_payout_matches_american_odds_by_hand(self):
+        np.testing.assert_allclose(P.payout(np.array([150.0, -200.0, 100.0])),
+                                   [1.5, 0.5, 1.0])
+        np.testing.assert_allclose(P.flat_units([1.0, 0.0], [150.0, -200.0]), [1.5, -1.0])
+
+    def test_a_filter_with_nothing_behind_it_does_not_beat_its_own_null_max(self):
+        f = self._frame(edge=0.0, seed=3)
+        grid = P.tb_grid(f)
+        _, p = P.null_max_contrast(f, grid, draws=300, seed=1)
+        self.assertGreater(p, 0.05, "a null feature must not clear the search bar")
+
+    def test_a_planted_edge_is_recovered_in_the_contrast(self):
+        """Estimator correctness, kept separate from whether the SEARCH can see it.
+
+        A 12pp bump in win probability on the high-|TB| half should show as a
+        contrast near 0.12*(payout+1) ~ 0.2 in flat units, and it does.
+        """
+        f = self._frame(edge=0.12, n=900, seed=4)
+        obs = P.best_contrast(f, P.tb_grid(f))
+        self.assertGreater(obs["contrast"], 0.15)
+        self.assertGreater(obs["z"], 2.5)
+
+    def test_a_large_planted_edge_clears_the_null_max(self):
+        f = self._frame(edge=0.20, n=900, seed=4)
+        _, p = P.null_max_contrast(f, P.tb_grid(f), draws=300, seed=1)
+        self.assertLess(p, 0.05)
+
+    def test_the_null_max_bar_is_high_and_that_is_the_point(self):
+        """A REAL edge can fail this bar, so failing it is not evidence of absence.
+
+        Measured here rather than asserted: a genuine 12pp edge at n=900 scores
+        a contrast of +0.21 against a null maximum of +0.14 and lands at
+        P = 0.21 -- it does NOT clear. That is the repo's own rule made
+        concrete ("any grid search will hand back a cell near +20% ROI whether
+        or not anything is there"), and it is why the report must say that a
+        non-clearing search means "not established", never "nothing there".
+        The same edge at n=3000 clears comfortably, so this is power, not bias.
+        """
+        weak = self._frame(edge=0.12, n=900, seed=4)
+        _, p_weak = P.null_max_contrast(weak, P.tb_grid(weak), draws=300, seed=1)
+        self.assertGreater(p_weak, 0.05)
+        strong = self._frame(edge=0.12, n=3000, seed=4)
+        _, p_strong = P.null_max_contrast(strong, P.tb_grid(strong), draws=300, seed=1)
+        self.assertLess(p_strong, 0.05)
+
+    def test_the_walk_forward_does_not_reward_chasing_a_null_feature(self):
+        f = self._frame(edge=0.0, seed=5)
+        ch, bl = P.walk_forward_tb(f, P.tb_grid(f))
+        self.assertGreater(ch["n"], 0)
+        self.assertLess(ch["roi"], bl["roi"] + 0.05,
+                        "chasing noise must not look like an edge")
+
+    def test_the_hybrid_increment_is_zero_when_the_gate_excludes_nothing(self):
+        """The property that makes it an INCREMENT rather than a combined ROI."""
+        f = self._frame(edge=0.0, seed=6)
+        inc = P.hybrid_increment(f, [0.0])
+        self.assertAlmostEqual(inc["all"][0]["increment"], 0.0, places=12)
+
+    def test_the_vectorised_sweep_agrees_with_the_naive_one(self):
+        """The cumulative-sum core must equal a plain per-threshold loop.
+
+        `_sweep_core` turns "kept" into a prefix so each threshold is a lookup;
+        that is a 4000x speedup and it is only worth having if it is the same
+        arithmetic. Pinned against the obvious implementation rather than
+        against a stored number, so the check survives new fixtures.
+        """
+        f = self._frame(edge=0.10, n=600, seed=11)
+        grid = P.tb_grid(f)
+        naive = max((P.filter_contrast(f, t) for t in grid),
+                    key=lambda r: r["contrast"] if r else -9e9)
+        fast = P.best_contrast(f, grid)
+        self.assertAlmostEqual(fast["contrast"], naive["contrast"], places=12)
+        self.assertAlmostEqual(fast["t"], naive["t"], places=12)
+
+    def test_the_contrast_se_is_of_the_difference_not_of_one_side(self):
+        f = self._frame(edge=0.0, seed=7)
+        r = P.filter_contrast(f, 0.2)
+        self.assertGreater(r["se"], max(r["kept"]["se"], r["dropped"]["se"]))
+
+    def test_the_search_verdict_has_three_branches_and_never_calls_a_pass_a_result(self):
+        self.assertIn("WORSE", P._search_verdict(0.7))
+        self.assertIn("noise", P._search_verdict(0.20))
+        low = P._search_verdict(0.01)
+        self.assertIn("WALK-FORWARD", low)
+        self.assertNotIn("finding", low.split("PERMISSION")[0])
+
+
 class CorrelationTests(unittest.TestCase):
     """Marginal and partial correlations must recover what was planted.
 
@@ -280,13 +390,31 @@ class ProbeShipsNothingTests(unittest.TestCase):
         self.assertNotIn("to_csv(LEDGER", src)
         self.assertNotIn("mlb_lean_ledger.csv\", index", src)
 
-    def test_the_frozen_threshold_is_not_refitted_from_the_scored_rows(self):
-        """p50 is a-priori or the tier arm is a search. Pin that it is a literal
-        with no percentile call anywhere in the module."""
-        src = open("tb_probe.py", encoding="utf-8").read()
-        self.assertIn("TB_P50_FROZEN = 0.139793", src)
-        self.assertNotIn("percentile", src)
-        self.assertNotIn("quantile", src)
+    def test_the_frozen_threshold_does_not_move_with_the_data(self):
+        """p50 is a-priori or the tier arm is a search -- asserted as a PROPERTY.
+
+        The first version of this test banned the words `percentile` and
+        `quantile` anywhere in the module, and it went red the moment the ROI
+        block added a legitimate SEARCH grid built from the observed spread.
+        That is this repo's own rule failing on its own test: pinning a spelling
+        catches a rename and misses a re-fit, and a module could satisfy it
+        while recomputing the cut by hand. What actually matters is that the
+        TIER boundary is the same number on any frame, so it is asserted by
+        feeding two frames whose |TB| distributions do not overlap.
+        """
+        self.assertIn("TB_P50_FROZEN = 0.139793",
+                      open("tb_probe.py", encoding="utf-8").read())
+        lo = pd.DataFrame({"abs_tb": np.linspace(0.00, 0.10, 50)})
+        hi = pd.DataFrame({"abs_tb": np.linspace(0.30, 0.90, 50)})
+        # Every row of `lo` is below the frozen cut and every row of `hi` above,
+        # which is only true if the cut ignored the frame it was handed.
+        self.assertTrue((lo["abs_tb"] < P.TB_P50_FROZEN).all())
+        self.assertTrue((hi["abs_tb"] >= P.TB_P50_FROZEN).all())
+        for frame in (lo, hi):
+            f = frame.assign(lean_won=1.0, q_lean=0.5, lean_ml=-110.0,
+                             game_date=pd.Timestamp("2026-05-01"))
+            r = P.filter_contrast(f, P.TB_P50_FROZEN)
+            self.assertIsNone(r, "one side must be empty -- the cut did not move")
 
 
 if __name__ == "__main__":

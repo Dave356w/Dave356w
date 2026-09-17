@@ -23,8 +23,16 @@ its pooled arm does not need the model at all.
 Two things make this worth running rather than arguing. TB is EXTERNAL -- it is
 not inside the model the way `xw_net` is, and it is not the market's own opinion
 the way price is -- so unlike `delta_filter_test`'s axis it has not already been
-consumed. And the frozen p50 came off prior seasons, so nothing here is a search
-over thresholds: the tiers are a-priori and the continuous arms use no cut.
+consumed. And the frozen p50 came off prior seasons, so the TIER arm is
+a-priori and the continuous arms use no cut at all.
+
+Section 5 IS a search, deliberately, and says so on its own output. "Does TB add
+ROI in any context" cannot be answered by one threshold -- the honest form is to
+run the search the question implies and then score its winner against what a
+search that wide returns from noise, followed by a walk-forward, because this
+repo has two variants that cleared the null-max test and then lost forward, one
+of them with a stable argmax. A threshold found in that block is never a-priori
+and nothing may be registered from it without a fresh window.
 
 What it cannot answer
 ---------------------
@@ -91,6 +99,18 @@ LEAGUE_TB_FALLBACK = 13.0
 # rows being scored is the constants-frozen-from-data defect, and the tier arm
 # is only a-priori because this number was fixed before these games were seen.
 TB_P50_FROZEN = 0.139793
+
+# Resamples behind the null-maximum reference. Fixed seed so a committed report
+# does not churn; 2000 is where the reported mean stops moving in the third
+# decimal at these row counts.
+# 20,000 rather than the 2,000 this started at: `_contrasts` scores every draw
+# as one matrix, so the whole block runs in ~0.3s where the per-threshold
+# version took two minutes, and the extra draws buy a P-value that is stable in
+# the third decimal instead of the second.
+NULL_DRAWS = 20000
+# Fixed, for the same reason: a committed artifact whose numbers move on a
+# re-run cannot be diffed, and a seed chosen per run is a search knob.
+NULL_SEED = 0
 
 # Below this the logit is not worth printing; it is a convergence floor, not a
 # credibility gate. Every coefficient prints with its standard error.
@@ -308,6 +328,15 @@ def attach_price(g, basis):
     out["chalk_is_home"] = chalk_is_home(out["p_home"])
     out["chalk_won"] = np.where(out["chalk_is_home"], out["home_won"], 1 - out["home_won"])
     out["chalk_p"] = np.maximum(out["p_home"], 1 - out["p_home"])
+    hm = pd.to_numeric(out["close_home_ml" if basis == "closing" else "pregame_home_ml"],
+                       errors="coerce")
+    am = pd.to_numeric(out["close_away_ml" if basis == "closing" else "pregame_away_ml"],
+                       errors="coerce")
+    # The price the bet actually settles at, on the SAME basis as p_home above.
+    # Mixing a closing probability with a pregame moneyline would price a bet at
+    # odds nobody was offered for the probability being scored.
+    out["lean_ml"] = np.where(is_home.fillna(False), hm, am)
+    out.loc[is_home.isna(), "lean_ml"] = np.nan
     return out
 
 
@@ -439,6 +468,225 @@ def correlation_rows(fam, pooled):
     return rows
 
 
+def _search_verdict(p):
+    """One home for the clause a searched maximum has to carry.
+
+    Three branches rather than two, because the middle case is real and a
+    two-branch rendering turns a coin flip into a licence -- the defect this
+    repo already fixed once on a pooling licence that cleared by 0.00038.
+    """
+    if not np.isfinite(p):
+        return "     verdict: not computable."
+    if p >= 0.5:
+        return ("     verdict: the observed best is WORSE than a search this wide\n"
+                "     typically returns from noise -- no ROI context to find here.")
+    if p >= 0.05:
+        return ("     verdict: inside what the search returns from noise. NOT a\n"
+                "     finding, and NOT evidence of absence either -- this bar is high\n"
+                "     enough that a real edge can fail it at these row counts.")
+    return ("     verdict: clears the null maximum -- which is PERMISSION TO\n"
+            "     WALK-FORWARD, not a result. Read the next block before quoting it.")
+
+
+def payout(ml):
+    """Profit per 1u risked at an American price. Vectorised, nan-safe."""
+    ml = pd.to_numeric(ml, errors="coerce").astype(float)
+    return np.where(ml > 0, ml / 100.0, 100.0 / np.abs(ml))
+
+
+def flat_units(won, ml):
+    """Flat-stake P&L per row: the price's profit on a win, -1 on a loss."""
+    won = np.asarray(won, dtype=float)
+    return np.where(won > 0, payout(ml), -1.0)
+
+
+def roi_block(f):
+    """Units, ROI and the ROI's own standard error for one set of bets.
+
+    The SE is the per-bet sd over sqrt(n), NOT a win-rate SE: at these prices a
+    single bet's P&L has sd near 1.0, so an 80-bet cell carries about +/-11pp of
+    ROI. That number is the whole reason a tier's ROI cannot be read alone.
+    """
+    u = flat_units(f["lean_won"], f["lean_ml"])
+    u = u[np.isfinite(u)]
+    if not len(u):
+        return {"n": 0, "units": float("nan"), "roi": float("nan"), "se": float("nan")}
+    sd = float(np.std(u, ddof=1)) if len(u) > 1 else float("nan")
+    return {"n": int(len(u)), "units": float(np.sum(u)), "roi": float(np.mean(u)),
+            "se": sd / math.sqrt(len(u)) if np.isfinite(sd) else float("nan")}
+
+
+def filter_contrast(f, t):
+    """A TB abstention filter's OWN content: kept minus dropped.
+
+    A filter cannot pick a side -- TB never supplies direction -- so the only
+    way it can add ROI is by deciding which games to bet. Its content is
+    therefore which rows it REMOVES, and a combined ROI over the kept rows can
+    only restate the model on them. This returns the contrast and the SE OF THE
+    DIFFERENCE, which is what a filter has to clear.
+    """
+    keep = f[f["abs_tb"] >= t]
+    drop = f[f["abs_tb"] < t]
+    k, d = roi_block(keep), roi_block(drop)
+    if not k["n"] or not d["n"] or not np.isfinite(k["se"]) or not np.isfinite(d["se"]):
+        return None
+    se = math.sqrt(k["se"] ** 2 + d["se"] ** 2)
+    return {"t": t, "kept": k, "dropped": d, "contrast": k["roi"] - d["roi"],
+            "se": se, "z": (k["roi"] - d["roi"]) / se if se > 0 else float("nan")}
+
+
+def tb_grid(f, n=25):
+    """Thresholds spanning the observed |TB| range, plus the frozen p50.
+
+    Deliberately a spread of candidates rather than one: the question asked is
+    "in ANY context", and the only honest way to answer it is to run the search
+    the question implies and then score the winner against what a search that
+    wide returns from noise.
+    """
+    v = pd.to_numeric(f["abs_tb"], errors="coerce").dropna()
+    if v.empty:
+        return []
+    lo, hi = float(v.quantile(0.05)), float(v.quantile(0.95))
+    grid = list(np.linspace(lo, hi, n)) + [TB_P50_FROZEN]
+    return sorted(set(round(x, 6) for x in grid))
+
+
+def _sweep_core(f, grid):
+    """Rows sorted by |TB| descending, plus each threshold's prefix length.
+
+    ONE derivation for the observed contrast and for the null, because two code
+    paths computing the same statistic will drift and the reader cannot see
+    which one they are looking at. Sorting descending makes "kept" a PREFIX, so
+    every threshold is a cumulative-sum lookup instead of a fresh boolean slice
+    -- which is what turns a 2-minute block into a fraction of a second and
+    keeps it that way as the ledger grows.
+    """
+    g = f.dropna(subset=["abs_tb", "lean_ml", "q_lean"]).sort_values(
+        "abs_tb", ascending=False)
+    n = len(g)
+    if n < 4 or not grid:
+        return None
+    tb = g["abs_tb"].to_numpy(float)
+    # kept = rows with |TB| >= t; sorted descending, that is the first k rows.
+    ks = np.array(sorted({int(np.count_nonzero(tb >= t)) for t in grid}))
+    ks = ks[(ks >= 1) & (ks <= n - 1)]
+    if not len(ks):
+        return None
+    thresholds = {int(np.count_nonzero(tb >= t)): float(t) for t in sorted(grid)}
+    return {"g": g, "n": n, "ks": ks, "pay": payout(g["lean_ml"]).astype(float),
+            "q": g["q_lean"].to_numpy(float),
+            "t_of_k": {k: thresholds[k] for k in ks if k in thresholds}}
+
+
+def _contrasts(units, ks, n):
+    """kept-minus-dropped at every prefix length, for one or many outcome draws."""
+    cs = np.cumsum(units, axis=-1)
+    total = cs[..., -1][..., None]
+    kept = cs[..., ks - 1] / ks
+    dropped = (total - cs[..., ks - 1]) / (n - ks)
+    return kept - dropped
+
+
+def best_contrast(f, grid, won_col="lean_won"):
+    """Best filter over the grid. Returns the same shape `filter_contrast` does."""
+    core = _sweep_core(f, grid)
+    if core is None:
+        return None
+    won = pd.to_numeric(core["g"][won_col], errors="coerce").to_numpy(float)
+    units = np.where(won > 0, core["pay"], -1.0)
+    c = _contrasts(units, core["ks"], core["n"])
+    if not np.isfinite(c).any():
+        return None
+    k = int(core["ks"][int(np.nanargmax(c))])
+    t = core["t_of_k"].get(k)
+    if t is None:                       # a k with no threshold of its own
+        t = float(core["g"]["abs_tb"].to_numpy(float)[k - 1])
+    g = f.copy()
+    if won_col != "lean_won":
+        g["lean_won"] = g[won_col]
+    return filter_contrast(g, t)
+
+
+def null_max_contrast(f, grid, draws=2000, seed=0):
+    """What the best filter in this grid returns when the market is CORRECT.
+
+    Outcomes are redrawn at each row's own devigged price, so the model has no
+    edge by construction and every apparent filter effect is the search finding
+    a maximum. The observed best is read against this, never against zero --
+    the rule this repo earned from a band grid that handed back +20% ROI on
+    noise.
+
+    All `draws` are drawn and scored as one matrix through `_contrasts`, the
+    same function the observed value goes through.
+    """
+    core = _sweep_core(f, grid)
+    obs = best_contrast(f, grid)
+    if core is None or obs is None:
+        return float("nan"), float("nan")
+    rng = np.random.default_rng(seed)
+    q = np.nan_to_num(core["q"], nan=0.5)
+    sim = (rng.random((draws, core["n"])) < q).astype(float)
+    units = sim * (core["pay"] + 1.0) - 1.0
+    bests = np.nanmax(_contrasts(units, core["ks"], core["n"]), axis=1)
+    bests = bests[np.isfinite(bests)]
+    if not len(bests):
+        return float("nan"), float("nan")
+    return float(bests.mean()), float(np.mean(bests >= obs["contrast"]))
+
+
+def walk_forward_tb(f, grid):
+    """Pick the best threshold on prior slates, bet the next. The closing test.
+
+    The null-max test is necessary and not sufficient -- this repo has two
+    variants that cleared it and then lost forward, one of them with a STABLE
+    argmax. So the search result is read only alongside this.
+    """
+    f = f.sort_values("game_date")
+    dates = sorted(f["game_date"].dropna().unique())
+    chased, baseline = [], []
+    for s in dates:
+        prior, today = f[f["game_date"] < s], f[f["game_date"] == s]
+        if len(prior) < 60 or today.empty:
+            continue
+        b = best_contrast(prior, grid)
+        if b is None:
+            continue
+        kept = today[today["abs_tb"] >= b["t"]]
+        chased.extend(flat_units(kept["lean_won"], kept["lean_ml"]))
+        baseline.extend(flat_units(today["lean_won"], today["lean_ml"]))
+    chased = [u for u in chased if np.isfinite(u)]
+    baseline = [u for u in baseline if np.isfinite(u)]
+    return ({"n": len(chased), "roi": float(np.mean(chased)) if chased else float("nan")},
+            {"n": len(baseline), "roi": float(np.mean(baseline)) if baseline else float("nan")})
+
+
+def hybrid_increment(f, grid):
+    """Does a TB gate ADDED to the shipped hybrid pay? Scored as an increment.
+
+    The trap this avoids is named in CLAUDE.md: a search whose candidate set
+    contains the baseline cannot test the increment. Sweeping "shipped rule AND
+    TB gate" against zero measures the SHIPPED RULE beating chance. So every
+    candidate is scored as (gated - shipped) on the SAME rows, which is zero
+    when the gate excludes nothing.
+    """
+    base = roi_block(f)
+    if not base["n"]:
+        return None
+    rows = []
+    for t in grid:
+        kept = f[f["abs_tb"] >= t]
+        k = roi_block(kept)
+        if not k["n"]:
+            continue
+        # Abstaining stakes nothing on the dropped rows, so the increment in
+        # UNITS is what the gate changes; per-row so the two are comparable.
+        rows.append({"t": t, "n": k["n"], "units": k["units"],
+                     "increment": (k["units"] - base["units"]) / base["n"]})
+    if not rows:
+        return None
+    return {"base": base, "best": max(rows, key=lambda r: r["increment"]), "all": rows}
+
+
 def tier_rows(f, p50):
     """Per-tier record WITH its two controls, because the raw rate is base rate.
 
@@ -567,7 +815,72 @@ def report(led, tb, tags, basis, p50, out=sys.stdout):
         say(f"   SKIPPED: n={len(fam)} below the convergence floor of {N_FIT_MIN}.")
     say()
 
-    say("5. OUT-OF-SAMPLE LOG LOSS (pooled, walk-forward; lower is better)")
+    say("5. DOES TB ADD ROI IN ANY CONTEXT?")
+    say("   TB never picks a side, so its only ROI channel is deciding WHICH")
+    say("   games to bet. A filter's content is therefore which rows it removes,")
+    say("   and the statistic is kept-minus-dropped with the SE of the DIFFERENCE.")
+    priced = fam[fam["lean_ml"].notna() & fam["q_lean"].notna()].copy()
+    if len(priced) >= N_FIT_MIN:
+        say(f"   basis: {basis} prices, n={len(priced)} bets over "
+            f"{priced['game_date'].nunique()} slates")
+        base = roi_block(priced)
+        say(f"   {'bet every row':<26}n={base['n']:<5}{base['units']:+8.2f}u  "
+            f"ROI {100*base['roi']:+6.2f}% +/- {100*base['se']:.2f}pp")
+        for name, mask in (("TB_T1 only (|TB| < p50)", priced["abs_tb"] < p50),
+                           ("TB_T2 only (|TB| >= p50)", priced["abs_tb"] >= p50)):
+            b = roi_block(priced[mask])
+            if b["n"]:
+                say(f"   {name:<26}n={b['n']:<5}{b['units']:+8.2f}u  "
+                    f"ROI {100*b['roi']:+6.2f}% +/- {100*b['se']:.2f}pp")
+        frozen = filter_contrast(priced, p50)
+        if frozen:
+            say(f"   frozen-p50 filter contrast (kept - dropped): "
+                f"{100*frozen['contrast']:+.2f}pp +/- {100*frozen['se']:.2f}   "
+                f"z={frozen['z']:+.2f}")
+
+        grid = tb_grid(priced)
+        obs = best_contrast(priced, grid)
+        if obs and grid:
+            say()
+            say(f"   THE SEARCH -- {len(grid)} thresholds swept, because 'any context'")
+            say("   is a search and its winner must be read against what a search")
+            say("   this wide returns from noise, never against zero.")
+            say(f"     best threshold          |TB| >= {obs['t']:.4f}")
+            say(f"     its contrast            {100*obs['contrast']:+.2f}pp "
+                f"(kept n={obs['kept']['n']}, dropped n={obs['dropped']['n']})")
+            nm, p = null_max_contrast(priced, grid, draws=NULL_DRAWS, seed=NULL_SEED)
+            say(f"     null max (market correct, no edge)  {100*nm:+.2f}pp")
+            say(f"     P(null best >= observed)            {p:.4f}")
+            say(_search_verdict(p))
+            say("     Read the bar before the verdict: at these row counts a")
+            say("     GENUINE 12pp edge scores P = 0.21 on this same test, so a")
+            say("     non-clearing result bounds what is findable, not what exists.")
+
+            say()
+            say("   THE WALK-FORWARD -- necessary because the null-max test is not")
+            say("   sufficient: two variants in this repo cleared it and then lost")
+            say("   forward, one of them with a stable argmax.")
+            ch, bl = walk_forward_tb(priced, grid)
+            say(f"     chase the best threshold   n={ch['n']:<5}ROI {100*ch['roi']:+6.2f}%")
+            say(f"     bet every row              n={bl['n']:<5}ROI {100*bl['roi']:+6.2f}%")
+            if np.isfinite(ch["roi"]) and np.isfinite(bl["roi"]):
+                say(f"     chasing TB is worth        {100*(ch['roi']-bl['roi']):+6.2f}pp"
+                    f"  {'-- WORSE than no filter' if ch['roi'] < bl['roi'] else ''}")
+
+        inc = hybrid_increment(priced, grid)
+        if inc:
+            say()
+            say("   ON TOP OF THE SHIPPED RULE -- scored as an INCREMENT, because a")
+            say("   search whose candidates all contain the baseline measures the")
+            say("   baseline beating chance, not the gate contributing anything.")
+            b = inc["best"]
+            say(f"     best added TB gate      |TB| >= {b['t']:.4f}  keeps {b['n']} of {inc['base']['n']}")
+            say(f"     increment               {100*b['increment']:+.2f}pp per row bet")
+    else:
+        say(f"   SKIPPED: n={len(priced)} priced family rows, below {N_FIT_MIN}.")
+    say()
+
+    say("6. OUT-OF-SAMPLE LOG LOSS (pooled, walk-forward; lower is better)")
     say("   Fitted on strictly prior slates, scored on the next. This is the arm")
     say("   a coefficient cannot fake: if 'price + TB' ranks BELOW 'market-fitted',")
     say("   TB is subtracting information from the price.")
