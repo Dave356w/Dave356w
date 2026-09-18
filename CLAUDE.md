@@ -91,6 +91,31 @@ way the evidence pointed independently of what the reset happened to cost. The
 scale half is the ordinary v10 argument and is measured: `q` is a convex weight
 between the same two phases, so the units are untouched.
 
+**v13 SHIPPED WITHOUT BLENDING ANYTHING FOR ITS FIRST TWO SLATES, and this
+is the first thing to know about the tag.** From the bump until 2026-09-18 the
+live build stamped `xw+starter_blend_v13` on rows carrying v12 math: the
+starter's published rate was the pure shrunk xwOBA on 28 of 28 side-rows of
+`leans_2026-09-18_xw.csv` and 18 of 18 of the 09-17 rebuild, `starter_rate_
+blended` False and `starter_rate_blend_in` null on every one. The cause and
+the fix are the anti-pattern entry below; what belongs here is what it means
+for the tag. Nothing graded — all 13 ledger rows were that morning's, pending,
+and `MODEL_FIELDS` re-derives a pending row on every pregame poll, so they
+were rebuilt under real v13 math before first pitch (the v8 precedent). So
+`_RECORD_FAMILIES` and `_SCALE_FAMILIES` are untouched and no tag moved: v13's
+first blended row is the first v13 row that ever graded. What does NOT survive
+is the sentence "v13 has graded no rows of its own" being read as neutral
+bookkeeping — for two slates it was the only thing standing between the tag
+and a graded row built under the previous model.
+
+**And the retrospective was blending the whole time, which is the part a later
+reader will trip on.** `reconstruct_v13` calls `blend_starter_rate` directly
+with the paired dumps' own values and never touches the frame, so it was never
+exposed to the gap. For those two slates the published v13 record — 449 of 449
+reconstructed — described a construction the live build was not running. That
+is the artifacts-disagreeing defect with the two artifacts being the model and
+its own retrospective, and the only reason it cost nothing is that the live
+arm produced no graded rows to disagree with.
+
 **v13 ships the starter blend and retires the hybrid rule, and this entry's
 job is to record that it was shipped AGAINST the measurements, on the
 operator's instruction.** Every reading in `blend_probe.py` and the sessions
@@ -788,6 +813,76 @@ precedent — they are how the fix is known to look.
   the fidelity gap above rather than rebuilding the same reconstruction.
 
 **Resolved — keep as precedent**
+
+- **A model input that never reached the model, and a degrade rule that made
+  it silent.** v13's whole content is the starter's centred 50/50
+  xwOBA/wOBA blend. `blend_starter_rate` was correct, `STATCAST_SELECTIONS`
+  requested the second rate, `load_stat_lookups` mapped it to
+  `wOBA_blend`, `compute_league_baseline` built its centre — and the blend
+  fired **zero times in production**, because `build_tables` populates each
+  frame row from `STAT_COLS` and then PROJECTS on `STAT_COLS`, and the blend
+  rate is deliberately in neither that list nor `STATCAST_RATE_COLS`. So
+  `segment_pitcher_blocks` passed each starter's whole row through to the
+  blend site with no blend rate in it, `pr.get(BLEND_RATE_INTERNAL_COL)`
+  returned None, and `blend_starter_rate` returned the primary unchanged.
+
+  **The degrade rule is what turned a missing column into two silent slates.**
+  Its docstring is explicit and RIGHT: "a missing optional input costs the
+  refinement, never the slate", because a slate's pregame rows cannot be
+  re-derived afterwards without lookahead. A rule written for the exception
+  fired on every row, and by construction it cannot log, raise or mark —
+  the flag that would have said so, `starter_rate_blended`, was False on
+  every row and nothing reads it. **When a function degrades silently by
+  design, the thing that has to be tested is that its input ARRIVES.**
+
+  Not a Savant outage, checked rather than assumed: the paired shadow dump
+  for the same slate carries a measured wOBA-allowed line for **18 of 18** of
+  09-17's starters. Reconstructed from those two dumps through
+  `blend_starter_rate` itself, the blend moves a starter's published rate by
+  mean **0.00738**, median 0.00393, max **0.01908** — against a median
+  `|xw_net|` of ~0.018, i.e. a starter input moving by up to a whole lean.
+  Consistent with the reconstruction's 32 flips in 448.
+
+  **Three tests covered v13 and all three passed, because every one of them
+  starts downstream of the gap.** Two pin constants
+  (`BLEND_RATE_SOURCE_COL`, `STARTER_BLEND_WEIGHT`, the cache namespace) and
+  the third pins `load_stat_lookups`' output dict — which is the LAST place
+  the value is still correct. Same shape as `abstain_test`'s borrowed
+  selector and the `MODEL_TAG`-patched matrix fixture: a fixture that cannot
+  represent the failure passes for a reason that has nothing to do with the
+  claim. `tests/test_starter_blend.py` drives the real path instead —
+  `build_tables` -> `build_xwoba_matchup` -> `_df_to_combined_games` ->
+  `_side_html` — and 6 of its 11 assertions go red on the pre-fix source,
+  checked by reverting rather than argued.
+
+  The fix is `BLEND_FRAME_COLS`, written on EVERY stat row (NaN on hitters,
+  who have no reader for it) and added to the projection. Written
+  unconditionally on purpose: an absent key raises in the projection, and a
+  build that raises because Savant dropped an optional column costs the
+  slate — the degrade rule reached from the other side. The blend rate still
+  stays out of `STATCAST_RATE_COLS`, so it acquires no matchup value, no edge
+  and no percentile bar; a test asserts that too, because carrying it into
+  that list is the obvious wrong fix.
+
+  `MODEL_TAG` is NOT bumped: the tag already names the blend, and the change
+  makes the code do what the tag says. See the v13 entry above for why that
+  costs no graded rows.
+
+  **One display consequence, on the operator's instruction and recorded
+  because the label is now a mixture.** The card's cell keeps reading
+  `starter_xwOBA`, so the blended rate publishes under the label it already
+  had — `xwOBA agn` — with no code change and no badge. That label now names
+  one metric over a value that is half another, which is the class of defect
+  this file has an entry for (`wOBA full 217-164`, and "read the metric from
+  `model_metric`, never from a key name"). It is a deliberate operator call,
+  the same one that took the `rebuilt` badges off the pages the same day, and
+  the auditability is unchanged: `starter_rate_primary`,
+  `starter_rate_blend_in` and `starter_rate_blended` are in the dump on every
+  row, the ledger carries none of them, so **the blend is auditable from the
+  dump or not at all**. One thing rides along unexamined and is flagged
+  rather than fixed: `pit_xw_pctile` ranks that blended rate against
+  `_pctile_ref_pit`, a pure-xwOBA reference population. Display-only, small
+  against the bar's own resolution, and not measured.
 
 - **A retirement that silently retired two tests nobody retired.** From
   2026-09-12 to 2026-09-17 three of the five registrations accrued no forward
@@ -2406,6 +2501,24 @@ precedent — they are how the fix is known to look.
   fails for its real causes (replay drift, or a report not regenerated beside
   its ledger) and never for arithmetic the bot did overnight. A test that
   cross-checks two artifacts should read both, never memorise one.
+
+  **Second instance, 2026-09-18, and the frozen literal is a SPELLING rather
+  than a number.** `test_ledger_invariants._version` matched
+  `(xw|woba|split)\+plat_consol_v(\d+)` — the lineage stem the ledger happens
+  to be full of, hardcoded in the one file whose own docstring forbids frozen
+  snapshots. `xw+starter_blend_v13` turned the gate red the morning its first
+  row landed, for a reason with nothing to do with any diff. Same fix: the
+  current stem is read off `build_site.MODEL_TAG` and retired stems are
+  listed, so the next lineage rename carries the gate forward instead of
+  breaking it. A widened guard is a weakened guard unless you say what it
+  still rejects, so a companion test pins the rejections — a typo'd stem, a
+  missing version, an unknown metric, a shadow tag — which is the assertion
+  that separates this from deleting the check. Checked rather than assumed
+  while writing this: the other `_version` caller,
+  `test_zero_delta_abstains_on_every_row_built_since_v7`, was NOT silently
+  exempting v13 — an unrecognised tag returns None and its `v is not None`
+  clause fails on it, so a violation would have been caught, just reported as
+  an unrecognised tag instead of as an abstention breach.
 
 - **Deleting controls as clutter.** The walk-forward Pythagorean control arm was
   added, then removed in a UI declutter three commits later, leaving the

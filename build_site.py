@@ -1311,6 +1311,21 @@ def resolve_lineup(game_pk, side, team_id, batter_stat, return_meta=False,
 STAT_COLS = ["BBE", "LA°", "EV", "Hard Hit%", "xwOBA", "xBA", "xSLG", "K%", "BB%"]
 BB_COLS = ["GB%", "FB%", "LD%", "PU%", "Pull%", "Straight%", "Oppo%"]
 
+# v13 reads a SECOND rate off the same leaderboard row, and the frame is where
+# it has to survive: `segment_pitcher_blocks` passes each starter's whole row
+# through to the blend site, so a rate that is not a frame column reaches
+# `blend_starter_rate` as None and that function -- correctly, by its own
+# degrade-to-primary rule -- returns the pure primary. That is what shipped:
+# v13-tagged rows carrying v12 math, because `build_tables` copied STAT_COLS
+# and nothing else. Deliberately NOT folded into STAT_COLS or
+# STATCAST_RATE_COLS: only the probable starter reads it, and a rate in either
+# of those lists acquires a matchup value, an edge and a percentile bar that no
+# surface publishes. Written on EVERY stat row -- NaN on hitters, who have no
+# reader for it -- so the frame's schema never depends on whether Savant served
+# the column: an absent key would raise in the projection below, and a missing
+# optional input must cost the refinement and never the slate.
+BLEND_FRAME_COLS = [BLEND_RATE_INTERNAL_COL]
+
 _pitcher_roster_cache = {}
 _team_pitcher_role_cache = {}
 _ROSTER_UNSET = object()
@@ -1915,7 +1930,9 @@ def build_tables(slate, lineups, batter_stat, pitcher_stat, batter_bb, pitcher_b
                     "sp_side": sp_side, "is_sp": True}
             if table == "stat":
                 pit_rows.append({**base, "table_type": "pitchers", "Pos.": "P",
-                                 **{c: src.get(c) for c in STAT_COLS}, "PA": src.get("PA"),
+                                 **{c: src.get(c) for c in STAT_COLS},
+                                 **{c: src.get(c) for c in BLEND_FRAME_COLS},
+                                 "PA": src.get("PA"),
                                  MODEL_RATE_TEAM_BACKFILL_COL: False,
                                  "player_id": pid, "bats": bio.get("bats"),
                                  "throws": bio.get("throws")})
@@ -1940,7 +1957,9 @@ def build_tables(slate, lineups, batter_stat, pitcher_stat, batter_bb, pitcher_b
                 if table == "stat":
                     backfill_value = src.get(MODEL_RATE_TEAM_BACKFILL_COL)
                     pit_rows.append({**base, "table_type": "pitchers", "Pos.": pos,
-                                     **{c: src.get(c) for c in STAT_COLS}, "PA": src.get("PA"),
+                                     **{c: src.get(c) for c in STAT_COLS},
+                                     **{c: np.nan for c in BLEND_FRAME_COLS},
+                                     "PA": src.get("PA"),
                                      MODEL_RATE_TEAM_BACKFILL_COL:
                                          (bool(backfill_value)
                                           if pd.notna(backfill_value) else False),
@@ -1964,7 +1983,7 @@ def build_tables(slate, lineups, batter_stat, pitcher_stat, batter_bb, pitcher_b
             "table_type", "table_index", "Name"]
     pdf = pd.DataFrame(pit_rows)
     if not pdf.empty:
-        pdf = pdf[META + ["Pos.", BATTING_ORDER_COL] + STAT_COLS
+        pdf = pdf[META + ["Pos.", BATTING_ORDER_COL] + STAT_COLS + BLEND_FRAME_COLS
                   + ["PA", MODEL_RATE_TEAM_BACKFILL_COL, "player_id", "bats", "throws",
                      "sp_side", "is_sp"]]
     bdf = pd.DataFrame(bb_rows)
