@@ -48,7 +48,10 @@ from market_backfill import (ODDS_LADDER as _mb_odds_ladder,
                              V13_RECON_COLS as _mb_v13_recon_cols,
                              chalk_is_home as _mb_chalk_is_home,
                              is_pickem as _mb_is_pickem,
-                             ladder_rung as _mb_ladder_rung)
+                             ladder_rung as _mb_ladder_rung,
+                             publish_reconstruction as _mb_publish_reconstruction,
+                             recon_grade as _mb_recon_grade,
+                             recon_grades as _mb_recon_grades)
 import requests
 
 import hitter_frame
@@ -6664,38 +6667,14 @@ def _american_unit_profit(ml, won):
     return ml / 100.0 if ml > 0 else 100.0 / abs(ml)
 
 
-def recon_grade(lean, home, full_home, full_away):
-    """W/L/T for a reconstructed lean against that game's own final score.
-
-    DERIVED, never stored. The grade is a deterministic function of three
-    write-once columns -- the reconstructed lean and the two finals -- and
-    this repo's standing rule for exactly that shape is to derive it, because
-    a second home for a value can drift from the first. It also makes a
-    PENDING retained row work: `reconstruct_v13` can write its lean today and
-    the grade appears the moment the game settles, where a stored grade would
-    have been NaN forever and the row would have dropped out of the published
-    record on the day it graded.
-
-    Returns None when the game has no final, which is the pending case and
-    not an error.
-    """
-    if not isinstance(lean, str) or not lean or not isinstance(home, str):
-        return None
-    fh = pd.to_numeric(full_home, errors="coerce")
-    fa = pd.to_numeric(full_away, errors="coerce")
-    if pd.isna(fh) or pd.isna(fa):
-        return None
-    if fh == fa:
-        return "T"
-    return "W" if (lean == home) == (fh > fa) else "L"
-
-
-def _recon_grades(g):
-    """`recon_grade` over a frame, as a Series aligned to it."""
-    return pd.Series(
-        [recon_grade(l, h, fh, fa) for l, h, fh, fa in zip(
-            g[V13_RECON_LEAN_COL], g["home"], g["full_home"], g["full_away"])],
-        index=g.index, dtype=object)
+# `recon_grade` / `_recon_grades` / the substitution body moved to
+# `market_backfill` on 2026-09-18 and are aliased here. They were spelled in
+# this file alone while `grade_leans` scored the same rows from the raw
+# ledger, and the two drifted: see `publish_reconstruction` for the
+# measurement. grade_leans cannot import this module, so a rule both need is
+# either in that one or spelled twice.
+recon_grade = _mb_recon_grade
+_recon_grades = _mb_recon_grades
 
 
 def _published_grades(led):
@@ -6737,26 +6716,7 @@ def _published_grades(led):
     g = _record_grades(led)
     if g.empty:
         return g
-    cur = g["model_tag"].astype(str).eq(MODEL_TAG)
-    need = (V13_RECON_BASIS_COL, V13_RECON_LEAN_COL, V13_RECON_NET_COL,
-            "home", "full_home", "full_away")
-    if any(c not in g.columns for c in need):
-        return g[cur].copy()
-    has = (g[V13_RECON_BASIS_COL].notna()
-           & g[V13_RECON_LEAN_COL].notna()
-           & _recon_grades(g).isin(["W", "L", "T"]))
-    out = g[cur | (~cur & has)].copy()
-    if out.empty:
-        return out
-    rebuilt = ~out["model_tag"].astype(str).eq(MODEL_TAG)
-    if rebuilt.any():
-        sub = out.loc[rebuilt]
-        out.loc[rebuilt, "xw_full"] = _recon_grades(sub)
-        out.loc[rebuilt, "xw_lean"] = sub[V13_RECON_LEAN_COL]
-        net = pd.to_numeric(sub[V13_RECON_NET_COL], errors="coerce")
-        out.loc[rebuilt, "xw_net"] = net
-        out.loc[rebuilt, "xw_delta"] = net.abs()
-    return out
+    return _mb_publish_reconstruction(g, MODEL_TAG)
 
 
 def _lean_market_observations(led):

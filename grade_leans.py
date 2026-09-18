@@ -65,7 +65,8 @@ import requests
 from market_backfill import (MARKET_COLS, ODDS_LADDER, V13_RECON_COLS,
                              V13_RECON_TEXT_COLS, attach_market,
                              breakeven_prob, chalk_is_home, excess_se,
-                             is_pickem, ladder_rung, metric_label)
+                             is_pickem, ladder_rung, metric_label,
+                             publish_reconstruction)
 from actuals_backfill import (ACTUAL_COLS, attach_actuals, actuals_summary,
                               actuals_family_line, components_summary,
                               target_reliability,
@@ -1438,6 +1439,20 @@ def _selection_price_matrix_lines(g):
     the reference a cell is read against, never zero.
     """
     import hybrid_v2
+    # PUBLISHED rows, not raw ledger rows. This block calls itself the grid
+    # the game card shows one cell of, and until this was added it was not:
+    # the card bands on the reconstructed delta and scores the re-decided
+    # lean, while this read `xw_net` / `xw_lean` / `xw_full` straight off the
+    # ledger, which on a retained row is v12's. Measured before the fix --
+    # 444 of 452 deltas differed by up to 0.0215 (wider than a band), the
+    # lean differed on 39 rows, and 24 of 26 cells disagreed.
+    #
+    # `publish_reconstruction` is the one home for that substitution and
+    # build_site renders from the same function, so the two cannot drift
+    # again. Scoped to THIS block: the family history lines above and every
+    # registration keep scoring the lean each build actually published, which
+    # is the difference `_published_basis_lines` declares on the artifact.
+    g = publish_reconstruction(g, MODEL_TAG)
     d = hybrid_v2.decidable(g)
     if d is None or d.empty:
         return []

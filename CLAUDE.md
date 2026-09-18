@@ -227,6 +227,49 @@ were deleted AT the removal** — the seventh instance of the
 callee-outliving-its-call-site pattern, and the second caught by running the
 reference count before the edit instead of days later.
 
+**A sanity check of the matrix then found the disagreement the rebase was
+supposed to prevent, and this is the entry to read.** The PR body claimed the
+card and `_selection_price_matrix_lines` "cannot disagree" because a test
+holds them equal cell by cell. They disagreed on **24 of 26 cells** in
+production. The card bands on the RECONSTRUCTED delta and scores the
+re-decided lean; the report read `xw_net` / `xw_lean` / `xw_full` straight
+off the ledger, which on a retained row is v12's. Over 452 rows the deltas
+differed on 444 by up to 0.0215 — wider than a whole band — the lean differed
+on 39, and the two artifacts published 282-170 against 273-171.
+
+**The test passed throughout, and the comment explaining why is the
+confession.** It patched `MODEL_TAG` to the family, with a note saying that
+leaving it alone "would compare a re-decided cell against a published one and
+fail for a reason that has nothing to do with the shared construction under
+test". Exactly backwards: the block's own docstring calls it the grid the
+card shows one cell of, so a re-decided cell against a published one IS the
+construction under test. The patch made the fixture unable to represent the
+only disagreement that could occur — the same trap as `abstain_test`'s
+borrowed selector, reintroduced by hand one day after the entry recording it
+was written.
+
+Fixed by giving the substitution one home, `market_backfill.publish_recon‐
+struction`, which build_site renders from and grade_leans now scores from —
+the `chalk_is_home` precedent, for the same reason: grade_leans cannot import
+build_site, and spelled twice it drifted. Scoped to that one block; family
+history lines and every registration still score the lean each build actually
+published, which is what `_published_basis_lines` declares. The test drops
+the `MODEL_TAG` patch, a second test asserts the disagreement is
+REPRESENTABLE at all (retained rows exist whose published lean or delta
+differs from their stored one), and reverting the one line turns the equality
+test red — checked, not assumed.
+
+**What the matrix says once it is right: less than it did when it was
+wrong.** Scored on the published v13 rows the |Δ| band excesses run +4.9,
++15.3, −3.7, +9.5, +8.4 pp — chi-squared 8.21 on 4 dof, no structure beyond
+noise, rank trend r = +0.03. On the v12 deltas it had been reading +6.0,
++2.9, +6.5, +8.4, +9.5 with **r = +0.78**, which looks like conviction
+paying off monotonically and is an artifact of banding on the wrong delta.
+Neither is a finding — both are inside their own error bars, and the grid
+prints a null maximum of +40.8 pp against an observed best of +46.0 on a
+one-game cell — but a reader who had quoted the +0.78 trend would have been
+quoting the previous model's delta under this one's name.
+
 One caveat was deleted rather than restated, and the reason is the rule about
 caveats one level out. `test_the_discovery_claim_survives_off_the_card`
 pinned the `Discovery, not a forward test` note on two pages, and it existed
