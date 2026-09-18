@@ -117,14 +117,32 @@ def reconstruct(led, nets):
     # The three string columns are created as object dtype explicitly. A fresh
     # float64 NaN column raises on the first club abbreviation assigned into
     # it, which is a real failure and not a warning.
-    _text = (bs.V13_RECON_LEAN_COL, bs.V13_RECON_GRADE_COL,
-             bs.V13_RECON_BASIS_COL)
+    _text = (bs.V13_RECON_LEAN_COL, bs.V13_RECON_BASIS_COL)
     for c in bs.V13_RECON_COLUMNS:
         if c not in out.columns:
             out[c] = pd.Series(np.nan, index=out.index,
                                dtype="object" if c in _text else "float64")
-    eligible = (out["status"].astype(str).eq("graded")
-                & ~out["model_tag"].isin(bs.RECORD_TAGS)
+    # Keyed on MODEL_TAG, NOT on RECORD_TAGS. Those stopped being the same
+    # question when v13 chose to SHARE v12's record line: the shared family
+    # is v12 + v13, so `isin(RECORD_TAGS)` would exclude exactly the rows
+    # this migration exists to rebuild. What needs a reconstruction is a row
+    # not BUILT under v13 math, which is a statement about the row's own tag
+    # and about nothing else.
+    # RETAINED rows only: in the record family, not built under v13. Both
+    # halves are load-bearing. `~eq(MODEL_TAG)` alone rebuilds pre-v12
+    # families too, and nothing publishes those -- a v2 row is not in the
+    # shared record line and the ledger table no longer renders one, so the
+    # cells would be a column carried to no surface. `isin(RECORD_TAGS)`
+    # alone rebuilds v13's own rows, which need no reconstruction because
+    # they were decided under this math in the first place.
+    # Deliberately NOT gated on `status == "graded"`. A retained row that is
+    # still pending needs its lean written now: this migration runs once, and
+    # a row reconstructed only after it grades would have to wait for a rerun
+    # that never comes. Its grade is derived from the finals at read time, so
+    # writing the lean early costs nothing and is what keeps a pending v12 row
+    # inside the published record on the day it settles.
+    eligible = (out["model_tag"].isin(bs.RECORD_TAGS)
+                & ~out["model_tag"].astype(str).eq(bs.MODEL_TAG)
                 & out["game_pk"].astype("Int64").isin(list(nets)))
     n = 0
     for i in out.index[eligible]:
@@ -135,19 +153,10 @@ def reconstruct(led, nets):
         home, away = out.at[i, "home"], out.at[i, "away"]
         if not isinstance(home, str) or not isinstance(away, str):
             continue
-        fh = pd.to_numeric(out.at[i, "full_home"], errors="coerce")
-        fa = pd.to_numeric(out.at[i, "full_away"], errors="coerce")
         lean = home if net > 0 else away
-        if pd.isna(fh) or pd.isna(fa):
-            grade = np.nan
-        elif fh == fa:
-            grade = "T"
-        else:
-            grade = "W" if (lean == home) == (fh > fa) else "L"
         out.at[i, bs.V13_RECON_NET_COL] = net
         out.at[i, bs.V13_RECON_DELTA_COL] = abs(net)
         out.at[i, bs.V13_RECON_LEAN_COL] = lean
-        out.at[i, bs.V13_RECON_GRADE_COL] = grade
         # Named for what it is. Every consumer branches on this string, never
         # on "is there a number here".
         out.at[i, bs.V13_RECON_BASIS_COL] = "post_hoc_shadow_pair"
@@ -237,9 +246,12 @@ def main(argv=None):
             f"records and the reconstruction moved them: {', '.join(moved)}")
     print(f"rows given a v13 reconstruction: {n}")
     if n:
-        g = out[out[bs.V13_RECON_GRADE_COL].isin(["W", "L"])]
-        w = int((g[bs.V13_RECON_GRADE_COL] == "W").sum())
-        l = int((g[bs.V13_RECON_GRADE_COL] == "L").sum())
+        # Graded through the same function every surface reads, so this
+        # summary cannot be a second spelling of the rule.
+        out["_g"] = bs._recon_grades(out)
+        g = out[out["_g"].isin(["W", "L"])]
+        w = int((g["_g"] == "W").sum())
+        l = int((g["_g"] == "L").sum())
         lw = int((g["xw_full"] == "W").sum())
         ll = int((g["xw_full"] == "L").sum())
         flips = int((g[bs.V13_RECON_LEAN_COL] != g["xw_lean"]).sum())
@@ -247,6 +259,7 @@ def main(argv=None):
               f"against the published lean's {lw}-{ll} "
               f"({lw / max(lw + ll, 1):.3f}) on the SAME rows")
         print(f"  leans flipped: {flips} of {w + l}")
+        out = out.drop(columns=["_g"])
         print("  NOT A RECORD. The wOBA half is post-hoc on most of these "
               "rows (the split is printed above), and a reconstruction is "
               "mixed-basis even where it is not -- the xwOBA half is the "

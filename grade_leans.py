@@ -62,7 +62,8 @@ import numpy as np
 import pandas as pd
 import requests
 
-from market_backfill import (MARKET_COLS, ODDS_LADDER, attach_market,
+from market_backfill import (MARKET_COLS, ODDS_LADDER, V13_RECON_COLS,
+                             V13_RECON_TEXT_COLS, attach_market,
                              breakeven_prob, chalk_is_home, excess_se,
                              is_pickem, ladder_rung, metric_label)
 from actuals_backfill import (ACTUAL_COLS, attach_actuals, actuals_summary,
@@ -129,7 +130,11 @@ _RECORD_FAMILIES = {
     "xw+plat_consol_v12": ("xw+plat_consol_v12",),
     # v13 starter blend -- ISOLATED. Mirrors build_site._RECORD_FAMILIES;
     # the argument lives there, beside the model that produces the rows.
-    "xw+starter_blend_v13": ("xw+starter_blend_v13",),
+    # v13 SHARES v12's record line. Mirrors build_site._RECORD_FAMILIES;
+    # the argument -- including why a 32-of-448 flip rate does NOT sink the
+    # share here, and what the retained rows cost in provenance -- lives
+    # there, beside the model that produces the rows.
+    "xw+starter_blend_v13": ("xw+plat_consol_v12", "xw+starter_blend_v13"),
 }
 RECORD_TAGS = tuple(
     t.strip() for t in os.environ.get(
@@ -339,8 +344,18 @@ MODEL_FIELDS = [
 def load_ledger():
     if os.path.exists(LEDGER_PATH):
         led = pd.read_csv(LEDGER_PATH)
+        # Preserved-if-present, never minted. reconstruct_v13 writes these
+        # and nothing in a build does, so enumerating them in AUDIT_COLS
+        # would mint them empty on every ledger and make the migration --
+        # which appends trailing fields and refuses a column that already
+        # exists -- unrunnable. Leaving them out of the list entirely is what
+        # deleted them: the reindex below keeps only what it is told to keep,
+        # so a column this module has never heard of does not survive one
+        # bot ledger commit. That is the whole failure, and it is the writer's
+        # to fix rather than the migration's to repeat.
+        carried = [c for c in V13_RECON_COLS if c in led.columns]
         persisted_cols = list(dict.fromkeys(
-            LEDGER_COLS + MARKET_COLS + AUDIT_COLS + ACTUAL_COLS
+            LEDGER_COLS + MARKET_COLS + AUDIT_COLS + ACTUAL_COLS + carried
         ))
         # Add every missing column in one concat. Inserting them one at a time
         # refragmented the frame on each new audit column and pandas warns.
@@ -370,6 +385,9 @@ def load_ledger():
                   "pitching_basis_away", "pitching_basis_home",
                   "sp_rate_basis_away", "sp_rate_basis_home"):
             led[c] = led[c].astype(object)
+        for c in V13_RECON_TEXT_COLS:
+            if c in led.columns:
+                led[c] = led[c].astype(object)
         return led
     return pd.DataFrame(columns=list(dict.fromkeys(
         LEDGER_COLS + MARKET_COLS + AUDIT_COLS + ACTUAL_COLS
@@ -1805,6 +1823,44 @@ def _hybrid_materialized_lines(g):
                 f"({type(_exc).__name__})"]
 
 
+def _published_basis_lines(g):
+    """Declare the one way this report and the public pages disagree.
+
+    `RECORD_TAGS` shares a line across v12 and v13, and the two artifacts
+    score those retained v12 rows DIFFERENTLY on purpose. This report scores
+    every row on the lean its own build published -- the immutable pregame
+    record, and the control the new model has to be read against. The public
+    pages score a retained row on `reconstruct_v13`'s re-decision of it, and
+    since 2026-09-18, on the operator's instruction, they do so without
+    marking which rows those are.
+
+    So the numbers differ, and this repo's standing rule is that an internal
+    and a public artifact may differ only if the difference is DECLARED --
+    `ledger_report.txt` once said the current family had no graded games while
+    the site published a pooled record, and nothing on either said why. This
+    is that declaration, and it is the only place the split is now printed.
+
+    Counted from the rows' own tags, never by subtracting one published
+    number from another. Empty once every row in the family was built under
+    the current tag, which is the state this whole clause exists to bridge to.
+    """
+    if g is None or not len(g) or "model_tag" not in getattr(g, "columns", ()):
+        return []
+    retained = g[~g["model_tag"].astype(str).eq(MODEL_TAG)]
+    if retained.empty or "v13_lean_recon" not in g.columns:
+        return []
+    n_rebuilt = int(retained["v13_lean_recon"].notna().sum())
+    if not n_rebuilt:
+        return []
+    return [
+        f"  BASIS: {n_rebuilt} of these {len(g)} rows were published under an "
+        f"earlier tag and are scored ABOVE on their own pregame lean.",
+        "  The public pages re-decide those rows under the current model and "
+        "blend them in unmarked, so their record is NOT this one and is "
+        "hindsight on the re-decided rows.",
+    ]
+
+
 def _record_grades(led):
     """Graded rows whose tags share the current prediction methodology."""
     return led[(led["status"] == "graded") & (led["model_tag"].isin(RECORD_TAGS))].copy()
@@ -1868,6 +1924,8 @@ def report_text(led):
             + (f" ({len(g) - _abs} with a lean, {_abs} abstained)" if _abs else "")
             + f"  [{' + '.join(RECORD_TAGS)}]")
         say(f"{MODEL_METRIC_LABEL} lean   full: {_rec(g['xw_full'])}   F5: {_rec(g['xw_f5'])}")
+        for _bl in _published_basis_lines(g):
+            say(_bl)
         for _hl in _hybrid_retrospective_lines(g):
             say(_hl)
         for _ml in _hybrid_materialized_lines(g):

@@ -612,9 +612,14 @@ class RenderTests(unittest.TestCase):
         src = open(b.__file__).read()
         # grades.html
         self.assertIn("<b>Discovery</b>, not a forward test", src)
-        # market-calibration.html
-        self.assertIn("<b>Retrospective</b>: both v2 gates were chosen after",
-                      src)
+        # market-calibration.html. The wording moved when v13 retired the
+        # rule ("both v2 gates" -> "both gates of the retired rule"), so the
+        # match is on the CLAIM rather than the sentence -- a test pinning the
+        # old spelling would have gone red for a rename and been "fixed" by
+        # deleting the assertion, which is the deletion it exists to prevent.
+        self.assertIn("<b>Retrospective</b>", src)
+        self.assertIn("gates", src)
+        self.assertIn("were chosen after examining these rows", src)
         # And the card must not be counted as a third carrier.
         ctx = {("branch", "FADE"): dict(n=19, w=13, l=6, implied=.58,
                                         actual=.684, excess=.104,

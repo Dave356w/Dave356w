@@ -1849,9 +1849,13 @@ class BaselineControlTests(unittest.TestCase):
         # gate. The CLAIM this test protects is unchanged: the page states
         # what it publishes, beside the number, rather than leaving a
         # reader to infer it from the controls below.
-        self.assertIn(f"<b>{build_site.PUBLIC_MODEL_NAME}</b> publishes "
-                      "the model's own side", page)
-        self.assertIn("<b>XWOBA SIDE</b> otherwise", page)
+        self.assertIn(f"<b>{build_site.PUBLIC_MODEL_NAME}</b> publishes", page)
+        self.assertIn("the model's own side, on every game it decides", page)
+        # The trailing "<FOLLOW> otherwise" clause is GONE and asserted gone.
+        # It was the second half of a two-branch rule description, and with
+        # one branch left it named an alternative that does not exist.
+        self.assertNotIn(f"<b>{build_site.hybrid_public_label('FOLLOW')}</b> "
+                         "otherwise", page)
 
     def test_an_abstained_game_is_scored_by_neither_the_record_nor_a_control(self):
         """v5 abstains, so a graded row can carry no lean. A control needs no
@@ -1980,12 +1984,13 @@ class RecordScopeTests(unittest.TestCase):
         hyb_rec = f"{hyb['w']}-{hyb['l']}"
         if hyb_rec != rec:
             self.assertNotIn(f"{hyb_rec} (", strip)
-        # A reconstructed figure must carry its marker on BOTH surfaces. A
-        # provenance claim that holds on one page and not the page one click
-        # away is this file's most-repeated defect.
-        if bool(obs["is_reconstructed"].iloc[0]):
-            self.assertIn("rebuilt", strip)
-            self.assertIn("rebuilt", header)
+        # The marker is GONE, on the operator's 2026-09-18 instruction to
+        # blend retained and live rows silently. Asserted as an absence rather
+        # than deleted, on both surfaces: a provenance claim that reappears on
+        # one page and not the page one click away is this file's
+        # most-repeated defect, and it fails in that direction too.
+        self.assertNotIn("rebuilt", strip.lower())
+        self.assertNotIn("rebuilt", header.lower())
 
     def test_the_scope_of_the_number_is_stated_next_to_it(self):
         """The strip states its ledger scope; the public table is v12-only."""
@@ -3129,12 +3134,6 @@ class LeanMarketValueTests(unittest.TestCase):
     # it. Adding a column means adding it here, which forces the question the
     # blacklist below could not ask: what renders this?
     OBS_COLUMNS = {
-        "is_reconstructed":
-            "provenance: gates the 'rebuilt, not a record' marker on the "
-            "front-page strip and the grades header. Carried as a COLUMN "
-            "rather than an attr because attrs are dropped by several of the "
-            "operations these surfaces perform, and a marker that silently "
-            "vanished would let a reconstruction render as a record",
         "delta":         "x-axis of the slope fit -> 'market response' tile",
         "market_p":      "decides the branch; agg implied/excess on the lean",
         "close_ml":      "input to profit, and the price the lean is scored at",
@@ -3201,12 +3200,13 @@ class LeanMarketValueTests(unittest.TestCase):
     # never reads it back. It is on the frame rather than left a local because
     # the renderer needs the home price to count pick'ems, and because every
     # post-filter use of the local was a length mismatch waiting to happen.
-    # `is_reconstructed` is a PROVENANCE flag, not a statistic: the strip and
-    # the grades header both branch on it to mark a rebuilt figure. It is
-    # listed here rather than left to trip this test because a marker that
-    # silently disappeared would let a reconstruction render as a record.
+    # `is_reconstructed` used to be listed here as a provenance flag the
+    # strip and the grades header branched on. Both branches were removed on
+    # 2026-09-18 and the column went with them, because a column computed and
+    # rendered nowhere is exactly what this test exists to catch -- the
+    # exemption would have kept it invisible.
     RETAINED_INPUT_COLUMNS = {"close_ml", "opp_ml", "hybrid_ml",
-                              "lean_is_home", "is_reconstructed"}
+                              "lean_is_home"}
 
     def test_every_declared_observation_column_is_actually_read(self):
         """The allowlist is a claim about consumption; hold it to that.
@@ -3603,64 +3603,44 @@ class HybridRuleTests(unittest.TestCase):
             self.skipTest("no faded rows in the committed ledger yet")
         self.assertEqual(fade, chalk)
 
-    def test_the_site_and_the_forward_test_decide_every_row_identically(self):
-        """Two implementations of one rule, held against each other.
+    def test_the_table_and_the_header_decide_every_published_row_identically(self):
+        """Two surfaces on one page, held against each other.
 
-        `build_site._row_hybrid` walks the ledger a row at a time for the
-        table; `hybrid_v2` derives the same rule in bulk for the registered
-        forward test. They share both thresholds, so this is
-        the check that the surface a reader sees and the instrument that will
-        judge the rule cannot drift apart -- the failure mode that let the site
-        publish a pooled record under a current-family label.
+        This began as a check on two implementations of the hybrid rule --
+        `_row_hybrid` walking the table a row at a time against `hybrid_v2`
+        in bulk. v13 retires that rule, so the drift it guarded against moved
+        rather than went away, and the version that replaced it is the more
+        dangerous one because both halves are on the SAME page: the header
+        scores `_published_grades`, the table renders `_row_selection`, and a
+        retained v12 row is in RECORD_TAGS while its published pick is v13's
+        reconstruction. Keyed on the family instead of the tag, the table
+        prints v12's side under a record computed from v13's -- which is the
+        artifacts-disagreeing defect in the one form a reader can see.
 
-        ROW BY ROW ON ITS OWN BASIS. `hybrid_v2` derives the rule two ways:
-        `apply_locked_rule` scores the immutable pregame selection stored on
-        the row, `apply_rule` recomputes the branch from the close. The site
-        prefers the locked action wherever one exists, so holding every row
-        against the closing recomputation asserts that the two prices never
-        straddle the threshold -- which is not a property of the code, and is
-        not true: 2026-09-07 NYM@MIA locked at q=0.4576 (FOLLOW, and that IS
-        the bet the rule made) and closed at q=0.4406. The test asserted the
-        market cannot move; the market moved. So each row is now held against
-        the basis it was actually decided on.
+        Restated rather than deleted for the reason this file gives every
+        time a test's subject is removed: dropping it would have left nothing
+        asserting that the two surfaces agree at all.
         """
-        import hybrid_v2
         led = build_site.load_ledger_df()
         if led is None:
             self.skipTest("ledger unavailable")
-        g = led[(led["status"] == "graded") & led["xw_lean"].notna()
-                & led["close_p_home"].notna()
-                & led["model_tag"].isin(build_site.RECORD_TAGS)]
+        g = build_site._published_grades(led)
         if g.empty:
-            self.skipTest("no priced current-family rows")
-        lean_home = (g["xw_lean"] == g["home"]).to_numpy()
-        home_won = (g["full_home"] > g["full_away"]).to_numpy()
-        # The row's own decision basis: the locked pregame probability where
-        # the row carries a locked selection, the close where it does not.
-        locked = (g["selection_rule_tag"].eq(build_site.HYBRID_RULE_TAG)
-                  & g["hybrid_price_source"].eq("saved_pregame")
-                  & g["hybrid_action"].isin(("FOLLOW", "FADE"))
-                  & g["hybrid_selection"].notna()).to_numpy()
-        p_close = np.where(lean_home, g["close_p_home"], 1 - g["close_p_home"])
-        p_lock = np.where(lean_home, g["pregame_p_home"], 1 - g["pregame_p_home"])
-        p_lean = np.where(locked, p_lock, p_close)
-        delta = pd.to_numeric(g["xw_net"], errors="coerce").abs().to_numpy()
-        follow = hybrid_v2.follows(p_lean, delta)
-        # A locked row's stored action must equal the branch its own locked
-        # price implies, or the two derivations have drifted after all.
-        self.assertTrue(
-            (follow[locked]
-             == g["hybrid_action"].eq("FOLLOW").to_numpy()[locked]).all(),
-            "a locked action disagrees with the locked price it was taken at")
-        lean_won = np.where(lean_home, home_won, ~home_won)
-        expected_won = np.where(follow, lean_won, ~lean_won)
-        rows = [build_site._row_hybrid(r) for _, r in g.iterrows()]
-        self.assertTrue(
-            (np.array([a == "FOLLOW" for a, _, _ in rows]) == follow).all(),
-            "the table and the forward test disagree about a game's branch")
-        self.assertTrue(
-            (np.array([gr == "W" for _, _, gr in rows]) == expected_won).all(),
-            "the table and the forward test disagree about a selection's result")
+            self.skipTest("no published rows")
+        rows = [build_site._row_selection(r) for _, r in g.iterrows()]
+        picks = [p for _, p, _ in rows]
+        grades = [gr for _, _, gr in rows]
+        self.assertEqual(picks, list(g["xw_lean"]),
+                         "the table and the header disagree about a pick")
+        self.assertEqual(grades, list(g["xw_full"]),
+                         "the table and the header disagree about a result")
+        # And the basis is decided by the row's own tag, never by the shared
+        # family -- the specific miskeying above.
+        bases = {b for b, _, _ in rows}
+        self.assertTrue(bases <= {"lean", "recon"})
+        for (basis, _, _), tag in zip(rows, g["model_tag"].astype(str)):
+            self.assertEqual(basis,
+                             "lean" if tag == build_site.MODEL_TAG else "recon")
 
     def test_the_panel_never_presents_history_as_this_games_chances(self):
         """The clarity defect this layout exists to fix.
@@ -3729,20 +3709,32 @@ class HybridRuleTests(unittest.TestCase):
         older = build_site._grades_row(row("woba+plat_consol_v5", "H", .60), True)
         self.assertIn("earlier model", older)
         self.assertIn("woba+plat_consol_v5", older)
-        # A reconstruction is marked as rebuilt and never as a live selection.
+        # A reconstruction renders EXACTLY like a live selection -- no badge,
+        # no qualifier -- on the operator's 2026-09-18 instruction to blend
+        # the two silently. Asserted rather than left to drift back: the cell
+        # shows the re-decided side, its grade is derived against the row's
+        # own final (A leans away, home won 3-1, so L), and nothing on the
+        # row says it was rebuilt.
         rebuilt = build_site._grades_row(row(
             "xw+plat_consol_v12", "H", .60,
             **{build_site.V13_RECON_LEAN_COL: "A",
-               build_site.V13_RECON_GRADE_COL: "L",
                build_site.V13_RECON_DELTA_COL: .02}), True)
-        self.assertIn("rebuilt", rebuilt)
         self.assertIn("data-l='Selection'>A", rebuilt)
         self.assertIn("<span class='wlt L'>L</span>", rebuilt)
+        self.assertNotIn("rebuilt", rebuilt)
+        self.assertNotIn("earlier model", rebuilt)
         # A current-family row publishes the lean with no qualifier at all.
         live = build_site._grades_row(row(build_site.MODEL_TAG, "H", .30), True)
         self.assertIn("data-l='Selection'>H", live)
         self.assertNotIn("earlier model", live)
         self.assertNotIn("rebuilt", live)
+        # The one reason that survives as a LABEL: a retained row with no
+        # reconstruction at all. It is not on the page's record and the cell
+        # has to say why, or an earlier model's lean stands unqualified in a
+        # Selection column.
+        stranded = build_site._grades_row(
+            row("xw+plat_consol_v12", "H", .60), True)
+        self.assertIn("earlier model", stranded)
         noleaan = build_site._grades_row(
             row(build_site.MODEL_TAG, np.nan, .60, basis="starter_unmeasured_no_lean"),
             True)
@@ -3770,20 +3762,28 @@ class HybridRuleTests(unittest.TestCase):
         obs = build_site._lean_market_observations(led)
         if obs.empty:
             self.skipTest("no priced rows on either basis")
-        rebuilt = bool(obs["is_reconstructed"].iloc[0])
-        lines_out = grade_leans._hybrid_retrospective_lines(
-            grade_leans._record_grades(led))
-        if rebuilt:
-            # The site is showing a reconstruction, so the report must NOT be
-            # showing a record for the same family -- that pairing is exactly
-            # how one artifact's hindsight becomes another's result.
-            self.assertFalse(
-                lines_out,
-                "the report published a current-family record while the site "
-                "was on a reconstructed basis")
-            return
-        rule = build_site._lean_market_agg(obs, obs["won"].notna())
+        fam = grade_leans._record_grades(led)
+        lines_out = grade_leans._hybrid_retrospective_lines(fam)
+        # The two artifacts MAY differ here, and only on one axis: the report
+        # scores a retained row on the lean its own build published, the site
+        # scores it on the v13 re-decision, and since 2026-09-18 the site does
+        # not mark which rows those are. The rule this repo has an entry for
+        # is not "they must agree" but "a difference must be declared", so the
+        # declaration is what is pinned -- and it is pinned on the artifact
+        # that still CAN carry it.
+        basis = grade_leans._published_basis_lines(fam)
+        rebuilt = bool(basis)
         self.assertTrue(lines_out, "the report prints no record line")
+        if rebuilt:
+            report = "\n".join(basis)
+            self.assertIn("BASIS", report)
+            self.assertIn("own pregame lean", report)
+            self.assertIn("public pages", report)
+            return
+        # No retained rows left: the family is one build's work, both
+        # artifacts score the same column, and they must land on the same
+        # number.
+        rule = build_site._lean_market_agg(obs, obs["won"].notna())
         head = lines_out[0]
         self.assertIn(f"{rule['w']}-{rule['l']}", head)
         self.assertIn(f"n={rule['n']}", head)
@@ -3952,22 +3952,35 @@ class HybridRuleTests(unittest.TestCase):
         self.assertEqual(build_site._row_selection(row), (None, None, None))
 
     def test_a_reconstructed_row_is_returned_under_its_own_basis(self):
-        """A rebuilt selection must never be indistinguishable from a real one.
+        """The basis is internal now, and it still has to be right.
 
-        The basis is what every renderer branches on, so it is asserted here
-        rather than left to the presence of a number -- a reconstruction that
-        arrived under the "lean" basis would render as a decision the model
-        actually made.
+        The pages no longer render it -- the two kinds of row are blended
+        silently since 2026-09-18 -- but `_row_selection` still branches on
+        it, and the branch is what decides whether a retained row shows v12's
+        pick or v13's. Keyed on RECORD_TAGS it would show v12's, while the
+        header above it scored v13's: the artifacts-disagreeing defect inside
+        one page. So this pins that a retained row comes back under "recon"
+        with the RECONSTRUCTED side, never its own.
+
+        The grade is DERIVED here, not read from a column. H leans home and
+        home won 3-1, so W -- and the row carries no stored grade at all,
+        which is the point: a pending retained row gets its grade the day it
+        settles instead of carrying NaN forever.
         """
         row = pd.Series({
             "xw_lean": "A", "close_p_home": .70, "home": "H", "away": "A",
             "xw_full": "L", "xw_net": .005, "xw_delta": .005,
+            "full_home": 3, "full_away": 1,
             "model_tag": "xw+plat_consol_v12",
             build_site.V13_RECON_LEAN_COL: "H",
-            build_site.V13_RECON_GRADE_COL: "W",
             build_site.V13_RECON_DELTA_COL: .02,
         })
         self.assertEqual(build_site._row_selection(row), ("recon", "H", "W"))
+        # Same row with no final: pending, so no grade rather than a guess.
+        pending = row.copy()
+        pending["full_home"] = np.nan
+        pending["full_away"] = np.nan
+        self.assertEqual(build_site._row_selection(pending), ("recon", "H", None))
 
 
 class DevigDerivationTests(unittest.TestCase):
