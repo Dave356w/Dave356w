@@ -216,6 +216,80 @@ class OnlyTheStarterBlendsTests(unittest.TestCase):
                                        without["opp_xwOBA_neutral"])
 
 
+class TheBuildSaysWhetherItBlendedTests(unittest.TestCase):
+    """The instrument that would have caught this in one build log.
+
+    A degrade-to-primary rule cannot raise and cannot mark, so the ONLY thing
+    that separates "the blend fired on every starter" from "the blend has
+    never fired" is a printed count. This is `shadow_metric`'s
+    `rate column resolved on 20/20 players` line -- the precedent that put a
+    Savant column on the critical path safely -- applied to the primary build.
+    """
+
+    def _log(self, frames_args, baseline):
+        pdf, _ = build_site.build_tables(SLATE, LINEUPS, BATS, frames_args,
+                                         {}, {}, PEOPLE)
+        with mock.patch.object(build_site, "log") as spoke:
+            build_site.build_xwoba_matchup(pdf, baseline)
+        return " ".join(str(c.args[0]) for c in spoke.call_args_list)
+
+    def test_a_working_build_reports_the_count(self):
+        out = self._log(SP, dict(LG))
+        self.assertIn("starter blend: 2/2", out)
+
+    def test_a_blend_that_never_fires_says_so_and_names_the_cause(self):
+        """The two causes are indistinguishable in the dump -- both leave
+        `starter_rate_blended` False -- so the log has to separate them."""
+        no_rate = self._log({pid: {k: v for k, v in s.items() if k != BLEND}
+                             for pid, s in SP.items()}, dict(LG))
+        self.assertIn("starter blend: 0/2", no_rate)
+        self.assertIn("not reaching the frame", no_rate)
+
+        no_centre = self._log(SP, {PRIMARY: LG[PRIMARY]})
+        self.assertIn("starter blend: 0/2", no_centre)
+        self.assertIn("no league", no_centre)
+        self.assertNotIn("not reaching the frame", no_centre)
+
+    def test_the_leaderboard_says_which_rates_it_was_served(self):
+        """A selection Savant declines comes back as an absent COLUMN, not an
+        error, so the board is the first place that answer exists."""
+        cust = pd.DataFrame({
+            "player_id": [1, 2], "pa": [10, 20],
+            build_site.MODEL_RATE_SOURCE_COL: [.30, .31],
+            build_site.BLEND_RATE_SOURCE_COL: [.32, None]})
+        batted = pd.DataFrame({"id": [1], "bbe": [5]})
+        for frame, want in ((cust, "served on 1/2 players"),
+                            (cust.drop(columns=[build_site.BLEND_RATE_SOURCE_COL]),
+                             "ABSENT from the response")):
+            with self.subTest(want=want):
+                with mock.patch.object(build_site, "cached_csv",
+                                       side_effect=[frame, batted]), \
+                        mock.patch.object(build_site, "log") as spoke:
+                    build_site.load_stat_lookups("pitcher")
+                out = " ".join(str(c.args[0]) for c in spoke.call_args_list)
+                self.assertIn(f"'{build_site.BLEND_RATE_SOURCE_COL}' ", out)
+                self.assertIn(want, out)
+
+    def test_reporting_can_never_cost_a_slate(self):
+        """Every pregame row on the critical path is irreplaceable, so the
+        reporter swallows its own failures rather than propagating one. A log
+        line that can raise is worse than no log line."""
+        class Hostile:
+            def get(self, *a, **k):
+                raise RuntimeError("boom")
+
+        frame = pd.DataFrame({"starter_rate_blended": [True, False]})
+        with mock.patch.object(build_site, "log") as spoke:
+            self.assertIsNone(build_site._log_starter_blend(frame, Hostile()))
+        out = " ".join(str(c.args[0]) for c in spoke.call_args_list)
+        self.assertIn("could not report", out)
+
+        # Nothing to say is said by saying nothing, not by raising.
+        for empty in (None, pd.DataFrame(), object()):
+            with self.subTest(arg=type(empty).__name__):
+                self.assertIsNone(build_site._log_starter_blend(empty, dict(LG)))
+
+
 class TheCardPublishesTheBlendTests(unittest.TestCase):
     """The operator's call, 2026-09-18: the card shows the blended rate under
     the label it already had. So the claim under test is that the number in

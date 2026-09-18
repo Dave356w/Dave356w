@@ -868,6 +868,19 @@ precedent — they are how the fix is known to look.
   makes the code do what the tag says. See the v13 entry above for why that
   costs no graded rows.
 
+  **The build now SAYS whether it blended, and that half is the durable one.**
+  `_log_starter_blend` prints `starter blend: n/N` every run, and
+  `load_stat_lookups` prints whether each requested rate was served at all --
+  because the two causes are indistinguishable in the dump (both leave
+  `starter_rate_blended` False) and one of them, a column Savant declines to
+  serve, arrives as a silently absent COLUMN rather than an error. This is
+  `shadow_metric`'s `rate column 'xwoba' resolved on 20/20 players` line, the
+  precedent that put a Savant column on the critical path safely, applied to
+  the primary build it was supposed to protect. Log-only, and it swallows its
+  own exceptions: a log line that can raise on the path that commits
+  irreplaceable pregame rows is worse than no log line. **Standing rule: when
+  a function degrades silently by design, print the count.**
+
   **One display consequence, on the operator's instruction and recorded
   because the label is now a mixture.** The card's cell keeps reading
   `starter_xwOBA`, so the blended rate publishes under the label it already

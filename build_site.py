@@ -942,6 +942,17 @@ def load_stat_lookups(player_type):
         pid = int(r["player_id"])
         stat[pid] = {REN_STAT[k]: r.get(k) for k in REN_STAT if k in cust.columns}
 
+    # Both rates are requested in one call, and a selection Savant declines to
+    # serve comes back as a silently absent COLUMN rather than an error -- so
+    # the blend's only symptom would be that it never fires. Said out loud
+    # here, per rate, because this board is the first place the answer exists.
+    for src in (MODEL_RATE_SOURCE_COL, BLEND_RATE_SOURCE_COL):
+        got = int(pd.to_numeric(cust[src], errors="coerce").notna().sum()) \
+            if src in cust.columns else None
+        log(f"  {player_type} board: '{src}' "
+            + (f"served on {got}/{len(cust)} players" if got is not None
+               else "ABSENT from the response"))
+
     BB_REN = {"gb_rate": "GB%", "fb_rate": "FB%", "ld_rate": "LD%", "pu_rate": "PU%",
               "pull_rate": "Pull%", "straight_rate": "Straight%", "oppo_rate": "Oppo%"}
     bbprofile = {}
@@ -3615,7 +3626,52 @@ def build_xwoba_matchup(pitchers_df, league_baseline, hitter_sink=None):
                                          hitter_sink=hitter_sink)
     matchup_df = build_matchup(pitcher_rows_df, opp_lineup_agg_df, STATCAST_RATE_COLS, league_baseline,
                                shrink_prior=prior, shrink_k=XWOBA_SHRINK_K)
+    _log_starter_blend(matchup_df, league_baseline)
     return matchup_df, pitcher_rows_df, opp_hitters_df
+
+
+def _log_starter_blend(matchup_df, league_baseline):
+    """Say on every build how many starters actually got blended.
+
+    v13's blend degrades to the pure primary on any unusable input, which is
+    the right rule -- a missing optional column must cost the refinement and
+    never a slate whose pregame rows cannot be re-derived. The cost of that
+    rule is that a blend which NEVER fires looks exactly like a build with no
+    starters on it, and for two slates it did: `xw+starter_blend_v13` stamped
+    on rows carrying v12 math, with nothing raised, nothing logged and
+    `starter_rate_blended` False on every row.
+
+    So this is the shadow arm's `rate column resolved on 20/20 players` line
+    applied to the primary build -- the precedent that put `xwoba` on the
+    critical path safely. It names the two causes separately, because they are
+    indistinguishable in the dump: the league centre absent (the batter
+    leaderboard served no blend rate) versus the per-starter rate absent.
+    Log-only; it reads the frame that was already built and returns nothing.
+    """
+    try:
+        if matchup_df is None or getattr(matchup_df, "empty", True):
+            return
+        if "starter_rate_blended" not in matchup_df.columns:
+            log("  starter blend: NOT APPLIED -- no blend columns on the frame")
+            return
+        centre = _f((league_baseline or {}).get(BLEND_RATE_INTERNAL_COL))
+        n = len(matchup_df)
+        ok = int(matchup_df["starter_rate_blended"].fillna(False).astype(bool).sum())
+        if centre is None:
+            log(f"  starter blend: 0/{n} -- no league {BLEND_RATE_INTERNAL_COL} "
+                f"centre; every starter keeps his pure {MODEL_RATE_LABEL}")
+        elif ok == 0:
+            log(f"  starter blend: 0/{n} starters blended despite a league "
+                f"centre of {centre:.5f} -- the per-starter "
+                f"{BLEND_RATE_SOURCE_COL} line is not reaching the frame")
+        else:
+            log(f"  starter blend: {ok}/{n} starters on the centred "
+                f"{1 - STARTER_BLEND_WEIGHT:.2f}/{STARTER_BLEND_WEIGHT:.2f} "
+                f"{MODEL_RATE_SOURCE_COL}/{BLEND_RATE_SOURCE_COL} blend "
+                f"(league centres {_f((league_baseline or {}).get(MODEL_RATE_INTERNAL_COL)):.5f}"
+                f" / {centre:.5f})")
+    except Exception as e:  # noqa: BLE001 - a log line must never cost a slate
+        log(f"  starter blend: could not report ({e!r})")
 
 
 def attach_pitch_mix_shadow(matchup_df, pitcher_rows_df, opp_hitters_df,
