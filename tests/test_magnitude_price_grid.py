@@ -334,9 +334,16 @@ def test_both_delta_grids_read_their_own_reference(fn):
     """Asserted on the RENDERED block, because printing a reference and never
     reading it is exactly what was wrong -- a test on the function alone would
     have passed throughout."""
+    # The family is read off the LEDGER rather than off the running build.
+    # These blocks are family-scoped, so a `MODEL_TAG` bump empties them until
+    # the first slate lands -- and this test would then fail because there was
+    # nothing to render, not because a reference went unread. The claim is
+    # about how a rendered grid reports its own null maximum, so the fixture
+    # has to be a grid that rendered.
     led = pd.read_csv(grade_leans.LEDGER_PATH)
-    g = led[led["status"].eq("graded")
-            & led["model_tag"].isin(grade_leans.RECORD_TAGS)]
+    graded = led[led["status"].eq("graded")]
+    fam = graded["model_tag"].value_counts().idxmax()
+    g = graded[graded["model_tag"].astype(str).eq(str(fam))]
     body = "\n".join(fn(g))
     assert "best-cell reference" in body
     assert any(v in body for v in ("ABOVE it", "at or below it",

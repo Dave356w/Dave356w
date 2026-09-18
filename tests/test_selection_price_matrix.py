@@ -7,6 +7,7 @@ test that only checked the block rendered would pass just as happily while the
 two drifted apart.
 """
 import re
+from unittest import mock
 
 import numpy as np
 import pandas as pd
@@ -16,9 +17,29 @@ import grade_leans
 import market_backfill
 
 
+
+def _populated_family_rows(led):
+    """Graded rows of the family the LEDGER actually holds most of.
+
+    These blocks are family-scoped by design, so on the day a `MODEL_TAG` bump
+    lands they correctly render nothing -- and a test that reads the committed
+    ledger through `_record_grades` then asserts against an empty block for a
+    reason that has nothing to do with the rule under test.
+
+    Reading the family off the ledger keeps the RULES pinned on both sides of a
+    bump. It is the same correction this repo made to `interaction_probe`, whose
+    hardcoded row selector went on answering about a model the build had stopped
+    running: a constant is not only a number, the set of rows is one too.
+    """
+    graded = led[led["status"].astype(str).eq("graded")]
+    if graded.empty:
+        return graded
+    fam = graded["model_tag"].value_counts().idxmax()
+    return graded[graded["model_tag"].astype(str).eq(str(fam))].copy()
+
 def _lines():
     led = pd.read_csv(grade_leans.LEDGER_PATH)
-    return grade_leans._selection_price_matrix_lines(grade_leans._record_grades(led))
+    return grade_leans._selection_price_matrix_lines(_populated_family_rows(led))
 
 
 def _cells(lines):
@@ -55,7 +76,19 @@ def test_every_cell_equals_the_card_cell_for_the_same_bucket():
     the construction is the claim, and a local copy of either would break it
     silently while both surfaces kept rendering.
     """
-    ctx = build_site.hybrid_branch_records()
+    # BOTH sides are scoped to the same family, and that is the whole point of
+    # the test rather than a detail of it. The report block reads the family
+    # the ledger holds; if the card were left on the build's current family the
+    # two would be compared across different row sets, and the assertion would
+    # then be about scoping rather than about the shared construction. A
+    # `MODEL_TAG` bump makes that difference real, so it is pinned explicitly.
+    led = pd.read_csv(grade_leans.LEDGER_PATH)
+    rows = _populated_family_rows(led)
+    fam = tuple(sorted(set(rows["model_tag"].astype(str))))
+    with mock.patch.object(build_site, "RECORD_TAGS", fam), \
+            mock.patch.object(grade_leans, "RECORD_TAGS", fam):
+        ctx = build_site.hybrid_branch_records()
+        report = _cells(_lines())
     card = {}
     for key, val in ctx.items():
         if isinstance(key, tuple) and key[0] == "delta_price_follow":
@@ -63,7 +96,6 @@ def test_every_cell_equals_the_card_cell_for_the_same_bucket():
             band = grade_leans._band_label(lo, hi).replace(" ", "")
             rung = key[2].replace(" to ", "/").replace(" ", "")
             card[(band, rung)] = (val["model"]["n"], val["model"]["w"])
-    report = _cells(_lines())
     assert report, "the matrix rendered no cells"
     assert report == card
 

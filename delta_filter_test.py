@@ -97,6 +97,26 @@ from market_backfill import chalk_is_home, row_supply_line
 # not to -- which is the point.
 # ---------------------------------------------------------------------------
 REGISTERED_ON = "2026-09-03"      # slates STRICTLY after this date are scored
+# The prediction family this registration was frozen AGAINST. A date bound alone
+# is not enough: `DELTA_THRESHOLD` below is denominated in the delta scale of
+# the family that was current at registration, so a row from a later
+# _SCALE_FAMILIES entry scored under the same 0.012 is a DIFFERENT statistic
+# wearing the registered constant's name.
+#
+# That is not hypothetical -- v13's starter blend opened a new scale family, and
+# without this bound this module would have gone on appending v13 rows to a v12
+# window and printing one gate over two scales. `hybrid_v2` is bounded already
+# and by accident rather than by design: it filters on `selection_rule_tag`, so
+# retiring the rule from the shipped selection stopped its window on its own.
+# This one had no such guard, which is exactly the shape of the retirement that
+# silently retired two other tests -- a denominator that can move without
+# anybody watching it.
+#
+# The window therefore CLOSES at the family change rather than continuing. That
+# is the honest outcome, not a workaround: the registered question was asked of
+# a specific statistic, and the answer it gets is however many rows that
+# statistic produced.
+REGISTERED_FAMILY = ("xw+plat_consol_v12",)
 DELTA_THRESHOLD = 0.012           # |xw_net| >= keeps the lean; below abstains
 # Same scale dependence as `hybrid_v2.DELTA_THRESHOLD`, and the same response:
 # a `_SCALE_FAMILIES` entry does not stale the number so much as invalidate the
@@ -219,7 +239,8 @@ def scored_rows(led=None):
     # Strictly after: the registration date itself already held graded rows, so
     # `>=` would silently readmit part of the discovery sample. This is the ONE
     # place the forward row set is decided.
-    g = g[g["game_date"].astype(str) > REGISTERED_ON]
+    g = g[(g["game_date"].astype(str) > REGISTERED_ON)
+          & g["model_tag"].isin(REGISTERED_FAMILY)]
     if g.empty:
         return g
     return apply_filter(g)

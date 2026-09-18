@@ -148,10 +148,33 @@ class TheTwoArtifactsAgree(unittest.TestCase):
         self.assertEqual(_site_chalk(led), _report_chalk(led))
 
     def test_they_agree_on_the_committed_ledger(self):
-        """The live instance. 257-179 both sides, not 257-179 and 256-180."""
+        """The live instance. 257-179 both sides, not 257-179 and 256-180.
+
+        Both sides must be scored on the SAME rows, which is the claim. The
+        report side used to be hand-filtered to `RECORD_TAGS` while the site
+        side was whatever the site happened to score -- fine while those were
+        the same set, and wrong the moment a bump made the site fall back to a
+        reconstruction. The site's own row set is used for both now, so the
+        test cannot pass by comparing two different denominators and cannot
+        fail because they diverged for a reason other than the tie-break.
+        """
         led = pd.read_csv(grade_leans.LEDGER_PATH)
-        self.assertEqual(_site_chalk(led), _report_chalk(
-            led[led["model_tag"].isin(build_site.RECORD_TAGS)]))
+        obs = build_site._lean_market_observations(led)
+        if obs.empty:
+            self.skipTest("no priced rows on either basis")
+        # Both sides are narrowed to the rows BOTH accept before either is
+        # scored. The two helpers apply different eligibility filters --
+        # `hybrid_v2.decidable` additionally requires a finite `xw_net` -- so
+        # handing them the same frame is not the same as scoring them on the
+        # same rows. Under a reconstruction the gap is real: rows given a lean
+        # by the rebuild are eligible on the site side and not on the report
+        # side. The claim under test is the tie-break convention, not the
+        # eligibility filter, so the filter is equalised first.
+        rows = led.loc[obs.index]
+        both = hybrid_v2.decidable(rows)
+        if both is None or both.empty:
+            self.skipTest("no rows both surfaces accept")
+        self.assertEqual(_site_chalk(both), _report_chalk(both))
 
 
 class TheFootprintIsDisclosed(unittest.TestCase):

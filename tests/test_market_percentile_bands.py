@@ -108,8 +108,18 @@ class MarketPercentileBandTests(unittest.TestCase):
         lines = gl._market_percentile_band_lines(
             pd.read_csv(gl.LEDGER_PATH))
         tail = [l for l in lines if "expected from noise" in l]
-        self.assertTrue(tail)
-        head = [l for l in lines if "pooling licence" in l][0]
+        head = [l for l in lines if "pooling licence" in l]
+        if not (head and tail):
+            # Same guard, and the same reason, as
+            # `test_both_sides_of_the_licence_print_enough_digits_to_compare`
+            # directly below. The licence compares the CURRENT family against
+            # the rest, so a family with no rows -- which is every family for
+            # the first slate after a `MODEL_TAG` bump -- has nothing to pool
+            # and correctly prints no licence. Asserting one exists would
+            # fail for the absence of rows rather than for the rendering
+            # defect this test is about.
+            self.skipTest("no pooling licence on this ledger")
+        head = head[0]
         got = float(head.split("max |z|")[1].split()[0].rstrip(","))
         exp = float(tail[0].strip().split()[1])
         if abs(exp - got) < 0.005:
