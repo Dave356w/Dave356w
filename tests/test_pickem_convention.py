@@ -51,7 +51,13 @@ def _led(p_home, lean_home, home_won, xw_net=0.02):
         "status": "graded",
         "game_date": "2026-09-20",
         "game_pk": np.arange(n) + 1,
-        "model_tag": sorted(build_site.RECORD_TAGS)[0],
+        # MODEL_TAG, not a member of RECORD_TAGS picked by sort order. The
+        # family is shared across v12 and v13 now, so `sorted(...)[0]` built
+        # RETAINED rows -- which the site publishes only where a v13
+        # reconstruction exists, and these constructed rows carry none. The
+        # fixture means "rows this build wrote", and that is what MODEL_TAG
+        # says.
+        "model_tag": build_site.MODEL_TAG,
         "home": "H", "away": "A",
         "xw_lean": np.where(lean_home, "H", "A"),
         "xw_net": np.broadcast_to(np.asarray(xw_net, dtype=float), (n,)),

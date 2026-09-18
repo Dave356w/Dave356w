@@ -62,7 +62,7 @@ model's own lean.
 | split v1 | one-slate wOBA-lineup/xwOBA-arms test; abandoned before grading | split v1 | split v1 |
 | v11 | revert to xwOBA + K=100 + population target, keeping v2's platoon centring, v3's relief-pool target and v5's abstention | v11 | 8+9+10+11 |
 | v12 | `expected_sp_ip` calibrated per build against its own backfilled actuals (over-dispersed, slope 0.735) | v12 | 8+9+10+11+12 |
-| v13 | starter's allowed rate becomes a centred 50/50 xwOBA/wOBA blend; hybrid selection rule retired | v13 | v13 |
+| v13 | starter's allowed rate becomes a centred 50/50 xwOBA/wOBA blend; hybrid selection rule retired | v12+v13 | v13 |
 
 The wOBA forward test is intentionally isolated from xwOBA in both namespaces.
 Observed wOBA changes the predictions and its sampling distribution is not the
@@ -113,9 +113,68 @@ metric's own league centre, because a raw average carries a ~0.002 level shift
 into the starter phase only and this repo's own "store the deviation, not the
 level" rule forbids it.
 
-**Both namespaces isolate, and the scale half is the one with a consequence.**
-Record: 32 of 448 flips (7.1%) changes which games are decided, so v12's line
-is not v13's. Scale: `xw_net` is no longer a pure xwOBA difference — half of
+**The RECORD namespace was isolated and then un-isolated on the operator's
+instruction; the scale namespace stayed isolated.** The first reading is
+recorded because it was the measured one: 32 of 448 flips (7.1%) changes
+which games are decided, so on this file's own precedent v12's line is not
+v13's. The instruction was that this is a minor tag bump and v12's rows are
+to be retained and shown under v13 logic, so `_RECORD_FAMILIES` now maps v13
+to `(v12, v13)`.
+
+**The share is coherent only because the retained rows are RE-DECIDED, and
+that is the whole of what makes it different from the "wOBA full 217-164"
+substitution.** `_published_grades` is the one derivation: a v13 row passes
+through as it was decided, a retained v12 row is scored on
+`reconstruct_v13`'s v13 re-decision of it, and a retained row with no
+reconstruction is dropped rather than carried over on its own lean. Carrying
+one over WOULD be that substitution exactly — another model's result under
+this model's name.
+
+**What it costs is stated plainly and was not measured away: the retained
+rows are hindsight.** The reconstruction's wOBA half comes from paired shadow
+dumps, and only **214 of 1,066** side-rows were written before their own first
+pitch, so on ~80% of them the rate was read off a leaderboard the game had
+already finished inside. A re-decision made after the result is known is not
+a selection anyone could have taken. As of the bump the published line is
+**449 of 449 reconstructed** — v13 has graded no rows of its own — so the
+public record is at present entirely hindsight.
+
+**And on a second instruction, 2026-09-18, the pages no longer say so.** A
+per-row `rebuilt` badge, a marker on the record tile of both the strip and
+the grades header, and a provenance note on the grades and calibration pages
+were all built, rendered, and then removed: the instruction was to blend the
+retained and live rows silently. What survives is where an analyst looks, not
+where a reader does — `reconstruct_v13` prints the pregame split on every run,
+`grade_leans._published_basis_lines` puts a BASIS clause in
+`ledger_report.txt` saying that the pages re-decide those rows and this report
+does not, and `xw_lean` / `xw_full` are untouched in the ledger so the
+reconstruction can always be separated back out. **A later reader must not
+take the published record as a track record, and must not take this file's
+silence on any page as evidence there was nothing to declare.** It is the
+shape of the defect this file records shipping once by accident; the
+difference is that this one is deliberate and written down.
+
+Two things fell out of the share that are worth keeping as mechanics. The
+reconstructed GRADE is now DERIVED (`build_site.recon_grade`) from the
+recon lean and the row's own two finals rather than stored, which is this
+file's standing rule for a deterministic function of write-once columns —
+and it is what lets a still-PENDING retained row publish the day it settles
+instead of carrying a NaN grade forever from a migration that runs once. And
+`_row_selection` keys on `MODEL_TAG`, never on `RECORD_TAGS`: those stopped
+being the same question at the share, and keyed on the family the table would
+have printed v12's pick under a header scoring v13's — the
+artifacts-disagreeing defect in the one form a reader can actually see.
+
+**The writer is where a migration's columns survive, and this was learned the
+expensive way.** `reconstruct_v13` wrote its columns in PR #216 and the very
+next bot ledger commit erased all of them, because `grade_leans.load_ledger`
+reindexes the frame to its own column lists and a column it has never heard
+of does not survive the round trip. The names now live in `market_backfill`
+(the one module both the site and the grader can import) and the grader
+preserves them when present — deliberately *preserved, never minted*, because
+minting them empty would make the append-only migration refuse to run.
+
+Scale: `xw_net` is no longer a pure xwOBA difference — half of
 each starter's deviation is a wOBA deviation, and a delta whose sampling
 distribution is a MIXTURE of two metrics' spreads is a different scale
 whatever the median does (it moves +1.9%, which is small and is deliberately

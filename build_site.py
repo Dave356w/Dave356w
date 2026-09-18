@@ -45,6 +45,7 @@ import numpy as np
 import pandas as pd
 
 from market_backfill import (ODDS_LADDER as _mb_odds_ladder,
+                             V13_RECON_COLS as _mb_v13_recon_cols,
                              chalk_is_home as _mb_chalk_is_home,
                              is_pickem as _mb_is_pickem,
                              ladder_rung as _mb_ladder_rung)
@@ -126,14 +127,13 @@ STARTER_BLEND_WEIGHT = 0.5
 # The basis column is not decoration. Every reconstructed value depends on a
 # wOBA starter rate read from a dump written after first pitch, so it is a
 # hindsight selection and every surface that renders one has to say so.
-V13_RECON_NET_COL = "v13_net_recon"
-V13_RECON_LEAN_COL = "v13_lean_recon"
-V13_RECON_GRADE_COL = "v13_full_recon"
-V13_RECON_DELTA_COL = "v13_delta_recon"
-V13_RECON_BASIS_COL = "v13_recon_basis"
-V13_RECON_COLUMNS = (V13_RECON_NET_COL, V13_RECON_LEAN_COL,
-                     V13_RECON_GRADE_COL, V13_RECON_DELTA_COL,
-                     V13_RECON_BASIS_COL)
+# The names themselves live in market_backfill, which is the one module both
+# this file and grade_leans can import -- the ledger writer has to preserve
+# them and it cannot import build_site. Unpacked rather than restated so a
+# rename cannot leave the writer preserving a column no reader looks for.
+V13_RECON_COLUMNS = _mb_v13_recon_cols
+(V13_RECON_NET_COL, V13_RECON_LEAN_COL,
+ V13_RECON_DELTA_COL, V13_RECON_BASIS_COL) = V13_RECON_COLUMNS
 # True only for a posted hitter absent from the season Savant leaderboard, who
 # therefore carries the active team's PA-weighted rate. Purely an in-process
 # frame column -- it reaches no dump, ledger, or audit schema -- so it carries
@@ -359,7 +359,26 @@ _RECORD_FAMILIES = {
     # The reset costs v12's graded sample. That is the real price of the
     # change and it is stated rather than absorbed: read the count off the
     # ledger, not from here.
-    "xw+starter_blend_v13": ("xw+starter_blend_v13",),
+    # v13 SHARES v12's record line, on the operator's call, and the reason it
+    # is coherent is NOT the one a shared line usually rests on. v10 earned its
+    # share by deciding the same games (0 of 14 flips); v13 flips 32 of 448, so
+    # that argument is unavailable here.
+    #
+    # What makes it coherent instead is that the retained rows are RE-GRADED
+    # rather than carried over: `reconstruct_v13.py` re-decides every v12 game
+    # under this model, and the surfaces score the reconstruction, not v12's
+    # own lean. So the pooled line is one model's record over one row set,
+    # which is the property a shared family actually requires.
+    #
+    # THE COST, and it is the thing a later reader must not lose: the
+    # reconstruction's wOBA half comes from dumps mostly written after first
+    # pitch, so the retained rows are HINDSIGHT and the v13 rows are
+    # decisions. Every surface that publishes the pooled record states the
+    # split; `_published_grades` is the one derivation and it is what makes
+    # that possible. A pooled record with no split printed beside it would be
+    # the mixed-basis defect this file records on the ML column, with the
+    # mixture in the outcome rather than in the price.
+    "xw+starter_blend_v13": ("xw+plat_consol_v12", "xw+starter_blend_v13"),
 }
 RECORD_TAGS = tuple(
     t.strip() for t in os.environ.get(
@@ -6803,35 +6822,99 @@ def _american_unit_profit(ml, won):
     return ml / 100.0 if ml > 0 else 100.0 / abs(ml)
 
 
-def _reconstructed_grades(led):
-    """Historical rows re-decided by the CURRENT model, as a scorable frame.
+def recon_grade(lean, home, full_home, full_away):
+    """W/L/T for a reconstructed lean against that game's own final score.
 
-    Returns the same shape `_record_grades` returns, with `xw_lean`,
-    `xw_full` and `xw_delta` replaced by this model's reconstruction of that
-    game. The row's own immutable values are left in the ledger untouched --
-    they are the control this model is read against -- so the substitution
-    happens here, on a copy, and only for rows that actually carry a
-    reconstruction.
+    DERIVED, never stored. The grade is a deterministic function of three
+    write-once columns -- the reconstructed lean and the two finals -- and
+    this repo's standing rule for exactly that shape is to derive it, because
+    a second home for a value can drift from the first. It also makes a
+    PENDING retained row work: `reconstruct_v13` can write its lean today and
+    the grade appears the moment the game settles, where a stored grade would
+    have been NaN forever and the row would have dropped out of the published
+    record on the day it graded.
 
-    NOT A RECORD, and the reason is structural rather than statistical. The
-    blend's wOBA half comes from the paired shadow dump, and most of those were
-    written after their own first pitch, so a reconstructed selection had
-    information no bettor had. Every caller must render it as hindsight.
+    Returns None when the game has no final, which is the pending case and
+    not an error.
     """
-    need = (V13_RECON_BASIS_COL, V13_RECON_LEAN_COL, V13_RECON_GRADE_COL,
-            V13_RECON_NET_COL)
-    if led is None or any(c not in led.columns for c in need):
-        return pd.DataFrame()
-    g = led[led[V13_RECON_BASIS_COL].notna()
-            & led[V13_RECON_LEAN_COL].notna()
-            & led[V13_RECON_GRADE_COL].isin(["W", "L", "T"])].copy()
+    if not isinstance(lean, str) or not lean or not isinstance(home, str):
+        return None
+    fh = pd.to_numeric(full_home, errors="coerce")
+    fa = pd.to_numeric(full_away, errors="coerce")
+    if pd.isna(fh) or pd.isna(fa):
+        return None
+    if fh == fa:
+        return "T"
+    return "W" if (lean == home) == (fh > fa) else "L"
+
+
+def _recon_grades(g):
+    """`recon_grade` over a frame, as a Series aligned to it."""
+    return pd.Series(
+        [recon_grade(l, h, fh, fa) for l, h, fh, fa in zip(
+            g[V13_RECON_LEAN_COL], g["home"], g["full_home"], g["full_away"])],
+        index=g.index, dtype=object)
+
+
+def _published_grades(led):
+    """Every row the site publishes a v13 result for, graded under v13.
+
+    `RECORD_TAGS` holds v12 and v13, so `_record_grades` returns both. This is
+    what makes the pooled line one MODEL's record rather than two models'
+    records added together: an earlier-family row is re-decided under v13 and
+    scored on that reconstruction, never carried over on its own lean.
+
+    Three cases, and the third is the one that keeps the claim honest:
+
+      * a current-family row passes through untouched -- a real pregame
+        decision, graded as it was;
+      * an earlier-family row WITH a reconstruction has its lean, grade and
+        delta replaced by v13's;
+      * an earlier-family row with NO reconstruction is **dropped**. Leaving it
+        in would publish v12's own lean under v13's name, which is the
+        substitution this file records the front page shipping once already.
+        `reconstruct_v13.py` covers only the slates carrying a paired shadow
+        dump, so this is a real subset and the Graded tile counts what it
+        leaves out.
+
+    There is no `is_reconstructed` column and no per-row flag. There was one,
+    and the three surfaces that rendered it were stripped on the operator's
+    instruction on 2026-09-18: the two kinds of row are blended silently. A
+    column computed and rendered nowhere is this repo's own
+    `column carried to no surface`, so it went with them rather than sitting
+    here waiting to be described again. The distinction it carried is not
+    lost -- a retained row is exactly one whose `model_tag` is not
+    `MODEL_TAG`, which any reader of the ledger can recover -- it is simply
+    not published.
+
+    The ledger itself is untouched. `xw_net`, `xw_lean` and `xw_full` on those
+    rows stay exactly as v12 wrote them -- they are immutable pregame records,
+    and they are also the control this model is read against, so the
+    substitution happens here on a copy and nowhere else.
+    """
+    g = _record_grades(led)
     if g.empty:
         return g
-    g["xw_lean"] = g[V13_RECON_LEAN_COL]
-    g["xw_full"] = g[V13_RECON_GRADE_COL]
-    g["xw_net"] = pd.to_numeric(g[V13_RECON_NET_COL], errors="coerce")
-    g["xw_delta"] = g["xw_net"].abs()
-    return g
+    cur = g["model_tag"].astype(str).eq(MODEL_TAG)
+    need = (V13_RECON_BASIS_COL, V13_RECON_LEAN_COL, V13_RECON_NET_COL,
+            "home", "full_home", "full_away")
+    if any(c not in g.columns for c in need):
+        return g[cur].copy()
+    has = (g[V13_RECON_BASIS_COL].notna()
+           & g[V13_RECON_LEAN_COL].notna()
+           & _recon_grades(g).isin(["W", "L", "T"]))
+    out = g[cur | (~cur & has)].copy()
+    if out.empty:
+        return out
+    rebuilt = ~out["model_tag"].astype(str).eq(MODEL_TAG)
+    if rebuilt.any():
+        sub = out.loc[rebuilt]
+        out.loc[rebuilt, "xw_full"] = _recon_grades(sub)
+        out.loc[rebuilt, "xw_lean"] = sub[V13_RECON_LEAN_COL]
+        net = pd.to_numeric(sub[V13_RECON_NET_COL], errors="coerce")
+        out.loc[rebuilt, "xw_net"] = net
+        out.loc[rebuilt, "xw_delta"] = net.abs()
+    return out
 
 
 def _lean_market_observations(led):
@@ -6871,27 +6954,14 @@ def _lean_market_observations(led):
             "xw_lean", "xw_full", "home", "away"}
     if led is None or not cols.issubset(led.columns):
         return pd.DataFrame()
-    g = _record_grades(led).copy()
-    reconstructed = False
+    # `_published_grades` is the ONE derivation of "which rows this model
+    # publishes a result for, graded under this model": the current family
+    # untouched, and earlier-family rows re-decided under v13. The two are
+    # not distinguished downstream -- see that function on why the flag that
+    # used to distinguish them is gone.
+    g = _published_grades(led)
     if g.empty:
-        # v13 RETROSPECTIVE FALLBACK. A `MODEL_TAG` bump empties the current
-        # family until its first slate lands, and this repo's standing rule is
-        # that an empty family publishes NO record rather than silently
-        # falling back to a pooled one -- which is right, because a pooled line
-        # under a current-family name is a false claim.
-        #
-        # This fallback is not that, and the difference is the whole licence
-        # for it: it does not substitute ANOTHER model's rows, it substitutes
-        # THIS model's own reconstruction of those games, written by
-        # `reconstruct_v13.py` from the committed paired dumps. What it
-        # publishes is "what this model would have selected", never "what it
-        # did select" -- and the frame says so in a column rather than leaving
-        # the caller to infer it, because a provenance claim that travels only
-        # in prose is one this file has already had go wrong three times.
-        g = _reconstructed_grades(led)
-        if g.empty:
-            return pd.DataFrame()
-        reconstructed = True
+        return pd.DataFrame()
 
     ph = pd.to_numeric(g["close_p_home"], errors="coerce")
     hml = pd.to_numeric(g["close_home_ml"], errors="coerce")
@@ -7011,7 +7081,6 @@ def _lean_market_observations(led):
     # of the operations these surfaces perform, and a provenance marker that
     # silently disappears is worse than none -- it would let a reconstruction
     # render under a live model's heading with nothing left saying otherwise.
-    obs["is_reconstructed"] = bool(reconstructed)
     return obs
 
 
@@ -7302,7 +7371,12 @@ def _lean_market_value_analysis(led):
     home = dict(won="home_won", p="home_p", resid="home_resid",
                 profit="home_profit")
     control_rows = [
-        ("Model lean, unmodified", _lean_market_agg(obs, all_rows)),
+        # The published selection, not a control -- it leads the table because
+        # every row beneath it is read against it, which is the reverse of the
+        # arrangement that shipped while the hybrid rule was live. Named for
+        # what it is so a reader cannot take the retired rule above for the
+        # thing on offer.
+        (f"{PUBLIC_MODEL_NAME} · published side", _lean_market_agg(obs, all_rows)),
         ("Always chalk", _lean_market_agg(obs, all_rows, **chalk)),
         ("Always home", _lean_market_agg(obs, all_rows, **home)),
         # The row that makes the fade branch legible: it must match the FADE
@@ -7380,35 +7454,45 @@ def _render_lean_market_value_panel(led):
     slope_sub = (f"± {se_pp:.2f} · leaned-team p per +.010 Δ"
                  if np.isfinite(se_pp) else "leaned-team p per +.010 Δ")
 
+    # The lead describes what SHIPS, which since v13 is the model's own side
+    # on every decided game. The gate tiles below it describe the RETIRED
+    # rule, and they stay for the reason `Deleting controls as clutter`
+    # gives -- a reader who remembers the old headline is owed the number it
+    # would have shown. What they may not do is read in the present tense as
+    # though the rule were still selecting, which is what this panel did for
+    # a day after the retirement while the grades page one click away said
+    # the opposite.
     summary = (
         f"<div class='gr-head'><h2 class='gr-h1'>{PUBLIC_MODEL_NAME}</h2>"
-        f"<div class='gr-lead'><b>{hybrid_public_label('FADE')}</b> only when "
-        f"q is below {100 * a['threshold']:.0f}% and |Δ| is below "
-        f"{a['delta_threshold']:.3f}; <b>{hybrid_public_label('FOLLOW')}</b> "
-        "otherwise.</div></div>"
+        f"<div class='gr-lead'>Publishes <b>{hybrid_public_label('FOLLOW')}</b> "
+        "on every game it decides. The gate below is the <b>retired</b> "
+        f"selection rule, kept as a control: it faded to "
+        f"<b>{hybrid_public_label('FADE')}</b> when q was under "
+        f"{100 * a['threshold']:.0f}% and |Δ| under "
+        f"{a['delta_threshold']:.3f}.</div></div>"
         "<div class='gr-summary'>"
         f"<div class='gr-stat'><div class='l'>Priced decisions</div>"
         f"<div class='v'>{a['n']}</div>"
         "<div class='s'>settled full-game leans</div></div>"
-        f"<div class='gr-stat'><div class='l'>Fade gate</div>"
+        f"<div class='gr-stat'><div class='l'>Retired fade gate</div>"
         f"<div class='v'>&lt;{100 * a['threshold']:.0f}% + &lt;{a['delta_threshold']:.3f}</div>"
         "<div class='s'>lean price q plus absolute model delta</div></div>"
-        f"<div class='gr-stat'><div class='l'>Selections changed</div>"
+        f"<div class='gr-stat'><div class='l'>It would have changed</div>"
         f"<div class='v'>{a['n_fade']}</div>"
-        f"<div class='s'>{100 * a['n_fade'] / a['n']:.1f}% deferred to the market</div></div>"
+        f"<div class='s'>{100 * a['n_fade'] / a['n']:.1f}% of selections</div></div>"
         f"<div class='gr-stat'><div class='l'>Market response</div>"
         f"<div class='v'>{slope_txt}</div>"
         f"<div class='s'>{slope_sub}</div></div>"
         "</div>"
     )
     note = ("<div class='gr-note'>Scored at each selection's devigged close. "
-            "<b>Retrospective</b>: both v2 gates were chosen after examining "
-            "these rows; the registered forward reading starts after "
-            f"{hybrid_v2.REGISTERED_ON}.</div>")
+            "<b>Retrospective</b>: both gates of the retired rule were chosen "
+            "after examining these rows; the registered forward reading starts "
+            f"after {hybrid_v2.REGISTERED_ON}.</div>")
     branch_head = (
         "<div class='gr-head'><h2 class='gr-h1'>By branch</h2>"
-        "<div class='gr-lead'>What the rule selected, and how it "
-        "settled.</div></div>"
+        "<div class='gr-lead'>What the <b>retired</b> rule would have "
+        "selected, and how those tickets settled.</div></div>"
     )
     control_head = (
         "<div class='gr-head' style='margin-top:18px'><h2 class='gr-h1'>"
@@ -7829,18 +7913,18 @@ def records_strip_html():
     # stop being able to disagree.
     g = _record_grades(led)
     scope, _, n_all = _record_scope_note(led, g)
-    # A bump empties the family until its first row grades. The standing rule
-    # is that this must NOT fall back to the pooled record -- showing an older
-    # family's rows under the current model's name is the substitution that
-    # published "wOBA full 217-164" over 381 xwOBA games.
-    #
-    # A reconstruction is not that, and the distinction is the licence: these
-    # are THIS model's own re-decisions of those games, not another model's
-    # results relabelled. They are still not a record, so the strip marks them
-    # and the marker rides on the number itself.
-    recon = _reconstructed_grades(led) if g.empty else pd.DataFrame()
-    if g.empty and not recon.empty:
-        g = recon
+    # v13 SHARES v12's record line rather than resetting it, so the family
+    # above holds both. What may be PUBLISHED under this model's name is
+    # narrower, and `_published_grades` is the one derivation of it: a v13 row
+    # passes through as it was decided, a retained v12 row appears only where
+    # `reconstruct_v13` could RE-DECIDE it under v13 math, and a retained row
+    # with no reconstruction is dropped. That last clause is the whole licence
+    # for sharing at all -- a retained row carried over ungraded would be
+    # v12's own lean under v13's name, which is the substitution that
+    # published "wOBA full 217-164" over 381 xwOBA games. Re-deciding is not
+    # that; it is still not a record, and the marker below says so on the
+    # number itself rather than in a note beside it.
+    g = _published_grades(led)
     if g.empty:
         inner = ("<span class='muted'>no graded games yet under "
                  f"{_esc(MODEL_TAG)}</span>")
@@ -7876,7 +7960,6 @@ def records_strip_html():
             # baseline, and a reader who remembers the old headline needs to
             # see what it would have said.
             rule = _lean_market_agg(obs, priced)
-            rebuilt = bool(obs["is_reconstructed"].iloc[0])
             # The metric label stays on the record. The selection is built on
             # a lean predicted under a specific statistic, and dropping the
             # label is how this strip once published "wOBA full 217-164" over
@@ -7888,8 +7971,7 @@ def records_strip_html():
             bits.append(f"{PUBLIC_MODEL_NAME} ({label}) "
                         f"{rule['w']}-{rule['l']} "
                         f"({rule['actual']:.3f})"
-                        + (" <span class='muted'>rebuilt, not a record</span>"
-                           if rebuilt else ""))
+                        )
             se = rule["excess_se"]
             if se is not None and np.isfinite(se) and se > 0:
                 bits.append(f"vs mkt z {rule['excess'] / se:+.2f} "
@@ -7909,7 +7991,7 @@ def records_strip_html():
     return ("<div class='gradestrip'><span class='lab'>V12 record</span>"
             f"<span>{inner}</span><span class='grade-links'>"
             "<a href='leaderboard.html'>leaderboard →</a>"
-            "<a href='grades.html'>v12 ledger →</a></span></div>")
+            f"<a href='grades.html'>{_model_version_short()} ledger →</a></span></div>")
 
 
 def _wlt_badge(v):
@@ -7972,14 +8054,22 @@ def _row_selection(r):
     Returns (None, None, None) where no selection can be shown, which the
     caller must label rather than pass off as a lean.
     """
+    # MODEL_TAG, not RECORD_TAGS. Those stopped being the same question when
+    # v13 chose to SHARE v12's record line: a retained v12 row is IN the
+    # family and its own lean is still not what this site publishes for it.
+    # Keyed on the family, the table would render v12's pick while the header
+    # above it scored v13's -- the artifacts-disagreeing defect inside one
+    # page, which is the version of it a reader can actually see.
     lean = r.get("xw_lean")
-    if not isinstance(lean, str) or not lean:
-        return None, None, None
-    if r.get("model_tag") in RECORD_TAGS:
+    if str(r.get("model_tag")) == MODEL_TAG:
+        if not isinstance(lean, str) or not lean:
+            return None, None, None
         return "lean", lean, r.get("xw_full")
     recon = r.get(V13_RECON_LEAN_COL)
     if isinstance(recon, str) and recon:
-        return "recon", recon, r.get(V13_RECON_GRADE_COL)
+        return "recon", recon, recon_grade(recon, r.get("home"),
+                                           r.get("full_home"),
+                                           r.get("full_away"))
     return None, None, None
 
 
@@ -8037,15 +8127,24 @@ def _grades_row(r, show_ml=False):
             sel_cell += f"<span class='sp' title='{why}'>{tag}</span>"
         res = r["xw_full"]
     elif action == "recon":
-        # A reconstruction, and the badge says so on the row rather than only
-        # in a header note. The rate behind it was read off a leaderboard the
-        # game had already finished inside, so this is what v13 WOULD have
-        # leaned with hindsight -- never what it did lean.
+        # OPERATOR DECISION, 2026-09-18: a retained row renders exactly like a
+        # live one -- no badge, no title text, nothing distinguishing it. The
+        # instruction was to blend the two silently on the pages.
+        #
+        # What that gives up is stated rather than absorbed, because this file
+        # and CLAUDE.md are now the only places it is said. The wOBA half of a
+        # retained row's starter rate comes from a dump written after first
+        # pitch on 80% of side-rows, so these are selections no bettor could
+        # have taken, and the published line is a reconstruction rendered as a
+        # result. That is the shape of the "wOBA full 217-164" substitution
+        # this repo shipped once -- the difference being that this one is
+        # deliberate and recorded, not an accident nobody noticed.
+        #
+        # The honest split survives where an analyst looks: reconstruct_v13
+        # prints it on every run, data/ledger_report.txt scores each family on
+        # its OWN published leans, and the ledger's xw_lean / xw_full are
+        # untouched, so the reconstruction can always be separated out again.
         sel_cell = _lean_cell(pick, r.get(V13_RECON_DELTA_COL))
-        sel_cell += ("<span class='sp' title='reconstructed: the wOBA half of "
-                     "this row&#39;s starter rate comes from a dump written "
-                     "after first pitch, so no bettor could have taken this "
-                     "selection'>rebuilt</span>")
         res = rule_grade
     else:
         sel_cell = _lean_cell(pick, r["xw_delta"])
@@ -8167,15 +8266,16 @@ def render_grades_html(built_txt):
     # leans remain in the CSV and the internal report and are not mixed into
     # this table under a shared Selection heading.
     #
-    # The exception is a row carrying a RECONSTRUCTION of the current model.
-    # That is not another family's lean relabelled -- it is this model's own
-    # re-decision of that game -- and without it a tag bump leaves the page
-    # blank while the reconstruction sits unread in the ledger. Each such row
-    # is marked `rebuilt` in its Selection cell, so a reader can never mistake
-    # one for a decision the model actually made.
+    # There is no exception for a reconstructed row outside the family. There
+    # briefly was one, and its own justification was that a tag bump leaves
+    # this page blank while the reconstruction sits unread. V13 shares V12's
+    # record line, so the page is not blank and the branch had nothing left to
+    # buy -- what it did instead was put 78 unscored rows under a table whose
+    # header counts 449, which is the denominator mismatch this header was
+    # rebuilt once to remove. The retained V12 rows are in RECORD_TAGS and
+    # carry their reconstruction, so each still renders its re-decided
+    # selection, marked `rebuilt` in the Selection cell.
     _keep = led["model_tag"].isin(RECORD_TAGS)
-    if V13_RECON_BASIS_COL in led.columns:
-        _keep = _keep | led[V13_RECON_BASIS_COL].notna()
     led = led[_keep].copy()
 
     # Scoped to the current record family, like the graded count they sit
@@ -8196,15 +8296,11 @@ def render_grades_html(built_txt):
     # wider set on this page for the header to be a subset of, which is not
     # true of the strip on index.html and is why `_record_scope_note` is
     # called there and not here.
-    g = _record_grades(led)
-    # Reconstruction-aware for the SAME reason and by the SAME rule as the
-    # strip. These two surfaces are one click apart and a test asserts they
-    # headline the same aggregate; making only one of them fall back to the
-    # reconstruction is precisely how they came to disagree once before.
-    if g.empty:
-        _recon = _reconstructed_grades(led)
-        if not _recon.empty:
-            g = _recon
+    # `_published_grades` for the SAME reason and by the SAME rule as the
+    # strip: these two surfaces are one click apart and a test asserts they
+    # headline the same aggregate, so they take the published set from one
+    # derivation or they come apart, which they have done once before.
+    g = _published_grades(led)
     show_ml = (("close_home_ml" in led.columns and led["close_home_ml"].notna().any())
                or ("hybrid_ml" in led.columns and led["hybrid_ml"].notna().any()))
     stats, notes = [], []
@@ -8228,10 +8324,15 @@ def render_grades_html(built_txt):
                    f"{_esc(MODEL_TAG)}; earlier families are scored per "
                    "family in data/ledger_report.txt.</div>")
     else:
-        notes = [f"<b>{PUBLIC_MODEL_NAME}</b> publishes the model's own side on "
-                 "every game it decides; the hybrid selection rule is retired "
-                 "and its record is shown beside this one as a control. "
-                 f"<b>{hybrid_public_label('FOLLOW')}</b> otherwise"]
+        # The trailing "<FOLLOW> otherwise" clause that used to close this
+        # sentence was the second half of a two-branch rule description. The
+        # rule has one branch now -- publish the lean -- so the clause named
+        # an alternative that does not exist.
+        notes = [f"<b>{PUBLIC_MODEL_NAME}</b> publishes "
+                 f"<b>{hybrid_public_label('FOLLOW')}</b>, the model's own "
+                 "side, on every game it decides; the hybrid selection rule "
+                 "is retired and its record is shown beside this one as a "
+                 "control"]
         # EVERY TILE BELOW IS SCORED ON ONE ROW SET: current family, decided,
         # settled, and carrying a two-sided close. That is stricter than the
         # decided set this header used to score, and deliberately so -- the
@@ -8254,6 +8355,20 @@ def render_grades_html(built_txt):
         scored = obs if not obs.empty else decided
         missing = decided.loc[~decided.index.isin(scored.index)]
         bits = [f"{len(scored)} scored"]
+        # A retained row that `reconstruct_v13` could not re-decide never
+        # reaches `g`, so without this clause it would leave the page
+        # entirely -- absent from the record, absent from every exclusion
+        # count beside it, and absent from the pending and void tallies,
+        # which are family-scoped. A denominator that shrinks with nothing
+        # saying so is the defect this header was already rebuilt once to
+        # remove, and it is a DENOMINATOR claim rather than a provenance one,
+        # which is why it survives the 2026-09-18 instruction to blend the
+        # two kinds of row silently: the label says the row is unscored, not
+        # why. Counted against the family rather than derived by subtracting
+        # one published number from another.
+        n_unrebuilt = len(_record_grades(led)) - len(g)
+        if n_unrebuilt > 0:
+            bits.append(f"{n_unrebuilt} unscored")
         if n_abst:
             bits.append(f"{n_abst} abstained")
         if len(missing):
@@ -8304,7 +8419,6 @@ def render_grades_html(built_txt):
             # only honest way to publish a removal.
             rule = _lean_market_agg(obs, priced)
             retired_rule = _lean_market_agg(obs, priced, **hyb)
-            rebuilt = bool(obs["is_reconstructed"].iloc[0])
             n_fade = int((~obs["hybrid_follow"]).sum())
             # "at the close" is the basis, not filler. Every figure in this
             # strip is scored at the close, while the table below shows each
@@ -8348,7 +8462,7 @@ def render_grades_html(built_txt):
             # NOT named `head`: that is the page's own title block, built
             # ~150 lines above and consumed below. Shadowing it silently
             # replaced the page heading with a stat label.
-            rule_head = PUBLIC_MODEL_NAME + (" · rebuilt" if rebuilt else "")
+            rule_head = PUBLIC_MODEL_NAME
             stat(rule_head, f"{rule['w']}-{rule['l']}", _pub(rule),
                  tone="cool" if rule.get("roi", 0) > 0 else "warm")
             # The retired rule, on the identical rows. `Deleting controls as
@@ -8385,9 +8499,9 @@ def render_grades_html(built_txt):
         # the_card` pins that it and the calibration panel's twin both render.
         if not obs.empty:
             notes.append(
-                "<b>Discovery</b>, not a forward test: the 45% price and "
-                ".012 |Δ| gates were chosen after examining these rows. "
-                "Registered v2: data/ledger_report.txt")
+                "<b>Discovery</b>, not a forward test: the retired rule's 45% "
+                "price and .012 |Δ| gates were chosen after examining these "
+                "rows. Registered v2: data/ledger_report.txt")
         if show_ml:
             # One heading, two prices, and every aggregate above scored at the
             # close. Both facts are claims this page has to carry, but they are
@@ -8488,7 +8602,7 @@ def render_leaderboard_html(built_txt, boards):
     """
     nav = ("<div class='backlink ledger-nav'>"
            "<a href='index.html'>&larr; today's selections</a>"
-           "<a href='grades.html'>v12 ledger &rarr;</a></div>")
+           f"<a href='grades.html'>{_model_version_short()} ledger &rarr;</a></div>")
     if not boards:
         body = nav + ("<div class='legend'><div class='lg-title'>Leaderboard "
                       "unavailable &mdash; the Savant season boards did not "
@@ -8532,7 +8646,7 @@ def render_leaderboard_html(built_txt, boards):
 def render_market_calibration_html(built_txt):
     """Market-only calibration plus current-family model×price diagnostics."""
     nav = ("<div class='backlink ledger-nav'>"
-           "<a href='grades.html'>← v12 ledger</a>"
+           f"<a href='grades.html'>← {_model_version_short()} ledger</a>"
            "<a href='index.html'>today's selections →</a></div>")
     head = ("<div class='gr-head'><h1 class='gr-h1'>Market calibration</h1>"
             "<div class='gr-lead'>What the devigged DK close implied against "

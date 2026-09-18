@@ -85,7 +85,15 @@ def test_every_cell_equals_the_card_cell_for_the_same_bucket():
     led = pd.read_csv(grade_leans.LEDGER_PATH)
     rows = _populated_family_rows(led)
     fam = tuple(sorted(set(rows["model_tag"].astype(str))))
+    # MODEL_TAG moves with the family, and not only for tidiness. build_site
+    # publishes a row whose tag is not MODEL_TAG through its v13
+    # RECONSTRUCTION, while grade_leans scores the lean that row's own build
+    # published -- so leaving MODEL_TAG where it was would compare a
+    # re-decided cell against a published one and fail for a reason that has
+    # nothing to do with the shared construction under test.
+    live = rows["model_tag"].astype(str).value_counts().idxmax()
     with mock.patch.object(build_site, "RECORD_TAGS", fam), \
+            mock.patch.object(build_site, "MODEL_TAG", live), \
             mock.patch.object(grade_leans, "RECORD_TAGS", fam):
         ctx = build_site.hybrid_branch_records()
         report = _cells(_lines())

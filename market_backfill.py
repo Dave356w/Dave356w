@@ -68,6 +68,32 @@ MARKET_COLS = ["gamePk", "espn_id", "open_away_ml", "open_home_ml",
                "f5_open_away_ml", "f5_open_home_ml",
                "f5_close_away_ml", "f5_close_home_ml", "f5_close_p_home"]
 
+# Columns written by reconstruct_v13.py -- a one-shot migration, never by a
+# build. They live in this module for the same reason `excess_se` and
+# `chalk_is_home` do: grade_leans owns the ledger writer and cannot import
+# build_site, and a writer that does not know a column exists DELETES it.
+# That is not hypothetical -- the first bot ledger commit after the v13
+# reconstruction landed dropped all five, because `load_ledger()` reindexes
+# the frame to its own column lists.
+#
+# Preserved when present, never minted. `reconstruct_v13.append_columns`
+# appends them as trailing fields so no existing byte is re-rendered, and
+# refuses to run if they already exist; minting them empty here would make
+# the migration unrunnable, so grade_leans keeps only the ones the loaded
+# ledger already carries.
+# There is deliberately no `v13_full_recon`. The reconstructed GRADE is a
+# deterministic function of the reconstructed lean and the game's own two
+# finals, all write-once, so it is derived at read time -- and deriving it is
+# what lets a retained row that is still PENDING publish the moment it
+# settles, instead of carrying a NaN grade forever and silently leaving the
+# record on the day it graded.
+V13_RECON_COLS = ("v13_net_recon", "v13_lean_recon", "v13_delta_recon",
+                  "v13_recon_basis")
+# The two that hold text, so a reader can force object dtype: an all-NaN
+# column reads back from CSV as float64 and pandas >=3 refuses a string
+# assignment into one.
+V13_RECON_TEXT_COLS = ("v13_lean_recon", "v13_recon_basis")
+
 
 # ---------------------------------------------------------------- helpers ---
 def _get(url):
