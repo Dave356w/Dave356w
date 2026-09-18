@@ -148,6 +148,30 @@ def publish_reconstruction(g, model_tag):
     DROPPED, because carrying one over on its own lean would publish an
     earlier model's result under this model's name.
 
+    **AN ABSTAINED ROW IS NEVER RE-DECIDED.** A retained row whose own build
+    published no lean passes through as it is -- kept, not substituted and
+    not dropped -- because the abstention is a rule THIS model still runs.
+    v5 declines a game when a side's starter has no measured season line,
+    v11 kept it, and v13 changed the starter's RATE without touching that
+    gate; a live build facing the same game today publishes nothing. So a
+    reconstruction that hands one a lean is publishing a selection this model
+    would itself refuse, which is the "a selection nobody could have made"
+    defect rather than a re-decision.
+
+    It was live. `reconstruct_v13` computes a net from the paired dumps with
+    no abstention check, so all 8 of the ledger's `starter_unmeasured_no_lean`
+    rows were being resurrected: the published headline read 282-171 where the
+    rows this model would actually decide are 278-167, and the 8 went 4-4.
+    Every surface inherited it through this one function -- the record, the
+    ROI, the delta x price grid -- and the grades page reported 0 abstentions
+    against a ledger holding 8.
+
+    Passing them through rather than dropping them is deliberate: every
+    surface already knows how to handle an abstention (`_rec()` skips it,
+    the Graded tile counts `xw_lean.isna()`, the observation frame's
+    home-or-away test excludes it), and dropping them instead would relabel
+    a declined game as one this migration could not rebuild.
+
     What this is NOT for: a family history line, or a registration. Those
     score the lean each build actually published, which is the difference
     `grade_leans._published_basis_lines` declares on the artifact. Re-aiming
@@ -160,13 +184,20 @@ def publish_reconstruction(g, model_tag):
             "home", "full_home", "full_away")
     if any(c not in g.columns for c in need):
         return g[cur].copy()
+    # `xw_lean.isna()` is the abstention signal every other surface in this
+    # repo uses, so it is the one used here rather than `pitching_basis_*`:
+    # a second spelling would miss v7's zero-delta rule, which has never
+    # fired and would produce the same NaN if it ever did.
+    abstained = g["xw_lean"].isna()
     has = (g["v13_recon_basis"].notna()
            & g["v13_lean_recon"].notna()
+           & ~abstained
            & recon_grades(g).isin(["W", "L", "T"]))
-    out = g[cur | (~cur & has)].copy()
+    keep = cur | (~cur & (has | abstained))
+    out = g[keep].copy()
     if out.empty:
         return out
-    rebuilt = ~out["model_tag"].astype(str).eq(str(model_tag))
+    rebuilt = (~cur & has)[keep].to_numpy()
     if rebuilt.any():
         sub = out.loc[rebuilt]
         out.loc[rebuilt, "xw_full"] = recon_grades(sub)

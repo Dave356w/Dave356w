@@ -141,7 +141,20 @@ def reconstruct(led, nets):
     # that never comes. Its grade is derived from the finals at read time, so
     # writing the lean early costs nothing and is what keeps a pending v12 row
     # inside the published record on the day it settles.
+    # ABSTENTIONS ARE NOT RECONSTRUCTED. A row whose own build published no
+    # lean was declined by a rule v13 still runs -- v5 abstains when a side's
+    # starter has no measured season line, and v13 changed that starter's
+    # RATE, not the gate. Handing one a blended net publishes a selection the
+    # live model would refuse. Without this, all 8 of the ledger's
+    # `starter_unmeasured_no_lean` rows were rebuilt and scored 4-4 into a
+    # published 282-171 whose honest figure is 278-167.
+    #
+    # `market_backfill.publish_reconstruction` enforces the same rule at READ
+    # time, which is what actually protects the surfaces -- this migration
+    # runs once and its columns are already written. Both exist because a
+    # re-run should not re-create what the reader then has to filter out.
     eligible = (out["model_tag"].isin(bs.RECORD_TAGS)
+                & out["xw_lean"].notna()
                 & ~out["model_tag"].astype(str).eq(bs.MODEL_TAG)
                 & out["game_pk"].astype("Int64").isin(list(nets)))
     n = 0

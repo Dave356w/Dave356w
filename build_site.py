@@ -7825,6 +7825,16 @@ def _row_selection(r):
         if not isinstance(lean, str) or not lean:
             return None, None, None
         return "lean", lean, r.get("xw_full")
+    # A retained row that ABSTAINED stays abstained, the same rule
+    # `publish_reconstruction` enforces on the record: v13 still runs v5's
+    # abstention, so a reconstruction that hands one a lean publishes a
+    # selection this model would refuse. `_grades_row` renders these as
+    # `no lean` from its own check either way; returning the pick here
+    # anyway made this function disagree with the header's row set, which
+    # is what `test_the_table_and_the_header_decide_every_published_row_
+    # identically` went red on.
+    if not isinstance(lean, str) or not lean:
+        return None, None, None
     recon = r.get(V13_RECON_LEAN_COL)
     if isinstance(recon, str) and recon:
         return "recon", recon, recon_grade(recon, r.get("home"),
