@@ -195,6 +195,51 @@ decision-time price that was never captured cannot be re-derived later.
 −0.336u ± 0.199) keeps accruing. Retiring a rule and deleting the thing that
 measures it are different acts; only the first was done.
 
+**And on 2026-09-18 it came off every user-facing page, on the operator's
+instruction — the instrument still untouched.** What went: the grades page's
+`Retired hybrid rule` tile and its `Discovery … 45% price and .012 |Δ| gates`
+note; the calibration page's gate tiles, its `By branch` table and the
+`Always chalk · MARKET OVER LEAN rows only` row; and the per-game card's
+`Rule` heading, its `XWOBA SIDE` / `MARKET OVER LEAN` labels and the
+unreachable FADE body of `_branch_history`. The card now heads its row
+`Selection` and names the club.
+
+**`Deleting controls as clutter` is the entry this trades against and it is
+not violated, which is worth stating rather than assuming.** That entry
+protects a TRIVIAL BASELINE beside a record; always-chalk and always-home are
+both still rendered on `market-calibration.html` over the identical rows. A
+retired selection rule was never one of those, and its forward reading — the
+only thing that can say whether it worked — is untouched in
+`ledger_report.txt`.
+
+Three things fell out and each is the shape of a rule this file already has.
+**The card's delta × price cells were the retired rule's selected side over
+its FOLLOW subset**, which on a faded row named the opposite club at the
+opposite price and, once the rule was off the pages, was a row set defined by
+something nothing runs; they now score the lean's own columns over every
+decided row, and `grade_leans._selection_price_matrix_lines` moved with them
+in the same commit so the two artifacts cannot disagree. **Six `hybrid_*`
+columns on the observation frame lost their last reader** and went with the
+renderers rather than being left to trip the `column carried to no surface`
+test that exists to catch exactly them. And **`hybrid_public_label`,
+`HYBRID_DELTA_THRESHOLD`, `BRANCH_RECORD_MIN` and the per-branch price bands
+were deleted AT the removal** — the seventh instance of the
+callee-outliving-its-call-site pattern, and the second caught by running the
+reference count before the edit instead of days later.
+
+One caveat was deleted rather than restated, and the reason is the rule about
+caveats one level out. `test_the_discovery_claim_survives_off_the_card`
+pinned the `Discovery, not a forward test` note on two pages, and it existed
+because this file once asserted a third carrier that did not exist. Its
+SUBJECT is now invisible: no gate, branch or rule record renders anywhere, so
+a caveat about a fitted threshold describes a diagnostic the reader cannot
+see. It is replaced by `test_no_page_claims_a_gate_the_reader_cannot_see`,
+which walks both pages for every trace of the rule and asserts the surviving
+controls are still there — a stronger claim than the one it replaces, and
+the reason the deletion is safe. Its first draft searched for a bare `.012`
+and matched a per-row `Δ0.012` in the ledger table, which is the text-window
+defect this file records; it matches a threshold beside a COMPARISON now.
+
 **The retrospective is a RECONSTRUCTION and must never be read as a record.**
 `reconstruct_v13.py` writes `v13_*_recon` columns onto earlier-family rows from
 the committed paired dumps, using `build_site.blend_starter_rate` itself so it

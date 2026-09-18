@@ -294,15 +294,20 @@ class CardIntegrationTests(unittest.TestCase):
         self.assertGreater(g["away"]["xw_edge"] - g["home"]["xw_edge"], 0)  # SEA
 
     def test_a_live_market_cannot_move_a_frozen_cards_selection(self):
-        # -140/+118 puts the leaned side under the hybrid threshold, which on
-        # a live card flips the published branch to a fade.
+        # -140/+118 is the price that used to flip the published branch to a
+        # fade on a live card. There are no branches now -- the retired rule
+        # came off every page on 2026-09-18 -- so what this pins is the
+        # freeze itself: the card must show the LOCKED price and must not
+        # reach for the live one.
         live = {823088: LIVE_ODDS}
         g = next(x for x in self._games(odds=live, locked=self.locked)
                  if x["game_pk"] == 823088)
         html = b.cmb_card(g, None, {})
         self.assertIn("-120", html)
         self.assertNotIn("+118", html)
-        self.assertIn(b.hybrid_public_label("FOLLOW"), html)
+        # And it still publishes a selection rather than rendering an empty
+        # panel -- an absence claim above needs a presence claim beside it.
+        self.assertIn("Selection", html)
 
     def test_a_game_that_has_not_started_is_untouched(self):
         # The frozen path must not change a normal pregame slate at all.
