@@ -73,7 +73,7 @@ from actuals_backfill import (ACTUAL_COLS, attach_actuals, actuals_summary,
 DATA_DIR    = os.environ.get("DATA_DIR", "data")
 LEDGER_PATH = os.path.join(DATA_DIR, "mlb_lean_ledger.csv")
 REPORT_PATH = os.path.join(DATA_DIR, "ledger_report.txt")
-MODEL_TAG   = os.environ.get("MODEL_TAG", "xw+plat_consol_v12")
+MODEL_TAG   = os.environ.get("MODEL_TAG", "xw+starter_blend_v13")
 MODEL_METRIC_LABEL = os.environ.get(
     "MODEL_METRIC_LABEL",
     "wOBA" if MODEL_TAG.startswith("woba+") else "xwOBA",
@@ -127,6 +127,9 @@ _RECORD_FAMILIES = {
     # have argued for sharing, but v11 had no graded rows so the reset is free.
     # build_site._RECORD_FAMILIES is the authority and carries the argument.
     "xw+plat_consol_v12": ("xw+plat_consol_v12",),
+    # v13 starter blend -- ISOLATED. Mirrors build_site._RECORD_FAMILIES;
+    # the argument lives there, beside the model that produces the rows.
+    "xw+starter_blend_v13": ("xw+starter_blend_v13",),
 }
 RECORD_TAGS = tuple(
     t.strip() for t in os.environ.get(
@@ -149,6 +152,7 @@ MODEL_FAMILY_TAGS = (
     ("split v1", ("split+plat_consol_v1",)),
     ("v11", ("xw+plat_consol_v11",)),
     ("v12", ("xw+plat_consol_v12",)),
+    ("v13 starter blend", ("xw+starter_blend_v13",)),
 )
 # Numerical floor on the weight fit, NOT an evidence threshold. It was 120,
 # chosen to suppress a ratio that is unreadable at small n; the ratio is gone

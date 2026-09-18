@@ -29,25 +29,47 @@ import shadow_metric as sm
 @pytest.fixture(autouse=True)
 def _restore():
     """Every test here mutates build_site globals; put them back afterwards."""
+    # STARTER_BLEND_WEIGHT joined this list with v13. `patch()` now writes it,
+    # so leaving it out let one test's arm leak a blend-off primary into the
+    # next -- which is the isolation failure this fixture exists to prevent,
+    # and it showed up immediately as a test that passed alone and failed in
+    # suite order.
     saved = {k: getattr(bs, k) for k in
              ("MODEL_RATE_SOURCE_COL", "MODEL_RATE_LABEL", "MODEL_TAG",
               "STATCAST_SELECTIONS", "STATCAST_CACHE_NS",
-              "MODEL_RATE_INTERNAL_COL")}
+              "MODEL_RATE_INTERNAL_COL", "STARTER_BLEND_WEIGHT")}
     yield
     for k, v in saved.items():
         setattr(bs, k, v)
 
 
 def test_importing_shadow_does_not_move_the_primary_metric():
-    """Import must be inert -- the daily build imports build_site too."""
+    """Import must be inert -- the daily build imports build_site too.
+
+    RESTATED AT v13, because the old form asserted something the build no
+    longer does. It required the shadow rate to be ABSENT from the primary
+    selection set, which was the same thing as "the arm runs the metric the
+    primary does not". v13's starter blend puts BOTH rates on the primary
+    fetch, so that assertion now fails for a reason that has nothing to do
+    with import inertness -- and deleting it would drop the inertness claim
+    with it.
+
+    What survives, and is what the test was protecting: the PRIMARY rate is
+    still exactly one metric, it is still the one the label names, and
+    importing the arm moves none of it.
+    """
     fresh = importlib.reload(bs)
     primary = fresh.MODEL_RATE_SOURCE_COL
     assert primary != sm.SHADOW_SOURCE_COL, (
-        "the shadow arm must run the metric the primary does not")
+        "the shadow arm must run the metric the primary's LEAN is built on")
     assert {"woba", "xwoba"} == {primary, sm.SHADOW_SOURCE_COL}
     assert fresh.MODEL_RATE_LABEL == ("wOBA" if primary == "woba" else "xwOBA")
     assert primary in fresh.STATCAST_SELECTIONS
-    assert sm.SHADOW_SOURCE_COL not in fresh.STATCAST_SELECTIONS
+    # The blend column rides along on the primary fetch by design; what must
+    # NOT happen is the arm's patch leaking into the primary at import.
+    assert fresh.BLEND_RATE_SOURCE_COL == sm.SHADOW_SOURCE_COL
+    assert fresh.STARTER_BLEND_WEIGHT > 0.0, (
+        "importing the arm must not switch the primary's blend off")
 
 
 def test_patch_repoints_every_metric_constant():
@@ -65,13 +87,40 @@ def test_patch_repoints_every_metric_constant():
     assert cfg["cache_ns"] != primary_ns
 
 
-def test_selection_set_swaps_one_column_and_keeps_the_rest():
+def test_the_arm_requests_exactly_one_rate_and_it_is_the_shadow_one():
+    """The arm is a SINGLE-metric build; that is what makes it a clean side.
+
+    Replaces `test_selection_set_swaps_one_column_and_keeps_the_rest`, whose
+    arithmetic (same length, one column in, one out) described a primary that
+    carried one rate. Under v13 the primary carries two, so a swap in place
+    would have left `woba` in the set TWICE and `xwoba` not at all -- a dump
+    built on a column the arm never asked for. The property is asserted
+    directly instead of being implied by a length.
+    """
     before = list(bs.STATCAST_SELECTIONS)
     primary_col = bs.MODEL_RATE_SOURCE_COL
+    blend_col = bs.BLEND_RATE_SOURCE_COL
     cfg = sm.patch()
-    assert len(cfg["selections"]) == len(before)
-    assert set(before) - set(cfg["selections"]) == {primary_col}
-    assert set(cfg["selections"]) - set(before) == {sm.SHADOW_SOURCE_COL}
+    sel = cfg["selections"]
+    assert len(sel) == len(set(sel)), f"duplicate column in {sel}"
+    assert [c for c in sel if c in ("woba", "xwoba")] == [sm.SHADOW_SOURCE_COL]
+    assert primary_col not in sel
+    # Everything that is not a rate is carried through untouched.
+    assert ([c for c in before if c not in (primary_col, blend_col)]
+            == [c for c in sel if c != sm.SHADOW_SOURCE_COL])
+
+
+def test_the_arm_turns_the_starter_blend_off():
+    """A blended arm would differ from the primary only in which half doubled.
+
+    The arm exists to be a clean single-metric comparison side. Leaving
+    `STARTER_BLEND_WEIGHT` at the primary's value would have produced a build
+    that blends wOBA with wOBA -- silently, since the column list alone would
+    look right.
+    """
+    assert bs.STARTER_BLEND_WEIGHT > 0.0
+    sm.patch()
+    assert bs.STARTER_BLEND_WEIGHT == 0.0
 
 
 def test_internal_schema_name_is_left_alone():

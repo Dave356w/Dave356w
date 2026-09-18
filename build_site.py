@@ -79,9 +79,61 @@ BATTING_ORDER_COL = "batting_order"
 # bullpen, league-prior, percentile, and pitch-mix inputs.
 MODEL_RATE_SOURCE_COL = "xwoba"
 MODEL_RATE_LABEL = "xwOBA"
-PUBLIC_MODEL_NAME = "XWOBA Market Hybrid"
+PUBLIC_MODEL_NAME = "XwOBA Market"
+# The hybrid selection rule no longer gates what this site publishes -- the
+# model's own lean is the published selection again. `hybrid_v2` is still
+# imported and its capture columns are still written to the ledger, because
+# those columns ARE the evidence for four live registrations and a pregame
+# price that was never captured cannot be re-derived later. Retiring the rule
+# from the SHIPPED selection and deleting the instrument that measures it are
+# different acts; only the first is done here.
 HYBRID_RULE_TAG = hybrid_v2.RULE_TAG
+LEAN_RULE_TAG = "lean"
 MODEL_RATE_INTERNAL_COL = "xwOBA"  # stable dump/ledger schema, both metrics
+# --- the starter blend (v13) ----------------------------------------------
+# The STARTER's allowed rate is a 50/50 blend of his xwOBA-allowed and his
+# wOBA-allowed line. Nothing else blends: the lineup composite, the bullpen
+# aggregate and the league baseline stay pure xwOBA, so this is a change to one
+# input and not a second metric running through the whole construction.
+#
+# It is CENTRED -- deviations are blended and re-expressed on the xwOBA centre
+# -- rather than a raw average of the two levels. The two league centres differ
+# (~0.3160 wOBA against ~0.3146 xwOBA), so a raw average would carry a constant
+# level shift into the starter phase only, biasing it against the bullpen phase
+# it is averaged with. That is this repo's own "store the deviation, not the
+# level" rule applied across metrics instead of across seasons. Measured on the
+# 448 paired v12 rows the three candidate constructions (raw, centred, and
+# raw-with-a-blended-baseline) flip the SAME 32 leans and post the same record,
+# so the choice cost nothing and was made on the principle rather than on the
+# score -- which is the only way to pick it without fitting a literal.
+#
+# Both rates come from ONE Savant request: `woba` is an extra column on the
+# existing custom-leaderboard selection, not a second fetch on the critical
+# path. A starter with no wOBA line keeps his pure xwOBA rate, so a missing
+# column costs the blend and never the slate.
+BLEND_RATE_SOURCE_COL = "woba"
+BLEND_RATE_INTERNAL_COL = "wOBA_blend"
+BLEND_RATE_LABEL = "wOBA"
+STARTER_BLEND_WEIGHT = 0.5
+# --- the v13 retrospective reconstruction ----------------------------------
+# `reconstruct_v13.py` writes these onto EARLIER-family ledger rows so the site
+# can show what the starter blend would have selected over history. They are
+# additive columns on rows whose own `xw_net` / `xw_lean` / `xw_full` are
+# untouched -- those are immutable pregame records and they are also the
+# control this model gets read against, so overwriting them would leave the
+# comparison measuring the new model against itself.
+#
+# The basis column is not decoration. Every reconstructed value depends on a
+# wOBA starter rate read from a dump written after first pitch, so it is a
+# hindsight selection and every surface that renders one has to say so.
+V13_RECON_NET_COL = "v13_net_recon"
+V13_RECON_LEAN_COL = "v13_lean_recon"
+V13_RECON_GRADE_COL = "v13_full_recon"
+V13_RECON_DELTA_COL = "v13_delta_recon"
+V13_RECON_BASIS_COL = "v13_recon_basis"
+V13_RECON_COLUMNS = (V13_RECON_NET_COL, V13_RECON_LEAN_COL,
+                     V13_RECON_GRADE_COL, V13_RECON_DELTA_COL,
+                     V13_RECON_BASIS_COL)
 # True only for a posted hitter absent from the season Savant leaderboard, who
 # therefore carries the active team's PA-weighted rate. Purely an in-process
 # frame column -- it reaches no dump, ledger, or audit schema -- so it carries
@@ -112,7 +164,7 @@ USE_TEAM_LOGOS = os.environ.get("USE_TEAM_LOGOS", "1") != "0"
 LOGO_CDN = "https://www.mlbstatic.com/team-logos"
 DATA_DIR = os.environ.get("DATA_DIR", "data")            # grading ledger home
 LEDGER_PATH = os.path.join(DATA_DIR, "mlb_lean_ledger.csv")
-MODEL_TAG = os.environ.get("MODEL_TAG", "xw+plat_consol_v12")  # keep in sync with grade_leans.py
+MODEL_TAG = os.environ.get("MODEL_TAG", "xw+starter_blend_v13")  # keep in sync with grade_leans.py
 if not MODEL_TAG.startswith("xw+"):
     raise RuntimeError(
         "This build fetches Savant xwOBA; refusing to stamp it with a non-xwOBA MODEL_TAG"
@@ -295,6 +347,19 @@ _RECORD_FAMILIES = {
     # sharing, and it is recorded here so a later reader can see which way the
     # evidence pointed independently of what the reset cost.
     "xw+plat_consol_v12": ("xw+plat_consol_v12",),
+    # v13 blends the STARTER's wOBA-allowed line into his xwOBA-allowed one at
+    # 50/50, centred on each metric's own league baseline. RECORD: ISOLATED,
+    # and measured rather than assumed. Reconstructed over the 448 graded v12
+    # rows that carry a paired wOBA dump, it flips 32 leans -- 7.1%, against
+    # v10's 0 of 14 which earned a shared line and v12's 1 of 254 which did
+    # not. A win-loss line is a property of the decided set, and this model
+    # decides 32 of those games the other way, so v12's record is not this
+    # model's record and the two must not be added together.
+    #
+    # The reset costs v12's graded sample. That is the real price of the
+    # change and it is stated rather than absorbed: read the count off the
+    # ledger, not from here.
+    "xw+starter_blend_v13": ("xw+starter_blend_v13",),
 }
 RECORD_TAGS = tuple(
     t.strip() for t in os.environ.get(
@@ -405,6 +470,30 @@ _SCALE_FAMILIES = {
     "xw+plat_consol_v12": ("xw+plat_consol_v8", "xw+plat_consol_v9",
                            "xw+plat_consol_v10", "xw+plat_consol_v11",
                            "xw+plat_consol_v12"),
+    # v13 SCALE: ISOLATED from the v8/v9/v10/v12 pool. `xw_net` under v13 is no
+    # longer a pure xwOBA difference -- half of each starter's deviation is a
+    # wOBA deviation, and the two metrics do not share a spread (the one slate
+    # built both ways showed the starter-allowed rate widening 0.0161 -> 0.0215
+    # under wOBA while the lineup composite did not move at all). A delta whose
+    # sampling distribution is a MIXTURE of two metrics' spreads is the
+    # definition of a different scale, whatever the median happens to do.
+    #
+    # Measured anyway, because "argued" is weaker than "measured" and this file
+    # says so: median |xw_net| moves 0.01758 -> 0.01792 on the 448 reconstructed
+    # rows, +1.9%. That is SMALL, and it is deliberately not the basis for
+    # sharing -- v11 shared a pool on a 0.7% move because its three changes were
+    # each scale-preserving on an existing precedent, and a metric mixture is
+    # not. A small observed move on one reconstruction does not make two
+    # distributions the same distribution.
+    #
+    # CONSEQUENCE, stated because this file records that it was once unstated:
+    # a new _SCALE_FAMILIES entry invalidates every delta-gated REGISTRATION,
+    # not just LEAN_STRENGTH_FALLBACK. `hybrid_v2.DELTA_THRESHOLD` and
+    # `delta_filter_test.DELTA_THRESHOLD` are frozen 0.012 in the v12 scale, so
+    # a v13 row scored under them is a different statistic under the same
+    # constant. Those registrations are bounded to their own families at their
+    # own call sites rather than being left to accrue v13 rows silently.
+    "xw+starter_blend_v13": ("xw+starter_blend_v13",),
     # wOBA has a different sampling distribution from xwOBA, so it cannot
     # share magnitude cutoffs with any xwOBA lineage.
     # v2 changes the centre of the starter platoon prior but retains observed
@@ -456,6 +545,7 @@ SCALE_TAGS = tuple(
     ).split(",") if t.strip()
 )
 STATCAST_SELECTIONS = ["pa", "k_percent", "bb_percent", MODEL_RATE_SOURCE_COL,
+                       BLEND_RATE_SOURCE_COL,
                        "xba", "xslg",
                        "exit_velocity_avg", "launch_angle_avg", "hard_hit_percent"]
 
@@ -466,7 +556,10 @@ STATCAST_SELECTIONS = ["pa", "k_percent", "bb_percent", MODEL_RATE_SOURCE_COL,
 # missing. Making both a pair of module constants is what lets shadow_metric.py
 # repoint the metric and its cache together; a literal at the fetch site could
 # only be repointed by patching the function.
-STATCAST_CACHE_NS = "custom_xwoba_v1"
+# Bumped with the v13 selection set: `woba` joined STATCAST_SELECTIONS, and a
+# same-day cache written under the old namespace carries no wOBA column, so
+# reusing it would silently drop every starter to the unblended fallback.
+STATCAST_CACHE_NS = "custom_xwoba_woba_v1"
 
 # Suffix of the per-slate dump, `leans_<date>_<DUMP_SUFFIX>.csv`. One constant
 # rather than a literal at the write site, because grade_leans ingests a fixed
@@ -813,6 +906,12 @@ def load_stat_lookups(player_type):
     # internal name stays xwOBA solely so old dumps, ledger readers, and audit
     # tooling remain compatible; MODEL_RATE_SOURCE_COL is the fetched value.
     REN_STAT = {MODEL_RATE_SOURCE_COL: MODEL_RATE_INTERNAL_COL,
+                # The blend rate rides along under its own internal name. It is
+                # deliberately NOT folded into STATCAST_RATE_COLS: only the
+                # starter reads it, so putting it in the generic rate list
+                # would build a matchup value, an edge and a percentile bar for
+                # a rate no surface publishes.
+                BLEND_RATE_SOURCE_COL: BLEND_RATE_INTERNAL_COL,
                 "xba": "xBA", "xslg": "xSLG", "exit_velocity_avg": "EV",
                 "launch_angle_avg": "LA°", "hard_hit_percent": "Hard Hit%",
                 "k_percent": "K%", "bb_percent": "BB%", "pa": "PA"}
@@ -1854,7 +1953,13 @@ def build_tables(slate, lineups, batter_stat, pitcher_stat, batter_bb, pitcher_b
 
 
 def compute_league_baseline(batter_cust):
+    # The blend centre is computed the same PA-weighted way as the primary one,
+    # off the same batter frame, so `starter_blend` compares two deviations
+    # that were measured against comparably-constructed centres. Using one
+    # centre for both would reintroduce exactly the level shift the centring
+    # exists to remove.
     _LB_MAP = {MODEL_RATE_SOURCE_COL: MODEL_RATE_INTERNAL_COL,
+               BLEND_RATE_SOURCE_COL: BLEND_RATE_INTERNAL_COL,
                "xba": "xBA", "xslg": "xSLG", "k_percent": "K%", "bb_percent": "BB%",
                "exit_velocity_avg": "EV", "launch_angle_avg": "LA°", "hard_hit_percent": "Hard Hit%"}
     league_baseline = {}
@@ -2820,6 +2925,35 @@ def _shrink_one(x, n, prior, k):
     return (n * x + k * prior) / (n + k)
 
 
+def blend_starter_rate(primary, blend, lg_primary, lg_blend,
+                       w=None):
+    """Centred 50/50 blend of a starter's two shrunk rates. See the constants.
+
+    Returns the rate expressed on the PRIMARY centre:
+
+        L_p + (1-w)*(primary - L_p) + w*(blend - L_b)
+
+    so a starter who is exactly league-average on both metrics comes back at
+    exactly `L_p`, and the blend can never move the starter phase's level
+    relative to the bullpen phase it is averaged against.
+
+    DEGRADES TO THE PRIMARY, never to NaN or to a prior. Any unusable input --
+    no wOBA line for this starter, a leaderboard served without the column, an
+    unusable centre -- returns `primary` unchanged. That is the critical-path
+    rule this build already applies to team logos and pitch mix: a missing
+    optional input costs the refinement, never the slate, and a slate's pregame
+    rows cannot be re-derived afterwards without lookahead.
+    """
+    w = STARTER_BLEND_WEIGHT if w is None else w
+    p = _f(primary)
+    if p is None:
+        return primary
+    b, lp, lb = _f(blend), _f(lg_primary), _f(lg_blend)
+    if b is None or lp is None or lb is None:
+        return primary
+    return lp + (1.0 - w) * (p - lp) + w * (b - lb)
+
+
 # --- percentile display scale (casual redesign) -----------------------------
 # Display-only. Ranks a player's *shrunk* xwOBA against a reference population
 # of qualified regulars so the casual card can show a 0-100 Statcast-style
@@ -3374,6 +3508,35 @@ def build_matchup(P, agg, rate_cols, league_baseline, shrink_prior=None, shrink_
                 pv = _shrink_one(pv, pd.to_numeric(pr.get("PA"), errors="coerce"),
                                  player_prior_one(pr.get("player_id"),
                                                   shrink_prior), shrink_k)
+                # v13: blend in the same starter's wOBA-allowed line. Each
+                # metric is shrunk toward ITS OWN league centre at the same K
+                # and the same BF before the deviations are averaged -- shrink
+                # first, then blend, because shrinking a blended rate toward a
+                # single centre would put half the blend on the wrong centre.
+                # `starter_rate_basis` above already records whether the
+                # PRIMARY rate was measured; `blended` below records whether
+                # the second one was, so a card can never imply a blend that
+                # did not happen.
+                _pv_primary = pv
+                _bv = _f(pr.get(BLEND_RATE_INTERNAL_COL))
+                if _bv is not None:
+                    _bv = _shrink_one(
+                        _bv, pd.to_numeric(pr.get("PA"), errors="coerce"),
+                        league_baseline.get(BLEND_RATE_INTERNAL_COL), shrink_k)
+                pv = blend_starter_rate(
+                    pv, _bv, league_baseline.get(MODEL_RATE_INTERNAL_COL),
+                    league_baseline.get(BLEND_RATE_INTERNAL_COL))
+                # Stored so the blend is auditable from the dump alone and so
+                # nothing downstream can refit against its own output -- the
+                # `expected_sp_ip_raw` lesson applied before it can bite.
+                rec["starter_rate_primary"] = (
+                    float(_pv_primary) if pd.notna(_pv_primary) else np.nan)
+                rec["starter_rate_blend_in"] = (
+                    float(_bv) if _bv is not None and pd.notna(_bv) else np.nan)
+                rec["starter_rate_blended"] = bool(
+                    _bv is not None and pd.notna(_bv)
+                    and pd.notna(_pv_primary)
+                    and pd.notna(league_baseline.get(BLEND_RATE_INTERNAL_COL)))
             ov = a.get(f"opp_{c}")
             if c == XWOBA_SHRINK_COL:
                 neutral = a.get("opp_xwOBA_neutral")
@@ -4698,8 +4861,8 @@ def _verdict_html(fav, odds, away_abbr, home_abbr, ctx=None, delta=None):
                 "<div class='vt'>No model lean — the rule abstains.</div></div>")
 
     p_lean = _lean_implied_p(odds, fav, away_abbr, home_abbr)
-    action = hybrid_action(p_lean, delta)
-    pick = hybrid_selection(fav, away_abbr, home_abbr, p_lean, delta)
+    action = published_action(p_lean, delta)
+    pick = fav if action else None
     d = _f(delta)
     delta_txt = f"{abs(d):.4f}".lstrip("0") if d is not None else "—"
     strength = _delta_label(delta) or "—"
@@ -4710,7 +4873,6 @@ def _verdict_html(fav, odds, away_abbr, home_abbr, ctx=None, delta=None):
     p_txt = (f"{100 * p_lean:.1f}% no-vig" if p_lean is not None
              else "no no-vig price yet")
 
-    thr = f"{100 * HYBRID_THRESHOLD:.0f}%"
     sel_price = None
     if action is None:
         rule_line = ("<div class='vline'><span class='vk'>Rule</span>"
@@ -4719,23 +4881,21 @@ def _verdict_html(fav, odds, away_abbr, home_abbr, ctx=None, delta=None):
         if pick is not None:
             sel_price = (odds.get("home_ml") if pick == home_abbr
                          else odds.get("away_ml"))
-        # The reason, in plain words, on the line that carries the decision.
-        # Without it a reader has to reverse-engineer the threshold from two
-        # numbers printed above -- and on a FADE the selected club appears
-        # nowhere else on the panel.
+        # v13 retires the hybrid rule, so there is exactly ONE reason and it is
+        # the same on every row: the site publishes the model's own side.
+        #
+        # The three-branch version this replaces had to go rather than be
+        # trimmed. Its `else` arm read "market gives X at least 45%, so X
+        # remains the XWOBA side" and, once the fade branch could no longer be
+        # reached, that arm caught every row -- including a lean priced at 30%,
+        # where the sentence is simply false. A reason that survives the rule
+        # it was reasoning about becomes a false claim on the most prominent
+        # surface the site has, which is the defect class this repo tracks most
+        # closely.
         public_branch = hybrid_public_label(action)
-        weak = d is not None and abs(d) < HYBRID_DELTA_THRESHOLD
-        if action == "FADE":
-            why = (f"market gives {_esc(fav)} under {thr} and |Δ| is below "
-                   f"{HYBRID_DELTA_THRESHOLD:.3f}, so the rule takes the "
-                   f"market's side, {_esc(pick)}")
-        elif p_lean is not None and p_lean < HYBRID_THRESHOLD and not weak:
-            why = (f"market gives {_esc(fav)} under {thr}, but |Δ| is at least "
-                   f"{HYBRID_DELTA_THRESHOLD:.3f}, so the stronger XWOBA "
-                   "lean is retained")
-        else:
-            why = (f"market gives {_esc(fav)} at least {thr}, so {_esc(fav)} "
-                   "remains the XWOBA side")
+        why = (f"the site publishes the model's own side; {_esc(fav)} is the "
+               f"{MODEL_RATE_LABEL} lean and the market is not consulted to "
+               "change it")
         rule_line = (
             f"<div class='vline'><span class='vk'>Rule</span>"
             f"<span><b>{public_branch} → {_esc(pick)}</b>"
@@ -4743,10 +4903,11 @@ def _verdict_html(fav, odds, away_abbr, home_abbr, ctx=None, delta=None):
             + f"</span></div><div class='vnote'>{why}</div>")
 
     history = _branch_history(ctx, action, p_lean, delta, sel_price)
-    # The warm accent marks a FADE -- the one case where the published
-    # selection differs from the model's own lean. It has never meant "bet
-    # this side".
-    cls = " edge" if action == "FADE" else ""
+    # The warm accent marked a FADE -- the one case where the published
+    # selection differed from the model's own lean. No such case exists now, so
+    # the accent would mark nothing and is removed rather than left to fire on
+    # a condition that can no longer be true.
+    cls = ""
     version = _model_version_short()
     return (
         f"<div class='verdict{cls}'><div class='l'>Model vs market</div>"
@@ -5114,8 +5275,8 @@ def _summary_market_line(g, lean=None, delta=None):
     p_lean = _lean_implied_p(odds, lean, away, home)
     if delta is None:
         delta = g.get("xw_net", g.get("xw_delta"))
-    action = hybrid_action(p_lean, delta)
-    pick = hybrid_selection(lean, away, home, p_lean, delta)
+    action = published_action(p_lean, delta)
+    pick = lean if action else None
     if action is None or pick is None:
         return "Selection pending"
     ml = odds.get("home_ml") if pick == home else odds.get("away_ml")
@@ -6642,6 +6803,37 @@ def _american_unit_profit(ml, won):
     return ml / 100.0 if ml > 0 else 100.0 / abs(ml)
 
 
+def _reconstructed_grades(led):
+    """Historical rows re-decided by the CURRENT model, as a scorable frame.
+
+    Returns the same shape `_record_grades` returns, with `xw_lean`,
+    `xw_full` and `xw_delta` replaced by this model's reconstruction of that
+    game. The row's own immutable values are left in the ledger untouched --
+    they are the control this model is read against -- so the substitution
+    happens here, on a copy, and only for rows that actually carry a
+    reconstruction.
+
+    NOT A RECORD, and the reason is structural rather than statistical. The
+    blend's wOBA half comes from the paired shadow dump, and most of those were
+    written after their own first pitch, so a reconstructed selection had
+    information no bettor had. Every caller must render it as hindsight.
+    """
+    need = (V13_RECON_BASIS_COL, V13_RECON_LEAN_COL, V13_RECON_GRADE_COL,
+            V13_RECON_NET_COL)
+    if led is None or any(c not in led.columns for c in need):
+        return pd.DataFrame()
+    g = led[led[V13_RECON_BASIS_COL].notna()
+            & led[V13_RECON_LEAN_COL].notna()
+            & led[V13_RECON_GRADE_COL].isin(["W", "L", "T"])].copy()
+    if g.empty:
+        return g
+    g["xw_lean"] = g[V13_RECON_LEAN_COL]
+    g["xw_full"] = g[V13_RECON_GRADE_COL]
+    g["xw_net"] = pd.to_numeric(g[V13_RECON_NET_COL], errors="coerce")
+    g["xw_delta"] = g["xw_net"].abs()
+    return g
+
+
 def _lean_market_observations(led):
     """One row per current-family full-game lean with a devigged DK close.
 
@@ -6680,8 +6872,26 @@ def _lean_market_observations(led):
     if led is None or not cols.issubset(led.columns):
         return pd.DataFrame()
     g = _record_grades(led).copy()
+    reconstructed = False
     if g.empty:
-        return pd.DataFrame()
+        # v13 RETROSPECTIVE FALLBACK. A `MODEL_TAG` bump empties the current
+        # family until its first slate lands, and this repo's standing rule is
+        # that an empty family publishes NO record rather than silently
+        # falling back to a pooled one -- which is right, because a pooled line
+        # under a current-family name is a false claim.
+        #
+        # This fallback is not that, and the difference is the whole licence
+        # for it: it does not substitute ANOTHER model's rows, it substitutes
+        # THIS model's own reconstruction of those games, written by
+        # `reconstruct_v13.py` from the committed paired dumps. What it
+        # publishes is "what this model would have selected", never "what it
+        # did select" -- and the frame says so in a column rather than leaving
+        # the caller to infer it, because a provenance claim that travels only
+        # in prose is one this file has already had go wrong three times.
+        g = _reconstructed_grades(led)
+        if g.empty:
+            return pd.DataFrame()
+        reconstructed = True
 
     ph = pd.to_numeric(g["close_p_home"], errors="coerce")
     hml = pd.to_numeric(g["close_home_ml"], errors="coerce")
@@ -6797,6 +7007,11 @@ def _lean_market_observations(led):
     obs = obs[np.isfinite(obs["profit"]) & np.isfinite(obs["hybrid_profit"])
               & np.isfinite(obs["chalk_profit"])
               & np.isfinite(obs["home_profit"])].copy()
+    # Carried as a COLUMN, not an attr: `DataFrame.attrs` is dropped by several
+    # of the operations these surfaces perform, and a provenance marker that
+    # silently disappears is worse than none -- it would let a reconstruction
+    # render under a live model's heading with nothing left saying otherwise.
+    obs["is_reconstructed"] = bool(reconstructed)
     return obs
 
 
@@ -6882,6 +7097,27 @@ def hybrid_action(market_p, xw_net):
         return None
     return ("FOLLOW" if bool(hybrid_v2.follows(market_p, xw_net))
             else "FADE")
+
+
+def published_action(market_p, xw_net):
+    """What the SITE publishes for this row: the model's own side, or nothing.
+
+    v13 retires the hybrid selection rule, so there is no longer a branch that
+    can put a game on the market's side. Every row the model decides is
+    published as the model's lean.
+
+    It still returns None on the rows `hybrid_action` returns None for, and
+    that is deliberate rather than leftover: those are rows with no usable
+    two-sided price, and a decision surface that prints a selection without a
+    price is claiming a comparison it cannot make. The shared refusal keeps the
+    published set identical to the set the market panel can score.
+
+    `hybrid_action` itself is NOT deleted. It still writes the ledger's capture
+    columns, which are the pregame evidence for live registrations and cannot
+    be re-derived after the fact -- retiring a rule from the shipped selection
+    and destroying the instrument that measures it are different acts.
+    """
+    return None if hybrid_action(market_p, xw_net) is None else "FOLLOW"
 
 
 def hybrid_public_label(action):
@@ -6970,7 +7206,12 @@ def attach_hybrid_snapshot(frame, odds, snapshot_utc):
         # column is persisted to the ledger, where `hybrid_test` matches it
         # against the ledger's own `home`/`away` and `grade_leans._wlt` grades
         # it against them. An untranslated `AZ` matches neither club there.
-        frame.loc[mask, "selection_rule_tag"] = HYBRID_RULE_TAG
+        # The published selection is the lean under v13. The hybrid columns
+        # beside this one are still captured -- they are the pregame evidence
+        # for four live registrations and cannot be re-derived later -- but
+        # they no longer name what the site published, so the tag must not
+        # say they do.
+        frame.loc[mask, "selection_rule_tag"] = LEAN_RULE_TAG
         frame.loc[mask, "pregame_market_utc"] = snapshot_utc
         frame.loc[mask, "pregame_away_ml"] = market.get("away_ml")
         frame.loc[mask, "pregame_home_ml"] = market.get("home_ml")
@@ -7588,13 +7829,19 @@ def records_strip_html():
     # stop being able to disagree.
     g = _record_grades(led)
     scope, _, n_all = _record_scope_note(led, g)
+    # A bump empties the family until its first row grades. The standing rule
+    # is that this must NOT fall back to the pooled record -- showing an older
+    # family's rows under the current model's name is the substitution that
+    # published "wOBA full 217-164" over 381 xwOBA games.
+    #
+    # A reconstruction is not that, and the distinction is the licence: these
+    # are THIS model's own re-decisions of those games, not another model's
+    # results relabelled. They are still not a record, so the strip marks them
+    # and the marker rides on the number itself.
+    recon = _reconstructed_grades(led) if g.empty else pd.DataFrame()
+    if g.empty and not recon.empty:
+        g = recon
     if g.empty:
-        # Deliberately NOT a fallback to the pooled record. A bump resets this
-        # to zero until the family's first row grades (v11 shipped and was
-        # superseded without ever producing one), and quietly showing an
-        # older family's record under the current model's name is the exact
-        # substitution that published "wOBA full 217-164" over 381 xwOBA
-        # games. Say there is nothing yet, and say where the history went.
         inner = ("<span class='muted'>no graded games yet under "
                  f"{_esc(MODEL_TAG)}</span>")
         if n_all:
@@ -7621,16 +7868,28 @@ def records_strip_html():
             bits.append(f"{label} lean {_rec_txt(g['xw_full'])}")
         else:
             priced = obs["won"].notna()
-            rule = _lean_market_agg(obs, priced, won="hybrid_won",
-                                    p="hybrid_p", resid="hybrid_resid",
-                                    profit="hybrid_profit")
+            # v13 retires the hybrid selection rule: the model's own lean IS
+            # the published selection again, so the headline reads the lean
+            # columns. The rule's own columns are still computed and still
+            # rendered further down as a COMPARISON -- `Deleting controls as
+            # clutter` applies to a retired rule exactly as it does to a
+            # baseline, and a reader who remembers the old headline needs to
+            # see what it would have said.
+            rule = _lean_market_agg(obs, priced)
+            rebuilt = bool(obs["is_reconstructed"].iloc[0])
             # The metric label stays on the record. The selection is built on
             # a lean predicted under a specific statistic, and dropping the
             # label is how this strip once published "wOBA full 217-164" over
             # 381 xwOBA games -- read off the ROWS, never MODEL_RATE_LABEL.
+            # The marker goes ON the record, not in a note beside it. This
+            # file records three separate occasions where a caveat was written
+            # for one surface and assumed for another; the number and its
+            # provenance travel together or they come apart.
             bits.append(f"{PUBLIC_MODEL_NAME} ({label}) "
                         f"{rule['w']}-{rule['l']} "
-                        f"({rule['actual']:.3f})")
+                        f"({rule['actual']:.3f})"
+                        + (" <span class='muted'>rebuilt, not a record</span>"
+                           if rebuilt else ""))
             se = rule["excess_se"]
             if se is not None and np.isfinite(se) and se > 0:
                 bits.append(f"vs mkt z {rule['excess'] / se:+.2f} "
@@ -7692,56 +7951,36 @@ def _lean_cell(lean, delta, muted=False):
     return f"<span class='muted'>{txt}</span>" if muted else txt
 
 
-def _row_hybrid(r):
-    """(action, selection, result) for one ledger row under the published rule.
+def _row_selection(r):
+    """(basis, pick, grade) for the PUBLISHED selection on one ledger row.
 
-    Row-level twin of the columns `_lean_market_observations` derives in bulk,
-    and the ONLY place the ledger table decides what the rule did. Returns
-    ``(None, None, None)`` whenever the rule cannot act, which is three
-    distinct cases the caller has to tell apart and label:
+    v13 retires the hybrid rule, so the published selection IS the model's own
+    lean and this returns the lean with the lean's OWN grade, uninverted. There
+    is no longer a branch that can flip a result, which removes the whole class
+    of defect the inverting version needed guarding against.
 
-      * the row predates the current record family -- see below;
-      * no lean was published (a v5 abstention);
-      * no two-sided close is attached (every pending row, by no-lookahead).
+    Two bases, and the difference is the whole point of the split:
 
-    An abstention must render as an abstention rather than borrowing the
-    model's own result under a selection heading.
+      * ``"lean"`` -- a current-family row. The model that wrote it is the
+        model the site publishes, and the grade is what it actually scored.
+      * ``"recon"`` -- an earlier-family row carrying a v13 RECONSTRUCTION.
+        The blend needs a wOBA starter rate, and for every already-graded game
+        that rate exists only in a dump written AFTER first pitch. So a
+        reconstructed selection is not a decision anybody could have taken, and
+        it is returned under its own basis so no surface can render it as one.
 
-    SCOPED TO `RECORD_TAGS`. The rule is registered against the current
-    prediction family, and applying it to an older family's rows publishes a
-    selection nobody could have made -- under lean math the rule was never
-    paired with, and with a grade this function would then invert. The archive
-    still shows those rows; it shows them as the leans they were.
-
-    The result on a faded row is the lean's grade INVERTED: the rule backed the
-    other side, so a lean that lost is a selection that won. Ties are mapped
-    explicitly rather than by subtraction, which is what swallows them.
+    Returns (None, None, None) where no selection can be shown, which the
+    caller must label rather than pass off as a lean.
     """
-    if r.get("model_tag") not in RECORD_TAGS:
-        return None, None, None
-    locked_pick = r.get("hybrid_selection")
-    locked_action = r.get("hybrid_action")
-    if (r.get("selection_rule_tag") == HYBRID_RULE_TAG
-            and isinstance(locked_pick, str) and locked_pick
-            and locked_action in ("FOLLOW", "FADE")):
-        return locked_action, locked_pick, r.get("hybrid_full")
     lean = r.get("xw_lean")
     if not isinstance(lean, str) or not lean:
         return None, None, None
-    ph = pd.to_numeric(r.get("close_p_home"), errors="coerce")
-    if pd.isna(ph):
-        return None, None, None
-    home, away = r.get("home"), r.get("away")
-    market_p = float(ph) if lean == home else 1.0 - float(ph)
-    delta = pd.to_numeric(r.get("xw_net", r.get("xw_delta")), errors="coerce")
-    action = hybrid_action(market_p, delta)
-    pick = hybrid_selection(lean, away, home, market_p, delta)
-    if action is None or pick is None:
-        return None, None, None
-    grade = r.get("xw_full")
-    if action == "FADE":
-        grade = {"W": "L", "L": "W"}.get(grade, grade)
-    return action, pick, grade
+    if r.get("model_tag") in RECORD_TAGS:
+        return "lean", lean, r.get("xw_full")
+    recon = r.get(V13_RECON_LEAN_COL)
+    if isinstance(recon, str) and recon:
+        return "recon", recon, r.get(V13_RECON_GRADE_COL)
+    return None, None, None
 
 
 def _grades_row(r, show_ml=False):
@@ -7777,74 +8016,49 @@ def _grades_row(r, show_ml=False):
     # lean result standing unlabelled in a selection column is the same
     # substitution that once published a pooled record under a current-family
     # name.
-    action, pick, rule_grade = _row_hybrid(r)
+    action, pick, rule_grade = _row_selection(r)
     current = r.get("model_tag") in RECORD_TAGS
     if abstained:
         sel_cell = ("<span class='muted' title='no lean published: a starter "
                     "had no measured season line'>no lean</span>")
         res = r["xw_full"]
     elif action is None:
-        # Three different reasons the rule did not act, and the cell has to say
+        # The selection column is empty for a reason, and the cell has to say
         # WHICH -- an unlabelled lean sitting in a selection column is the
         # substitution that once published a pooled record under a
         # current-family label.
         sel_cell = _lean_cell(r["xw_lean"], r["xw_delta"], muted=True)
         if isinstance(r.get("xw_lean"), str) and r["xw_lean"]:
-            if not current:
-                why, tag = ("the hybrid rule is registered against "
-                            f"{MODEL_TAG} and is not applied to earlier "
-                            "prediction families; this row shows the lean it "
-                            "published at the time", "lean only")
-            else:
-                why, tag = ("no locked pregame market exists on this row and "
-                            "no closing market is attached yet", "awaiting market")
+            why, tag = (
+                f"this row was published under {_esc(str(r.get('model_tag')))}, "
+                f"and no {MODEL_TAG} reconstruction exists for it; the lean "
+                "shown is the one that family published at the time",
+                "earlier model")
             sel_cell += f"<span class='sp' title='{why}'>{tag}</span>"
         res = r["xw_full"]
-    elif action == "FADE":
-        # Δ is deliberately NOT shown beside `pick`. It is the model's
-        # separation in favour of the side the rule just declined; printed
-        # beside the club the rule selected it would read as the model rating
-        # THAT team, which is the opposite of what the number means.
-        #
-        # But that left the declined club named NOWHERE on the row, on exactly
-        # the rows where the rule and the model disagree -- the only rows whose
-        # selection the rule is responsible for. The tooltip said "Δ describes
-        # the declined model side" while the page never said which side that
-        # was. So the club is named, and Δ rides with it: the number sits
-        # beside the team it is a statement about, which is what the reasoning
-        # above actually requires rather than silence.
-        sel_cell = _lean_cell(pick, None)
-        sel_cell += ("<span class='sp fade-mark' title='the model side was "
-                     "priced below 45% and its |Δ| was below .012, so the rule "
-                     "took the market's side'>"
-                     f"{hybrid_public_label('FADE')}</span>")
-        declined = r.get("xw_lean")
-        if isinstance(declined, str) and declined and declined != pick:
-            # Same Δ formatting as `_lean_cell`, read off the same column, so
-            # a followed row and a declined side cannot render the number two
-            # different ways.
-            _d = pd.to_numeric(r.get("xw_delta"), errors="coerce")
-            d_txt = f" Δ{delta3(_d)}" if pd.notna(_d) else ""
-            sel_cell += (
-                "<span class='sp declined' title='the model leaned this side; "
-                "the rule declined it, and Δ is the model separation in its "
-                f"favour'>declined {_esc(declined)}{d_txt}</span>")
+    elif action == "recon":
+        # A reconstruction, and the badge says so on the row rather than only
+        # in a header note. The rate behind it was read off a leaderboard the
+        # game had already finished inside, so this is what v13 WOULD have
+        # leaned with hindsight -- never what it did lean.
+        sel_cell = _lean_cell(pick, r.get(V13_RECON_DELTA_COL))
+        sel_cell += ("<span class='sp' title='reconstructed: the wOBA half of "
+                     "this row&#39;s starter rate comes from a dump written "
+                     "after first pitch, so no bettor could have taken this "
+                     "selection'>rebuilt</span>")
         res = rule_grade
     else:
         sel_cell = _lean_cell(pick, r["xw_delta"])
-        sel_cell += ("<span class='sp' title='the rule follows when q is at "
-                     "least 45% or |Δ| is at least .012'>"
-                     f"{hybrid_public_label('FOLLOW')}</span>")
         res = rule_grade
     cells = [("c-game", "Game", game),
              ("c-lean", "Selection", sel_cell)]
     if show_ml:
+        # One basis now the rule is gone: the selection is the lean, so the
+        # price is the lean's price. The old branch preferred a locked
+        # `hybrid_ml` captured for a selection this column no longer shows.
         cells.append(("c-ml", "ML",
-                      _lean_ml_cell(r, "xw_lean") if action is None
-                      else (_fmt_ml_cell(r.get("hybrid_ml"))
-                            if r.get("selection_rule_tag") == HYBRID_RULE_TAG
-                            and pd.notna(pd.to_numeric(r.get("hybrid_ml"), errors="coerce"))
-                            else _pick_ml_cell(r, pick))))
+                      _lean_ml_cell(r, "xw_lean") if action != "recon"
+                      else _pick_ml_cell(r, pick)))
     cells += [("c-final", "Final", final),
               ("c-res", "Result", _wlt_badge(res))]
     cls = "gr-row void" if status == "void" else "gr-row"
@@ -7870,7 +8084,7 @@ def _grades_day_header(date, day, ncols):
     # Day record only once something on that date is graded; an all-pending
     # date would otherwise show a meaningless 0-0.
     displayed_grades = pd.Series(
-        [_row_hybrid(r)[2] for _, r in day.iterrows()], index=day.index,
+        [_row_selection(r)[2] for _, r in day.iterrows()], index=day.index,
         dtype=object)
     decided = displayed_grades.isin(["W", "L", "T"]).sum()
     if decided:
@@ -7949,10 +8163,20 @@ def render_grades_html(built_txt):
                        "</div></div>")
         return html_document(body, built_txt, title=f"{PUBLIC_MODEL_NAME} ledger")
 
-    # The public archive is one product with one rule. Older prediction-family
-    # leans remain in the CSV and internal report, but are not mixed into the
-    # XWOBA Market Hybrid table under a shared Selection heading.
-    led = led[led["model_tag"].isin(RECORD_TAGS)].copy()
+    # The public archive is one product with one model. Older prediction-family
+    # leans remain in the CSV and the internal report and are not mixed into
+    # this table under a shared Selection heading.
+    #
+    # The exception is a row carrying a RECONSTRUCTION of the current model.
+    # That is not another family's lean relabelled -- it is this model's own
+    # re-decision of that game -- and without it a tag bump leaves the page
+    # blank while the reconstruction sits unread in the ledger. Each such row
+    # is marked `rebuilt` in its Selection cell, so a reader can never mistake
+    # one for a decision the model actually made.
+    _keep = led["model_tag"].isin(RECORD_TAGS)
+    if V13_RECON_BASIS_COL in led.columns:
+        _keep = _keep | led[V13_RECON_BASIS_COL].notna()
+    led = led[_keep].copy()
 
     # Scoped to the current record family, like the graded count they sit
     # beside. Pooling them there would put "30 graded" next to a void count
@@ -7962,7 +8186,7 @@ def render_grades_html(built_txt):
     n_pend = int((_fam & (led["status"] == "pending")).sum())
     n_void = int((_fam & (led["status"] == "void")).sum())
     head = (f"<div class='gr-head'><h1 class='gr-h1'>{PUBLIC_MODEL_NAME} ledger</h1>"
-            "<div class='gr-lead'>V12 selections and results. Built "
+            f"<div class='gr-lead'>{_model_version_short()} selections and results. Built "
             f"<span class='stamp'>{built_txt}"
             "</span>.</div></div>")
 
@@ -7973,6 +8197,14 @@ def render_grades_html(built_txt):
     # true of the strip on index.html and is why `_record_scope_note` is
     # called there and not here.
     g = _record_grades(led)
+    # Reconstruction-aware for the SAME reason and by the SAME rule as the
+    # strip. These two surfaces are one click apart and a test asserts they
+    # headline the same aggregate; making only one of them fall back to the
+    # reconstruction is precisely how they came to disagree once before.
+    if g.empty:
+        _recon = _reconstructed_grades(led)
+        if not _recon.empty:
+            g = _recon
     show_ml = (("close_home_ml" in led.columns and led["close_home_ml"].notna().any())
                or ("hybrid_ml" in led.columns and led["hybrid_ml"].notna().any()))
     stats, notes = [], []
@@ -7996,9 +8228,9 @@ def render_grades_html(built_txt):
                    f"{_esc(MODEL_TAG)}; earlier families are scored per "
                    "family in data/ledger_report.txt.</div>")
     else:
-        notes = [f"<b>{hybrid_public_label('FADE')}</b> only when q is below "
-                 f"{100 * HYBRID_THRESHOLD:.0f}% and |Δ| is below "
-                 f"{HYBRID_DELTA_THRESHOLD:.3f}; "
+        notes = [f"<b>{PUBLIC_MODEL_NAME}</b> publishes the model's own side on "
+                 "every game it decides; the hybrid selection rule is retired "
+                 "and its record is shown beside this one as a control. "
                  f"<b>{hybrid_public_label('FOLLOW')}</b> otherwise"]
         # EVERY TILE BELOW IS SCORED ON ONE ROW SET: current family, decided,
         # settled, and carrying a two-sided close. That is stricter than the
@@ -8066,8 +8298,13 @@ def render_grades_html(built_txt):
             hyb = dict(won="hybrid_won", p="hybrid_p", resid="hybrid_resid",
                        profit="hybrid_profit")
             priced = obs["won"].notna()
-            rule = _lean_market_agg(obs, priced, **hyb)
-            lean_only = _lean_market_agg(obs, priced)
+            # v13: the published selection is the lean. `retired_rule` keeps
+            # the old headline computable so the page can show what the
+            # retired hybrid would have scored on the same rows, which is the
+            # only honest way to publish a removal.
+            rule = _lean_market_agg(obs, priced)
+            retired_rule = _lean_market_agg(obs, priced, **hyb)
+            rebuilt = bool(obs["is_reconstructed"].iloc[0])
             n_fade = int((~obs["hybrid_follow"]).sum())
             # "at the close" is the basis, not filler. Every figure in this
             # strip is scored at the close, while the table below shows each
@@ -8104,10 +8341,25 @@ def render_grades_html(built_txt):
                     out += f" · ROI {100 * roi:+.1f}%"
                 return out
 
-            stat(f"V12 {label} Hybrid", f"{rule['w']}-{rule['l']}", _pub(rule),
+            # The heading names the model and its basis. It used to read
+            # "V12 ... Hybrid" as a literal, which is two stale claims in one
+            # string the moment either the family or the rule moves -- and
+            # both moved at v13. Read from the constants instead.
+            # NOT named `head`: that is the page's own title block, built
+            # ~150 lines above and consumed below. Shadowing it silently
+            # replaced the page heading with a stat label.
+            rule_head = PUBLIC_MODEL_NAME + (" · rebuilt" if rebuilt else "")
+            stat(rule_head, f"{rule['w']}-{rule['l']}", _pub(rule),
                  tone="cool" if rule.get("roi", 0) > 0 else "warm")
-            stat("Model lean alone", f"{lean_only['w']}-{lean_only['l']}",
-                 _pub(lean_only), tone="dim")
+            # The retired rule, on the identical rows. `Deleting controls as
+            # clutter` applies to a rule that has just been removed exactly as
+            # it does to a baseline: a reader who remembers the old headline
+            # is owed the number it would have shown, beside the one that
+            # replaced it, rather than having it vanish.
+            if retired_rule:
+                stat("Retired hybrid rule",
+                     f"{retired_rule['w']}-{retired_rule['l']}",
+                     _pub(retired_rule), tone="dim")
             for lab, cols in (
                 ("Always chalk", dict(won="chalk_won", p="chalk_p",
                                       resid="chalk_resid",

@@ -38,8 +38,10 @@ prediction math. Two separate tag families gate two different questions:
 These are different equivalence relations and they do disagree. The authority is
 `_RECORD_FAMILIES` / `_SCALE_FAMILIES` in `build_site.py` (records mirrored in
 `grade_leans.py`) — not this table, which is a reading aid. Current model is
-**v12** — Savant xwOBA, `XWOBA_SHRINK_K = 100`, population shrinkage
-targets, calibrated expected starter IP.
+**v13** — Savant xwOBA with a centred 50/50 wOBA blend on the STARTER rate,
+`XWOBA_SHRINK_K = 100`, population shrinkage targets, calibrated expected
+starter IP. The hybrid selection rule is retired: the site publishes the
+model's own lean.
 
 | tag | what changed | record family | scale family |
 |---|---|---|---|
@@ -60,6 +62,7 @@ targets, calibrated expected starter IP.
 | split v1 | one-slate wOBA-lineup/xwOBA-arms test; abandoned before grading | split v1 | split v1 |
 | v11 | revert to xwOBA + K=100 + population target, keeping v2's platoon centring, v3's relief-pool target and v5's abstention | v11 | 8+9+10+11 |
 | v12 | `expected_sp_ip` calibrated per build against its own backfilled actuals (over-dispersed, slope 0.735) | v12 | 8+9+10+11+12 |
+| v13 | starter's allowed rate becomes a centred 50/50 xwOBA/wOBA blend; hybrid selection rule retired | v13 | v13 |
 
 The wOBA forward test is intentionally isolated from xwOBA in both namespaces.
 Observed wOBA changes the predictions and its sampling distribution is not the
@@ -87,6 +90,65 @@ way, and it is recorded in `_RECORD_FAMILIES` so a later reader can see which
 way the evidence pointed independently of what the reset happened to cost. The
 scale half is the ordinary v10 argument and is measured: `q` is a convex weight
 between the same two phases, so the units are untouched.
+
+**v13 ships the starter blend and retires the hybrid rule, and this entry's
+job is to record that it was shipped AGAINST the measurements, on the
+operator's instruction.** Every reading in `blend_probe.py` and the sessions
+behind it says the blend does not clear its own noise: paired d_corr against
+the shipped arm +0.0117 with se 0.0112 (z +1.05) on 448 reconstructed rows,
+against a noise bar of ~2.04 for the constructions searched; the ROI gain is
++10.57u over 32 flipped games of which the top three carry +7.42u; the
+null-max test returns P = 0.39; and applying the published hybrid rule on top
+of it made things WORSE, not better (−10.21u). None of that is retracted here
+and none of it should be quoted as support. **The model changed because it was
+directed to, not because a measurement argued for it.** A later reader must
+not convert this into evidence — the same instruction this file gives about
+v11, for the same reason.
+
+What IS measured and did decide something smaller: of the three candidate
+constructions (raw average, centred, raw-with-blended-baseline) all three flip
+the same 32 leans and post the same record, so the choice cost nothing and was
+made on principle — the centred form, blending deviations against each
+metric's own league centre, because a raw average carries a ~0.002 level shift
+into the starter phase only and this repo's own "store the deviation, not the
+level" rule forbids it.
+
+**Both namespaces isolate, and the scale half is the one with a consequence.**
+Record: 32 of 448 flips (7.1%) changes which games are decided, so v12's line
+is not v13's. Scale: `xw_net` is no longer a pure xwOBA difference — half of
+each starter's deviation is a wOBA deviation, and a delta whose sampling
+distribution is a MIXTURE of two metrics' spreads is a different scale
+whatever the median does (it moves +1.9%, which is small and is deliberately
+not the basis for sharing). The consequence this file already warned about
+then fired: a new `_SCALE_FAMILIES` entry invalidates every delta-gated
+REGISTRATION. `hybrid_v2` self-bounds because it filters on
+`selection_rule_tag` and the rule is no longer published; `delta_filter_test`
+had NO such guard and would have gone on appending v13 rows to a v12 window
+under the same frozen 0.012, so it now carries `REGISTERED_FAMILY` and its
+window closes at the bump. That is the honest outcome rather than a
+workaround: a registered question was asked of a specific statistic.
+
+**The hybrid rule is retired from the SHIPPED selection and its instrument is
+not destroyed.** `hybrid_action` still writes the ledger's capture columns,
+because those are the pregame evidence for four live registrations and a
+decision-time price that was never captured cannot be re-derived later.
+`abstain_test`'s pre-committed decision (17 of 82 declined games, reading
+−0.336u ± 0.199) keeps accruing. Retiring a rule and deleting the thing that
+measures it are different acts; only the first was done.
+
+**The retrospective is a RECONSTRUCTION and must never be read as a record.**
+`reconstruct_v13.py` writes `v13_*_recon` columns onto earlier-family rows from
+the committed paired dumps, using `build_site.blend_starter_rate` itself so it
+cannot drift into a second spelling. It refuses to write if any protected
+column moved — `xw_net`, `xw_lean`, `xw_full` and the market columns are
+immutable pregame records AND the control this model is read against — and it
+appends columns without rewriting a byte of the existing file, because a
+whole-file `to_csv` re-renders every float and this ledger has already lost a
+digit of `xw_net` that way once. Measured provenance, printed rather than
+asserted: only **222 of 1,066** shadow side-rows were written before their own
+first pitch, so most of the wOBA half is post-hoc and every reconstructed
+selection is hindsight at worst and mixed-basis at best. The strip, the grades
+header and every ledger row carrying one are marked `rebuilt`.
 
 **v11 reverts the metric to xwOBA and `K` to 100 and the shrinkage target to the
 population centre, and this table's job is to stop that being read as a
@@ -2727,8 +2789,8 @@ registered pregame scorer excludes and counts malformed locked commitments;
 close-scored sections exclude missing `close_p_home` and their rule-specific
 inputs, while relying on the market join to supply the paired moneylines.
 
-**Probes run on demand.** Eighteen read committed artifacts and need no live
-API. The table below has NINETEEN rows and that is not a miscount: `tb_probe`
+**Probes run on demand.** Nineteen read committed artifacts and need no live
+API. The table below has TWENTY rows and that is not a miscount: `tb_probe`
 appears in both lists, because it needs StatsAPI for its feature but runs off a
 pre-computed frame via `--tb-csv`. Say which set a count is over.
 All run anywhere with one qualification, stated in its own row:
@@ -2755,6 +2817,7 @@ the count is the one thing here a reader cannot check without counting:
 | `bp_ablation.py` | does removing the bullpen term change any decision? |
 | `compare_v8_v9.py` | what the v9 sequential form changed against v8 |
 | `shadow_report.py` | what the paired metric arm can and cannot settle |
+| `reconstruct_v13.py` | writes the v13 starter-blend RECONSTRUCTION onto earlier-family ledger rows from the committed paired dumps. Additive columns only; refuses to write if a protected column moved, and appends without rewriting a byte of the existing file. Run once, not a re-runnable migration |
 | `blend_probe.py` | does a 50/50 wOBA+xwOBA blend beat either alone? Reconstructs a blended build exactly from the paired dumps (self-checked bitwise against each arm's published edge), and reports the sign criterion `shadow_report` omits |
 | `phase_benchmark_probe.py` | should each phase's ratio have its own peer benchmark? Closes the hitter half and the uniform-centre case by arithmetic, then decides the rest on the realised SP-minus-BP gap rather than on a correlation |
 | `tb_probe.py` | does 60-day team total-bases context add anything to the closing price, and anything on top of `\|xw_net\|`? Conditional logit, because the proposed median split has 80% power only against a 13.4pp gap. Needs StatsAPI for the feature, or a pre-computed frame via `--tb-csv` |

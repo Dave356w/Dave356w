@@ -143,13 +143,31 @@ def patch():
     keeps the shadow dump readable by the same tooling.
     """
     primary_col = bs.MODEL_RATE_SOURCE_COL
+    blend_col = getattr(bs, "BLEND_RATE_SOURCE_COL", None)
     bs.MODEL_RATE_SOURCE_COL = SHADOW_SOURCE_COL
     bs.MODEL_RATE_LABEL = SHADOW_LABEL
     bs.MODEL_TAG = SHADOW_TAG
+    # v13 put a SECOND rate on the primary selection set (the starter blend's
+    # wOBA half). Swapping the primary column in place would then have left the
+    # set holding `woba` twice and `xwoba` not at all, so the blend column is
+    # dropped first. The arm is a SINGLE-metric build by definition -- that is
+    # what makes it a clean comparison side -- and it is turned off explicitly
+    # below rather than left to be implied by the column list.
+    sel = [c for c in bs.STATCAST_SELECTIONS if c != blend_col]
     bs.STATCAST_SELECTIONS = [
-        SHADOW_SOURCE_COL if c == primary_col else c
-        for c in bs.STATCAST_SELECTIONS
+        SHADOW_SOURCE_COL if c == primary_col else c for c in sel
     ]
+    # The arm runs the UNBLENDED model on its own metric. Leaving the blend on
+    # would have made it a second blended build differing only in which half
+    # was doubled, which answers no question either arm was built to ask.
+    #
+    # Note what this means for the shipped model's own control: it does NOT
+    # need this arm. The primary dump stores `starter_rate_primary` beside the
+    # blended value, so the unblended v13 lean is exactly recomputable from the
+    # shipped pregame artifact alone -- no second fetch, no pairing, and
+    # pregame rather than post-hoc. That is strictly better than a shadow arm
+    # and it is why one was not added for the blend.
+    bs.STARTER_BLEND_WEIGHT = 0.0
     # Keyed to the selection set, so it MUST differ from the primary's.
     bs.STATCAST_CACHE_NS = f"custom_{SHADOW_SOURCE_COL}_v1"
     return {

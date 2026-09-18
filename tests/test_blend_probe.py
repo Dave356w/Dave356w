@@ -119,12 +119,30 @@ class ScopeTests(unittest.TestCase):
         for banned in ("to_csv", "open(", "os.remove", "makedirs"):
             self.assertNotIn(banned, src, f"a probe must not {banned}")
 
-    def test_the_blended_lean_is_not_stamped_into_any_family_map(self):
-        """A reconstructed arm shares a record line and a delta scale with nothing."""
+    def test_the_probe_stamps_no_tag_of_its_own_into_any_family_map(self):
+        """A probe's reconstructed arm shares a record line with nothing.
+
+        RESTATED. This used to ban the substring "blend" from the family maps,
+        which was a correct spelling of the rule only while no shipped model
+        had that word in its tag. v13 does -- `xw+starter_blend_v13` is a real
+        prediction family with a real record line -- so the substring test now
+        forbids a legitimate entry and says nothing about the probe.
+
+        The property was never about the word. It is that THIS MODULE defines
+        no tag and contributes no row to any family, so a reconstruction it
+        builds can never be pooled into a record or a delta scale. That is
+        asserted directly, and it holds whatever a shipped tag is called.
+        """
         import build_site as bs
+        src = open(os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), "blend_probe.py"),
+            encoding="utf-8").read()
+        self.assertNotIn("MODEL_TAG =", src)
         for m in (bs._RECORD_FAMILIES, bs._SCALE_FAMILIES):
-            for tag in m:
-                self.assertNotIn("blend", str(tag).lower())
+            for tag, fam in m.items():
+                self.assertNotIn("shadow", str(tag).lower())
+                for t in fam:
+                    self.assertNotIn("shadow", str(t).lower())
 
 
 class SignCriterionTests(unittest.TestCase):

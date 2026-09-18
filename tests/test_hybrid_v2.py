@@ -14,7 +14,7 @@ def _rows(q, delta, won=True, date="2026-09-12", source="saved_pregame"):
     home_ml, away_ml = (-150, 130) if q >= .5 else (130, -150)
     row = dict(
         game_pk=1, game_date=date, away="A", home="H", status="graded",
-        model_tag="xw+plat_consol_v12", xw_lean="H", xw_net=delta,
+        model_tag=grade_leans.MODEL_TAG, xw_lean="H", xw_net=delta,
         full_away=1 if won else 4, full_home=4 if won else 1,
         xw_full="W" if won else "L", close_p_home=q,
         close_home_ml=home_ml, close_away_ml=away_ml,
@@ -214,7 +214,8 @@ def test_a_first_migration_still_mints_the_archive():
     assert got.at[0, "hybrid_v1_full"] == "W"
 
 
-def _pair(idx, q, delta, won, date, tag="xw+plat_consol_v12"):
+def _pair(idx, q, delta, won, date, tag=None):
+    tag = grade_leans.MODEL_TAG if tag is None else tag
     r = _rows(q, delta, won=won, date=date)
     r["game_pk"] = idx
     r["model_tag"] = tag
@@ -274,7 +275,7 @@ def test_the_discovery_reference_is_scoped_to_the_rules_own_family():
             _pair(3, .40, .005, False, post)]
     clean = hybrid_v2.discovery_switch_delta(pd.concat(base, ignore_index=True))
     assert clean is not None and clean["n"] == 1
-    assert clean["families"] == ("xw+plat_consol_v12",)
+    assert clean["families"] == (grade_leans.MODEL_TAG,)
 
     # Same frame plus pre-registration rows from an older family, faded and
     # LOSING, which would drag an unscoped mean down hard.
@@ -284,7 +285,7 @@ def test_the_discovery_reference_is_scoped_to_the_rules_own_family():
         pd.concat(base + older, ignore_index=True))
     assert mixed["n"] == clean["n"]
     assert mixed["mean"] == pytest.approx(clean["mean"])
-    assert mixed["families"] == ("xw+plat_consol_v12",)
+    assert mixed["families"] == (grade_leans.MODEL_TAG,)
 
 
 def test_no_forward_rows_means_no_discovery_reference():
@@ -382,7 +383,17 @@ def test_the_archive_is_minted_for_every_family_row_a_live_test_selects():
     a shrinking forward denominator visible.
     """
     led = pd.read_csv(grade_leans.LEDGER_PATH, low_memory=False)
-    cur = led[led["model_tag"].astype(str).eq(grade_leans.MODEL_TAG)]
+    # The family is read off the LEDGER, not off the running build. A
+    # `MODEL_TAG` bump makes the build's current family empty until its first
+    # slate lands, and a test keyed to the build would then either fail on an
+    # empty frame or -- worse -- pass vacuously for exactly as long as the
+    # invariant was unobservable. Reading it off the ledger's own most recent
+    # graded rows keeps the property under test on both sides of a bump. This
+    # is the version-note-asserts-rows failure that CLAUDE.md records three
+    # times, arriving in a test instead of in prose.
+    graded = led[led["status"].astype(str).eq("graded")]
+    family = graded.loc[graded["game_date"].astype(str).idxmax(), "model_tag"]
+    cur = led[led["model_tag"].astype(str).eq(str(family))]
     usable = cur[[hybrid_test.locked_v1_decision(
         r.xw_lean, r.home, r.away, r.pregame_p_home,
         r.pregame_home_ml, r.pregame_away_ml) is not None

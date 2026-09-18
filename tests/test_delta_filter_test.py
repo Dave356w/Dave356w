@@ -34,8 +34,18 @@ import delta_filter_test as dft
 
 
 def _led(deltas, lean_home=True, home_won=True, p_home=0.55,
-         date="2026-09-10", status="graded"):
-    """A minimal graded ledger frame at the given deltas and one flat price."""
+         date="2026-09-10", status="graded",
+         model_tag=dft.REGISTERED_FAMILY[0]):
+    """A minimal graded ledger frame at the given deltas and one flat price.
+
+    Carries `model_tag` because the registration is family-bounded as well as
+    date-bounded: `DELTA_THRESHOLD` is denominated in the delta scale of the
+    family it was frozen against, so a row from a later scale family is a
+    different statistic under the same constant. A fixture that omitted the
+    column could not REPRESENT that distinction -- the shape of defect this
+    repo already paid for when three tests of a delegated row selector all
+    passed on a frame carrying none of the column the new gate read.
+    """
     deltas = np.asarray(deltas, dtype=float)
     n = len(deltas)
     lean_home = np.broadcast_to(np.asarray(lean_home, dtype=bool), (n,))
@@ -47,7 +57,7 @@ def _led(deltas, lean_home=True, home_won=True, p_home=0.55,
                        -np.round(100 * (1 - p_home) / p_home))
     return pd.DataFrame({
         "status": status, "game_date": date, "home": "H", "away": "A",
-        "close_p_home": p_home,
+        "model_tag": model_tag, "close_p_home": p_home,
         "xw_lean": np.where(lean_home, "H", "A"),
         # Sign is irrelevant to the filter -- it reads the magnitude -- so the
         # frames alternate it to prove that.
@@ -300,3 +310,39 @@ class LedgerReportWiringTests(unittest.TestCase):
         comparing them has to know a fourth place to look."""
         src = open("grade_leans.py", encoding="utf-8").read()
         self.assertIn("delta_filter_test", src)
+
+
+class RegisteredFamilyTests(unittest.TestCase):
+    """The window closes at a scale-family change rather than running on.
+
+    Without this, a `_SCALE_FAMILIES` bump would have kept appending rows to
+    the same forward sample under the same frozen 0.012 -- one gate printed
+    over two scales, with nothing on the artifact saying so. That is the
+    denominator-moves-invisibly failure, and the guard written for the last one
+    could not see it either.
+    """
+
+    def test_a_row_from_a_later_family_is_not_scored(self):
+        led = _led([0.02, 0.005], model_tag="xw+starter_blend_v13")
+        self.assertEqual(len(dft.scored_rows(led)), 0)
+
+    def test_a_row_from_the_registered_family_still_is(self):
+        led = _led([0.02, 0.005])
+        self.assertEqual(len(dft.scored_rows(led)), 2)
+
+    def test_a_mixed_ledger_scores_only_the_registered_family(self):
+        led = pd.concat([_led([0.02, 0.005]),
+                         _led([0.02, 0.005], model_tag="xw+starter_blend_v13")],
+                        ignore_index=True)
+        got = dft.scored_rows(led)
+        self.assertEqual(len(got), 2)
+        self.assertEqual(set(got["model_tag"]),
+                         set(dft.REGISTERED_FAMILY))
+
+    def test_the_registered_family_is_not_the_running_build(self):
+        """It is frozen to what was current at registration, not to whatever
+        ships today -- reading it off the live build is how a registration
+        silently follows the model it was supposed to be measuring."""
+        import build_site
+        self.assertNotIn(build_site.MODEL_TAG,
+                         dft.REGISTERED_FAMILY)

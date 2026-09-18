@@ -1,6 +1,8 @@
 """Reporting-only guards for calibration, price provenance, and field labels."""
 
 import numpy as np
+from unittest import mock
+
 import pandas as pd
 
 import abstain_test
@@ -50,7 +52,15 @@ def test_historical_sections_name_closing_prices():
     import grade_leans
 
     ledger = pd.read_csv(grade_leans.LEDGER_PATH, low_memory=False)
-    text = grade_leans.report_text(ledger)
+    # The retrospective block is family-scoped and prints nothing when the
+    # current family has no graded rows -- which is every family for the first
+    # slate after a `MODEL_TAG` bump. Scored on a family that HAS rows, so the
+    # claim under test (every historical section names its price basis) is
+    # pinned rather than skipped whenever the model version moves.
+    graded = ledger[ledger["status"].astype(str).eq("graded")]
+    fam = graded["model_tag"].value_counts().idxmax()
+    with mock.patch.object(grade_leans, "RECORD_TAGS", (str(fam),)):
+        text = grade_leans.report_text(ledger)
     assert "price source — all retrospectives: closing close_p_home" in text
     assert "price source — selection/eligibility and market comparison: closing" in text
 
@@ -107,7 +117,13 @@ def test_both_surfaces_naming_the_abstain_branch_name_the_same_one():
     """
     import grade_leans
     led = pd.read_csv("data/mlb_lean_ledger.csv", low_memory=False)
-    g = led[led["model_tag"].astype(str).eq(grade_leans.MODEL_TAG)]
+    # The family is read off the LEDGER, not the running build: the
+    # retrospective block is family-scoped, so a `MODEL_TAG` bump leaves it
+    # empty and this test would then fail for the absence of rows rather than
+    # for the caveat drifting between the two surfaces.
+    _graded = led[led["status"].astype(str).eq("graded")]
+    _fam = _graded["model_tag"].value_counts().idxmax()
+    g = led[led["model_tag"].astype(str).eq(str(_fam))]
     surfaces = {
         "retrospective": "\n".join(grade_leans._registration_retrospective_lines(g)),
         "forward": "\n".join(abstain_test.report_lines(led)),
