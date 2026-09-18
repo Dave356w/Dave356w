@@ -11,6 +11,7 @@ from unittest import mock
 
 import numpy as np
 import pandas as pd
+import pytest
 
 import build_site
 import grade_leans
@@ -85,15 +86,28 @@ def test_every_cell_equals_the_card_cell_for_the_same_bucket():
     led = pd.read_csv(grade_leans.LEDGER_PATH)
     rows = _populated_family_rows(led)
     fam = tuple(sorted(set(rows["model_tag"].astype(str))))
-    # MODEL_TAG moves with the family, and not only for tidiness. build_site
-    # publishes a row whose tag is not MODEL_TAG through its v13
-    # RECONSTRUCTION, while grade_leans scores the lean that row's own build
-    # published -- so leaving MODEL_TAG where it was would compare a
-    # re-decided cell against a published one and fail for a reason that has
-    # nothing to do with the shared construction under test.
-    live = rows["model_tag"].astype(str).value_counts().idxmax()
+    # MODEL_TAG IS NOT PATCHED, and that is the point of this test rather
+    # than a detail of it.
+    #
+    # It was patched, for one day, with a comment saying that leaving it
+    # alone "would compare a re-decided cell against a published one and fail
+    # for a reason that has nothing to do with the shared construction under
+    # test". That reasoning was exactly backwards: this block's own docstring
+    # calls it the grid the game card shows one cell of, so a re-decided cell
+    # against a published one IS the construction under test, and patching it
+    # out made the fixture unable to represent the only disagreement that
+    # could occur.
+    #
+    # It was occurring. Measured in production with the patch in place: the
+    # card banded on the reconstructed delta and the report on the ledger's
+    # raw `xw_net`, 444 of 452 deltas differed by up to 0.0215 -- wider than
+    # a band -- the lean differed on 39 rows, and 24 of these 26 cells
+    # disagreed while this test passed green.
+    #
+    # Only RECORD_TAGS is patched now, because the family genuinely is a
+    # scoping parameter both sides must share. Everything about which SIDE
+    # and which DELTA a row publishes is left to production.
     with mock.patch.object(build_site, "RECORD_TAGS", fam), \
-            mock.patch.object(build_site, "MODEL_TAG", live), \
             mock.patch.object(grade_leans, "RECORD_TAGS", fam):
         ctx = build_site.hybrid_branch_records()
         report = _cells(_lines())
@@ -106,6 +120,37 @@ def test_every_cell_equals_the_card_cell_for_the_same_bucket():
             card[(band, rung)] = (val["model"]["n"], val["model"]["w"])
     assert report, "the matrix rendered no cells"
     assert report == card
+
+
+def test_the_two_grids_are_scored_on_the_same_published_rows():
+    """The equality above is only meaningful if the bases can differ.
+
+    A test that pins two numbers equal proves nothing when the fixture makes
+    them equal by construction -- which is what patching `MODEL_TAG` did here
+    for a day. So this asserts the precondition directly: the ledger holds
+    retained rows whose published lean and delta are NOT the ones stored on
+    them, so the comparison above has something to catch.
+
+    If this ever skips because every row is current-family, the equality test
+    above has stopped being a test and needs its own fixture.
+    """
+    led = pd.read_csv(grade_leans.LEDGER_PATH, low_memory=False)
+    fam = build_site._record_grades(led)
+    retained = fam[~fam["model_tag"].astype(str).eq(build_site.MODEL_TAG)]
+    if retained.empty:
+        pytest.skip("no retained rows: the equality test above is vacuous")
+    pub = build_site._published_grades(led)
+    joined = pub.merge(
+        led[["game_pk", "game_date", "xw_lean", "xw_net"]],
+        on=["game_pk", "game_date"], suffixes=("_pub", "_raw"))
+    moved_lean = (joined["xw_lean_pub"] != joined["xw_lean_raw"]).sum()
+    moved_delta = (
+        pd.to_numeric(joined["xw_net_pub"], errors="coerce").abs()
+        - pd.to_numeric(joined["xw_net_raw"], errors="coerce").abs()
+    ).abs().gt(1e-12).sum()
+    assert moved_lean > 0 or moved_delta > 0, (
+        "no published row differs from its stored row, so the cell-equality "
+        "test above cannot fail and is not testing the shared basis")
 
 
 def test_an_empty_cell_is_rendered_rather_than_skipped():
@@ -128,17 +173,23 @@ def test_an_empty_cell_is_rendered_rather_than_skipped():
 
 
 def test_the_header_states_the_denominator_and_the_price_basis():
-    """A record over a subset must name what it dropped, from its own count.
+    """The header must state its denominator and its price basis.
 
-    The fade rows are excluded because a fade backs the favourite by
-    construction; the closing basis is what separates this grid from the
-    saved-pregame one above it. Both are claims a reader needs in place, so
-    both are pinned -- as claims, not as wording.
+    It used to state a SUBSET -- follow rows only, faded rows excluded -- and
+    that claim went when the retired rule came off the pages on 2026-09-18:
+    the grid now scores every decidable row on the lean's own price. The
+    requirement is unchanged and is restated against the new denominator,
+    because a grid that stopped naming what it covers is the silent-
+    denominator defect whichever direction the row set moved.
+
+    The closing basis is what separates this grid from the saved-pregame one
+    above it, and that claim is untouched.
     """
     head = " ".join(_lines()[:4]).lower()
-    assert "follow" in head and "faded" in head and "excluded" in head
+    assert "all" in head and "decidable" in head
+    # And the retired rule's denominator claim must not come back.
+    assert "faded rows excluded" not in head
     assert "closing" in head and "pregame" in head
-    assert "retrospective" in head
 
 
 def test_the_grid_prints_its_own_null_maximum():
@@ -166,15 +217,17 @@ def test_the_price_ladder_has_exactly_one_home():
     assert "(None, -250," not in src, "build_site restates the ladder edges"
 
 
-def test_the_matrix_covers_every_followed_row_exactly_once():
-    """The bands and the ladder both tile, so no followed row may be dropped.
+def test_the_matrix_covers_every_decidable_row_exactly_once():
+    """The bands and the ladder both tile, so no row may be dropped.
 
     A row whose price fell outside every rung would vanish from the grid with
     nothing saying so, which is the silent-denominator failure the header line
-    exists to prevent.
+    exists to prevent. Renamed from `..._every_followed_row_...` when the
+    retired rule's FOLLOW filter went: the property is the same and its
+    subject is now every decidable row.
     """
     cells = _cells(_lines())
     total_n = sum(n for n, _w in cells.values())
     head = _lines()[1]
-    stated = int(re.search(r"rows: (\d+) followed", head).group(1))
+    stated = int(re.search(r"rows: all (\d+) decidable", head).group(1))
     assert total_n == stated

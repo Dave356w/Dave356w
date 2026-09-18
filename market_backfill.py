@@ -95,6 +95,88 @@ V13_RECON_COLS = ("v13_net_recon", "v13_lean_recon", "v13_delta_recon",
 V13_RECON_TEXT_COLS = ("v13_lean_recon", "v13_recon_basis")
 
 
+def recon_grade(lean, home, full_home, full_away):
+    """W/L/T for a reconstructed lean against that game's own final score.
+
+    DERIVED, never stored. The grade is a deterministic function of three
+    write-once columns -- the reconstructed lean and the two finals -- and
+    this repo's standing rule for exactly that shape is to derive it. It also
+    makes a PENDING retained row work: `reconstruct_v13` writes its lean today
+    and the grade appears the moment the game settles.
+
+    Returns None when the game has no final, which is the pending case and
+    not an error.
+    """
+    if not isinstance(lean, str) or not lean or not isinstance(home, str):
+        return None
+    fh = pd.to_numeric(full_home, errors="coerce")
+    fa = pd.to_numeric(full_away, errors="coerce")
+    if pd.isna(fh) or pd.isna(fa):
+        return None
+    if fh == fa:
+        return "T"
+    return "W" if (lean == home) == (fh > fa) else "L"
+
+
+def recon_grades(g):
+    """`recon_grade` over a frame, as a Series aligned to it."""
+    return pd.Series(
+        [recon_grade(l, h, fh, fa) for l, h, fh, fa in zip(
+            g["v13_lean_recon"], g["home"], g["full_home"], g["full_away"])],
+        index=g.index, dtype=object)
+
+
+def publish_reconstruction(g, model_tag):
+    """Substitute the v13 re-decision into every retained row of `g`.
+
+    THE one derivation of "what this model publishes for these rows", and it
+    lives here for the reason `chalk_is_home` and `excess_se` do: build_site
+    renders it and grade_leans has to score the same thing, and grade_leans
+    cannot import build_site. Spelled twice, it drifted -- and did.
+
+    **The drift this was extracted to fix, measured before the fix.** The
+    per-game card banded on the RECONSTRUCTED delta while
+    `grade_leans._selection_price_matrix_lines`, whose own docstring calls
+    itself "the grid the game card shows one cell of", banded on the ledger's
+    raw `xw_net`. Over 452 rows the two deltas differed on 444, by up to
+    0.0215 -- wider than a whole band -- the published LEAN differed on 39,
+    and **24 of the 26 cells disagreed**. The records disagreed too: 282-170
+    against 273-171.
+
+    Rows: a row built under `model_tag` passes through untouched; a retained
+    row is re-decided; a retained row with no usable reconstruction is
+    DROPPED, because carrying one over on its own lean would publish an
+    earlier model's result under this model's name.
+
+    What this is NOT for: a family history line, or a registration. Those
+    score the lean each build actually published, which is the difference
+    `grade_leans._published_basis_lines` declares on the artifact. Re-aiming
+    a registration at this would restart its forward window.
+    """
+    if g is None or not len(g):
+        return g
+    cur = g["model_tag"].astype(str).eq(str(model_tag))
+    need = ("v13_recon_basis", "v13_lean_recon", "v13_net_recon",
+            "home", "full_home", "full_away")
+    if any(c not in g.columns for c in need):
+        return g[cur].copy()
+    has = (g["v13_recon_basis"].notna()
+           & g["v13_lean_recon"].notna()
+           & recon_grades(g).isin(["W", "L", "T"]))
+    out = g[cur | (~cur & has)].copy()
+    if out.empty:
+        return out
+    rebuilt = ~out["model_tag"].astype(str).eq(str(model_tag))
+    if rebuilt.any():
+        sub = out.loc[rebuilt]
+        out.loc[rebuilt, "xw_full"] = recon_grades(sub)
+        out.loc[rebuilt, "xw_lean"] = sub["v13_lean_recon"]
+        net = pd.to_numeric(sub["v13_net_recon"], errors="coerce")
+        out.loc[rebuilt, "xw_net"] = net
+        out.loc[rebuilt, "xw_delta"] = net.abs()
+    return out
+
+
 # ---------------------------------------------------------------- helpers ---
 def _get(url):
     # Was a bare `Mozilla/5.0`, which ESPN's edge began 403ing on 2026-08-04.

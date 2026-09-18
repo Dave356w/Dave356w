@@ -48,7 +48,10 @@ from market_backfill import (ODDS_LADDER as _mb_odds_ladder,
                              V13_RECON_COLS as _mb_v13_recon_cols,
                              chalk_is_home as _mb_chalk_is_home,
                              is_pickem as _mb_is_pickem,
-                             ladder_rung as _mb_ladder_rung)
+                             ladder_rung as _mb_ladder_rung,
+                             publish_reconstruction as _mb_publish_reconstruction,
+                             recon_grade as _mb_recon_grade,
+                             recon_grades as _mb_recon_grades)
 import requests
 
 import hitter_frame
@@ -4594,9 +4597,16 @@ def _lean_history_range(lo, hi):
 
 
 def _xwoba_side_history(ctx, delta, selection_ml=None):
-    """XWOBA SIDE history at the intersection of delta and closing-price rung.
+    """Lean history at the intersection of delta and closing-price rung.
 
-    This is one current-rule population, not two adjacent aggregates with
+    "XWOBA SIDE" was the retired rule's FOLLOW branch name and it is gone
+    from the copy here, with the rule, on 2026-09-18 -- a card still using
+    one branch's label after the other branch was deleted keeps the rule's
+    vocabulary as the most visible copy on the site. The cells themselves
+    moved to the lean's own columns over every decided row in the same
+    commit; see `hybrid_branch_records`.
+
+    This is one population, not two adjacent aggregates with
     different denominators. The displayed moneyline chooses the rung; the
     historical rows themselves are still bucketed on their closing prices.
 
@@ -4642,7 +4652,7 @@ def _xwoba_side_history(ctx, delta, selection_ml=None):
     parts = (ctx or {}).get(("delta_price_follow", i, rung))
     if not parts:
         return ("<div class='vline hist'><span class='vk'>Past results:</span>"
-                f"<span>No completed {version} XWOBA SIDE picks in the "
+                f"<span>No completed {version} selections in the "
                 f"Δ {range_txt} / closing ML {_esc(rung)} intersection "
                 "yet.</span></div>")
 
@@ -4653,7 +4663,7 @@ def _xwoba_side_history(ctx, delta, selection_ml=None):
             f"({model['actual']:.3f}) · {model['units']:+.2f}u</span></div>")
     return (
         "<div class='vprofile'>"
-        f"<div class='vprofile-title'>Past {version} XWOBA SIDE picks</div>"
+        f"<div class='vprofile-title'>Past {version} selections</div>"
         f"<div class='vprofile-band'>Δ {range_txt} · closing ML {_esc(rung)} · "
         f"{model['n']} {model_unit}</div>"
         f"{body}</div>"
@@ -4661,201 +4671,31 @@ def _xwoba_side_history(ctx, delta, selection_ml=None):
 
 
 def _branch_history(ctx, action, p_lean=None, delta=None, selection_ml=None):
-    """Track record of the branch this game's price puts it in.
+    """Track record of the delta x price cell this game's selection lands in.
 
-    Every line here describes PAST games, and the wording has to make that
+    Every line below it describes PAST games, and the wording has to make that
     impossible to misread. The version this replaces led with
     "Selection won  73.3%" directly under tonight's teams, which reads as this
-    pick's win probability -- it is the historical rate of past picks in the
-    same branch, and the panel publishes no per-game probability at all. The
-    count therefore moves into the heading, every value row is past tense, and
-    the two percentages that used to sit unlabelled beside each other (this
-    game's 37.4% no-vig against the branch's 58.6% average price) are now
-    named for what they are.
+    pick's win probability -- it is a historical rate, and the panel publishes
+    no per-game probability at all.
+
+    **The FADE body is gone, along with the `("branch", …)` and
+    `("chalk", …)` aggregates it read.** v13 retires the hybrid rule, so
+    `published_action` returns FOLLOW or None and no call could reach it --
+    an unreachable renderer whose eight aggregates were still computed every
+    build, which is exactly the shape this file records finding once before.
+    The retired rule was taken off every user-facing page on 2026-09-18 and
+    this is the last of it.
+
+    What this is NOT is the deletion of a control: always-chalk and always-home
+    are on `market-calibration.html`, scored on the identical rows, and the
+    rule's own forward reading is untouched in `data/ledger_report.txt`.
     """
     if not action:
-        # The rule line already says the rule abstains and why; a second line
-        # restating it is the redundancy this rewrite is removing.
+        # The rule line already says the selection abstains and why; a second
+        # line restating it is the redundancy this rewrite removed.
         return ""
-    if action == "FOLLOW":
-        return _xwoba_side_history(ctx, delta, selection_ml)
-    # Everything below is FADE-only -- FOLLOW returned on the line above. The
-    # ternary that used to stand here, `"model-side" if action == "FOLLOW"`,
-    # could never take its first arm.
-    history_branch = "market-side"
-    parts = (ctx or {}).get(("branch", action))
-    if not parts:
-        return ("<div class='vline hist'><span class='vk'>Track record:</span>"
-                f"<span>No completed {_model_version_short()} {history_branch} selections "
-                "yet.</span></div>")
-
-    version = _model_version_short()
-    n = parts["n"]
-
-    def _wl_units(p, bold=False):
-        """`W-L (0.xxx) · +N.NNu` -- the public shape for every record here.
-
-        REVERSED ON THE OPERATOR'S CALL, 2026-09-16. This line used to read
-        `13-6 (68.4%) vs 58.0% priced`, and the reasoning for that shape was
-        sound as far as it went: a bare win rate is mostly base rate -- chalk
-        takes 76.5% of these same games by backing the favourite -- so the
-        record has to carry something price-relative beside it, and the
-        branch's own mean implied price did that without betting framing.
-
-        Flat-stake units do the same job and do it better, which is why the
-        swap costs nothing the old form was protecting. A record is priced in
-        by construction once you settle it at each row's own moneyline: 68.4%
-        at short odds and 68.4% at long odds are different numbers here and
-        the same number under `vs X% priced`. So the property that mattered --
-        the reader cannot mistake base rate for skill -- is preserved rather
-        than traded away.
-
-        What IS given up is stated plainly: the implied price itself no longer
-        appears on this line, so a reader can no longer see WHICH prices the
-        branch was betting. That is the branch's mean `q`, and it is still on
-        `market-calibration.html` where the controls live -- the same place
-        the chalk-identity clause was moved to, and for the same reason.
-
-        `units` is not a new computation. `_lean_market_agg` has returned it
-        for every bucket all along, scoped to the same row mask as the record
-        above it, so a band record gets that band's units and the pooled
-        fallback gets the branch's. It was a returned-and-unrendered key,
-        listed as `delegated` in
-        `test_verdict_panel_leaves_no_computed_key_unrendered`; that test now
-        requires it to be RENDERED instead, so the key cannot go quiet again.
-
-        Units, not ROI, and the label says neither. ROI is a rate and units is
-        a total; printing `+1.57u` is unambiguous where `ROI +1.57u` would name
-        one and show the other.
-        """
-        rec = (f"{p['w']}-{p['l']} ({p['actual']:.3f})"
-               f" · {p['units']:+.2f}u")
-        return f"<b>{rec}</b>" if bold else rec
-
-    # The reliability marker stays, in words. It is the plain-English form of
-    # the error bar the numbers no longer print, and at n=17 it is the only
-    # thing stopping 76.5% from reading as a rate you can bank -- so dropping
-    # the `±` makes it MORE load-bearing, not less.
-    # THE PRICE-BAND SELECTION WAS REMOVED 2026-09-16 BECAUSE IT COULD NOT
-    # CHOOSE. It existed to prefer the band containing THIS game's price, on
-    # the sound reasoning that a pooled branch line mixes a .46 underdog lean
-    # with a .72 favourite. That reasoning applies to FOLLOW -- which never
-    # reaches this function, having returned to `_xwoba_side_history` above,
-    # where it bands on delta x moneyline instead.
-    #
-    # On FADE the rule fires only when the leaned side is priced below
-    # THRESHOLD, and the first band is [0, THRESHOLD), so EVERY fade row lands
-    # in it. The band was therefore always `under 45%`, its record was always
-    # bit-identical to the branch's (verified on the committed ledger, n=19,
-    # every key equal), and the label it produced -- `Won (at under 45%)` --
-    # was a qualifier that could not take another value. Same class as the
-    # calibration tile that read `50.0% vs 50.0% implied` forever: a statistic
-    # whose value is fixed by the partition rather than by the data.
-    #
-    # It also read as a second, unexplained `45%` one line under the rule's own
-    # `market gives ATL under 45%`, which is what made it confusing rather than
-    # merely redundant.
-    #
-    # The label now matches `_xwoba_side_history`'s, since both lines describe
-    # the same kind of thing and there is no longer a row set to disambiguate.
-    use = parts
-    rows = [("Past results", _wl_units(use, bold=True))]
-    # The chalk control, and whether it is worth a ROW or only a clause. The
-    # answer differs by branch and is checked rather than assumed:
-    #
-    #   FADE   -- chalk is 13-4 (76.5%) against the branch's 13-4 (76.5%). A
-    #             literal duplicate, because fading a sub-45% lean backs the
-    #             favourite on every row. Printing it twice is the redundancy
-    #             the operator flagged, so the row goes and the CLAIM stays as
-    #             one clause. The claim itself cannot go: a reader shown
-    #             "13-4 (76.5%)" with nothing saying it is the favourite's
-    #             record reads chalk as the rule's own skill, which is the
-    #             named incident behind `Deleting controls as clutter`.
-    #   FOLLOW -- chalk is 228-161 (58.6%) against the branch's 247-142
-    #             (63.5%). Different numbers, so nothing is duplicated and the
-    #             row is the only thing on the card saying whether the model
-    #             beat simply backing the favourite. It stays.
-    # The control must be scored on whatever rows the record above it used:
-    # band chalk for a band record, branch chalk for the pooled fallback.
-    chalk = (ctx or {}).get(("chalk", action))
-    note = ""
-    # Show the control when it SAYS something, and not when it is a copy of
-    # the line above. Measured, and structural rather than incidental: where
-    # the model's side is priced at or above .50 that side IS the favourite,
-    # so chalk backs it too and the two records are equal by construction --
-    # 51-42 in the 50-55% band, 146-69 at 55%+, 13-4 on every fade. Only the
-    # underdog bands differ, and there the gap is the whole point: 42-25 for
-    # the model against 25-42 for chalk at 45-50%.
-    #
-    # This replaces an `action != "FADE"` special case with the property that
-    # case was standing in for, so the new price bands get the same treatment
-    # without a second rule. Subtractive: one branch fewer, and it cannot go
-    # stale the way a hardcoded branch name would.
-    duplicate = chalk and (chalk["w"], chalk["l"]) == (use["w"], use["l"])
-    if chalk and not duplicate:
-        rows.append(("Always chalk, same games", _wl_units(chalk)))
-        note = "Chalk is the yardstick: the favourite on these same games."
-    # FADE carries neither, on the operator's call. The row was a literal
-    # duplicate of the record above it and went first; the identity clause
-    # went with it.
-    #
-    # This is NOT the control being deleted, which `Deleting controls as
-    # clutter` forbids -- that entry's own remedy is to mute a noisy control
-    # or move it, and it is moved. market-calibration.html carries the row AND
-    # the claim together: "Always chalk · MARKET OVER LEAN rows only" beside
-    # "the other side is always the favourite, so the two are the same bet",
-    # which is more than this card ever showed, on the page whose subject is
-    # controls. Verified rendered, not assumed, and pinned by a test below.
-    #
-    # What a reader of the CARD loses is the warning that 13-4 (76.5%) is the
-    # favourite's record rather than the rule's skill. `within noise` still
-    # sits on that row, so the number is not published as reliable; the
-    # attribution now lives one click away.
-    body = "".join(
-        f"<div class='vline'><span class='vk'>{k}</span><span>{v}</span></div>"
-        for k, v in rows)
-    # Directly under the chalk row, before anything else: a note explaining a
-    # row two rows above it is a note the reader has to hunt for.
-    if note:
-        body += f"<div class='vnote'>{note}</div>"
-    # The pooled reference is gone from this card, on the operator's call, and
-    # so is the `within noise` marker that replaced it (2026-09-16). Both were
-    # anchors against reading a thin branch as reliable; what carries that now
-    # is the block's own `not a prediction -- and not a forward test` band plus
-    # the printed `n`, and the error bar itself lives on
-    # market-calibration.html, where `_lean_market_value_cell` renders the same
-    # `excess_se` as a `±`. That is the control MOVED rather than deleted --
-    # the rule `Deleting controls as clutter` states -- and it is worth being
-    # plain that the card is now the weaker of the two surfaces on reliability.
-    #
-    # `ctx["pooled"]` is still computed and still rendered there, so this is
-    # not a value disappearing off every surface.
-    return (
-        "<div class='vprofile'>"
-        f"<div class='vprofile-title'>Past {version} {history_branch} picks · "
-        f"{n} {'game' if n == 1 else 'games'}</div>"
-        # THE DISCOVERY BAND IS GONE FROM THIS CARD, 2026-09-16, on the
-        # operator's call -- the third guard removed from this block in one
-        # day, after the pooled reference row and the `within noise` marker.
-        # What the card retains is its own `n` in the heading above.
-        #
-        # MOVED, NOT DELETED, and verified rather than asserted because this
-        # repo has published that claim falsely before. grades.html carries
-        # "<b>Discovery</b>, not a forward test: the 45% price and .012 |Δ|
-        # gates were chosen after examining these rows", and
-        # market-calibration.html carries "<b>Retrospective</b>: both v2 gates
-        # were chosen after examining these rows; the registered forward
-        # reading starts after <date>". Both render live; a test asserts the
-        # pair so a later trim cannot take the claim off the site entirely.
-        #
-        # It also makes FADE consistent with FOLLOW, which lost its caveat
-        # line to `_xwoba_side_history` earlier on the same grounds. Worth
-        # stating plainly rather than filing as tidy-up: the branch whose
-        # gates were fitted on exactly these 19 rows is now the one surface
-        # that shows their record with no framing at all.
-        f"{body}"
-        "</div>"
-    )
+    return _xwoba_side_history(ctx, delta, selection_ml)
 
 
 def _verdict_html(fav, odds, away_abbr, home_abbr, ctx=None, delta=None):
@@ -4894,8 +4734,8 @@ def _verdict_html(fav, odds, away_abbr, home_abbr, ctx=None, delta=None):
 
     sel_price = None
     if action is None:
-        rule_line = ("<div class='vline'><span class='vk'>Rule</span>"
-                     "<span>abstains — no two-sided price yet</span></div>")
+        rule_line = ("<div class='vline'><span class='vk'>Selection</span>"
+                     "<span>pending — no two-sided price yet</span></div>")
     else:
         if pick is not None:
             sel_price = (odds.get("home_ml") if pick == home_abbr
@@ -4911,13 +4751,16 @@ def _verdict_html(fav, odds, away_abbr, home_abbr, ctx=None, delta=None):
         # it was reasoning about becomes a false claim on the most prominent
         # surface the site has, which is the defect class this repo tracks most
         # closely.
-        public_branch = hybrid_public_label(action)
-        why = (f"the site publishes the model's own side; {_esc(fav)} is the "
-               f"{MODEL_RATE_LABEL} lean and the market is not consulted to "
-               "change it")
+        # No branch name and no arrow. `XWOBA SIDE` was the FOLLOW branch's
+        # public label, so a card still carrying it kept the retired rule's
+        # vocabulary as the most visible copy on the site -- one branch of a
+        # two-branch rule, with the other branch deleted. The heading is what
+        # the row IS, not which arm of a rule produced it.
+        why = (f"{_esc(fav)} is the {MODEL_RATE_LABEL} lean; the market is "
+               "not consulted to change it")
         rule_line = (
-            f"<div class='vline'><span class='vk'>Rule</span>"
-            f"<span><b>{public_branch} → {_esc(pick)}</b>"
+            f"<div class='vline'><span class='vk'>Selection</span>"
+            f"<span><b>{_esc(pick)}</b>"
             + (f" {_fmt_ml(sel_price)}" if sel_price is not None else "")
             + f"</span></div><div class='vnote'>{why}</div>")
 
@@ -5299,7 +5142,9 @@ def _summary_market_line(g, lean=None, delta=None):
     if action is None or pick is None:
         return "Selection pending"
     ml = odds.get("home_ml") if pick == home else odds.get("away_ml")
-    return f"{pick} {_fmt_ml(ml)} · {hybrid_public_label(action)}".strip()
+    # No branch label. Same reason as the card's Selection line: the suffix
+    # was the retired rule's FOLLOW branch name and it is the only arm left.
+    return f"{pick} {_fmt_ml(ml)}".strip()
 
 
 def _summary_team_html(g, side, ctx):
@@ -6822,38 +6667,14 @@ def _american_unit_profit(ml, won):
     return ml / 100.0 if ml > 0 else 100.0 / abs(ml)
 
 
-def recon_grade(lean, home, full_home, full_away):
-    """W/L/T for a reconstructed lean against that game's own final score.
-
-    DERIVED, never stored. The grade is a deterministic function of three
-    write-once columns -- the reconstructed lean and the two finals -- and
-    this repo's standing rule for exactly that shape is to derive it, because
-    a second home for a value can drift from the first. It also makes a
-    PENDING retained row work: `reconstruct_v13` can write its lean today and
-    the grade appears the moment the game settles, where a stored grade would
-    have been NaN forever and the row would have dropped out of the published
-    record on the day it graded.
-
-    Returns None when the game has no final, which is the pending case and
-    not an error.
-    """
-    if not isinstance(lean, str) or not lean or not isinstance(home, str):
-        return None
-    fh = pd.to_numeric(full_home, errors="coerce")
-    fa = pd.to_numeric(full_away, errors="coerce")
-    if pd.isna(fh) or pd.isna(fa):
-        return None
-    if fh == fa:
-        return "T"
-    return "W" if (lean == home) == (fh > fa) else "L"
-
-
-def _recon_grades(g):
-    """`recon_grade` over a frame, as a Series aligned to it."""
-    return pd.Series(
-        [recon_grade(l, h, fh, fa) for l, h, fh, fa in zip(
-            g[V13_RECON_LEAN_COL], g["home"], g["full_home"], g["full_away"])],
-        index=g.index, dtype=object)
+# `recon_grade` / `_recon_grades` / the substitution body moved to
+# `market_backfill` on 2026-09-18 and are aliased here. They were spelled in
+# this file alone while `grade_leans` scored the same rows from the raw
+# ledger, and the two drifted: see `publish_reconstruction` for the
+# measurement. grade_leans cannot import this module, so a rule both need is
+# either in that one or spelled twice.
+recon_grade = _mb_recon_grade
+_recon_grades = _mb_recon_grades
 
 
 def _published_grades(led):
@@ -6895,26 +6716,7 @@ def _published_grades(led):
     g = _record_grades(led)
     if g.empty:
         return g
-    cur = g["model_tag"].astype(str).eq(MODEL_TAG)
-    need = (V13_RECON_BASIS_COL, V13_RECON_LEAN_COL, V13_RECON_NET_COL,
-            "home", "full_home", "full_away")
-    if any(c not in g.columns for c in need):
-        return g[cur].copy()
-    has = (g[V13_RECON_BASIS_COL].notna()
-           & g[V13_RECON_LEAN_COL].notna()
-           & _recon_grades(g).isin(["W", "L", "T"]))
-    out = g[cur | (~cur & has)].copy()
-    if out.empty:
-        return out
-    rebuilt = ~out["model_tag"].astype(str).eq(MODEL_TAG)
-    if rebuilt.any():
-        sub = out.loc[rebuilt]
-        out.loc[rebuilt, "xw_full"] = _recon_grades(sub)
-        out.loc[rebuilt, "xw_lean"] = sub[V13_RECON_LEAN_COL]
-        net = pd.to_numeric(sub[V13_RECON_NET_COL], errors="coerce")
-        out.loc[rebuilt, "xw_net"] = net
-        out.loc[rebuilt, "xw_delta"] = net.abs()
-    return out
+    return _mb_publish_reconstruction(g, MODEL_TAG)
 
 
 def _lean_market_observations(led):
@@ -7022,24 +6824,23 @@ def _lean_market_observations(led):
         for ml, w in zip(obs["close_ml"], obs["won"])
     ]
 
-    # --- the published rule, derived once ---------------------------------
-    # Fade only when BOTH gates are open. Boundary values follow.
-    follow = hybrid_v2.follows(obs["market_p"], obs["delta"])
+    # No `hybrid_*` columns. Six of them were derived here for the retired
+    # rule's branch table, its grades-page tile and the card's branch history,
+    # and all three surfaces came off the pages on 2026-09-18. A column still
+    # computed for a surface that no longer renders it is the
+    # `column carried to no surface` entry, so they went with the renderers
+    # rather than being left for a later reader to describe.
+    #
+    # `hybrid_action` and `attach_hybrid_snapshot` are untouched -- they write
+    # the ledger's pregame capture columns, which four live registrations read
+    # and which cannot be re-derived after the fact.
     lean_won = obs["won"].to_numpy(dtype=float)
-    obs["hybrid_follow"] = follow
-    obs["hybrid_won"] = np.where(follow, lean_won, 1.0 - lean_won)
-    obs["hybrid_p"] = np.where(follow, obs["market_p"], 1.0 - obs["market_p"])
-    obs["hybrid_ml"] = np.where(follow, obs["close_ml"], obs["opp_ml"])
-    obs["hybrid_resid"] = obs["hybrid_won"] - obs["hybrid_p"]
-    obs["hybrid_profit"] = [
-        _american_unit_profit(ml, bool(w))
-        for ml, w in zip(obs["hybrid_ml"], obs["hybrid_won"])
-    ]
 
     # --- controls, on the IDENTICAL rows -----------------------------------
-    # Always-chalk is the control the fade branch has to be read against --
-    # that branch backs the favourite on every row by construction, so the two
-    # must come out equal. Always-home is the coin-flip yardstick.
+    # Always-chalk and always-home are the two trivial baselines the record
+    # has to be read against, and `Deleting controls as clutter` is why they
+    # survive a pass that removed a rule: a retired selection rule is not one
+    # of these.
     #
     # Both are derived HERE, from the same frame as the record, so no surface
     # can score a control over a different row set than the number beside it.
@@ -7074,7 +6875,12 @@ def _lean_market_observations(led):
         for ml, w in zip(home_ml, obs["home_won"])
     ]
 
-    obs = obs[np.isfinite(obs["profit"]) & np.isfinite(obs["hybrid_profit"])
+    # `hybrid_profit` was a term here and is dropped rather than replaced:
+    # it is finite exactly when `hybrid_ml` is, which is `close_ml` on a
+    # followed row and `opp_ml` on a faded one -- and both are already
+    # required finite by the filter above. Removing it moves no row, which
+    # was checked on the committed ledger rather than argued.
+    obs = obs[np.isfinite(obs["profit"])
               & np.isfinite(obs["chalk_profit"])
               & np.isfinite(obs["home_profit"])].copy()
     # Carried as a COLUMN, not an attr: `DataFrame.attrs` is dropped by several
@@ -7136,8 +6942,12 @@ def _lean_market_agg(obs, mask, won="won", p="market_p",
 #
 # Display and monitoring only. The rule never enters a lean and does not bump
 # MODEL_TAG.
+# Imported, never restated -- a second `= 0.45` in this file could drift from
+# the registration. `HYBRID_DELTA_THRESHOLD` was beside it and is deleted: it
+# was read only by the calibration page's gate tiles, which went with the rule.
+# This one survives because `hybrid_action` still needs the gate to write the
+# ledger's pregame capture columns for four live registrations.
 HYBRID_THRESHOLD = hybrid_v2.THRESHOLD
-HYBRID_DELTA_THRESHOLD = hybrid_v2.DELTA_THRESHOLD
 
 # Display bands. Only the first boundary is also the v2 decision gate; the high
 # band remains descriptive and neither band receives its own performance claim.
@@ -7189,23 +6999,14 @@ def published_action(market_p, xw_net):
     return None if hybrid_action(market_p, xw_net) is None else "FOLLOW"
 
 
-def hybrid_public_label(action):
-    """Plain-language public label for an internal Hybrid branch code.
-
-    The FADE branch was published as "MARKET FAVORITE", which names the ticket
-    and hides the decision. Every such selection IS the favourite -- that is a
-    property of the threshold, not of the rule -- but what the rule did was
-    prefer the market's read to the model's on a game the model still chose.
-    The market-overpricing note in CLAUDE.md measures the difference: the 20
-    favourites this branch takes beat their price by +11.5pp against +5.0pp
-    for the favourites it passes on, so "always chalk" is the control, not the
-    description.
-
-    Every surface reads the label from here. It used to be restated as a
-    literal at seven call sites, which is how a rename becomes a page that
-    disagrees with itself.
-    """
-    return {"FOLLOW": "XWOBA SIDE", "FADE": "MARKET OVER LEAN"}.get(action, "")
+# `hybrid_public_label` stood here, mapping FOLLOW/FADE to "XWOBA SIDE" and
+# "MARKET OVER LEAN". Both labels came off the pages on 2026-09-18 with the
+# rule, leaving it with no production caller, so it is deleted at the removal
+# rather than left for a reference count to find later.
+#
+# What replaced it is not another label: the card heads its row `Selection`
+# and names the club. A branch name is only meaningful when there is more
+# than one branch.
 
 
 def hybrid_selection(lean, away_abbr, home_abbr, market_p, xw_net):
@@ -7353,48 +7154,37 @@ def _lean_market_value_analysis(led):
     else:
         slope = intercept = slope_se = np.nan
 
-    follow = obs["hybrid_follow"]
-    hyb = dict(won="hybrid_won", p="hybrid_p", resid="hybrid_resid",
-               profit="hybrid_profit")
+    # No branch rows. The retired rule's two-branch table, its gate tiles and
+    # the `Always chalk · <FADE> rows only` row that made the fade branch
+    # legible were all removed from the public pages on 2026-09-18, on the
+    # operator's instruction: a rule the site does not run has no selections to
+    # publish, and a caveat about gates the reader can no longer see describes
+    # something invisible.
+    #
+    # What is NOT removed is the rule's instrument. `hybrid_action` still
+    # writes the ledger's capture columns and `ledger_report.txt` still prints
+    # every registration's forward block -- four live registrations read those,
+    # and a decision-time price that was never captured cannot be re-derived.
+    # Retiring a rule and deleting the thing that measures it are different
+    # acts, and only the first is done here.
     chalk = dict(won="chalk_won", p="chalk_p", resid="chalk_resid",
                  profit="chalk_profit")
-    all_rows = obs["won"].notna()
-    branch_rows = [
-        ("XWOBA SIDE · q ≥ 45% or |Δ| ≥ .012",
-         _lean_market_agg(obs, follow, **hyb)),
-        # Plain "<": the table escapes every label through `_esc`, so a
-        # pre-escaped entity here would render as literal "&lt;".
-        (f"{hybrid_public_label('FADE')} · q < 45% and |Δ| < .012",
-         _lean_market_agg(obs, ~follow, **hyb)),
-        ("Hybrid, both branches", _lean_market_agg(obs, all_rows, **hyb)),
-    ]
     home = dict(won="home_won", p="home_p", resid="home_resid",
                 profit="home_profit")
+    all_rows = obs["won"].notna()
     control_rows = [
         # The published selection, not a control -- it leads the table because
-        # every row beneath it is read against it, which is the reverse of the
-        # arrangement that shipped while the hybrid rule was live. Named for
-        # what it is so a reader cannot take the retired rule above for the
-        # thing on offer.
+        # every row beneath it is read against it.
         (f"{PUBLIC_MODEL_NAME} · published side", _lean_market_agg(obs, all_rows)),
         ("Always chalk", _lean_market_agg(obs, all_rows, **chalk)),
         ("Always home", _lean_market_agg(obs, all_rows, **home)),
-        # The row that makes the fade branch legible: it must match the FADE
-        # line above EXACTLY. If it ever does not, the two were computed over
-        # different rows and that is a bug rather than a discovery.
-        (f"Always chalk · {hybrid_public_label('FADE')} rows only",
-         _lean_market_agg(obs, ~follow, **chalk)),
     ]
     return {
         "obs": obs,
         "n": int(len(obs)),
-        "n_fade": int((~follow).sum()),
-        "threshold": HYBRID_THRESHOLD,
-        "delta_threshold": HYBRID_DELTA_THRESHOLD,
         "slope": float(slope),
         "slope_se": float(slope_se),
         "intercept": float(intercept),
-        "branch_rows": branch_rows,
         "control_rows": control_rows,
     }
 
@@ -7464,55 +7254,32 @@ def _render_lean_market_value_panel(led):
     # the opposite.
     summary = (
         f"<div class='gr-head'><h2 class='gr-h1'>{PUBLIC_MODEL_NAME}</h2>"
-        f"<div class='gr-lead'>Publishes <b>{hybrid_public_label('FOLLOW')}</b> "
-        "on every game it decides. The gate below is the <b>retired</b> "
-        f"selection rule, kept as a control: it faded to "
-        f"<b>{hybrid_public_label('FADE')}</b> when q was under "
-        f"{100 * a['threshold']:.0f}% and |Δ| under "
-        f"{a['delta_threshold']:.3f}.</div></div>"
+        "<div class='gr-lead'>Publishes the model's own side on every game "
+        "it decides, and consults the market for nothing.</div></div>"
         "<div class='gr-summary'>"
         f"<div class='gr-stat'><div class='l'>Priced decisions</div>"
         f"<div class='v'>{a['n']}</div>"
         "<div class='s'>settled full-game leans</div></div>"
-        f"<div class='gr-stat'><div class='l'>Retired fade gate</div>"
-        f"<div class='v'>&lt;{100 * a['threshold']:.0f}% + &lt;{a['delta_threshold']:.3f}</div>"
-        "<div class='s'>lean price q plus absolute model delta</div></div>"
-        f"<div class='gr-stat'><div class='l'>It would have changed</div>"
-        f"<div class='v'>{a['n_fade']}</div>"
-        f"<div class='s'>{100 * a['n_fade'] / a['n']:.1f}% of selections</div></div>"
         f"<div class='gr-stat'><div class='l'>Market response</div>"
         f"<div class='v'>{slope_txt}</div>"
         f"<div class='s'>{slope_sub}</div></div>"
         "</div>"
     )
-    note = ("<div class='gr-note'>Scored at each selection's devigged close. "
-            "<b>Retrospective</b>: both gates of the retired rule were chosen "
-            "after examining these rows; the registered forward reading starts "
-            f"after {hybrid_v2.REGISTERED_ON}.</div>")
-    branch_head = (
-        "<div class='gr-head'><h2 class='gr-h1'>By branch</h2>"
-        "<div class='gr-lead'>What the <b>retired</b> rule would have "
-        "selected, and how those tickets settled.</div></div>"
-    )
+    note = ("<div class='gr-note'>Scored at each selection's devigged "
+            "close.</div>")
     control_head = (
         "<div class='gr-head' style='margin-top:18px'><h2 class='gr-h1'>"
-        "Controls</h2><div class='gr-lead'>The same rows, three other "
+        "Controls</h2><div class='gr-lead'>The same rows, two other "
         "ways. A record is only a result against these.</div></div>"
     )
-    # The card's per-game panel already says this in words; the page that
-    # prints the two lines four rows apart did not. Adjacency is not enough
-    # when two published records are identical to the decimal -- without a
-    # sentence a reader sees duplicated data or a bug, rather than the point.
-    control_note = (
-        f"<div class='gr-note'>The last row must equal <b>"
-        f"{hybrid_public_label('FADE')}</b> above: on rows below both gates "
-        "the other side is always the favourite, "
-        "so the two are the same bet. A difference is a bug."
-        + _pickem_note(a["obs"]) + "</div>"
-    )
-    return (summary + note + branch_head
-            + _lean_market_value_table(a["branch_rows"], first_head="Branch")
-            + control_head
+    # The chalk-identity clause that stood here had one subject -- the retired
+    # rule's fade branch -- and went with it. `_pickem_note` did not: it says
+    # how many always-chalk rows rest on the tie-break rather than on a price,
+    # and always-chalk is a surviving control.
+    control_note = (_pickem_note(a["obs"]) or "").strip()
+    control_note = (f"<div class='gr-note'>{control_note}</div>"
+                    if control_note else "")
+    return (summary + note + control_head
             + _lean_market_value_table(a["control_rows"], first_head="Control")
             + control_note)
 
@@ -7622,51 +7389,43 @@ def _baseline_controls(g):
     return out
 
 
-# Emergency kill switch only: raise it to suppress branch records entirely.
-# It is 1 rather than a sample floor for ONE reason now, and the other is
-# recorded because it was removed rather than found wanting: suppressing a
-# number invites someone to recompute it without the caveat, which is the rule
-# this repo settled when it deleted `N_FIT_MIN`. That stands on its own.
+# `BRANCH_RECORD_MIN` and the per-game branch price bands stood here and are
+# deleted with the surfaces that read them. The floor gated
+# `("branch", action)` / `("chalk", action)`, and the bands gated a per-branch
+# price split; the retired hybrid rule came off every user-facing page on
+# 2026-09-18, so both had zero production callers the moment that landed.
 #
-# What went on 2026-09-16 is the second reason -- "a thin branch is
-# self-describing, because `_branch_read` says 'within noise' whenever the
-# spread cannot support more". The marker was removed from the card on the
-# operator's call, so that clause is void and is not left here to read as
-# though it still holds. A floor is NOT the answer to its absence: a hard
-# `>= N` is the threshold cliff this repo has removed four times, and the
-# printed `n` plus the block's discovery band are what a reader has.
-BRANCH_RECORD_MIN = 1
-
-# Price bands for the per-game branch record, on the model side's own no-vig
-# price. Edges are imported or definitional, never fitted: HYBRID_THRESHOLD is
-# the registered gate, .50 is what makes a side the underdog, and the mirror
-# of the gate closes the pair. The same three edges the magnitude-by-market
-# grid in ledger_report.txt uses.
-#
-# A lean priced under .50 IS the underdog, so this one cut already separates
-# underdog leans from favourite leans -- crossing price with "lean type" would
-# only re-split cells that are each wholly one or the other.
+# Deleted AT the removal rather than found days later: this repo tracks a
+# callee-outliving-its-call-site pattern and the cheap detection is a
+# reference count run before the edit. The tests that pinned them are
+# restated, not dropped -- what they really protected is that a thin cell
+# still prints its own `n`, and that survives on the card.
 
 
 def hybrid_branch_records():
-    """Current-family records for each hybrid branch, plus its chalk control.
+    """Current-family records the per-game card reads, keyed by cell.
 
-    Keys: ``("branch", "FOLLOW"|"FADE")`` for the rule's own record,
-    ``("chalk", ...)`` for always-chalk on the IDENTICAL rows, and ``"pooled"``
-    for the whole family. Scored on `_record_grades`, because pooling older
+    Keys: ``("delta_price_follow", band, rung)`` for the |delta| x
+    closing-price cell the card shows one of, ``"pooled"`` for the whole
+    family, and ``"n"``. Scored on `_record_grades`, because pooling older
     prediction math would answer a different question.
 
-    THESE ARE DISCOVERY ROWS. The v2 gates were chosen after this sample, so a
-    branch's excess here is not evidence the rule works -- `hybrid_v2.py`
-    holds the forward registration and is the only thing that can answer that.
-    Every surface rendering these says so; that is not decoration.
+    **The retired rule's keys are gone**, on the operator's 2026-09-18
+    instruction to take it off every user-facing page: ``("branch", …)`` and
+    ``("chalk", …)`` fed `_branch_history`'s FADE body, which became
+    unreachable at v13, and ``"threshold"`` had no reader at all. The cell
+    key keeps its historical name -- renaming it would move the one thing
+    `grade_leans._selection_price_matrix_lines` is held equal to by a test,
+    for no gain.
 
-    The chalk control is keyed per branch on purpose. Pooled it would be one
-    number a reader has to hold against two, and on the FADE branch it is not a
-    comparison at all but an identity: fading a sub-threshold lean backs the
-    favourite on every row, so `("chalk", "FADE")` and `("branch", "FADE")`
-    must come out equal. If they ever differ, the row sets have drifted apart
-    and that is a bug, not a finding.
+    The cells score the LEAN's own columns over every decided row. They were
+    the retired rule's selected side over its FOLLOW subset until the same
+    commit, which on a faded row meant the opposite club at the opposite
+    price -- and a row set defined by a rule nothing runs.
+
+    These remain DISCOVERY rows in the sense every retrospective is, and the
+    always-chalk / always-home controls that make them readable live on
+    `market-calibration.html`, scored on the identical rows.
     """
     led = load_ledger_df()
     if led is None:
@@ -7674,39 +7433,40 @@ def hybrid_branch_records():
     obs = _lean_market_observations(led)
     if obs.empty:
         return {}
-    out = {"n": int(len(obs)), "threshold": HYBRID_THRESHOLD}
+    out = {"n": int(len(obs))}
     # The pooled reference the per-game panel prints beside its branch. Same
     # rows, same aggregate, several times the precision.
     pooled = _lean_market_agg(obs, obs["won"].notna())
     if pooled:
         out["pooled"] = pooled
-    # Cross the fixed |delta| bands with the selected side's closing-price rung.
-    # This is an actual current-rule Hybrid slice: MARKET OVER LEAN rows are
-    # excluded before the record is calculated. Counts are intentionally
-    # retained even when thin because the public card labels that limitation.
+    # Cross the fixed |delta| bands with the leaned side's closing-price rung.
+    # Counts are intentionally retained even when thin because the public card
+    # prints its own `n` beside every cell.
+    #
+    # The LEAN's own columns and every decided row. Until 2026-09-18 this
+    # scored `hybrid_won` / `hybrid_p` / `hybrid_ml` masked to `hybrid_follow`
+    # -- the retired rule's selected side, over the subset it would have
+    # followed. With the rule off the pages that is a row set defined by
+    # something nothing runs, and on a faded row it named the opposite club at
+    # the opposite price. `grade_leans._selection_price_matrix_lines` moved to
+    # the same basis in the same commit, and a test holds the two equal cell
+    # by cell.
+    #
+    # The `("branch", action)` and `("chalk", action)` keys went with the
+    # renderer that read them: `_branch_history`'s FADE body is unreachable
+    # once `published_action` can only return FOLLOW, and a key computed for
+    # an unreachable renderer is the `column carried to no surface` entry in
+    # its hardest-to-spot form.
     delta = pd.to_numeric(obs["delta"], errors="coerce")
-    hybrid_ml = pd.to_numeric(obs["hybrid_ml"], errors="coerce")
-    price_rung = hybrid_ml.map(
+    lean_ml = pd.to_numeric(obs["close_ml"], errors="coerce")
+    price_rung = lean_ml.map(
         lambda value: _ladder_rung(float(value)) if pd.notna(value) else None)
     for i, (lo, hi) in enumerate(_LEAN_HISTORY_BINS):
-        delta_mask = delta.ge(lo) & delta.lt(hi) & obs["hybrid_follow"]
+        delta_mask = delta.ge(lo) & delta.lt(hi)
         for _rung_lo, _rung_hi, rung in _ODDS_LADDER:
-            model = _lean_market_agg(
-                obs, delta_mask & price_rung.eq(rung), won="hybrid_won",
-                p="hybrid_p", resid="hybrid_resid", profit="hybrid_profit")
+            model = _lean_market_agg(obs, delta_mask & price_rung.eq(rung))
             if model:
                 out[("delta_price_follow", i, rung)] = {"model": model}
-    for action, mask in (("FOLLOW", obs["hybrid_follow"]),
-                         ("FADE", ~obs["hybrid_follow"])):
-        parts = _lean_market_agg(obs, mask, won="hybrid_won",
-                                 p="hybrid_p", resid="hybrid_resid",
-                                 profit="hybrid_profit")
-        if parts and parts["n"] >= BRANCH_RECORD_MIN:
-            out[("branch", action)] = parts
-        ctl = _lean_market_agg(obs, mask, won="chalk_won", p="chalk_p",
-                               resid="chalk_resid", profit="chalk_profit")
-        if ctl and ctl["n"] >= BRANCH_RECORD_MIN:
-            out[("chalk", action)] = ctl
     return out
 
 
@@ -8328,11 +8088,9 @@ def render_grades_html(built_txt):
         # sentence was the second half of a two-branch rule description. The
         # rule has one branch now -- publish the lean -- so the clause named
         # an alternative that does not exist.
-        notes = [f"<b>{PUBLIC_MODEL_NAME}</b> publishes "
-                 f"<b>{hybrid_public_label('FOLLOW')}</b>, the model's own "
-                 "side, on every game it decides; the hybrid selection rule "
-                 "is retired and its record is shown beside this one as a "
-                 "control"]
+        notes = [f"<b>{PUBLIC_MODEL_NAME}</b> publishes the model's own side "
+                 "on every game it decides, and consults the market for "
+                 "nothing"]
         # EVERY TILE BELOW IS SCORED ON ONE ROW SET: current family, decided,
         # settled, and carrying a two-sided close. That is stricter than the
         # decided set this header used to score, and deliberately so -- the
@@ -8410,16 +8168,12 @@ def render_grades_html(built_txt):
                     sub += f" · n={w + l}"
                 stat(ctl_labels[key], f"{w}-{l}", sub, tone="dim")
         else:
-            hyb = dict(won="hybrid_won", p="hybrid_p", resid="hybrid_resid",
-                       profit="hybrid_profit")
             priced = obs["won"].notna()
             # v13: the published selection is the lean. `retired_rule` keeps
             # the old headline computable so the page can show what the
             # retired hybrid would have scored on the same rows, which is the
             # only honest way to publish a removal.
             rule = _lean_market_agg(obs, priced)
-            retired_rule = _lean_market_agg(obs, priced, **hyb)
-            n_fade = int((~obs["hybrid_follow"]).sum())
             # "at the close" is the basis, not filler. Every figure in this
             # strip is scored at the close, while the table below shows each
             # row's LOCKED action -- and the two can disagree, because a
@@ -8465,15 +8219,18 @@ def render_grades_html(built_txt):
             rule_head = PUBLIC_MODEL_NAME
             stat(rule_head, f"{rule['w']}-{rule['l']}", _pub(rule),
                  tone="cool" if rule.get("roi", 0) > 0 else "warm")
-            # The retired rule, on the identical rows. `Deleting controls as
-            # clutter` applies to a rule that has just been removed exactly as
-            # it does to a baseline: a reader who remembers the old headline
-            # is owed the number it would have shown, beside the one that
-            # replaced it, rather than having it vanish.
-            if retired_rule:
-                stat("Retired hybrid rule",
-                     f"{retired_rule['w']}-{retired_rule['l']}",
-                     _pub(retired_rule), tone="dim")
+            # The `Retired hybrid rule` tile stood here and is GONE, on the
+            # operator's 2026-09-18 instruction to take the retired rule off
+            # every user-facing page.
+            #
+            # `Deleting controls as clutter` is the entry to read against
+            # this, and it survives: the two things it protects -- a trivial
+            # baseline beside the record -- are `Always chalk` and
+            # `Always home`, and both are still rendered below on the
+            # identical rows. What went is a retired SELECTION RULE, which was
+            # never one of those. Its forward reading is untouched in
+            # data/ledger_report.txt, which is the artifact that decides
+            # whether it worked.
             for lab, cols in (
                 ("Always chalk", dict(won="chalk_won", p="chalk_p",
                                       resid="chalk_resid",
@@ -8497,11 +8254,16 @@ def render_grades_html(built_txt):
         # makes it load-bearing in a way its first version only anticipated.
         # It is not optional copy, and `test_the_discovery_claim_survives_off_
         # the_card` pins that it and the calibration panel's twin both render.
-        if not obs.empty:
-            notes.append(
-                "<b>Discovery</b>, not a forward test: the retired rule's 45% "
-                "price and .012 |Δ| gates were chosen after examining these "
-                "rows. Registered v2: data/ledger_report.txt")
+        # The `Discovery` note went with its subject. Its whole content was
+        # that the retired rule's 45% and .012 gates were fitted on these
+        # rows, and no gate, branch or rule record appears on any page now --
+        # a caveat about something the reader cannot see is the "note
+        # describing an invisible diagnostic" entry, and the honest move is
+        # to delete the note when the thing it qualifies goes.
+        #
+        # Nothing published here is gated on a fitted threshold any more: the
+        # selection is the model's own lean on every decided row. The rule's
+        # registered forward reading is still in data/ledger_report.txt.
         if show_ml:
             # One heading, two prices, and every aggregate above scored at the
             # close. Both facts are claims this page has to carry, but they are
@@ -8514,16 +8276,14 @@ def render_grades_html(built_txt):
             # locked branch, and the two straddle the gate on 2026-09-07
             # NYM@MIA (locked .4576 FOLLOW, closed .4406). Printed as a tile it
             # invites a reader to count fade rows and find a different number.
-            ml_note = ("<b>ML</b> is the selection's price, locked pregame "
-                       "where the row has one. Records are scored at the close")
-            if not obs.empty:
-                # Guarded: `rule` and `n_fade` exist only on the priced path.
-                # Unguarded this raised NameError on an empty market join --
-                # the path that fires whenever the backfill has not run.
-                ml_note += (f", where {n_fade} of {rule['n']} went to the "
-                            "market; each row shows the branch its "
-                            "<b>locked</b> price chose")
-            notes.append(ml_note)
+            # The trailing clause counted the rows the retired rule would
+            # have handed to the market and named the branch each row's
+            # locked price chose. Both are properties of the rule, so both
+            # went with it. What the reader still needs is the ML column's
+            # own basis, which is what remains.
+            notes.append("<b>ML</b> is the selection's price, locked pregame "
+                         "where the row has one. Records are scored at the "
+                         "close")
         lock = _lock_note(led)
         if lock:
             notes.append(lock)

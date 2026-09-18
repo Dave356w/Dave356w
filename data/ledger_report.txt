@@ -113,39 +113,39 @@ xwOBA |delta| x saved-pregame market probability (current record family; descrip
     all q          n=221    134-87 (0.606)   mean q .555   excess   +5.1 +-  3.3 pp   EV   +2.6 pp
   best-cell reference: the best of these 17 non-empty cells averages +47.3 pp of excess under 'every game settles at its own price';
     the observed best is +58.3 pp, |delta| [0.030, 0.050) q <.450 (n=1) -- ABOVE it, which a search returns about half the time under no effect, so it is not a finding either. A grid is a search, so a cell is read against that reference, never against zero.
-xwOBA |delta| x SELECTED-side closing price (hybrid v2 FOLLOW branch; the grid the game card shows one cell of)
-  rows: 422 followed of 444 decidable; 22 faded rows excluded (a fade backs the favourite by construction, so it is a different bet).
-  Price basis: the selection's own CLOSING moneyline -- not the saved pregame price the block above uses, so the two grids score different row sets on purpose.
-  Retrospective: both v2 gates were chosen on these rows. Cells are descriptive history, not a validated mapping from |delta| to a win probability, and no cell is a registered rule.
+xwOBA |delta| x LEANED-side closing price (the grid the game card shows one cell of)
+  rows: all 452 decidable rows of the current family. The v13 selection IS the lean, so no row is excluded for a branch; this block scored the retired rule's FOLLOW subset until 2026-09-18.
+  Price basis: the lean's own CLOSING moneyline -- not the saved pregame price the block above uses, so the two grids score different row sets on purpose.
+  Cells are descriptive history, not a validated mapping from |delta| to a win probability, and no cell is a registered rule.
   n and W-L
     |delta|               ≤-250   -249/-175   -174/-130   -129/-100   +100/+129   +130/+174   +175/+249       ≥+250         ROW
     ---------------------------------------------------------------------------------------------------------------------------
-    [0.000, 0.010)            ·      11:6-5    30:19-11    38:22-16     26:17-9           ·           ·           ·   105:64-41
-    [0.010, 0.020)        1:1-0     15:11-4    36:22-14    41:20-21      15:8-7       4:3-1           ·           ·   112:65-47
-    [0.020, 0.030)        3:2-1     16:11-5    38:26-12    22:12-10       9:5-4       5:2-3           ·           ·    93:58-35
-    [0.030, 0.050)        4:4-0     28:22-6     32:23-9      12:4-8       5:2-3           ·           ·           ·    81:55-26
-    [0.050, inf)          7:6-1     15:10-5       8:6-2       1:1-0           ·           ·           ·           ·     31:23-8
-    COLUMN              15:13-2    85:60-25   144:96-48   114:59-55    55:32-23       9:5-4           ·           · 422:265-157
+    [0.000, 0.010)            ·       5:4-1    35:20-15    46:21-25    30:20-10      12:7-5           ·           ·   128:72-56
+    [0.010, 0.020)        1:1-0     17:13-4     34:28-6    39:24-15     18:10-8       8:5-3           ·           ·   117:81-36
+    [0.020, 0.030)        2:2-0     23:16-7    34:16-18    25:13-12       6:2-4       3:0-3           ·           ·    93:49-44
+    [0.030, 0.050)        3:2-1     29:21-8     36:28-8      12:5-7       4:2-2           ·           ·           ·    84:58-26
+    [0.050, inf)          9:8-1      12:8-4       8:5-3       1:1-0           ·           ·           ·           ·     30:22-8
+    COLUMN              15:13-2    86:62-24   147:97-50   123:64-59    58:34-24    23:12-11           ·           · 452:282-170
   flat-stake units (1u a game, at each row's own close)
     |delta|               ≤-250   -249/-175   -174/-130   -129/-100   +100/+129   +130/+174   +175/+249       ≥+250         ROW
     ---------------------------------------------------------------------------------------------------------------------------
-    [0.000, 0.010)            ·       -1.94       +1.98       +3.62       +9.49           ·           ·           ·      +13.15
-    [0.010, 0.020)        +0.36       +1.76       +0.93       -2.81       +1.67       +3.27           ·           ·       +5.19
-    [0.020, 0.030)        -0.21       +0.61       +5.65       +0.57       +1.58       +0.04           ·           ·       +8.24
-    [0.030, 0.050)        +1.33       +4.76       +6.60       -4.53       -0.63           ·           ·           ·       +7.53
-    [0.050, inf)          +1.12       -0.09       +1.78       +0.82           ·           ·           ·           ·       +3.62
-    COLUMN                +2.61       +5.09      +16.94       -2.33      +12.11       +3.31           ·           ·      +37.73
+    [0.000, 0.010)            ·       +1.18       -1.50       -6.11      +11.97       +5.50           ·           ·      +11.04
+    [0.010, 0.020)        +0.36       +2.60      +12.96       +6.37       +3.02       +4.31           ·           ·      +29.63
+    [0.020, 0.030)        +0.79       +1.15       -7.01       -0.39       -1.68       -3.00           ·           ·      -10.14
+    [0.030, 0.050)        -0.31       +2.29      +10.96       -2.69       +0.37           ·           ·           ·      +10.63
+    [0.050, inf)          +1.76       -0.04       +0.17       +0.82           ·           ·           ·           ·       +2.71
+    COLUMN                +2.61       +7.17      +15.59       -2.00      +13.68       +6.81           ·           ·      +43.86
   beat its own price (pp +- se)
     |delta|               ≤-250   -249/-175   -174/-130   -129/-100   +100/+129   +130/+174   +175/+249       ≥+250         ROW
     ---------------------------------------------------------------------------------------------------------------------------
-    [0.000, 0.010)            ·       -9±14        +6±9        +6±8      +19±10           ·           ·           ·        +7±5
-    [0.010, 0.020)       +28±45       +9±12        +4±8        -3±8       +7±13      +35±24           ·           ·        +4±5
-    [0.020, 0.030)        -3±27       +4±12       +10±8       +3±11      +10±17       +0±22           ·           ·        +7±5
-    [0.030, 0.050)       +28±22       +13±9       +14±9      -18±14       -6±22           ·           ·           ·        +8±5
-    [0.050, inf)         +14±17       +2±12      +15±17      +46±50           ·           ·           ·           ·       +10±9
-    COLUMN               +16±12        +6±5        +9±4        -0±5       +12±7      +16±16           ·           ·        +7±2
-  best-cell reference: the best of these 25 non-empty cells averages +40.2 pp of excess under 'every game settles at its own price'; the observed best is +46.0 pp, |delta| [0.050, inf) -129 to -100 (n=1) -- ABOVE it, which a search returns about half the time under no effect, so it is not a finding either. A grid is a search, so a cell is read against that reference, never against zero.
-  pooled over all 422 followed rows: 265-157 (0.628)   excess +6.6 +- 2.4 pp   +37.73u. The margins are better estimated than any cell; read them first.
+    [0.000, 0.010)            ·      +16±21        -0±8        -6±7       +21±9      +19±14           ·           ·        +5±4
+    [0.010, 0.020)       +28±45      +13±12       +24±8       +10±8      +10±12      +22±17           ·           ·       +15±5
+    [0.020, 0.030)       +30±32       +5±10       -10±8       +1±10      -12±20      -39±28           ·           ·        -4±5
+    [0.030, 0.050)        -3±26        +7±9       +20±8      -11±14       +4±25           ·           ·           ·        +9±5
+    [0.050, inf)         +17±15       +2±14       +3±17      +46±50           ·           ·           ·           ·        +8±9
+    COLUMN               +16±12        +8±5        +8±4        +0±5       +13±7      +12±10           ·           ·        +7±2
+  best-cell reference: the best of these 26 non-empty cells averages +40.8 pp of excess under 'every game settles at its own price'; the observed best is +46.0 pp, |delta| [0.050, inf) -129 to -100 (n=1) -- ABOVE it, which a search returns about half the time under no effect, so it is not a finding either. A grid is a search, so a cell is read against that reference, never against zero.
+  pooled over all 452 rows: 282-170 (0.624)   excess +6.9 +- 2.3 pp   +43.86u. The margins are better estimated than any cell; read them first.
 xwOBA F5 by |Δ| tercile:
   low  68-67-13  (0.504)   (Δ 0.000–0.012, n=148)
   mid  56-65-27  (0.463)   (Δ 0.012–0.026, n=148)

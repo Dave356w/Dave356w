@@ -65,7 +65,8 @@ import requests
 from market_backfill import (MARKET_COLS, ODDS_LADDER, V13_RECON_COLS,
                              V13_RECON_TEXT_COLS, attach_market,
                              breakeven_prob, chalk_is_home, excess_se,
-                             is_pickem, ladder_rung, metric_label)
+                             is_pickem, ladder_rung, metric_label,
+                             publish_reconstruction)
 from actuals_backfill import (ACTUAL_COLS, attach_actuals, actuals_summary,
                               actuals_family_line, components_summary,
                               target_reliability,
@@ -1400,7 +1401,7 @@ def _market_percentile_band_lines(led, bands=8):
 
 
 def _selection_price_matrix_lines(g):
-    """|xw_net| bands x the SELECTED side's closing price rung, FOLLOW only.
+    """|xw_net| bands x the LEAN's own closing price rung, every decided row.
 
     This is the grid the per-game card publishes one cell of, brought into the
     internal artifact. It is deliberately NOT the block above it, and the two
@@ -1408,38 +1409,62 @@ def _selection_price_matrix_lines(g):
 
       * that grid bands the market's own probability `q` of the LEAN and reads
         saved PREGAME prices with no close fallback, so it scores fewer rows;
-      * this one buckets the published SELECTION on the closing moneyline
+      * this one buckets the published selection on the closing moneyline
         ladder, which is the axis a reader of the card sees, and scores every
-        followed row of the current family.
+        decided row of the current family.
 
-    Follow branch only. The fade rows are a different bet -- by construction
-    they back the favourite -- so pooling them would put two rules in one cell.
-    The header states that denominator rather than leaving it to subtraction.
+    **It scored FOLLOW rows only until 2026-09-18, and that filter went with
+    the rule.** v13 retires the hybrid selection, so the published side is the
+    model's own lean on every decided game -- and a grid that still excluded
+    the 25 rows the retired rule would have faded would be cutting the ledger
+    on a row set defined by a rule nothing runs. The card changed in the same
+    commit for the same reason, and a test holds the two equal cell by cell.
 
-    Arithmetic comes from `hybrid_v2.apply_rule`, never a local copy, and the
-    rungs from `market_backfill.ladder_rung`, so a cell here and the same cell
-    on the card cannot drift apart. That equality is the whole point of adding
-    the block: the site began publishing per-cell units with no counterpart in
-    this file, which is the artifacts-disagreeing defect waiting to happen.
+    The LEAN columns, not the bet columns. `ml_bet` / `p_bet` / `bet_won` name
+    the side the retired rule selected, which on a faded row is the opposite
+    club at the opposite price; dropping the filter while keeping them would
+    have silently scored 25 games at the wrong side's odds. `lean_ml`,
+    `model_side_p`, `lean_won` and `lean_profit` are the lean's own throughout.
 
-    Retrospective. Both v2 gates were chosen after examining these rows, so no
-    cell here is out-of-sample, and a grid is a search -- the null-max line at
-    the foot is the reference a cell is read against, never zero.
+    `hybrid_v2.apply_rule` is still where the arithmetic comes from, never a
+    local copy, and the rungs from `market_backfill.ladder_rung`, so a cell
+    here and the same cell on the card cannot drift apart. That equality is
+    the whole point of the block: the site publishes per-cell units and this
+    file is their counterpart. Reading the lean columns off a function that
+    also computes a retired rule's branch is deliberate -- it is the one home
+    for the ledger-to-bet mapping, and a second spelling is the defect this
+    repo tracks most closely.
+
+    Retrospective, and a grid is a search -- the null-max line at the foot is
+    the reference a cell is read against, never zero.
     """
     import hybrid_v2
+    # PUBLISHED rows, not raw ledger rows. This block calls itself the grid
+    # the game card shows one cell of, and until this was added it was not:
+    # the card bands on the reconstructed delta and scores the re-decided
+    # lean, while this read `xw_net` / `xw_lean` / `xw_full` straight off the
+    # ledger, which on a retained row is v12's. Measured before the fix --
+    # 444 of 452 deltas differed by up to 0.0215 (wider than a band), the
+    # lean differed on 39 rows, and 24 of 26 cells disagreed.
+    #
+    # `publish_reconstruction` is the one home for that substitution and
+    # build_site renders from the same function, so the two cannot drift
+    # again. Scoped to THIS block: the family history lines above and every
+    # registration keep scoring the lean each build actually published, which
+    # is the difference `_published_basis_lines` declares on the artifact.
+    g = publish_reconstruction(g, MODEL_TAG)
     d = hybrid_v2.decidable(g)
     if d is None or d.empty:
         return []
     h = hybrid_v2.apply_rule(d)
-    h = h[h["follow"].astype(bool)]
     if h.empty:
         return []
 
     mag = pd.to_numeric(h["xw_net"], errors="coerce").abs().to_numpy(dtype=float)
-    ml = pd.to_numeric(h["ml_bet"], errors="coerce").to_numpy(dtype=float)
-    p = pd.to_numeric(h["p_bet"], errors="coerce").to_numpy(dtype=float)
-    profit = pd.to_numeric(h["profit"], errors="coerce").to_numpy(dtype=float)
-    won = h["bet_won"].to_numpy(dtype=bool)
+    ml = pd.to_numeric(h["lean_ml"], errors="coerce").to_numpy(dtype=float)
+    p = pd.to_numeric(h["model_side_p"], errors="coerce").to_numpy(dtype=float)
+    profit = pd.to_numeric(h["lean_profit"], errors="coerce").to_numpy(dtype=float)
+    won = h["lean_won"].to_numpy(dtype=bool)
     rung = np.array([ladder_rung(float(m)) if np.isfinite(m) else None
                      for m in ml], dtype=object)
     bands = list(zip(FIXED_MAGNITUDE_EDGES, FIXED_MAGNITUDE_EDGES[1:]))
@@ -1462,17 +1487,16 @@ def _selection_price_matrix_lines(g):
 
     n_all, w_all = len(h), int(won.sum())
     out = [
-        f"{MODEL_METRIC_LABEL} |delta| x SELECTED-side closing price "
-        f"(hybrid v2 FOLLOW branch; the grid the game card shows one cell of)",
-        f"  rows: {n_all} followed of {len(d)} decidable; "
-        f"{int(len(d) - n_all)} faded rows excluded (a fade backs the favourite "
-        f"by construction, so it is a different bet).",
-        "  Price basis: the selection's own CLOSING moneyline -- not the saved "
+        f"{MODEL_METRIC_LABEL} |delta| x LEANED-side closing price "
+        f"(the grid the game card shows one cell of)",
+        f"  rows: all {n_all} decidable rows of the current family. The v13 "
+        f"selection IS the lean, so no row is excluded for a branch; this "
+        f"block scored the retired rule's FOLLOW subset until 2026-09-18.",
+        "  Price basis: the lean's own CLOSING moneyline -- not the saved "
         "pregame price the block above uses, so the two grids score different "
         "row sets on purpose.",
-        "  Retrospective: both v2 gates were chosen on these rows. Cells are "
-        "descriptive history, not a validated mapping from |delta| to a win "
-        "probability, and no cell is a registered rule.",
+        "  Cells are descriptive history, not a validated mapping from "
+        "|delta| to a win probability, and no cell is a registered rule.",
     ]
     width, lab_w = 12, 15
     for title, kind in (("n and W-L", "wl"),
@@ -1518,7 +1542,7 @@ def _selection_price_matrix_lines(g):
         f"{_search_verdict(100 * best, 100 * ref)}. "
         f"A grid is a search, so a cell is read against that reference, never against zero.")
     out.append(
-        f"  pooled over all {n_all} followed rows: {w_all}-{n_all - w_all} "
+        f"  pooled over all {n_all} rows: {w_all}-{n_all - w_all} "
         f"({w_all / n_all:.3f})   excess {100 * pooled:+.1f} +- "
         f"{100 * excess_se(pd.Series(p)):.1f} pp   {profit.sum():+.2f}u. "
         f"The margins are better estimated than any cell; read them first.")

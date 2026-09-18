@@ -357,7 +357,12 @@ class RenderTests(unittest.TestCase):
         self.assertIn("class='summary-center'", html)
         self.assertIn("class='summary-team home'", html)
         self.assertIn(">7:05 PM ET</span>", html)
-        self.assertIn(">LAD -160 · XWOBA SIDE</span>", html)
+        # The branch-label suffix went with the retired rule on 2026-09-18.
+        # Pinned in both directions: the club and price must still be there,
+        # and the label must not creep back as the only arm of a rule with no
+        # other arm.
+        self.assertIn(">LAD -160</span>", html)
+        self.assertNotIn("XWOBA SIDE", html)
         detail = html.split("<div class='game-detail'>", 1)[1]
         self.assertIn("class='read'", detail)
         self.assertIn("class='market'", detail)
@@ -498,9 +503,12 @@ class RenderTests(unittest.TestCase):
         self.assertIn(f"{b._model_version_short()} Δ .0920 (HIGH)", agree)
         self.assertIn("This game", agree)
         self.assertIn("60.5% no-vig", agree)
-        # The market backs this lean, so the rule follows it and the card is
-        # not accented.
-        self.assertIn("XWOBA SIDE → LAD", agree)
+        # The market backs this lean, and the card publishes it without a
+        # branch name: the retired rule's `XWOBA SIDE → LAD` heading came off
+        # on 2026-09-18, leaving the club under a `Selection` label.
+        self.assertIn("Selection", agree)
+        self.assertIn("LAD", agree)
+        self.assertNotIn("XWOBA SIDE", agree)
         self.assertNotIn("verdict edge", agree)
         dis = b.cmb_card(g_dis, None)
         # A lean the market prices as an underdog is still published as the
@@ -508,9 +516,11 @@ class RenderTests(unittest.TestCase):
         # the selection -- and the card carries no accent either way, because
         # the condition an accent marked (the rule departing from the lean) no
         # longer exists.
-        self.assertIn("XWOBA SIDE", dis)
+        self.assertIn("Selection", dis)
         self.assertNotIn("verdict edge", dis)
-        self.assertNotIn(b.hybrid_public_label("FADE"), dis)
+        # Neither branch label survives anywhere on the card.
+        self.assertNotIn("XWOBA SIDE", dis)
+        self.assertNotIn("MARKET OVER LEAN", dis)
 
     def test_the_panel_names_the_intersection_its_history_came_from(self):
         """A record must name the rows it is a record OF.
@@ -536,15 +546,21 @@ class RenderTests(unittest.TestCase):
         follow = b._verdict_html(
             "ARI", dict(p_home=.62, home_ml=-160), "LAD", "ARI", ctx, .02,
         )
-        self.assertIn(f"Past {b._model_version_short()} XWOBA SIDE picks", follow)
-        self.assertIn("XWOBA SIDE → ARI", follow)
+        self.assertIn(f"Past {b._model_version_short()} selections", follow)
+        self.assertIn("Selection", follow)
+        self.assertIn("ARI", follow)
         self.assertIn(
             "Δ .020–.030 · closing ML -174 to -130 · 32 games", follow)
         self.assertIn(
             "Past results</span><span>21-11 (0.656) · +4.62u", follow)
         # The reason sits on the decision rather than being inferable from two
         # numbers printed above it. Under v13 there is one reason.
-        self.assertIn("the site publishes the model's own side", follow)
+        # The reason line dropped its "the site publishes ..." preamble when
+        # `Rule` became `Selection`: with one branch and no rule, the row's
+        # own heading already says what it is, and the note says why that
+        # club. What must survive is the CLAIM that the market is not
+        # consulted to change the selection.
+        self.assertIn("the market is not consulted to change it", follow)
         # The retired branch's record must reach no surface.
         self.assertNotIn("11-4", follow)
     def test_no_fade_branch_renders_at_any_price(self):
@@ -573,8 +589,10 @@ class RenderTests(unittest.TestCase):
             h = b._verdict_html("LAD", dict(p_home=p_home, away_ml=200,
                                             home_ml=-260),
                                 "LAD", "ARI", ctx, delta)
-            self.assertNotIn(b.hybrid_public_label("FADE"), h)
-            self.assertIn("XWOBA SIDE → LAD", h)
+            self.assertNotIn("MARKET OVER LEAN", h)
+            self.assertNotIn("XWOBA SIDE", h)
+            self.assertIn("Selection", h)
+            self.assertIn("LAD", h)
             self.assertNotIn("11-4", h)
     def test_a_one_game_history_still_states_its_own_sample(self):
         """A single completed game can publish a headline, so it must say so.
@@ -595,38 +613,60 @@ class RenderTests(unittest.TestCase):
         # Singular, and the count lives in the heading rather than being
         # repeated on the row beneath it.
         self.assertIn("1 game<", h)
-    def test_the_discovery_claim_survives_off_the_card(self):
-        """`Moved, not deleted` is checked, never asserted.
+    def test_no_page_claims_a_gate_the_reader_cannot_see(self):
+        """Replaces `test_the_discovery_claim_survives_off_the_card`.
 
-        The per-game card carried `not a prediction -- and not a forward test`
-        on both branches once; it now carries it on neither. That is only
-        acceptable while the claim renders somewhere a reader can reach, and
-        this repo has published a `each surface says so in its own copy`
-        assurance that turned out to be false about one of the three surfaces
-        -- which is why the page source is walked here rather than trusted.
+        That test pinned a `Discovery, not a forward test: the 45% price and
+        .012 |Δ| gates were chosen after examining these rows` note on the
+        grades page and its twin on the calibration page. It existed because
+        the per-game card had lost the claim and this repo had once published
+        an `each surface says so in its own copy` assurance that was false
+        about one of the three surfaces.
 
-        Both remaining carriers are asserted, not just one: a test pinning a
-        single page would pass while the other quietly dropped it, and the
-        whole point is that the card is no longer a carrier at all.
+        **Its subject is gone.** The retired rule came off every user-facing
+        page on 2026-09-18 -- no gate, no branch, no rule record is rendered
+        anywhere -- and a caveat about a threshold the reader cannot see
+        describes an invisible diagnostic, which is its own entry in this
+        repo's anti-patterns.
+
+        So the claim is asserted ABSENT rather than present, and the property
+        is restated as the thing that actually has to hold: no page may
+        publish a fitted gate, a branch, or a caveat about one. Restated
+        rather than deleted, because deleting it would leave nothing stopping
+        a later change from reintroducing a gate with no framing at all --
+        which is the direction the original test was guarding.
         """
-        src = open(b.__file__).read()
-        # grades.html
-        self.assertIn("<b>Discovery</b>, not a forward test", src)
-        # market-calibration.html. The wording moved when v13 retired the
-        # rule ("both v2 gates" -> "both gates of the retired rule"), so the
-        # match is on the CLAIM rather than the sentence -- a test pinning the
-        # old spelling would have gone red for a rename and been "fixed" by
-        # deleting the assertion, which is the deletion it exists to prevent.
-        self.assertIn("<b>Retrospective</b>", src)
-        self.assertIn("gates", src)
-        self.assertIn("were chosen after examining these rows", src)
-        # And the card must not be counted as a third carrier.
-        ctx = {("branch", "FADE"): dict(n=19, w=13, l=6, implied=.58,
-                                        actual=.684, excess=.104,
-                                        excess_se=.113, roi=.136, units=2.58)}
-        h = b._verdict_html("LAD", dict(p_home=.70, away_ml=200, home_ml=-260),
-                            "LAD", "ARI", ctx, .005)
-        self.assertNotIn("forward test", h)
+        import html as _html
+        pages = {
+            "grades": b.render_grades_html("t"),
+            "calibration": b.render_market_calibration_html("t"),
+        }
+        for name, page in pages.items():
+            text = _html.unescape(re.sub(r"(?s)<style.*?</style>", " ", page))
+            with self.subTest(page=name):
+                for banned in ("XWOBA SIDE", "MARKET OVER LEAN", "hybrid",
+                               "Hybrid", "fade gate", "Retired", "retired",
+                               "By branch"):
+                    self.assertNotIn(banned, text)
+                # The gates themselves. NOT a bare "45%" / ".012" search:
+                # `Δ0.012` is a legitimate per-row DELTA in the ledger table
+                # and `.012` matched it, so the first version of this failed
+                # for a reason with nothing to do with the claim -- the
+                # text-window defect this repo has an entry for. A gate is a
+                # threshold beside a COMPARISON, so that is what is matched.
+                for pat in (r"[<>≥≤]\s*=?\s*4[45]\s*%",
+                            r"under\s+4[45]\s*%",
+                            r"[<>≥≤]\s*=?\s*0?\.012",
+                            r"under\s+0?\.012"):
+                    self.assertIsNone(
+                        re.search(pat, text),
+                        f"{name} renders a gate: {pat}")
+        # And the controls a record is read against DID survive the pass --
+        # `Deleting controls as clutter` is the entry this trades against,
+        # and it is satisfied on the page that owns controls.
+        cal = pages["calibration"]
+        self.assertIn("Always chalk", cal)
+        self.assertIn("Always home", cal)
 
     def test_the_record_row_carries_no_price_band_qualifier(self):
         """`Won (at under 45%)` could not take another value, so it went.
@@ -786,7 +826,7 @@ class RenderTests(unittest.TestCase):
         h = b._verdict_html(
             "ARI", dict(p_home=.62, home_ml=-160), "LAD", "ARI", ctx, .02)
         self.assertIn("Past results", h)
-        self.assertIn(f"Past {b._model_version_short()} XWOBA SIDE picks", h)
+        self.assertIn(f"Past {b._model_version_short()} selections", h)
         self.assertNotIn("prediction for this game", h)
         # The units figure is the reason the marker went; it must be present,
         # signed, and never rendered as a rate for the next game.
@@ -1547,7 +1587,10 @@ class CardCopyTests(unittest.TestCase):
 
     def test_verdict_uses_structured_labels_and_read_uses_sentence_punctuation(self):
         html = self._card()
-        for label in ("Model lean", "Market price", "Rule", "This game"):
+        # `Rule` became `Selection` when the retired rule left the pages:
+        # a row heading naming a rule the site does not run is the last
+        # visible trace of it.
+        for label in ("Model lean", "Market price", "Selection", "This game"):
             self.assertIn(label, html)
         self.assertIn("That is a <b>", html)
 
