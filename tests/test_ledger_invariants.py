@@ -43,10 +43,28 @@ def _num(d, col):
     return pd.to_numeric(d[col], errors="coerce")
 
 
+# A lineage is `<metric>+<stem>_v<n>`. The stem is NOT hardcoded to the one
+# the ledger happens to be full of: `plat_consol` ran for twelve versions and
+# `xw+starter_blend_v13` turned this gate red the morning its first row landed
+# -- the suite failing for a reason with nothing to do with the diff under
+# test, which is the defect this file's own docstring names. The current stem
+# is read off the module that stamps it, so the next lineage rename carries
+# the gate forward; retired stems are listed because no module still names
+# them, and an unlisted stem is still a typo or an injected tag.
+_RETIRED_TAG_STEMS = ("plat_consol",)
+
+
+def _known_tag_stems():
+    import build_site
+    m = re.fullmatch(r"(?:xw|woba|split)\+([a-z_]+)_v\d+", build_site.MODEL_TAG)
+    return set(_RETIRED_TAG_STEMS) | ({m.group(1)} if m else set())
+
+
 def _version(tag):
     """Trailing version for a recognised production lineage, else None."""
-    m = re.fullmatch(r"(xw|woba|split)\+plat_consol_v(\d+)", str(tag))
-    return int(m.group(2)) if m else None
+    m = re.fullmatch(r"(xw|woba|split)\+([a-z_]+)_v(\d+)", str(tag))
+    return (int(m.group(3))
+            if m and m.group(2) in _known_tag_stems() else None)
 
 
 class LedgerShapeTest(unittest.TestCase):
@@ -71,6 +89,21 @@ class LedgerShapeTest(unittest.TestCase):
         bad = sorted({t for t in _load()["model_tag"].dropna().unique()
                       if _version(t) is None})
         self.assertEqual(bad, [], f"unrecognised model_tag(s): {bad}")
+
+    def test_widening_the_stem_did_not_gut_the_guard(self):
+        """The stem is read off the module instead of hardcoded, so this pins
+        what that must still reject -- otherwise the fix for a gate red on
+        arrival is indistinguishable from deleting the gate."""
+        import build_site
+        self.assertIsNotNone(_version(build_site.MODEL_TAG))
+        self.assertIsNotNone(_version("xw+plat_consol_v12"))
+        for junk in ("xw+plat_consl_v12",        # typo'd stem
+                     "xw+starter_blend",          # no version
+                     "zz+plat_consol_v12",        # unknown metric
+                     "shadow_woba+plat_consol_v1",
+                     "xw+plat_consol_v12 ", ""):
+            with self.subTest(tag=junk):
+                self.assertIsNone(_version(junk))
 
 
 class PhaseAlgebraTest(unittest.TestCase):
