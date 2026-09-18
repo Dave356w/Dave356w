@@ -259,6 +259,41 @@ REPRESENTABLE at all (retained rows exist whose published lean or delta
 differs from their stored one), and reverting the one line turns the equality
 test red — checked, not assumed.
 
+**A second sanity check, on the report the build then produced, found the
+larger defect: the reconstruction was resurrecting every ABSTENTION.** The
+header read `453 graded games (445 with a lean, 8 abstained)` while the grid
+below it scored `453 decidable rows` and the grades page reported `0
+abstained`. All 8 are `starter_unmeasured_no_lean` — v5's rule, which v11
+kept and which v13 did not touch, because v13 changed the starter's RATE and
+not the gate. `reconstruct_v13` computes a net from the paired dumps with no
+abstention check, so each one carried a `v13_lean_recon`, and
+`publish_reconstruction` substituted it.
+
+**A live v13 build facing those games publishes nothing.** So this was not a
+re-decision at all — it was a selection the model itself would refuse, which
+is the "a selection nobody could have made" defect the ledger table was gated
+on `RECORD_TAGS` to prevent, arriving through the reconstruction instead.
+Measured: the published headline read **282-171** where the rows this model
+would decide are **278-167**, and the 8 resurrected games went 4-4.
+
+Fixed in `publish_reconstruction`, which every surface reads, so the record,
+the ROI, the delta × price grid and the Graded tile all corrected together.
+An abstained retained row passes through **kept, not substituted and not
+dropped** — dropping it would relabel a declined game as one the migration
+could not rebuild, and every surface already knows how to skip an abstention
+(`_rec()` skips it, the tile counts `xw_lean.isna()`, the observation frame's
+home-or-away test excludes it). `reconstruct_v13` stops writing them too, so
+a re-run does not re-create what the reader would filter out. The signal is
+`xw_lean.isna()` rather than `pitching_basis_*`, because a second spelling
+would miss v7's zero-delta rule if it ever fired.
+
+**The cross-surface test written the day before is what caught the second
+half**, and that is the entry: `_row_selection` still handed those rows a
+recon pick, so the table's row set disagreed with the header's. It went red
+on exactly the rows the reconstruction had resurrected. A test restated to
+follow its subject caught a defect introduced a day later in a different
+function — which is the argument for restating rather than deleting.
+
 **What the matrix says once it is right: less than it did when it was
 wrong.** Scored on the published v13 rows the |Δ| band excesses run +4.9,
 +15.3, −3.7, +9.5, +8.4 pp — chi-squared 8.21 on 4 dof, no structure beyond

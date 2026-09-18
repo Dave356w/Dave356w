@@ -3918,19 +3918,45 @@ class HybridRuleTests(unittest.TestCase):
         if g.empty:
             self.skipTest("no published rows")
         rows = [build_site._row_selection(r) for _, r in g.iterrows()]
-        picks = [p for _, p, _ in rows]
-        grades = [gr for _, _, gr in rows]
-        self.assertEqual(picks, list(g["xw_lean"]),
+
+        def _absent(v):
+            """`None` and `NaN` are the same claim: no pick, no grade.
+
+            `_row_selection` returns Python None on an abstention while the
+            frame carries np.nan, so comparing the sentinels fails for a
+            reason that has nothing to do with the two surfaces agreeing.
+            Normalised rather than dropped: an abstained row is exactly where
+            they could most easily diverge, so it stays in the comparison.
+            """
+            return None if v is None or (isinstance(v, float)
+                                         and pd.isna(v)) else v
+
+        picks = [_absent(p) for _, p, _ in rows]
+        grades = [_absent(gr) for _, _, gr in rows]
+        self.assertEqual(picks, [_absent(v) for v in g["xw_lean"]],
                          "the table and the header disagree about a pick")
-        self.assertEqual(grades, list(g["xw_full"]),
+        self.assertEqual(grades, [_absent(v) for v in g["xw_full"]],
                          "the table and the header disagree about a result")
+        # And the abstentions are actually IN this comparison, or the
+        # normalisation above would have quietly made it vacuous.
+        self.assertIn(None, picks)
         # And the basis is decided by the row's own tag, never by the shared
-        # family -- the specific miskeying above.
+        # family -- the specific miskeying this test was restated for --
+        # with `None` for an abstention, which has no basis because it has
+        # no selection. A retained abstention is NOT "recon": v13 still runs
+        # v5's abstention, so the reconstruction must not re-decide it.
         bases = {b for b, _, _ in rows}
-        self.assertTrue(bases <= {"lean", "recon"})
-        for (basis, _, _), tag in zip(rows, g["model_tag"].astype(str)):
-            self.assertEqual(basis,
-                             "lean" if tag == build_site.MODEL_TAG else "recon")
+        self.assertTrue(bases <= {"lean", "recon", None}, bases)
+        for (basis, _, _), tag, lean in zip(rows,
+                                            g["model_tag"].astype(str),
+                                            g["xw_lean"]):
+            if not isinstance(lean, str) or not lean:
+                self.assertIsNone(basis,
+                                  "an abstained row was given a basis")
+            else:
+                self.assertEqual(
+                    basis,
+                    "lean" if tag == build_site.MODEL_TAG else "recon")
 
     def test_the_panel_never_presents_history_as_this_games_chances(self):
         """The clarity defect this layout exists to fix.
@@ -4240,6 +4266,45 @@ class HybridRuleTests(unittest.TestCase):
             xw_lean="A", close_p_home=.70, home="H", away="A", xw_full="L",
             xw_net=.005, xw_delta=.005, model_tag="woba+plat_consol_v5"))
         self.assertEqual(build_site._row_selection(row), (None, None, None))
+
+    def test_an_abstained_row_is_never_re_decided_by_the_reconstruction(self):
+        """v13 retains v5's abstention, so a declined game stays declined.
+
+        `reconstruct_v13` computes a net from the paired dumps with no
+        abstention check, so every `starter_unmeasured_no_lean` row carried a
+        `v13_lean_recon` -- and `publish_reconstruction` was substituting it.
+        Measured on the committed ledger at the fix: 8 rows resurrected, going
+        4-4, inflating the published headline from 278-167 to 282-171 while
+        the grades page reported 0 abstentions against a ledger holding 8.
+
+        The abstention is a rule this model STILL RUNS: v5 declines when a
+        side's starter has no measured season line, v11 kept it, and v13
+        changed the starter's rate rather than the gate. A live build facing
+        the same game publishes nothing, so a reconstruction that hands one a
+        lean is publishing a selection the model would itself refuse.
+
+        Pinned three ways, because the row must be KEPT and not dropped:
+        the count of abstentions survives the substitution, none of them
+        gains a lean, and the published set still covers the whole family.
+        """
+        led = build_site.load_ledger_df()
+        if led is None:
+            self.skipTest("ledger unavailable")
+        fam = build_site._record_grades(led)
+        n_abstained = int(fam["xw_lean"].isna().sum())
+        if not n_abstained:
+            self.skipTest("no abstained rows in the committed ledger")
+        pub = build_site._published_grades(led)
+        self.assertEqual(int(pub["xw_lean"].isna().sum()), n_abstained,
+                         "the reconstruction re-decided an abstained game")
+        # Kept, not dropped: a declined game is not an un-rebuilt one, and
+        # every surface already knows how to skip an abstention.
+        self.assertEqual(len(pub), len(fam))
+        # And the rows that WERE abstained are exactly the ones still NaN.
+        key = ["game_pk", "game_date"]
+        before = set(map(tuple, fam[fam["xw_lean"].isna()][key].values))
+        after = set(map(tuple, pub[pub["xw_lean"].isna()][key].values))
+        self.assertEqual(before, after)
 
     def test_a_reconstructed_row_is_returned_under_its_own_basis(self):
         """The basis is internal now, and it still has to be right.
