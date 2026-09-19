@@ -359,3 +359,10 @@ pre-registered underdog sign-flip test  (registered 2026-09-03; dog leans split 
     all dog leans               n=41   23-18  +11.29pp +/-  7.75    +8.08u  ROI  +19.7%
     NOT independent of forward_test arm 2 (34 of 47 discovery rows shared) or of abstain_test, which touches the same below-split games.
     GATE: 41 of ~88 dog leans, ~198 for a 10pp contrast. The band alone scored P=0.2805 on its own search test and is deliberately NOT the registered quantity.
+
+pre-registered Candidate B2 individual-extreme TMR10 test  (registered 2026-09-18; shadow only)
+    rule — max(|Z_home|, |Z_away|) >= 1.50; select the lower raw TMR10 team.
+    state — prior 10 valid priced games; prior-game closing close_p_home; same-day frozen; season reset.
+    scoring — actual forward xw+starter_blend_v13 only; saved pregame_p_home + saved pregame MLs; no close fallback.
+    interpretation — conditional market-calibration / forecast-error state test, not a generic mean-reversion claim.
+    nothing to score yet; forward sample begins with slates strictly after 2026-09-18.
