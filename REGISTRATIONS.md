@@ -324,6 +324,10 @@ header rather than discovered later.
 samples.** A reader tallying the registrations as independent pieces of
 evidence is the error this note exists to prevent.
 
+B2 also runs on the same future v13 slates as the other monitors. Its mechanism
+and selector are different, but overlapping games do not become an independent
+sample merely because they appear in a separate report block.
+
 ## How to read a forward block
 
 1. **Find the registered headline.** It is the line marked as such, not the
@@ -331,9 +335,10 @@ evidence is the error this note exists to prevent.
 2. **Read it against the discovery value printed beside it**, never against
    zero. Every one of these rules was found on rows that already existed; the
    forward question is whether the effect survived, not whether it is positive.
-3. **Check the gate before reading anything at all.** Each block prints how far
-   it is from the count that could separate its own claimed effect. All eight
-   are currently a long way short.
+3. **Check the gate or checkpoint before reading anything at all.** The
+   original seven print power-oriented gates; B2 prints its frozen 20 / 40 /
+   75 stability checkpoints instead. None is currently a production-decision
+   trigger.
 4. **Read the always-chalk control on the same rows.** On any fade branch it is
    the same bet by construction, so a branch beating its price is only
    interesting relative to the control, never on its own.
