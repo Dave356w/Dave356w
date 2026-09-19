@@ -130,6 +130,8 @@ def attach_b2_state(led):
     for c in _STATE_COLS:
         if c == "b2_signal":
             out[c] = False
+        elif c in ("b2_side", "b2_trigger_type"):
+            out[c] = pd.Series(pd.NA, index=out.index, dtype="object")
         else:
             out[c] = np.nan
 
