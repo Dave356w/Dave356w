@@ -1,6 +1,6 @@
 # The pre-registered forward tests
 
-Seven registrations across six modules. This file explains their **logic** —
+Eight registrations across seven modules. This file explains their **logic** —
 what each rule does, what number decides it, and why that number rather than
 the obvious one.
 
@@ -14,7 +14,7 @@ registration actually stands.
 
 ---
 
-## The one idea behind all seven
+## The one idea behind all eight
 
 **A registration's headline is deliberately not the number you would want to
 look at.** The obvious number — the rule's ROI, the filtered record, the
@@ -27,7 +27,7 @@ So each registration freezes the **increment**: what the rule changes relative
 to doing nothing, measured only on the rows where it acts. Everything else
 follows from that choice.
 
-Five properties every one of them has:
+Five discipline properties define the program; B2 keeps the same frozen increment/selector rules but uses staged reporting checkpoints rather than a discovery-sized power gate:
 
 1. **The headline is the increment.** A switch delta over switched games, an
    excess over dropped games, a contrast between two halves. Never a combined
@@ -255,13 +255,65 @@ register and far better than the delta filter's, but short of the hybrid's and
 of any conventional bar: **it does not clear 0.05**, which is why the prior is
 null rather than positive.
 
-Its gate is the most reachable of the seven, and deliberately **not** sized to
+Its gate was the most reachable of the original seven, and deliberately **not** sized to
 the discovery effect: a selected maximum reproducing itself over a handful of
 slates would prove nothing.
 
 ---
 
-## These are not seven independent samples
+## `b2_tmr_test.py` — individual-extreme TMR10 calibration state
+
+*Registered 2026-09-18. Prior: **data-informed exploratory; no forward evidence**.*
+
+B2 asks whether a team-specific history of market forecast error identifies a
+conditional calibration state that the otherwise well-calibrated market does
+not fully absorb on the next game. It is **not** registered as a generic
+team-talent mean-reversion rule.
+
+For each club, the state uses its previous ten valid priced games:
+
+`residual = outcome - market implied probability`
+
+`TMR10 = mean(last 10 residuals)`
+
+`Var(TMR10) = sum[p(1-p)] / 10^2`
+
+`Z_team = TMR10 / sqrt(Var(TMR10))`
+
+The frozen trigger is
+`max(abs(Z_home), abs(Z_away)) >= 1.50`, and the B2 side is the team with the
+**lower raw TMR10**. The individual Z score qualifies the game; it does not
+choose the side. That distinction preserves both mechanisms seen in the
+historical diagnostic: backing an extreme negative residual state and fading
+an extreme positive residual state.
+
+The state is reconstructed from **prior completed games' closing
+`close_p_home`** because the Candidate-B research lineage treated the archived
+two-sided ESPN market as a close proxy. Same-day state is frozen: every game on
+a date is assigned state before any result from that date enters a team's
+history. State resets by season.
+
+The forward scorer is stricter than the state reconstruction. It scores only
+actual `xw+starter_blend_v13` rows strictly after registration and uses the
+current game's **saved pregame** probability and paired saved pregame moneylines,
+with no closing fallback.
+
+**The headline is the increment on disagreement games:** B2 minus unchanged
+v13 market residual, with paired flat-unit profit gain secondary. Agreement
+games are context because changing nothing cannot demonstrate overlay value.
+Reconstructed historical B2 results are deliberately excluded from the forward
+report block.
+
+B2 uses the pre-committed 20 / 40 / 75 disagreement checkpoints from its
+forward protocol. Those are reporting/stability checkpoints, **not**
+significance thresholds and not permission to tune the rule. At 20 the report
+gets an early directional read; at 40 it adds stability diagnostics; at 75+ a
+substantive review becomes reasonable. The rule remains shadow-only throughout
+this test.
+
+---
+
+## These are not eight independent samples
 
 `forward_test` arm 2, `abstain_test`, and `dog_contrast_test`'s below-split half
 all read the same small set of games. The report says so on its own line every
@@ -272,6 +324,10 @@ header rather than discovered later.
 samples.** A reader tallying the registrations as independent pieces of
 evidence is the error this note exists to prevent.
 
+B2 also runs on the same future v13 slates as the other monitors. Its mechanism
+and selector are different, but overlapping games do not become an independent
+sample merely because they appear in a separate report block.
+
 ## How to read a forward block
 
 1. **Find the registered headline.** It is the line marked as such, not the
@@ -279,9 +335,10 @@ evidence is the error this note exists to prevent.
 2. **Read it against the discovery value printed beside it**, never against
    zero. Every one of these rules was found on rows that already existed; the
    forward question is whether the effect survived, not whether it is positive.
-3. **Check the gate before reading anything at all.** Each block prints how far
-   it is from the count that could separate its own claimed effect. All seven
-   are currently a long way short.
+3. **Check the gate or checkpoint before reading anything at all.** The
+   original seven print power-oriented gates; B2 prints its frozen 20 / 40 /
+   75 stability checkpoints instead. None is currently a production-decision
+   trigger.
 4. **Read the always-chalk control on the same rows.** On any fade branch it is
    the same bet by construction, so a branch beating its price is only
    interesting relative to the control, never on its own.

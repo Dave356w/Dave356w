@@ -2190,6 +2190,22 @@ def report_text(led):
             say(_cl)
     except Exception as _exc:                      # noqa: BLE001 - see above
         say(f"pre-registered dog contrast test unavailable ({type(_exc).__name__})")
+
+    # Candidate B2 individual-extreme TMR10 shadow test. Registered 2026-09-18
+    # after the historical mechanism comparison was complete. This block is
+    # intentionally prospective only: b2_tmr_test reconstructs each day's
+    # state from PRIOR completed ledger games, then scores only actual v13 rows
+    # strictly after registration against their saved pregame market. Like the
+    # other monitors it is guarded because a reporting diagnostic must never
+    # be able to cost an irreplaceable pregame snapshot.
+    try:
+        import b2_tmr_test
+        say("")
+        for _b2l in b2_tmr_test.report_lines(led):
+            say(_b2l)
+    except Exception as _exc:                      # noqa: BLE001 - see above
+        say(f"pre-registered B2 TMR10 test unavailable ({type(_exc).__name__})")
+
     return "\n".join(lines)
 
 
