@@ -301,8 +301,12 @@ with no closing fallback.
 **The headline is the increment on disagreement games:** B2 minus unchanged
 v13 market residual, with paired flat-unit profit gain secondary. Agreement
 games are context because changing nothing cannot demonstrate overlay value.
-Reconstructed historical B2 results are deliberately excluded from the forward
-report block.
+Reconstructed historical B2 results are now shown in a **separate descriptive
+diagnostic** against the stored v13 reconstruction, scored at that game's
+closing market. They remain excluded from the registered forward accumulator:
+the v13 reconstruction is mixed-basis/hindsight on most rows, so its B2 result
+is context, not forward evidence and not a record. Only actual post-registration
+v13 rows advance the 20 / 40 / 75 disagreement checkpoints.
 
 B2 uses the pre-committed 20 / 40 / 75 disagreement checkpoints from its
 forward protocol. Those are reporting/stability checkpoints, **not**

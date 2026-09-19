@@ -15,7 +15,8 @@ import b2_tmr_test as b2
 
 def _row(game_pk, game_date, home, away, home_won, *, p_home=.5,
          model_tag="legacy", xw_lean=None, pregame_p_home=.5,
-         pregame_home_ml=-110, pregame_away_ml=-110):
+         pregame_home_ml=-110, pregame_away_ml=-110,
+         close_home_ml=-110, close_away_ml=-110):
     return {
         "game_pk": game_pk,
         "game_date": game_date,
@@ -25,6 +26,8 @@ def _row(game_pk, game_date, home, away, home_won, *, p_home=.5,
         "full_home": 1 if home_won else 0,
         "full_away": 0 if home_won else 1,
         "close_p_home": p_home,
+        "close_home_ml": close_home_ml,
+        "close_away_ml": close_away_ml,
         "model_tag": model_tag,
         "xw_lean": xw_lean,
         "pregame_p_home": pregame_p_home,
@@ -52,6 +55,21 @@ def _positive_extreme_fixture(future_date="2026-09-19", *,
         pregame_home_ml=-120, pregame_away_ml=110,
     ))
     return pd.DataFrame(rows)
+
+
+def _reconstruction_fixture():
+    """One historical reconstruction row where B2 and reconstructed v13 disagree."""
+    led = _positive_extreme_fixture(
+        future_date="2026-09-17", future_pregame=.80, xw_lean="HOT"
+    )
+    i = led.index[-1]
+    led.loc[i, "model_tag"] = "xw+plat_consol_v12"
+    led.loc[i, "v13_recon_basis"] = b2.V13_RECON_BASIS
+    led.loc[i, "v13_lean_recon"] = "HOT"
+    led.loc[i, "close_p_home"] = .55
+    led.loc[i, "close_home_ml"] = -120
+    led.loc[i, "close_away_ml"] = 110
+    return led
 
 
 class RegistrationFrozenTests(unittest.TestCase):
@@ -146,6 +164,27 @@ class ForwardScopeTests(unittest.TestCase):
         self.assertGreater(row["b2_profit"], row["v13_profit"])
 
 
+class ReconstructionScopeTests(unittest.TestCase):
+    def test_reconstruction_rows_score_b2_against_reconstructed_v13(self):
+        led = _reconstruction_fixture()
+        r = b2.reconstruction_rows(led)
+        self.assertEqual(len(r), 1)
+        row = r.iloc[0]
+
+        self.assertEqual(row["b2_interaction"], "DISAGREE")
+        self.assertTrue(bool(row["b2_won"]))
+        self.assertFalse(bool(row["v13_won"]))
+        self.assertAlmostEqual(float(row["b2_p"]), .45, places=12)
+        self.assertAlmostEqual(float(row["v13_p"]), .55, places=12)
+        self.assertGreater(row["b2_residual"], row["v13_residual"])
+        self.assertGreater(row["b2_profit"], row["v13_profit"])
+
+    def test_reconstruction_rows_never_enter_forward_accumulator(self):
+        led = _reconstruction_fixture()
+        self.assertEqual(len(b2.reconstruction_rows(led)), 1)
+        self.assertEqual(len(b2.forward_rows(led)), 0)
+
+
 class ReportTests(unittest.TestCase):
     def test_report_names_rule_price_basis_and_forward_scope(self):
         lines = b2.report_lines(_positive_extreme_fixture(xw_lean="HOT"))
@@ -154,11 +193,13 @@ class ReportTests(unittest.TestCase):
         self.assertIn("lower raw TMR10", joined)
         self.assertIn("prior-game closing close_p_home", joined)
         self.assertIn("saved pregame_p_home", joined)
-        self.assertIn("actual forward xw+starter_blend_v13 only", joined)
+        self.assertIn("forward scoring — actual xw+starter_blend_v13 only", joined)
+        self.assertIn("RECONSTRUCTION DIAGNOSTIC", joined)
+        self.assertIn("REGISTERED FORWARD ACCUMULATION", joined)
         self.assertIn("PRIMARY", joined)
         self.assertIn("DISAGREE", joined)
         self.assertIn("paired gain", joined)
-        self.assertIn("Reconstructed historical B2 results are deliberately excluded", joined)
+        self.assertIn("reconstruction rows above never enter", joined)
 
     def test_report_survives_missing_columns(self):
         lines = b2.report_lines(pd.DataFrame({"status": ["graded"]}))

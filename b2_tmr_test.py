@@ -38,8 +38,11 @@ paired saved pregame moneylines. There is deliberately no current-game closing
 fallback. That keeps the forward evaluation tied to information available at
 decision time.
 
-The reconstructed historical comparison that generated B2 is NOT printed in
-this block. This module is the prospective test only.
+Historical v13 reconstruction rows are scored in a SEPARATE descriptive block
+against B2, using the reconstructed v13 lean and that game's closing market.
+Those rows are never allowed into the registered forward accumulator: the v13
+reconstruction is mixed-basis/hindsight on most rows, so it is context only.
+The prospective block remains actual post-registration v13 only.
 """
 
 from collections import defaultdict
@@ -55,6 +58,9 @@ import pandas as pd
 # ---------------------------------------------------------------------------
 REGISTERED_ON = "2026-09-18"  # score slates STRICTLY after this date
 BASE_MODEL_TAG = "xw+starter_blend_v13"
+V13_RECON_LEAN_COL = "v13_lean_recon"
+V13_RECON_BASIS_COL = "v13_recon_basis"
+V13_RECON_BASIS = "post_hoc_shadow_pair"
 LOOKBACK_N = 10
 Z_THRESHOLD = 1.50
 STAKE = 1.0
@@ -71,6 +77,10 @@ _STATE_REQUIRED = {
 _FORWARD_REQUIRED = {
     "model_tag", "xw_lean", "pregame_p_home",
     "pregame_home_ml", "pregame_away_ml",
+}
+_RECON_REQUIRED = {
+    V13_RECON_LEAN_COL, V13_RECON_BASIS_COL,
+    "close_p_home", "close_home_ml", "close_away_ml",
 }
 
 _STATE_COLS = (
@@ -222,30 +232,13 @@ def attach_b2_state(led):
     return out
 
 
-def forward_rows(led=None):
-    """Return post-registration actual-v13 rows with B2 state and scoring fields."""
-    if led is None:
-        if not os.path.exists(LEDGER):
-            return None
-        led = pd.read_csv(LEDGER, low_memory=False)
-
-    if any(c not in getattr(led, "columns", ()) for c in _FORWARD_REQUIRED):
-        return None
-
-    g = attach_b2_state(led)
-    if g is None:
-        return None
-
-    g = g[
-        g["status"].astype(str).eq("graded")
-        & g["game_date"].astype(str).gt(REGISTERED_ON)
-        & g["model_tag"].astype(str).eq(BASE_MODEL_TAG)
-    ].copy()
+def _score_overlay_rows(g, *, base_lean_col, prob_col,
+                        home_ml_col, away_ml_col):
+    """Score B2 and one baseline lean on the exact same game rows."""
     if g.empty:
         return g
 
-    for c in ("pregame_p_home", "pregame_home_ml", "pregame_away_ml",
-              "full_home", "full_away"):
+    for c in (prob_col, home_ml_col, away_ml_col, "full_home", "full_away"):
         g[c] = pd.to_numeric(g[c], errors="coerce")
 
     g["state_ready"] = (
@@ -255,21 +248,19 @@ def forward_rows(led=None):
         & g["tmr10_z_away"].notna()
     )
     g["price_ready"] = (
-        g["pregame_p_home"].map(_valid_prob)
-        & g["pregame_home_ml"].map(_valid_ml)
-        & g["pregame_away_ml"].map(_valid_ml)
+        g[prob_col].map(_valid_prob)
+        & g[home_ml_col].map(_valid_ml)
+        & g[away_ml_col].map(_valid_ml)
     )
-    g["base_ready"] = (
-        g["xw_lean"].astype(str).eq(g["home"].astype(str))
-        | g["xw_lean"].astype(str).eq(g["away"].astype(str))
-    )
+    base = g[base_lean_col].astype(str)
+    home = g["home"].astype(str)
+    away = g["away"].astype(str)
+    g["base_ready"] = base.eq(home) | base.eq(away)
 
     g["b2_interaction"] = "NO_SIGNAL"
     sig = g["b2_signal"].fillna(False).astype(bool)
     g.loc[sig & ~g["base_ready"], "b2_interaction"] = "BASE_UNAVAILABLE"
-    agree = sig & g["base_ready"] & (
-        g["b2_side"].astype(str) == g["xw_lean"].astype(str)
-    )
+    agree = sig & g["base_ready"] & (g["b2_side"].astype(str) == base)
     disagree = sig & g["base_ready"] & ~agree
     g.loc[agree, "b2_interaction"] = "AGREE"
     g.loc[disagree, "b2_interaction"] = "DISAGREE"
@@ -278,26 +269,26 @@ def forward_rows(led=None):
     g["b2_scorable"] = scorable
 
     home_won = g["full_home"] > g["full_away"]
-    b2_home = g["b2_side"].astype(str) == g["home"].astype(str)
-    v13_home = g["xw_lean"].astype(str) == g["home"].astype(str)
+    b2_home = g["b2_side"].astype(str) == home
+    base_home = base == home
 
-    g["b2_won"] = np.where(scorable, np.where(b2_home, home_won, ~home_won), np.nan)
-    g["v13_won"] = np.where(scorable, np.where(v13_home, home_won, ~home_won), np.nan)
+    g["b2_won"] = np.where(
+        scorable, np.where(b2_home, home_won, ~home_won), np.nan
+    )
+    g["v13_won"] = np.where(
+        scorable, np.where(base_home, home_won, ~home_won), np.nan
+    )
     g["b2_p"] = np.where(
-        scorable, np.where(b2_home, g["pregame_p_home"], 1.0 - g["pregame_p_home"]),
-        np.nan,
+        scorable, np.where(b2_home, g[prob_col], 1.0 - g[prob_col]), np.nan
     )
     g["v13_p"] = np.where(
-        scorable, np.where(v13_home, g["pregame_p_home"], 1.0 - g["pregame_p_home"]),
-        np.nan,
+        scorable, np.where(base_home, g[prob_col], 1.0 - g[prob_col]), np.nan
     )
     g["b2_ml"] = np.where(
-        scorable, np.where(b2_home, g["pregame_home_ml"], g["pregame_away_ml"]),
-        np.nan,
+        scorable, np.where(b2_home, g[home_ml_col], g[away_ml_col]), np.nan
     )
     g["v13_ml"] = np.where(
-        scorable, np.where(v13_home, g["pregame_home_ml"], g["pregame_away_ml"]),
-        np.nan,
+        scorable, np.where(base_home, g[home_ml_col], g[away_ml_col]), np.nan
     )
 
     s = g["b2_scorable"].astype(bool)
@@ -320,6 +311,66 @@ def forward_rows(led=None):
         )
     return g
 
+
+def forward_rows(led=None):
+    """Return post-registration actual-v13 rows with B2 state and scoring fields."""
+    if led is None:
+        if not os.path.exists(LEDGER):
+            return None
+        led = pd.read_csv(LEDGER, low_memory=False)
+
+    if any(c not in getattr(led, "columns", ()) for c in _FORWARD_REQUIRED):
+        return None
+
+    g = attach_b2_state(led)
+    if g is None:
+        return None
+
+    g = g[
+        g["status"].astype(str).eq("graded")
+        & g["game_date"].astype(str).gt(REGISTERED_ON)
+        & g["model_tag"].astype(str).eq(BASE_MODEL_TAG)
+    ].copy()
+    return _score_overlay_rows(
+        g,
+        base_lean_col="xw_lean",
+        prob_col="pregame_p_home",
+        home_ml_col="pregame_home_ml",
+        away_ml_col="pregame_away_ml",
+    )
+
+
+def reconstruction_rows(led=None):
+    """Return historical v13-reconstruction rows as descriptive context only.
+
+    The B2 state itself still uses only prior completed games. The comparison
+    baseline is the stored v13 reconstruction, and current-game scoring uses
+    the closing market because these rows are historical diagnostics rather
+    than the registered decision-time sample.
+    """
+    if led is None:
+        if not os.path.exists(LEDGER):
+            return None
+        led = pd.read_csv(LEDGER, low_memory=False)
+
+    if any(c not in getattr(led, "columns", ()) for c in _RECON_REQUIRED):
+        return None
+
+    g = attach_b2_state(led)
+    if g is None:
+        return None
+
+    g = g[
+        g["status"].astype(str).eq("graded")
+        & g[V13_RECON_BASIS_COL].astype(str).eq(V13_RECON_BASIS)
+    ].copy()
+    return _score_overlay_rows(
+        g,
+        base_lean_col=V13_RECON_LEAN_COL,
+        prob_col="close_p_home",
+        home_ml_col="close_home_ml",
+        away_ml_col="close_away_ml",
+    )
 
 def _performance_line(g, label, prefix):
     if not len(g):
@@ -345,20 +396,74 @@ def report_lines(led=None):
         "select the lower raw TMR10 team.",
         f"    state — prior {LOOKBACK_N} valid priced games; prior-game closing "
         "close_p_home; same-day frozen; season reset.",
-        "    scoring — actual forward xw+starter_blend_v13 only; saved "
+        "    forward scoring — actual xw+starter_blend_v13 only; saved "
         "pregame_p_home + saved pregame MLs; no close fallback.",
+        "    reconstruction scoring — stored v13 reconstruction only; current-"
+        "game closing close_p_home + paired close MLs.",
+        "    split — reconstruction is descriptive hindsight context; it is "
+        "never pooled into the registered forward accumulator or checkpoints.",
         "    interpretation — conditional market-calibration / forecast-error "
         "state test, not a generic mean-reversion claim.",
     ]
 
+    r = reconstruction_rows(led)
+    out.append("  RECONSTRUCTION DIAGNOSTIC — NOT FORWARD EVIDENCE / NOT A RECORD")
+    if r is None:
+        out.append("    reconstruction rows unavailable or missing columns.")
+    elif not len(r):
+        out.append("    no scored v13 reconstruction rows available.")
+    else:
+        r_state = int(r["state_ready"].sum())
+        r_signals = r[r["b2_signal"].fillna(False).astype(bool)]
+        r_scorable = r_signals[
+            r_signals["b2_scorable"].fillna(False).astype(bool)
+        ]
+        r_agree = r_scorable[r_scorable["b2_interaction"] == "AGREE"]
+        r_disagree = r_scorable[r_scorable["b2_interaction"] == "DISAGREE"]
+        out.append(
+            f"    reconstructed v13 rows: {len(r)}; state-ready {r_state}; "
+            f"B2 signals {len(r_signals)}; scorable {len(r_scorable)} "
+            f"({len(r_agree)} agree, {len(r_disagree)} disagree)."
+        )
+        out.append(
+            "    basis warning — v13 reconstruction is post-hoc/mixed-basis on "
+            "most rows; these results are descriptive only."
+        )
+        if len(r_scorable):
+            out.append(_performance_line(r_scorable, "all B2", "b2"))
+        if len(r_disagree):
+            out.append("    DISAGREE diagnostic — B2 vs reconstructed v13")
+            out.append(_performance_line(r_disagree, "B2", "b2"))
+            out.append(_performance_line(r_disagree, "v13 recon", "v13"))
+            resid_gain = float(
+                (r_disagree["b2_residual"] - r_disagree["v13_residual"]).mean()
+            )
+            profit_gain = float(
+                (r_disagree["b2_profit"] - r_disagree["v13_profit"]).sum()
+            )
+            out.append(
+                f"      paired gain: residual {resid_gain*100:+.1f}pp; "
+                f"flat-unit profit {profit_gain:+.2f}u."
+            )
+        elif len(r_scorable):
+            out.append("    no B2-v13 reconstruction disagreements in scorable rows.")
+
+    out.append(
+        f"  REGISTERED FORWARD ACCUMULATION — actual {BASE_MODEL_TAG}; "
+        f"slates strictly after {REGISTERED_ON}"
+    )
     g = forward_rows(led)
     if g is None:
-        out.append("    ledger unavailable or missing columns -- not scored")
+        out.append("    ledger unavailable or missing columns -- forward not scored")
         return out
     if not len(g):
         out.append(
             "    nothing to score yet; forward sample begins with slates "
             f"strictly after {REGISTERED_ON}."
+        )
+        out.append(
+            "    FORWARD FIREWALL — reconstruction rows above never enter this "
+            "accumulator or its checkpoints."
         )
         return out
 
@@ -384,6 +489,10 @@ def report_lines(led=None):
 
     if not len(scorable):
         out.append("    no scorable B2 signals yet.")
+        out.append(
+            "    FORWARD FIREWALL — reconstruction rows above never enter this "
+            "accumulator or its checkpoints."
+        )
         return out
 
     out.append(_performance_line(scorable, "all B2", "b2"))
@@ -427,8 +536,8 @@ def report_lines(led=None):
         )
     out.append(f"    CHECKPOINT: {checkpoint}")
     out.append(
-        "    Reconstructed historical B2 results are deliberately excluded "
-        "from this forward block."
+        "    FORWARD FIREWALL — reconstruction rows above never enter this "
+        "accumulator or its checkpoints."
     )
     return out
 
