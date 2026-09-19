@@ -363,6 +363,18 @@ pre-registered underdog sign-flip test  (registered 2026-09-03; dog leans split 
 pre-registered Candidate B2 individual-extreme TMR10 test  (registered 2026-09-18; shadow only)
     rule — max(|Z_home|, |Z_away|) >= 1.50; select the lower raw TMR10 team.
     state — prior 10 valid priced games; prior-game closing close_p_home; same-day frozen; season reset.
-    scoring — actual forward xw+starter_blend_v13 only; saved pregame_p_home + saved pregame MLs; no close fallback.
+    forward scoring — actual xw+starter_blend_v13 only; saved pregame_p_home + saved pregame MLs; no close fallback.
+    reconstruction scoring — stored v13 reconstruction only; current-game closing close_p_home + paired close MLs.
+    split — reconstruction is descriptive hindsight context; it is never pooled into the registered forward accumulator or checkpoints.
     interpretation — conditional market-calibration / forecast-error state test, not a generic mean-reversion claim.
+  RECONSTRUCTION DIAGNOSTIC — NOT FORWARD EVIDENCE / NOT A RECORD
+    reconstructed v13 rows: 453; state-ready 453; B2 signals 70; scorable 70 (35 agree, 35 disagree).
+    basis warning — v13 reconstruction is post-hoc/mixed-basis on most rows; these results are descriptive only.
+    all B2        n=70  45-25  mean p 0.505  residual +13.7pp  +18.57u
+    DISAGREE diagnostic — B2 vs reconstructed v13
+    B2            n=35  24-11  mean p 0.449  residual +23.7pp  +17.09u
+    v13 recon     n=35  11-24  mean p 0.551  residual -23.7pp  -15.95u
+      paired gain: residual +47.4pp; flat-unit profit +33.05u.
+  REGISTERED FORWARD ACCUMULATION — actual xw+starter_blend_v13; slates strictly after 2026-09-18
     nothing to score yet; forward sample begins with slates strictly after 2026-09-18.
+    FORWARD FIREWALL — reconstruction rows above never enter this accumulator or its checkpoints.
