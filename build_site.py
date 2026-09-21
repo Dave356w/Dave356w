@@ -4743,29 +4743,12 @@ def _xwoba_side_history(ctx, delta, selection_ml=None):
     )
 
 def _branch_history(ctx, action, p_lean=None, delta=None, selection_ml=None):
-    """Track record of the delta x price cell this game's selection lands in.
+    """Return descriptive history only when a two-sided price is available.
 
-    Every line below it describes PAST games, and the wording has to make that
-    impossible to misread. The version this replaces led with
-    "Selection won  73.3%" directly under tonight's teams, which reads as this
-    pick's win probability -- it is a historical rate, and the panel publishes
-    no per-game probability at all.
-
-    **The FADE body is gone, along with the `("branch", …)` and
-    `("chalk", …)` aggregates it read.** v13 retires the hybrid rule, so
-    `published_action` returns FOLLOW or None and no call could reach it --
-    an unreachable renderer whose eight aggregates were still computed every
-    build, which is exactly the shape this file records finding once before.
-    The retired rule was taken off every user-facing page on 2026-09-18 and
-    this is the last of it.
-
-    What this is NOT is the deletion of a control: always-chalk and always-home
-    are on `market-calibration.html`, scored on the identical rows, and the
-    rule's own forward reading is untouched in `data/ledger_report.txt`.
+    The model lean is shown independently of the market. History needs the
+    current price only to choose the matching closing-moneyline rung.
     """
     if not action:
-        # The rule line already says the selection abstains and why; a second
-        # line restating it is the redundancy this rewrite removed.
         return ""
     return _xwoba_side_history(ctx, delta, selection_ml)
 
@@ -6142,8 +6125,9 @@ td.bar{width:86px;padding:4px 8px 4px 2px}
    to the value column so it reads as a note on that row, not a new row. */
 .verdict .vnote{margin:2px 0 1px;font:500 12.5px/1.4 var(--sans);
   color:var(--faint)}
-.verdict .vprofile .vline{justify-content:space-between;gap:14px;font-weight:600}
-.verdict .vprofile .vline>span:last-child{text-align:right;color:var(--ink)}
+.verdict .vprofile .vline{display:block;font-weight:600}
+.verdict .vprofile .vline + .vline{margin-top:5px}
+.verdict .vprofile .vline>span:last-child{display:block;margin-top:1px;text-align:left;color:var(--ink)}
 
 /* hitter row: percentile column + name cell. The column is the 88px bar plus
    the cell's own gutters -- it carried a printed percentile until that was
@@ -7052,9 +7036,9 @@ def published_action(market_p, xw_net):
 # rule, leaving it with no production caller, so it is deleted at the removal
 # rather than left for a reference count to find later.
 #
-# What replaced it is not another label: the card heads its row `Selection`
-# and names the club. A branch name is only meaningful when there is more
-# than one branch.
+# What replaced it is not another branch label: the card names the model lean
+# directly, then shows the market price and posted break-even hurdle. A branch
+# name is only meaningful when there is more than one branch.
 
 
 def hybrid_selection(lean, away_abbr, home_abbr, market_p, xw_net):
@@ -7479,8 +7463,7 @@ def hybrid_branch_records():
     if obs.empty:
         return {}
     out = {"n": int(len(obs))}
-    # The pooled reference the per-game panel prints beside its branch. Same
-    # rows, same aggregate, several times the precision.
+    # Whole-family reference retained for other reporting surfaces.
     pooled = _lean_market_agg(obs, obs["won"].notna())
     if pooled:
         out["pooled"] = pooled
