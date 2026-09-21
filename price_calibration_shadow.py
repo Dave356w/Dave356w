@@ -39,9 +39,9 @@ import pandas as pd
 
 from market_backfill import breakeven_prob, publish_reconstruction
 
-M0 = 20.0
+M0 = 10.0
 HURDLE = 0.015
-RULE_TAG = "v13_dynamic_price_shadow_m20_h015"
+RULE_TAG = "v13_dynamic_price_shadow_m10_h015"
 MODEL_TAG = "xw+starter_blend_v13"
 SOURCE_TAGS = ("xw+plat_consol_v12", MODEL_TAG)
 
