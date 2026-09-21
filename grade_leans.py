@@ -1981,7 +1981,7 @@ def report_text(led):
 
         # v13 dynamic-price calibration SHADOW. This is analysis only: it reads
         # the same reconstructed/native v13 history the public UI already uses,
-        # then walks it chronologically with fixed 5x4 cells and M0=20 market
+        # then walks it chronologically with fixed 5x4 cells and M0=10 market
         # shrinkage. It never writes a model field or changes a ledger decision.
         # Closing prices are used here on purpose so the entire reconstruction
         # has one uniform retrospective basis; the block labels that basis and

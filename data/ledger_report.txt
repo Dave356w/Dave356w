@@ -146,26 +146,26 @@ xwOBA |delta| x LEANED-side closing price (the grid the game card shows one cell
     COLUMN               +18±10        +9±5        +8±4        +3±4       +12±6      +13±11           ·           ·        +8±2
   best-cell reference: the best of these 26 non-empty cells averages +40.7 pp of excess under 'every game settles at its own price'; the observed best is +46.0 pp, |delta| [0.050, inf) -129 to -100 (n=1) -- ABOVE it, which a search returns about half the time under no effect, so it is not a finding either. A grid is a search, so a cell is read against that reference, never against zero.
   pooled over all 490 rows: 312-178 (0.637)   excess +8.0 +- 2.2 pp   +54.94u. The margins are better estimated than any cell; read them first.
-v13 dynamic-price calibration SHADOW — retrospective (M0=20, hurdle +1.5pp)
-  rule — fixed 5x4 |delta| x market-q cells; p_hat=(W+20*qbar)/(n+20); QUALIFY when p_hat - posted breakeven >= 1.5pp.
+v13 dynamic-price calibration SHADOW — retrospective (M0=10, hurdle +1.5pp)
+  rule — fixed 5x4 |delta| x market-q cells; p_hat=(W+10*qbar)/(n+10); QUALIFY when p_hat - posted breakeven >= 1.5pp.
   state — one expanding stream from the earliest usable v13-represented slate; same-date games share a frozen prior state and are appended only after the slate.
   basis — 490 usable rows over 37 slates (2026-08-15..2026-09-20): 445 reconstructed + 45 native v13; the native boundary does NOT reset n.
   price basis — leaned-side CLOSING devigged q for cell/prior; leaned-side posted closing ML for executable breakeven and flat-stake return. No saved-pregame fallback.
   INTERPRETATION — descriptive shadow only. Reconstructed v13 is mixed-basis hindsight and close is not the execution snapshot; nothing here changes the model or a ledger decision.
-  all v13 leans     n=490  312-178 (0.637)  +54.94u  ROI +11.2%  mean p_hat 0.597  mean BE 0.575  mean edge +2.2pp
-  QUALIFY           n=262  161-101 (0.615)  +25.04u  ROI +9.6%  mean p_hat 0.630  mean BE 0.563  mean edge +6.7pp
-  ABSTAIN           n=228  151-77 (0.662)  counterfactual +29.89u  ROI +13.1%  mean p_hat 0.558  mean BE 0.589  mean edge -3.0pp
-  probability diagnostics (all rows): Brier 0.2326  log loss 0.6577
+  all v13 leans     n=490  312-178 (0.637)  +54.94u  ROI +11.2%  mean p_hat 0.610  mean BE 0.575  mean edge +3.5pp
+  QUALIFY           n=284  179-105 (0.630)  +33.50u  ROI +11.8%  mean p_hat 0.654  mean BE 0.567  mean edge +8.7pp
+  ABSTAIN           n=206  133-73 (0.646)  counterfactual +21.44u  ROI +10.4%  mean p_hat 0.550  mean BE 0.585  mean edge -3.5pp
+  probability diagnostics (all rows): Brier 0.2341  log loss 0.6611
   basis split (QUALIFY performance; both use the same continuously accumulated cell state):
-    reconstructed: n=445, QUALIFY 235  141-94  +17.01u (+7.2% ROI)
-    native: n=45, QUALIFY 27  20-7  +8.03u (+29.7% ROI)
+    reconstructed: n=445, QUALIFY 256  158-98  +24.65u (+9.6% ROI)
+    native: n=45, QUALIFY 28  21-7  +8.85u (+31.6% ROI)
   QUALIFY / total by fixed cell:
                      q<.450   .450-.500   .500-.550      .550+
-    [0.000,0.010)       8/18      32/36      26/44      14/42 
-    [0.010,0.020)       4/16      14/17      22/36      47/57 
-    [0.020,0.030)       1/5        1/13      12/23      13/56 
-    [0.030,0.050)       0/1        0/4        1/12      51/77 
-    [0.050,+)           0/0        0/0        0/1       16/32 
+    [0.000,0.010)      10/18      32/36      27/44      14/42 
+    [0.010,0.020)       4/16      14/17      26/36      52/57 
+    [0.020,0.030)       1/5        1/13      17/23       7/56 
+    [0.030,0.050)       0/1        0/4        1/12      60/77 
+    [0.050,+)           0/0        0/0        0/1       18/32 
 xwOBA F5 by |Δ| tercile:
   low  79-71-14  (0.527)   (Δ 0.000–0.012, n=164)
   mid  66-69-28  (0.489)   (Δ 0.012–0.026, n=163)
