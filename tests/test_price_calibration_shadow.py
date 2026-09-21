@@ -9,6 +9,9 @@ def _prepared(rows):
 
 
 def test_fixed_band_boundaries():
+    assert pcs.M0 == 10.0
+    assert pcs.RULE_TAG == "v13_dynamic_price_shadow_m10_h015"
+
     assert pcs.delta_band(0.000)[0] == "D1"
     assert pcs.delta_band(0.010)[0] == "D2"
     assert pcs.delta_band(0.020)[0] == "D3"
