@@ -60,7 +60,7 @@ def test_same_slate_rows_share_frozen_state_then_next_slate_updates():
     assert out.loc[2, "cell_n_pregame"] == 2
     assert out.loc[2, "cell_wins_pregame"] == 1
     assert np.isclose(out.loc[2, "cell_mean_market_p_pregame"], 0.61)
-    assert np.isclose(out.loc[2, "shrinkage_lambda_pregame"], 2 / 22)
+    assert np.isclose(out.loc[2, "shrinkage_lambda_pregame"], 2 / 12)
     assert np.isclose(out.loc[2, "adjusted_probability_pregame"], 0.60)
     assert np.isclose(out.loc[2, "estimated_edge"], 0.02)
     assert out.loc[2, "decision_action"] == "QUALIFY"
@@ -96,8 +96,8 @@ def test_sparse_heavy_favorite_example_shrinks_to_abstain():
     assert r["cell_n_pregame"] == 8
     assert r["cell_wins_pregame"] == 6
     assert np.isclose(r["cell_mean_market_p_pregame"], 0.665)
-    assert np.isclose(r["shrinkage_lambda_pregame"], 8 / 28)
-    assert np.isclose(r["adjusted_probability_pregame"], (6 + 20 * 0.665) / 28)
+    assert np.isclose(r["shrinkage_lambda_pregame"], 8 / 18)
+    assert np.isclose(r["adjusted_probability_pregame"], (6 + 10 * 0.665) / 18)
     assert r["decision_action"] == "ABSTAIN"
 
 
