@@ -1978,6 +1978,22 @@ def report_text(led):
         except Exception as _exc:                  # noqa: BLE001 - see above
             say(f"{MODEL_METRIC_LABEL} |delta| x selected-side closing price "
                 f"unavailable ({type(_exc).__name__})")
+
+        # v13 dynamic-price calibration SHADOW. This is analysis only: it reads
+        # the same reconstructed/native v13 history the public UI already uses,
+        # then walks it chronologically with fixed 5x4 cells and M0=20 market
+        # shrinkage. It never writes a model field or changes a ledger decision.
+        # Closing prices are used here on purpose so the entire reconstruction
+        # has one uniform retrospective basis; the block labels that basis and
+        # the reconstruction hindsight explicitly.
+        try:
+            import price_calibration_shadow
+            for line in price_calibration_shadow.report_lines(g, model_tag=MODEL_TAG):
+                say(line)
+        except Exception as _exc:                  # noqa: BLE001 - see above
+            say(f"v13 dynamic-price calibration shadow unavailable "
+                f"({type(_exc).__name__})")
+
         if len(g) >= 9:
             g["_terc"] = pd.qcut(g["xw_delta"], 3, labels=["low", "mid", "hi"], duplicates="drop")
             say(f"{MODEL_METRIC_LABEL} F5 by |Δ| tercile:")
