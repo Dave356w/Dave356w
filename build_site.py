@@ -4672,122 +4672,93 @@ def _lean_history_range(lo, hi):
 
 
 def _xwoba_side_history(ctx, delta, selection_ml=None):
-    """Lean history at the intersection of delta and closing-price rung.
+    """Descriptive v13 history around this game's delta and price buckets.
 
-    "XWOBA SIDE" was the retired rule's FOLLOW branch name and it is gone
-    from the copy here, with the rule, on 2026-09-18 -- a card still using
-    one branch's label after the other branch was deleted keeps the rule's
-    vocabulary as the most visible copy on the site. The cells themselves
-    moved to the lean's own columns over every decided row in the same
-    commit; see `hybrid_branch_records`.
+    The intersection remains visible because it is useful context, but it is
+    not presented as this game's probability. Two broader margins sit beside
+    it: the same delta band across all closing prices, and the same closing
+    price rung across all deltas. All three are retrospective flat-stake
+    records from the same v13-represented history.
 
-    This is one population, not two adjacent aggregates with
-    different denominators. The displayed moneyline chooses the rung; the
-    historical rows themselves are still bucketed on their closing prices.
-
-    The record carries FLAT-STAKE UNITS rather than a reliability marker, on
-    the operator's call. `units` is the sum of `_american_unit_profit` at 1u a
-    game, priced at each row's own close, so it is already price-relative in
-    the way a bare win rate is not: 5-5 at -200 is a loss and reads as one.
-
-    THE LABEL SAID `ROI` AND THE VALUE WAS UNITS -- fixed 2026-09-16. ROI is a
-    RATE and units is a TOTAL, so `ROI +4.69u` named one quantity and showed
-    another. It survived because the two card lines were written on separate
-    operator calls and neither was read beside the other; rendering both cards
-    from live ledger data in one page is what exposed it, not reading either
-    function. The paragraph this replaces made the divergence sound deliberate
-    -- "read the two as different surfaces on purpose, not as one drifting" --
-    which is prose defending an inconsistency rather than a design.
-
-    Both card lines now read `W-L (0.xxx) · +N.NNu`, and `ROI` survives only on
-    the grades page, where it IS a rate and prints as `+11.4%`. One label per
-    quantity; `test_card_units_are_never_labelled_roi` pins that no card line
-    pairs the word with a unit suffix.
-
-    What went with the marker is a CLAIM, not decoration -- these rows are
-    retrospective, the v2 gates were chosen after this sample, and the ranges
-    are descriptive bands rather than validated cells. That framing has not
-    been deleted from the site; it is carried by the panel's own copy on
-    `market-calibration.html` and by `hybrid_v2.py`'s registration, which is
-    still the only thing that can answer whether the rule works. A thin cell
-    here can show a large units figure for the same reason it could show a
-    large excess, and nothing on this card converts either into a forward
-    expectation.
+    The live card uses the current pregame price while these rows are bucketed
+    on closing moneylines, so the heading says closing ML explicitly.
     """
     bucket = _lean_history_bucket(delta)
     if bucket is None:
         return ""
     i, lo, hi = bucket
     range_txt = _lean_history_range(lo, hi)
-    version = _model_version_short()
     ml = _f(selection_ml)
     rung = _ladder_rung(ml) if ml is not None else None
     if rung is None:
         return ""
-    parts = (ctx or {}).get(("delta_price_follow", i, rung))
-    if not parts:
-        return ("<div class='vline hist'><span class='vk'>Past results:</span>"
-                f"<span>No completed {version} selections in the "
-                f"Δ {range_txt} / closing ML {_esc(rung)} intersection "
-                "yet.</span></div>")
 
-    model = parts["model"]
-    model_unit = "game" if model["n"] == 1 else "games"
-    body = ("<div class='vline'><span class='vk'>Past results</span>"
-            f"<span>{model['w']}-{model['l']} "
-            f"({model['actual']:.3f}) · {model['units']:+.2f}u</span></div>")
+    ctx = ctx or {}
+    cell = ctx.get(("delta_price_follow", i, rung))
+    delta_all = ctx.get(("delta_all_prices", i))
+    price_all = ctx.get(("price_all_delta", rung))
+
+    def _record(parts):
+        if not parts or not parts.get("model"):
+            return None
+        model = parts["model"]
+        n = int(model["n"])
+        game_word = "game" if n == 1 else "games"
+        return (f"{n} {game_word} · {int(model['w'])}-{int(model['l'])} · "
+                f"{float(model['units']):+.2f}u")
+
+    rows = []
+    cell_txt = _record(cell)
+    if cell_txt:
+        rows.append(
+            "<div class='vline'><span class='vk'>Similar Δ + closing-price cell</span>"
+            f"<span>{cell_txt}</span></div>"
+        )
+    else:
+        rows.append(
+            "<div class='vline'><span class='vk'>Similar Δ + closing-price cell</span>"
+            f"<span>No completed {_model_version_short()} selections yet</span></div>"
+        )
+
+    delta_txt = _record(delta_all)
+    if delta_txt:
+        rows.append(
+            f"<div class='vline'><span class='vk'>Δ {range_txt} across all prices</span>"
+            f"<span>{delta_txt}</span></div>"
+        )
+
+    price_txt = _record(price_all)
+    if price_txt:
+        rows.append(
+            f"<div class='vline'><span class='vk'>Closing ML {_esc(rung)} across all Δ</span>"
+            f"<span>{price_txt}</span></div>"
+        )
+
     return (
         "<div class='vprofile'>"
-        f"<div class='vprofile-title'>Past {version} selections</div>"
-        f"<div class='vprofile-band'>Δ {range_txt} · closing ML {_esc(rung)} · "
-        f"{model['n']} {model_unit}</div>"
-        f"{body}</div>"
+        "<div class='vprofile-title'>Historical context · descriptive only</div>"
+        f"<div class='vprofile-band'>Δ {range_txt} · closing ML {_esc(rung)}</div>"
+        + "".join(rows)
+        + "</div>"
     )
 
-
 def _branch_history(ctx, action, p_lean=None, delta=None, selection_ml=None):
-    """Track record of the delta x price cell this game's selection lands in.
+    """Return descriptive history only when a two-sided price is available.
 
-    Every line below it describes PAST games, and the wording has to make that
-    impossible to misread. The version this replaces led with
-    "Selection won  73.3%" directly under tonight's teams, which reads as this
-    pick's win probability -- it is a historical rate, and the panel publishes
-    no per-game probability at all.
-
-    **The FADE body is gone, along with the `("branch", …)` and
-    `("chalk", …)` aggregates it read.** v13 retires the hybrid rule, so
-    `published_action` returns FOLLOW or None and no call could reach it --
-    an unreachable renderer whose eight aggregates were still computed every
-    build, which is exactly the shape this file records finding once before.
-    The retired rule was taken off every user-facing page on 2026-09-18 and
-    this is the last of it.
-
-    What this is NOT is the deletion of a control: always-chalk and always-home
-    are on `market-calibration.html`, scored on the identical rows, and the
-    rule's own forward reading is untouched in `data/ledger_report.txt`.
+    The model lean is shown independently of the market. History needs the
+    current price only to choose the matching closing-moneyline rung.
     """
     if not action:
-        # The rule line already says the selection abstains and why; a second
-        # line restating it is the redundancy this rewrite removed.
         return ""
     return _xwoba_side_history(ctx, delta, selection_ml)
 
 
 def _verdict_html(fav, odds, away_abbr, home_abbr, ctx=None, delta=None):
-    """Per-game panel: the model's lean, the price, and the rule's selection.
+    """Per-game panel: model side, current market hurdle, descriptive history.
 
-    The site's one published decision surface. It is laid out in two labelled
-    zones -- what is true of THIS game, then the track record of the branch it
-    landed in -- because every clarity problem this panel has had came from a
-    reader carrying a historical rate down onto tonight's teams.
-
-    Two things it deliberately does not do. It never calls a selection a bet:
-    the copy carries no betting language and a test pins that. And it never
-    hides the always-chalk control, because the FADE branch is chalk-identical
-    by construction and says so in words rather than by adjacency alone.
-
-    A live card uses the current pregame price while history is bucketed on
-    closes, so a game can cross the threshold before first pitch.
+    v13 chooses the side from model inputs alone. The market supplies the
+    current price and no-vig benchmark; historical delta/price buckets are
+    context, not a calibrated probability for tonight's game.
     """
     ctx = ctx or {}
     if fav is None:
@@ -4796,10 +4767,9 @@ def _verdict_html(fav, odds, away_abbr, home_abbr, ctx=None, delta=None):
 
     p_lean = _lean_implied_p(odds, fav, away_abbr, home_abbr)
     action = published_action(p_lean, delta)
-    pick = fav if action else None
     d = _f(delta)
     delta_txt = f"{abs(d):.4f}".lstrip("0") if d is not None else "—"
-    strength = _delta_label(delta) or "—"
+    version = _model_version_short()
 
     odds = odds or {}
     price = odds.get("home_ml") if fav == home_abbr else odds.get("away_ml")
@@ -4807,57 +4777,43 @@ def _verdict_html(fav, odds, away_abbr, home_abbr, ctx=None, delta=None):
     p_txt = (f"{100 * p_lean:.1f}% no-vig" if p_lean is not None
              else "no no-vig price yet")
 
-    sel_price = None
-    if action is None:
-        rule_line = ("<div class='vline'><span class='vk'>Selection</span>"
-                     "<span>pending — no two-sided price yet</span></div>")
-    else:
-        if pick is not None:
-            sel_price = (odds.get("home_ml") if pick == home_abbr
-                         else odds.get("away_ml"))
-        # v13 retires the hybrid rule, so there is exactly ONE reason and it is
-        # the same on every row: the site publishes the model's own side.
-        #
-        # The three-branch version this replaces had to go rather than be
-        # trimmed. Its `else` arm read "market gives X at least 45%, so X
-        # remains the XWOBA side" and, once the fade branch could no longer be
-        # reached, that arm caught every row -- including a lean priced at 30%,
-        # where the sentence is simply false. A reason that survives the rule
-        # it was reasoning about becomes a false claim on the most prominent
-        # surface the site has, which is the defect class this repo tracks most
-        # closely.
-        # No branch name and no arrow. `XWOBA SIDE` was the FOLLOW branch's
-        # public label, so a card still carrying it kept the retired rule's
-        # vocabulary as the most visible copy on the site -- one branch of a
-        # two-branch rule, with the other branch deleted. The heading is what
-        # the row IS, not which arm of a rule produced it.
-        why = (f"{_esc(fav)} is the {MODEL_RATE_LABEL} lean; the market is "
-               "not consulted to change it")
-        rule_line = (
-            f"<div class='vline'><span class='vk'>Selection</span>"
-            f"<span><b>{_esc(pick)}</b>"
-            + (f" {_fmt_ml(sel_price)}" if sel_price is not None else "")
-            + f"</span></div><div class='vnote'>{why}</div>")
+    break_even_line = ""
+    price_num = _f(price)
+    if price_num is not None and (price_num <= -100 or price_num >= 100):
+        be = _imp_ml(price_num)
+        if p_lean is not None:
+            lift_pp = 100.0 * (be - p_lean)
+            break_even_line = (
+                "<div class='vline'><span class='vk'>Posted break-even</span>"
+                f"<span>{100 * be:.1f}% · requires {lift_pp:+.1f} pp over market"
+                "</span></div>"
+            )
+        else:
+            break_even_line = (
+                "<div class='vline'><span class='vk'>Posted break-even</span>"
+                f"<span>{100 * be:.1f}%</span></div>"
+            )
 
-    history = _branch_history(ctx, action, p_lean, delta, sel_price)
-    # The warm accent marked a FADE -- the one case where the published
-    # selection differed from the model's own lean. No such case exists now, so
-    # the accent would mark nothing and is removed rather than left to fire on
-    # a condition that can no longer be true.
-    cls = ""
-    version = _model_version_short()
+    note = (
+        f"<div class='vnote'>{version} chooses the side independently of the "
+        "market. Δ magnitude is not a calibrated win probability.</div>"
+    )
+
+    selection_ml = price if action else None
+    history = _branch_history(ctx, action, p_lean, delta, selection_ml)
+
     return (
-        f"<div class='verdict{cls}'><div class='l'>Model vs market</div>"
+        "<div class='verdict'><div class='l'>Model vs market</div>"
         "<div class='vt'>"
         "<div class='vprofile-title vgroup'>This game</div>"
         f"<div class='vline'><span class='vk'>Model lean</span>"
-        f"<span>{_esc(fav)} · {version} Δ {delta_txt} ({strength})</span></div>"
+        f"<span>{_esc(fav)} · {version} Δ {delta_txt}</span></div>"
         f"<div class='vline'><span class='vk'>Market price</span>"
         f"<span>{_esc(fav)} {price_txt} · {p_txt}</span></div>"
-        f"{rule_line}"
+        f"{break_even_line}"
+        f"{note}"
         f"{history}</div></div>"
     )
-
 
 def _hitter_row_html(i, hr):
     """One batting-order row: name + batting hand, Statcast percentile bar, and
@@ -6169,8 +6125,9 @@ td.bar{width:86px;padding:4px 8px 4px 2px}
    to the value column so it reads as a note on that row, not a new row. */
 .verdict .vnote{margin:2px 0 1px;font:500 12.5px/1.4 var(--sans);
   color:var(--faint)}
-.verdict .vprofile .vline{justify-content:space-between;gap:14px;font-weight:600}
-.verdict .vprofile .vline>span:last-child{text-align:right;color:var(--ink)}
+.verdict .vprofile .vline{display:block;font-weight:600}
+.verdict .vprofile .vline + .vline{margin-top:5px}
+.verdict .vprofile .vline>span:last-child{display:block;margin-top:1px;text-align:left;color:var(--ink)}
 
 /* hitter row: percentile column + name cell. The column is the 88px bar plus
    the cell's own gutters -- it carried a printed percentile until that was
@@ -7024,12 +6981,6 @@ def _lean_market_agg(obs, mask, won="won", p="market_p",
 # ledger's pregame capture columns for four live registrations.
 HYBRID_THRESHOLD = hybrid_v2.THRESHOLD
 
-# Display bands. Only the first boundary is also the v2 decision gate; the high
-# band remains descriptive and neither band receives its own performance claim.
-_DELTA_MEDIUM = 0.012
-_DELTA_HIGH = 0.025
-
-
 def hybrid_action(market_p, xw_net):
     """FOLLOW / FADE for the leaned side's price and delta, else None.
 
@@ -7079,9 +7030,9 @@ def published_action(market_p, xw_net):
 # rule, leaving it with no production caller, so it is deleted at the removal
 # rather than left for a reference count to find later.
 #
-# What replaced it is not another label: the card heads its row `Selection`
-# and names the club. A branch name is only meaningful when there is more
-# than one branch.
+# What replaced it is not another branch label: the card names the model lean
+# directly, then shows the market price and posted break-even hurdle. A branch
+# name is only meaningful when there is more than one branch.
 
 
 def hybrid_selection(lean, away_abbr, home_abbr, market_p, xw_net):
@@ -7168,23 +7119,6 @@ def attach_hybrid_snapshot(frame, odds, snapshot_utc):
         frame.loc[mask, "hybrid_ml"] = selected_ml
         frame.loc[mask, "hybrid_price_source"] = "saved_pregame"
     return frame
-
-
-def _delta_label(delta):
-    """LOW/MEDIUM/HIGH display band for a usable absolute model delta."""
-    if delta is None:
-        return None
-    try:
-        delta = abs(float(delta))
-    except (TypeError, ValueError):
-        return None
-    if not np.isfinite(delta):
-        return None
-    if delta < _DELTA_MEDIUM:
-        return "LOW"
-    if delta < _DELTA_HIGH:
-        return "MEDIUM"
-    return "HIGH"
 
 
 def _lean_market_value_analysis(led):
@@ -7480,10 +7414,7 @@ def _baseline_controls(g):
 def hybrid_branch_records():
     """Current-family records the per-game card reads, keyed by cell.
 
-    Keys: ``("delta_price_follow", band, rung)`` for the |delta| x
-    closing-price cell the card shows one of, ``"pooled"`` for the whole
-    family, and ``"n"``. Scored on `_record_grades`, because pooling older
-    prediction math would answer a different question.
+    Keys: ``("delta_price_follow", band, rung)`` for the |delta| x\n    closing-price cell, ``("delta_all_prices", band)`` for its delta margin,\n    ``("price_all_delta", rung)`` for its price margin, ``"pooled"`` for\n    the whole family, and ``"n"``. Scored on `_record_grades`, because\n    pooling older prediction math would answer a different question.
 
     **The retired rule's keys are gone**, on the operator's 2026-09-18
     instruction to take it off every user-facing page: ``("branch", …)`` and
@@ -7509,8 +7440,7 @@ def hybrid_branch_records():
     if obs.empty:
         return {}
     out = {"n": int(len(obs))}
-    # The pooled reference the per-game panel prints beside its branch. Same
-    # rows, same aggregate, several times the precision.
+    # Whole-family reference retained for other reporting surfaces.
     pooled = _lean_market_agg(obs, obs["won"].notna())
     if pooled:
         out["pooled"] = pooled
@@ -7536,12 +7466,27 @@ def hybrid_branch_records():
     lean_ml = pd.to_numeric(obs["close_ml"], errors="coerce")
     price_rung = lean_ml.map(
         lambda value: _ladder_rung(float(value)) if pd.notna(value) else None)
+    def _card_record(mask):
+        """Project an aggregate to only the quantities the game card renders."""
+        model = _lean_market_agg(obs, mask)
+        if not model:
+            return None
+        return {k: model[k] for k in ("n", "w", "l", "units")}
+
     for i, (lo, hi) in enumerate(_LEAN_HISTORY_BINS):
         delta_mask = delta.ge(lo) & delta.lt(hi)
+        model = _card_record(delta_mask)
+        if model:
+            out[("delta_all_prices", i)] = {"model": model}
         for _rung_lo, _rung_hi, rung in _ODDS_LADDER:
-            model = _lean_market_agg(obs, delta_mask & price_rung.eq(rung))
+            model = _card_record(delta_mask & price_rung.eq(rung))
             if model:
                 out[("delta_price_follow", i, rung)] = {"model": model}
+
+    for _rung_lo, _rung_hi, rung in _ODDS_LADDER:
+        model = _card_record(price_rung.eq(rung))
+        if model:
+            out[("price_all_delta", rung)] = {"model": model}
     return out
 
 

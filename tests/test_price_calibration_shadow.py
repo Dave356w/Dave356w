@@ -158,3 +158,7 @@ def test_report_combines_reconstructed_and_native_without_reset():
     assert "native boundary does NOT reset n" in text
     assert "CLOSING" in text
     assert "descriptive shadow only" in text
+    # Both outcomes are wins with closing-market probability .60. The market
+    # comparator must cover both rows, independently of the shadow decisions.
+    assert "closing-market baseline (same 2 rows): Brier 0.1600  log loss 0.5108" in text
+    assert "shadow minus market loss:" in text
