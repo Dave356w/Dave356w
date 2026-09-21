@@ -305,9 +305,12 @@ class CardIntegrationTests(unittest.TestCase):
         html = b.cmb_card(g, None, {})
         self.assertIn("-120", html)
         self.assertNotIn("+118", html)
-        # And it still publishes a selection rather than rendering an empty
-        # panel -- an absence claim above needs a presence claim beside it.
-        self.assertIn("Selection", html)
+        # And it still publishes the locked model/market view rather than
+        # rendering an empty panel -- an absence claim above needs a presence
+        # claim beside it.
+        self.assertIn("Model lean", html)
+        self.assertIn("Seattle Mariners · V13 Δ", html)
+        self.assertIn("Market price</span><span>Seattle Mariners -120", html)
 
     def test_a_game_that_has_not_started_is_untouched(self):
         # The frozen path must not change a normal pregame slate at all.
