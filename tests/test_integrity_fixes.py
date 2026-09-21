@@ -3688,44 +3688,36 @@ class HybridRuleTests(unittest.TestCase):
         self.assertEqual(build_site._summary_market_line(game, "H"),
                          "H +220")
     def test_an_exact_pickem_follows_the_model(self):
-        """A devigged .500 market has no favourite, and sits well above .45.
-
-        The grid this replaced had to file a no-favourite market into one of
-        three direction bands and got the boundary claim wrong once. The
-        hybrid makes no such claim: a pick'em is simply above the threshold,
-        so the rule follows the model and the card says exactly that.
-        """
+        """A devigged .500 market still leaves v13's model side unchanged."""
         pk = build_site._lean_implied_p(
             {"home_ml": -110, "away_ml": -110}, "H", "A", "H")
         self.assertEqual(pk, 0.5)
         self.assertEqual(build_site.hybrid_action(pk, .001), "FOLLOW")
         html = build_site._verdict_html(
             "H", {"home_ml": -110, "away_ml": -110}, "A", "H", {}, .02)
-        # No branch label: the card heads the row `Selection` and names the
-        # club. `XWOBA SIDE → H` was the retired rule's FOLLOW heading.
-        self.assertIn("Selection", html)
-        self.assertIn("<b>H</b>", html)
-        self.assertNotIn("XWOBA SIDE", html)
+        self.assertIn(
+            f"Model lean</span><span>H · {build_site._model_version_short()} Δ .0200",
+            html)
         self.assertIn("50.0% no-vig", html)
-        # Nothing on a followed game may read as opposition or as an accent.
+        self.assertIn(
+            "Posted break-even</span><span>52.4% · requires +2.4 pp over market",
+            html)
+        self.assertIn("chooses the side independently of the market", html)
+        self.assertNotIn("Selection", html)
+        self.assertNotIn("XWOBA SIDE", html)
         self.assertNotIn("verdict edge", html)
         for banned in ("OPPOSE", "opposes", "against"):
             self.assertNotIn(banned, html)
-
     def test_no_accent_survives_the_rule_it_marked(self):
-        """The accent meant "the rule departed from the model's lean".
-
-        No such row exists under v13, so an accent would mark a condition that
-        cannot occur. Removing the condition and leaving the accent is how a
-        surface ends up with a highlight nobody can explain, so the absence is
-        pinned at both the price that used to fade and one that never did.
-        """
+        """No retired branch accent or branch label survives on the v13 card."""
         for fav, odds, delta in (("H", {"home_ml": -110, "away_ml": -110}, .02),
                                  ("A", {"home_ml": -260, "away_ml": 215}, .005)):
             html = build_site._verdict_html(fav, odds, "A", "H", {}, delta)
             self.assertNotIn("verdict edge", html)
-            self.assertIn(f"<b>{fav}</b>", html)
-            # Neither branch label survives the rule that had branches.
+            self.assertIn(
+                f"Model lean</span><span>{fav} · {build_site._model_version_short()} Δ",
+                html)
+            self.assertNotIn("Selection", html)
             self.assertNotIn("XWOBA SIDE", html)
             self.assertNotIn("MARKET OVER LEAN", html)
     def test_unusable_prices_abstain_rather_than_defaulting_to_a_branch(self):
@@ -3750,25 +3742,21 @@ class HybridRuleTests(unittest.TestCase):
     def test_follow_panel_shows_the_delta_by_price_intersection(self):
         ctx = {
             ("delta_price_follow", 1, "+100 to +129"): {
-                "model": dict(n=14, w=7, l=7, actual=.500, units=-1.80),
+                "model": dict(n=14, w=7, l=7, units=-1.80),
             },
         }
         html = build_site._verdict_html(
             "PIT", dict(p_home=.529, away_ml=103), "PIT", "SD", ctx, .0187,
         )
-        v = build_site._model_version_short()
-        self.assertIn(f"Past {v} selections", html)
-        self.assertIn("Past results", html)
-        self.assertIn(
-            "Δ .010–.020 · closing ML +100 to +129 · 14 games", html)
-        self.assertIn(
-            "Past results</span><span>7-7 (0.500) · -1.80u",
-            html)
-
+        self.assertIn("Historical context · descriptive only", html)
+        self.assertIn("Δ .010–.020 · closing ML +100 to +129", html)
+        self.assertIn("Similar Δ + closing-price cell", html)
+        self.assertIn("14 games · 7-7 · -1.80u", html)
+        self.assertNotIn("Past results", html)
     def test_pit_acceptance_panel_has_the_requested_reads(self):
         ctx = {
             ("delta_price_follow", 1, "+100 to +129"): {
-                "model": dict(n=14, w=7, l=7, actual=.500, units=-1.80),
+                "model": dict(n=14, w=7, l=7, units=-1.80),
             },
         }
         html = build_site._verdict_html(
@@ -3776,22 +3764,20 @@ class HybridRuleTests(unittest.TestCase):
         )
         for expected in (
             "This game",
-            f"Model lean</span><span>PIT · {build_site._model_version_short()} Δ .0187 (MEDIUM)",
+            f"Model lean</span><span>PIT · {build_site._model_version_short()} Δ .0187",
             "Market price</span><span>PIT +103 · 47.1% no-vig",
-            "Selection</span><span><b>PIT</b> +103",
-            # v13 publishes the model side unconditionally, so the
-            # reason is no longer a threshold statement. The old
-            # copy said "market gives X at least 45%", which became
-            # false for every sub-45% lean once the fade branch went.
-            "the market is not consulted to change it",
-            f"Past {build_site._model_version_short()} selections",
-            "Δ .010–.020 · closing ML +100 to +129 · 14 games",
-            "Past results</span><span>7-7 (0.500) · -1.80u",
+            "Posted break-even</span><span>49.3% · requires +2.2 pp over market",
+            "chooses the side independently of the market",
+            "Δ magnitude is not a calibrated win probability",
+            "Historical context · descriptive only",
+            "Δ .010–.020 · closing ML +100 to +129",
+            "14 games · 7-7 · -1.80u",
         ):
             self.assertIn(expected, html)
+        self.assertNotIn("(MEDIUM)", html)
+        self.assertNotIn("Selection", html)
         for banned in ("value bet", "best bet", "free money", "lock"):
             self.assertNotIn(banned, html.lower())
-
     def test_no_branch_or_threshold_key_survives_the_rule(self):
         """Replaces `test_records_respect_the_branch_floor`.
 
