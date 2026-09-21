@@ -7127,23 +7127,6 @@ def attach_hybrid_snapshot(frame, odds, snapshot_utc):
     return frame
 
 
-def _delta_label(delta):
-    """LOW/MEDIUM/HIGH display band for a usable absolute model delta."""
-    if delta is None:
-        return None
-    try:
-        delta = abs(float(delta))
-    except (TypeError, ValueError):
-        return None
-    if not np.isfinite(delta):
-        return None
-    if delta < _DELTA_MEDIUM:
-        return "LOW"
-    if delta < _DELTA_HIGH:
-        return "MEDIUM"
-    return "HIGH"
-
-
 def _lean_market_value_analysis(led):
     """Current-family hybrid-branch summary for the market calibration page.
 
