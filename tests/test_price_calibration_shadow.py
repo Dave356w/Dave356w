@@ -66,7 +66,7 @@ def test_same_slate_rows_share_frozen_state_then_next_slate_updates():
     assert np.isclose(out.loc[2, "shrinkage_lambda_pregame"], 2 / 12)
     assert np.isclose(out.loc[2, "adjusted_probability_pregame"], (1 + 10 * 0.61) / 12)
     assert np.isclose(out.loc[2, "estimated_edge"], ((1 + 10 * 0.61) / 12) - 0.58)
-    assert out.loc[2, "decision_action"] == "QUALIFY"
+    assert out.loc[2, "decision_action"] == "ABSTAIN"
 
 
 def test_sparse_heavy_favorite_example_shrinks_to_abstain():
