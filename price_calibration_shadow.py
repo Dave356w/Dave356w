@@ -332,6 +332,11 @@ def report_lines(ledger, model_tag=MODEL_TAG, m0=M0, hurdle=HURDLE):
     p = np.clip(g["adjusted_probability_pregame"].to_numpy(float), 1e-9, 1 - 1e-9)
     brier = float(np.mean((p - y) ** 2))
     logloss = float(-np.mean(y * np.log(p) + (1 - y) * np.log(1 - p)))
+    market_p = np.clip(g["market_q"].to_numpy(float), 1e-9, 1 - 1e-9)
+    market_brier = float(np.mean((market_p - y) ** 2))
+    market_logloss = float(-np.mean(
+        y * np.log(market_p) + (1 - y) * np.log(1 - market_p)
+    ))
 
     out = [
         title,
@@ -350,6 +355,11 @@ def report_lines(ledger, model_tag=MODEL_TAG, m0=M0, hurdle=HURDLE):
         _summary_line(qual, "QUALIFY"),
         _summary_line(abst, "ABSTAIN", counterfactual=True),
         f"  probability diagnostics (all rows): Brier {brier:.4f}  log loss {logloss:.4f}",
+        f"  closing-market baseline (same {len(g)} rows): Brier {market_brier:.4f}  "
+        f"log loss {market_logloss:.4f}",
+        f"  shadow minus market loss: Brier {brier-market_brier:+.4f}  "
+        f"log loss {logloss-market_logloss:+.4f}; negative is better. "
+        "Descriptive probability scores, not a significance test.",
         "  basis split (QUALIFY performance; both use the same continuously accumulated cell state):",
         _basis_line(g, "reconstructed"),
         _basis_line(g, "native"),

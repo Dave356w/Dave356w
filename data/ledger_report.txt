@@ -156,6 +156,8 @@ v13 dynamic-price calibration SHADOW — retrospective (M0=10, hurdle +1.5pp)
   QUALIFY           n=284  179-105 (0.630)  +33.50u  ROI +11.8%  mean p_hat 0.654  mean BE 0.567  mean edge +8.7pp
   ABSTAIN           n=206  133-73 (0.646)  counterfactual +21.44u  ROI +10.4%  mean p_hat 0.550  mean BE 0.585  mean edge -3.5pp
   probability diagnostics (all rows): Brier 0.2341  log loss 0.6611
+  closing-market baseline (same 490 rows): Brier 0.2318  log loss 0.6556
+  shadow minus market loss: Brier +0.0023  log loss +0.0055; negative is better. Descriptive probability scores, not a significance test.
   basis split (QUALIFY performance; both use the same continuously accumulated cell state):
     reconstructed: n=445, QUALIFY 256  158-98  +24.65u (+9.6% ROI)
     native: n=45, QUALIFY 28  21-7  +8.85u (+31.6% ROI)
