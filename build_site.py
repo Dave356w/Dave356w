@@ -6981,12 +6981,6 @@ def _lean_market_agg(obs, mask, won="won", p="market_p",
 # ledger's pregame capture columns for four live registrations.
 HYBRID_THRESHOLD = hybrid_v2.THRESHOLD
 
-# Display bands. Only the first boundary is also the v2 decision gate; the high
-# band remains descriptive and neither band receives its own performance claim.
-_DELTA_MEDIUM = 0.012
-_DELTA_HIGH = 0.025
-
-
 def hybrid_action(market_p, xw_net):
     """FOLLOW / FADE for the leaned side's price and delta, else None.
 
