@@ -531,6 +531,32 @@ def ladder_rung(ml):
     return None
 
 
+def percentile_price_edges(ml, bands=8):
+    """Shared nearest-rank equal-count market-price edges, with ties intact.
+
+    The market report and live game cards must use the same dynamically
+    recomputed historical partition, not each keep a frozen price ladder.
+    """
+    prices = np.sort(np.asarray(ml, dtype=float))
+    if not prices.size:
+        return []
+    out = []
+    for k in range(1, bands):
+        edge = float(prices[int(np.ceil(k * prices.size / bands)) - 1])
+        if not out or edge > out[-1]:
+            out.append(edge)
+    return out
+
+
+def percentile_band_index(ml, edges):
+    """Index each American moneyline into the same partition as the report."""
+    ml = np.asarray(ml, dtype=float)
+    idx = np.zeros(ml.size, dtype=int)
+    for i, edge in enumerate(edges):
+        idx[ml > edge] = i + 1
+    return idx
+
+
 def excess_se(probs):
     """SE of (realised rate - mean implied) under correctly priced games.
 
