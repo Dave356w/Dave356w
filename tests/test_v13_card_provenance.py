@@ -5,7 +5,9 @@ minority of near-zero selections on the historical paired rows. This does not
 make reconstructed rows prospective bets: most saved wOBA shadow timestamps
 are after their own game's scheduled start. Render both bases explicitly.
 """
+from unittest import mock
 import numpy as np
+import pandas as pd
 import build_site as b
 
 
@@ -67,3 +69,23 @@ def test_reconstructed_only_card_never_invents_native_record():
     assert "12 mixed-basis reconstructions" in h
     assert "prospective record" in h
     assert "Cleared the posted price by" not in h
+
+
+def test_missing_row_provenance_never_creates_a_native_record():
+    """A synthetic observation frame cannot be assigned live V13 status."""
+    obs = pd.DataFrame({
+        "won": [1.0, 0.0],
+        "market_p": [.55, .45],
+        "market_resid": [.45, -.45],
+        "close_ml": [-120.0, 115.0],
+        "profit": [100 / 120, -1.0],
+    })
+    with mock.patch.object(b, "load_ledger_df",
+                           return_value=pd.DataFrame([{}])):
+        with mock.patch.object(b, "_lean_market_observations",
+                               return_value=obs):
+            ctx = b.hybrid_branch_records()
+    assert ctx["n"] == 2
+    assert ctx["pooled"]["n"] == 2
+    assert "native" not in ctx
+    assert "reconstructed_n" not in ctx
