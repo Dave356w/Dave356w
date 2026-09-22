@@ -64,7 +64,7 @@ import requests
 
 from market_backfill import (MARKET_COLS, ODDS_LADDER, V13_RECON_COLS,
                              V13_RECON_TEXT_COLS, attach_market,
-                             breakeven_prob, chalk_is_home, excess_se,
+                             breakeven_prob, chalk_is_home, ev_null, excess_se,
                              is_pickem, ladder_rung, metric_label,
                              publish_reconstruction)
 from actuals_backfill import (ACTUAL_COLS, attach_actuals, actuals_summary,
@@ -967,7 +967,11 @@ def _grid_cell_line(label, won, q, width=14, breakeven=None):
     if breakeven is not None:
         be = np.asarray(breakeven, dtype=float)
         if be.size == n and np.isfinite(be).all():
-            line += f"   EV {100 * (rate - float(be.mean())):+6.1f} pp"
+            # The null is PRINTED, not left to the block's prose. Stating the
+            # rule and withholding the number is what let a reader compare an
+            # EV figure to zero; see market_backfill.ev_null for the incident.
+            line += (f"   EV {100 * (rate - float(be.mean())):+6.1f} pp"
+                     f" (null {100 * ev_null(q, be):+5.1f})")
     return line
 
 
@@ -1065,8 +1069,14 @@ def _magnitude_price_grid_lines(g):
         "a bet has to clear. The two differ by the",
         "    cell's own hold, so a cell can beat its devigged q and still lose money. "
         "One SE serves both: the breakeven is fixed",
-        "    by the market exactly as q is. Their NULLS differ though -- excess is "
-        "centred on zero when the market is right, EV on minus the hold.",
+        "    by the market exactly as q is. Their NULLS differ though, and the EV "
+        "column PRINTS its own: excess is centred on",
+        "    zero when the market is right, EV on minus the cell's hold, which is "
+        "the (null ...) beside it. Read EV against that,",
+        "    NEVER against zero -- doing so credits the model with one hold it never "
+        "earned. Because the two columns differ by a",
+        "    constant the market fixes, excess / +- is already the z for BOTH, so no "
+        "second interval is printed or needed.",
         "  Magnitude is an xwOBA difference, not a win probability, and this repo has "
         "no validated mapping between the two.",
         "    A cell's rate is what past leans in it did; it is not this model's "

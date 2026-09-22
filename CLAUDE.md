@@ -2,7 +2,7 @@
 
 This is the current working agreement for `Dave356w/Dave356w`, the XWOBA MLB Matchups project. Be a rigorous, constructive collaborator: inspect real code and data, recognize demonstrated progress, explain uncertainty in proportion to the evidence, and help turn observations into testable improvements. The owner directs the product and decides which experiments and changes to pursue. Your job is to make those decisions better informed and execute authorized work reliably.
 
-This file intentionally stays short and current. The former 4,700-plus-line working log is preserved at `docs/archive/working_standards_history_2026-09-22.md` as **historical context, not active instructions**. Consult specific entries when relevant, then recheck their dated claims against current code, ledger, and tests. Do not append a session transcript or a running postmortem to this file.
+This file intentionally stays short and current. The former 4,800-line working log—including the merged EV-null incident—is preserved at `docs/archive/working_standards_history_2026-09-22.md` as **historical context, not active instructions**. Consult specific entries when relevant, then recheck their dated claims against current code, ledger, and tests. Do not append a session transcript or a running postmortem to this file.
 
 ## 1. Partnership: constructive without sacrificing rigor
 
@@ -58,8 +58,34 @@ A confidence interval crossing zero means the sample has not resolved that effec
 - A historical delta-by-price cell is descriptive. Overlapping cell and marginal records are not independent corroborations. Large searches require an explicit multiplicity/search reference; do not showcase the largest in-sample cell as a per-game recommendation.
 - The no-vig market q and the posted price's break-even probability are **different thresholds**. An apparent excess over q can still be insufficient at the posted price.
 - When evaluating market-relative EV, specify the null. Under "the devigged market is correct," the expected EV margin against posted break-even is **q minus break-even**, generally negative by the hold—not zero. Under a distinct "strategy breaks even" null, zero profit is appropriate. Never attach the first question's label to the second question's calculation.
+- **Preserve the merged EV-null safeguard (#227).** `market_backfill.ev_null(probs, breakevens)` derives the market-correct null from the *same* q and posted break-even values the renderer holds, returns NaN rather than inventing zero for invalid inputs, and supplies the `(null …)` value on every EV line. `EV − null` must equal excess up to output rounding. The two columns share their sampling SE when their difference is fixed by the prices; test the rendered lines, not just the helper.
 - A probability model must be assessed against the contemporaneous market on the **same rows** using proper scoring rules (for example Brier and log loss), calibration, and uncertainty. High accuracy or positive ROI alone does not demonstrate probability calibration.
 - The dynamic-price arm is a **shadow experiment** until a separately specified forward test validates an execution rule. Changing the reporting or shadow analysis must not silently modify v13's lean, selection, registered constants, or historical ledger.
+
+### Dated research snapshot: v13-represented performance by leaned-side closing price
+
+**Frozen observation: September 22, 2026; source: `data/ledger_report.txt` on main at this update. Not a continuously updated result or an execution rule.** The published v13-represented historical basis contains 493 completed leans across 39 slates (August 15–September 22): **445 retrospective reconstructions and 48 native v13 decisions**, scored at each game's **closing** no-vig market probability q and corresponding posted closing moneyline. The original-decision ledger reports a different 308–185 record across its lean rows; do not substitute it for the 313–180 reconstructed/current-model representation below.
+
+| Closing ML band | n | W–L | Win % | Share | Mean q | Excess (pp) | ± SE (pp) | EV (pp) | Market null (pp) | Units | ROI |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| ≤ −250 | 19 | 17–2 | 89.5% | 3.9% | 0.715 | +18.0 | 10.3 | +15.2 | −2.8 | +3.88 | +20.4% |
+| −249 to −175 | 92 | 68–24 | 73.9% | 18.7% | 0.645 | +9.5 | 5.0 | +7.3 | −2.2 | +10.10 | +11.0% |
+| −174 to −130 | 164 | 108–56 | 65.9% | 33.3% | 0.578 | +8.1 | 3.9 | +6.1 | −2.0 | +16.89 | +10.3% |
+| −129 to −100 | 135 | 73–62 | 54.1% | 27.4% | 0.517 | +2.3 | 4.3 | +0.8 | −1.6 | +2.60 | +1.9% |
+| +100 to +129 | 62 | 36–26 | 58.1% | 12.6% | 0.458 | +12.3 | 6.3 | +10.7 | −1.5 | +13.91 | +22.4% |
+| +130 to +174 | 21 | 11–10 | 52.4% | 4.3% | 0.397 | +12.7 | 10.7 | +11.4 | −1.2 | +6.24 | +29.7% |
+| +175 to +249 / ≥ +250 | 0 | — | — | 0% | — | — | — | — | — | — | — |
+| **Pooled** | **493** | **313–180** | **63.5%** | **100%** | **0.556** | **+7.9** | **2.2** | **+6.0** | **−1.8** | **+53.62** | **+10.9%** |
+
+**Observed distribution, without declaring a price-band winner:**
+
+- The pooled historical model-relative result is **+7.9 ± 2.2 percentage points over closing no-vig q**, with **+53.62 flat-stake units (+10.9% closing-price ROI)**. This is an informative retrospective pattern, not verified pregame executable profitability.
+- The adjacent favorite bands **−249 to −175** and **−174 to −130** jointly account for **256 games, 176–80, and +26.99u**; the result is not solely an extreme-favorite or one-cell artifact. Nevertheless, the same underlying reconstructions are reused throughout these summaries.
+- The nearer-even **−129 to −100** group is **135 games, 73–62, +2.3 ± 4.3pp excess, +2.60u (+1.9% ROI)**. Its weaker historical price-relative margin is an appropriate *hypothesis* to monitor, not an automatically justified exclusion gate.
+- The two observed **plus-money bands** together are **83 games, 47–36, +20.15u (+24.3% ROI)**. Their results merit prospective monitoring, but the +130 to +174 segment contains only **21** games, and neither tail has a preregistered price-band selection rule.
+- **The null matters:** the pooled posted-price EV margin is **+6.0pp** against a **−1.8pp** market-correct null; their difference approximately equals the reported **+7.9pp** no-vig excess after rounding. Do not compare that EV column to a zero null while describing the test as "market correct."
+
+**Next discriminating check:** freeze these bands as descriptive monitoring dimensions; collect native v13 selections with saved pregame prices, show native versus reconstructed outcomes separately, and compare each band's excess against the *same-row* market and unchanged all-lean baseline over future slates. Use price-basis-specific uncertainty and a multiple-comparison or prespecified-contrast framework if testing band differences. Do not change v13's selection, invent calibrated per-game probabilities, or promote an observed retrospective band to an execution filter on this snapshot.
 
 When a probe shows that an added feature did not improve held-out scores, say which specific feature/test failed to demonstrate an increment, keep the functional baseline, and propose the next discriminating test if one is worthwhile. Do not infer that the original model therefore lacks value.
 

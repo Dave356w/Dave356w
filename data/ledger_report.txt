@@ -63,7 +63,10 @@ xwOBA |delta| x saved-pregame market probability (current record family; descrip
   Cell: n; record; mean q; excess = realised rate - mean q, in points; +- Poisson-binomial SE at the cell's own prices;
     EV = the same rate against the POSTED price's breakeven, which is what a bet has to clear. The two differ by the
     cell's own hold, so a cell can beat its devigged q and still lose money. One SE serves both: the breakeven is fixed
-    by the market exactly as q is. Their NULLS differ though -- excess is centred on zero when the market is right, EV on minus the hold.
+    by the market exactly as q is. Their NULLS differ though, and the EV column PRINTS its own: excess is centred on
+    zero when the market is right, EV on minus the cell's hold, which is the (null ...) beside it. Read EV against that,
+    NEVER against zero -- doing so credits the model with one hold it never earned. Because the two columns differ by a
+    constant the market fixes, excess / +- is already the z for BOTH, so no second interval is printed or needed.
   Magnitude is an xwOBA difference, not a win probability, and this repo has no validated mapping between the two.
     A cell's rate is what past leans in it did; it is not this model's probability for the next game in that cell.
   The q column is what makes the rate readable: a band can win 77% because the model is right or because it leaned
@@ -75,42 +78,42 @@ xwOBA |delta| x saved-pregame market probability (current record family; descrip
        229  no usable saved pregame price
          9  no finite xw_net
   |delta| [0.000, 0.010)  n=80
-    q <.450        n= 13       6-7 (0.462)   mean q .417   excess   +4.5 +- 13.7 pp   EV   +2.5 pp
-    q .450-.500    n= 18      13-5 (0.722)   mean q .473   excess  +24.9 +- 11.8 pp   EV  +22.7 pp
-    q .500-.550    n= 25     11-14 (0.440)   mean q .521   excess   -8.1 +- 10.0 pp   EV  -10.5 pp
-    q .550+        n= 24      15-9 (0.625)   mean q .590   excess   +3.5 +- 10.0 pp   EV   +0.8 pp
-    all q          n= 80     45-35 (0.562)   mean q .514   excess   +4.8 +-  5.5 pp   EV   +2.5 pp
+    q <.450        n= 13       6-7 (0.462)   mean q .417   excess   +4.5 +- 13.7 pp   EV   +2.5 pp (null  -1.9)
+    q .450-.500    n= 18      13-5 (0.722)   mean q .473   excess  +24.9 +- 11.8 pp   EV  +22.7 pp (null  -2.2)
+    q .500-.550    n= 25     11-14 (0.440)   mean q .521   excess   -8.1 +- 10.0 pp   EV  -10.5 pp (null  -2.4)
+    q .550+        n= 24      15-9 (0.625)   mean q .590   excess   +3.5 +- 10.0 pp   EV   +0.8 pp (null  -2.7)
+    all q          n= 80     45-35 (0.562)   mean q .514   excess   +4.8 +-  5.5 pp   EV   +2.5 pp (null  -2.4)
   |delta| [0.010, 0.020)  n=67
-    q <.450        n=  6       3-3 (0.500)   mean q .420   excess   +8.0 +- 20.1 pp   EV   +6.0 pp
-    q .450-.500    n=  8       3-5 (0.375)   mean q .481   excess  -10.6 +- 17.7 pp   EV  -12.8 pp
-    q .500-.550    n= 23     13-10 (0.565)   mean q .526   excess   +3.9 +- 10.4 pp   EV   +1.5 pp
-    q .550+        n= 30     19-11 (0.633)   mean q .586   excess   +4.8 +-  9.0 pp   EV   +2.1 pp
-    all q          n= 67     38-29 (0.567)   mean q .538   excess   +2.9 +-  6.1 pp   EV   +0.5 pp
+    q <.450        n=  6       3-3 (0.500)   mean q .420   excess   +8.0 +- 20.1 pp   EV   +6.0 pp (null  -1.9)
+    q .450-.500    n=  8       3-5 (0.375)   mean q .481   excess  -10.6 +- 17.7 pp   EV  -12.8 pp (null  -2.2)
+    q .500-.550    n= 23     13-10 (0.565)   mean q .526   excess   +3.9 +- 10.4 pp   EV   +1.5 pp (null  -2.4)
+    q .550+        n= 30     19-11 (0.633)   mean q .586   excess   +4.8 +-  9.0 pp   EV   +2.1 pp (null  -2.7)
+    all q          n= 67     38-29 (0.567)   mean q .538   excess   +2.9 +-  6.1 pp   EV   +0.5 pp (null  -2.5)
   |delta| [0.020, 0.030)  n=48
-    q <.450        n=  4       3-1 (0.750)   mean q .419   excess  +33.1 +- 24.7 pp   EV  +31.1 pp
-    q .450-.500    n=  8       5-3 (0.625)   mean q .471   excess  +15.4 +- 17.6 pp   EV  +13.2 pp
-    q .500-.550    n= 12      10-2 (0.833)   mean q .528   excess  +30.6 +- 14.4 pp   EV  +28.1 pp
-    q .550+        n= 24      15-9 (0.625)   mean q .606   excess   +1.9 +- 10.0 pp   EV   -0.9 pp
-    all q          n= 48     33-15 (0.688)   mean q .548   excess  +13.9 +-  7.1 pp   EV  +11.4 pp
+    q <.450        n=  4       3-1 (0.750)   mean q .419   excess  +33.1 +- 24.7 pp   EV  +31.1 pp (null  -1.9)
+    q .450-.500    n=  8       5-3 (0.625)   mean q .471   excess  +15.4 +- 17.6 pp   EV  +13.2 pp (null  -2.2)
+    q .500-.550    n= 12      10-2 (0.833)   mean q .528   excess  +30.6 +- 14.4 pp   EV  +28.1 pp (null  -2.4)
+    q .550+        n= 24      15-9 (0.625)   mean q .606   excess   +1.9 +- 10.0 pp   EV   -0.9 pp (null  -2.8)
+    all q          n= 48     33-15 (0.688)   mean q .548   excess  +13.9 +-  7.1 pp   EV  +11.4 pp (null  -2.5)
   |delta| [0.030, 0.050)  n=55
-    q <.450        n=  1       1-0 (1.000)   mean q .417   excess  +58.3 +- 49.3 pp   EV  +56.3 pp
-    q .450-.500    n=  1       0-1 (0.000)   mean q .483   excess  -48.3 +- 50.0 pp   EV  -50.5 pp
-    q .500-.550    n=  5       3-2 (0.600)   mean q .518   excess   +8.2 +- 22.3 pp   EV   +5.8 pp
-    q .550+        n= 48     35-13 (0.729)   mean q .625   excess  +10.4 +-  7.0 pp   EV   +7.5 pp
-    all q          n= 55     39-16 (0.709)   mean q .609   excess  +10.0 +-  6.5 pp   EV   +7.2 pp
+    q <.450        n=  1       1-0 (1.000)   mean q .417   excess  +58.3 +- 49.3 pp   EV  +56.3 pp (null  -1.9)
+    q .450-.500    n=  1       0-1 (0.000)   mean q .483   excess  -48.3 +- 50.0 pp   EV  -50.5 pp (null  -2.2)
+    q .500-.550    n=  5       3-2 (0.600)   mean q .518   excess   +8.2 +- 22.3 pp   EV   +5.8 pp (null  -2.4)
+    q .550+        n= 48     35-13 (0.729)   mean q .625   excess  +10.4 +-  7.0 pp   EV   +7.5 pp (null  -2.9)
+    all q          n= 55     39-16 (0.709)   mean q .609   excess  +10.0 +-  6.5 pp   EV   +7.2 pp (null  -2.8)
   |delta| [0.050, inf)  n=20
     q <.450        n=  0   (no rows)
     q .450-.500    n=  0   (no rows)
     q .500-.550    n=  0   (no rows)
-    q .550+        n= 20      14-6 (0.700)   mean q .666   excess   +3.4 +- 10.5 pp   EV   +0.3 pp
-    all q          n= 20      14-6 (0.700)   mean q .666   excess   +3.4 +- 10.5 pp   EV   +0.3 pp
+    q .550+        n= 20      14-6 (0.700)   mean q .666   excess   +3.4 +- 10.5 pp   EV   +0.3 pp (null  -3.0)
+    all q          n= 20      14-6 (0.700)   mean q .666   excess   +3.4 +- 10.5 pp   EV   +0.3 pp (null  -3.0)
       (this band occupies one column, so the margin above can only repeat that cell)
   all |delta| bands
-    q <.450        n= 24     13-11 (0.542)   mean q .418   excess  +12.4 +- 10.1 pp   EV  +10.4 pp
-    q .450-.500    n= 35     21-14 (0.600)   mean q .475   excess  +12.5 +-  8.4 pp   EV  +10.4 pp
-    q .500-.550    n= 65     37-28 (0.569)   mean q .524   excess   +4.5 +-  6.2 pp   EV   +2.1 pp
-    q .550+        n=146     98-48 (0.671)   mean q .614   excess   +5.7 +-  4.0 pp   EV   +2.9 pp
-    all q          n=270   169-101 (0.626)   mean q .557   excess   +6.9 +-  3.0 pp   EV   +4.4 pp
+    q <.450        n= 24     13-11 (0.542)   mean q .418   excess  +12.4 +- 10.1 pp   EV  +10.4 pp (null  -1.9)
+    q .450-.500    n= 35     21-14 (0.600)   mean q .475   excess  +12.5 +-  8.4 pp   EV  +10.4 pp (null  -2.2)
+    q .500-.550    n= 65     37-28 (0.569)   mean q .524   excess   +4.5 +-  6.2 pp   EV   +2.1 pp (null  -2.4)
+    q .550+        n=146     98-48 (0.671)   mean q .614   excess   +5.7 +-  4.0 pp   EV   +2.9 pp (null  -2.8)
+    all q          n=270   169-101 (0.626)   mean q .557   excess   +6.9 +-  3.0 pp   EV   +4.4 pp (null  -2.6)
   best-cell reference: the best of these 17 non-empty cells averages +47.3 pp of excess under 'every game settles at its own price';
     the observed best is +58.3 pp, |delta| [0.030, 0.050) q <.450 (n=1) -- ABOVE it, which a search returns about half the time under no effect, so it is not a finding either. A grid is a search, so a cell is read against that reference, never against zero.
 xwOBA |delta| x LEANED-side closing price (analyst-only; the game card publishes no cell of it)
