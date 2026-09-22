@@ -213,7 +213,7 @@ def quote(g, market, mult, source, now, cfg, trades, exposure):
     ask, size = number(market.get("yes_ask_dollars")), number(market.get("yes_ask_size_fp"))
     if ask is None or not 0 < ask < 1 or size is None or size < 1:
         return None, "no_top_ask_or_depth", None
-    if market.get("fee_type") not in (None, "", "quadratic", "quadratic_fee"):
+    if market.get("fee_type") not in (None, "", "quadratic", "quadratic_with_maker_fees", "quadratic_fee"):
         return None, "unrecognized_market_fee", None
     qty = min(cfg.max_contracts, int(size), int(Decimal(str(cfg.max_stake)) / ask))
     while qty:
@@ -301,7 +301,7 @@ def run(cfg, client=None, now=None):
         try:
             schedule = client.schedule(date)
             series = client.kalshi("/series/KXMLBGAME").get("series", {})
-            if series.get("fee_type") not in (None, "", "quadratic", "quadratic_fee"):
+            if series.get("fee_type") not in (None, "", "quadratic", "quadratic_with_maker_fees", "quadratic_fee"):
                 raise ValueError("unsupported series fee_type")
             raw = number(series.get("fee_multiplier"))
             mult = raw if raw is not None and 0 <= raw <= 10 else Decimal(1)
