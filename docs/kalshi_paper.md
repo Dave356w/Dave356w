@@ -24,8 +24,10 @@ public GET endpoints exclusively and accepts no trading API credentials.
   We use the exchange's observed ask, **never** the display midpoint.
 - Estimated standard taker fee = ceiling-to-cent of
   0.07 * quantity * ask * (1 - ask) * series fee multiplier.
-  A missing series multiplier conservatively uses 1x and is labeled. Market
-  overrides or actual per-order rounding can change realized charges.
+  A missing series multiplier conservatively uses 1x and is labeled. The
+  monitor accepts quadratic-with-maker-fees series for TAKING (not making),
+  checks the event's fee overrides, and abstains if those cannot be verified.
+  Actual per-order rounding can change realized charges.
 - A prospective simulated trade requires a recorded V13 lean, saved-pregame
   sportsbook ML no older than 30 minutes, Kalshi quote updated in the last 15
   minutes, Preview status, model snapshot before first pitch and within six
