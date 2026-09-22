@@ -66,7 +66,9 @@ from market_backfill import (MARKET_COLS, ODDS_LADDER, V13_RECON_COLS,
                              V13_RECON_TEXT_COLS, attach_market,
                              breakeven_prob, chalk_is_home, ev_null, excess_se,
                              is_pickem, ladder_rung, metric_label,
-                             publish_reconstruction)
+                             publish_reconstruction,
+                             percentile_price_edges as _percentile_price_edges,
+                             percentile_band_index as _percentile_band_index)
 from actuals_backfill import (ACTUAL_COLS, attach_actuals, actuals_summary,
                               actuals_family_line, components_summary,
                               target_reliability,
@@ -1220,33 +1222,6 @@ def _search_verdict(observed, reference, fmt="+.1f"):
         return ("ABOVE it, which a search returns about half the time under "
                 "no effect, so it is not a finding either")
     return "at or below it"
-
-
-def _percentile_price_edges(ml, bands=8):
-    """Nearest-rank equal-count upper bounds, ties kept whole.
-
-    Derived from the rows the block scores, never frozen: a literal copied off
-    one price distribution is the constants-frozen-from-data entry, and this
-    one would re-stale as the book moves. The cost is that the labels are a
-    property of the build -- see the caveat the block prints.
-    """
-    s = np.sort(np.asarray(ml, dtype=float))
-    if not s.size:
-        return []
-    out = []
-    for k in range(1, bands):
-        e = float(s[int(np.ceil(k * s.size / bands)) - 1])
-        if not out or e > out[-1]:
-            out.append(e)
-    return out
-
-
-def _percentile_band_index(ml, edges):
-    ml = np.asarray(ml, dtype=float)
-    idx = np.zeros(ml.size, dtype=int)
-    for i, e in enumerate(edges):
-        idx[ml > e] = i + 1
-    return idx
 
 
 def _market_percentile_band_lines(led, bands=8):
