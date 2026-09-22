@@ -41,7 +41,7 @@ observational infrastructure, not a continuous low-latency trading engine.
   0.5 percentage points. This is an execution-cost screen only: a V13 lean
   and sportsbook disagreement do **not** establish positive expected value.
 * `data/paper_kalshi/observations.csv` records **all** observations and skips;
-  `positions.csv` holds at most one hypothetical position per game + lean;
+  `positions.csv` holds at most one hypothetical position per game;
   `report.txt` summarizes diagnostic skips, open positions and hypothetical
   settlement results. No sensitive credentials are stored.
 * At each run, pending positions settle only when the **Kalshi market itself
