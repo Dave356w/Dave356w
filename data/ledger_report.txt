@@ -230,7 +230,7 @@ target reliability (can the ACTUAL tell this component's units apart?)
   lineup  by batting club   units=30   n=1512  F=1.095 (p=0.333)  ICC=+0.0019  true between-unit sd 0.00391  -> UNMEASURABLE -- not separated from chance
 by slate (most recent 14 of 63; monitoring, not trend)
   scale: per-side rate error sd 0.0891 over 1500 paired side-games — read gross outliers, not drift
-  2026-09-22  xwOBA       15g  rate n=  2 pred 0.2987 act 0.1599 (-0.1389) MAE 0.1389  SP IP n=  2 bias +1.46 MAE 1.46
+  2026-09-22  xwOBA       16g  rate n=  2 pred 0.2987 act 0.1599 (-0.1389) MAE 0.1389  SP IP n=  2 bias +1.46 MAE 1.46
   2026-09-21  xwOBA        3g  rate n=  4 pred 0.2970 act 0.2783 (-0.0186) MAE 0.0696  SP IP n=  6 bias -1.24 MAE 1.60
   2026-09-20  xwOBA       15g  rate n= 30 pred 0.3092 act 0.2840 (-0.0251) MAE 0.0689  SP IP n= 30 bias +0.03 MAE 1.01
   2026-09-19  xwOBA       15g  rate n= 30 pred 0.3084 act 0.3179 (+0.0094) MAE 0.0626  SP IP n= 30 bias -0.18 MAE 1.17
