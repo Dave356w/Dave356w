@@ -58,7 +58,7 @@ def number(v):
 
 def break_even(ml):
     p = number(ml)
-    return (Decimal(100) / (100 + p) if p > 0 else -p / (100 - p)) if p and p != -100 else None
+    return (Decimal(100) / (100 + p) if p > 0 else -p / (100 - p)) if p is not None and p != 0 else None
 
 
 def taker_fee(ask, qty, multiplier):
