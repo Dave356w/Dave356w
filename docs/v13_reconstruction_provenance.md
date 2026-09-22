@@ -58,14 +58,19 @@ pregame-locked without that evidence.
 
 ## Reporting convention
 
-The per-game card now distinguishes:
+The per-game card retains the **comparable V12→V13 family**
+retrospective as the primary historical figure, rather than promoting the
+shorter native V13 sample above it. Its compact provenance note states the
+number of paired-snapshot V12 rows re-scored under the V13 starter blend and
+the number of **native pregame V13** decisions. The native record and its
+closing-price margin appear as secondary context. The current game's model
+lean, no-vig market probability and posted break-even remain distinct.
 
-- the **native V13** record, for actual original pregame V13 decisions;
-- the **mixed-basis retrospective** combined V13-represented sample, clearly
-  marked as reconstructed and *not* a prospective V13 record;
-- the **current-game** model lean, no-vig market probability, and posted
-  break-even threshold, none of which is itself a calibrated model win
-  probability.
+The overlap measurement above supports pooling these closely related model
+specifications for **descriptive family analysis**. Pooling is not proof that
+all reconstructed inputs were captured pregame: that narrower claim still
+requires the data-vintage audit described above. Neither historical figure is
+a calibrated win probability or expected edge at today's quote.
 
 Historical margin over break-even on these cards uses **saved historical
 closing prices**, not each game's locked pregame quote and not today's posted
