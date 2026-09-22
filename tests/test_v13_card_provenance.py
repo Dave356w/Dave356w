@@ -1,4 +1,4 @@
-"""Guard V13 card provenance: native pregame vs reconstructed history.
+"""Guard V13 card provenance: comparable pooled family with native and re-scored basis.
 
 V12 and V13 share a prediction family. The V13 SP rate blend changed only a
 minority of near-zero selections on the historical paired rows. This does not
@@ -11,7 +11,7 @@ import pandas as pd
 import build_site as b
 
 
-def test_card_names_native_and_mixed_historical_bases():
+def test_card_leads_with_comparable_family_and_names_both_bases():
     ctx = {
         "native": dict(n=48, w=35, l=13, excess_be=.018, excess_se=.069),
         "reconstructed_n": 445,
@@ -21,15 +21,14 @@ def test_card_names_native_and_mixed_historical_bases():
         "MIN", dict(p_home=.521, home_ml=-120),
         "SEA", "MIN", ctx, .0016,
     )
-    assert "Historical context · native V13" in h
-    assert "35–13 · 48 completed games" in h
-    assert "Versus historical closing prices" in h
-    assert "+1.8 ± 6.9 pts (1 SE)" in h
-    assert "445 mixed-basis reconstructed rows are excluded" in h
-    assert "Mixed-basis retrospective diagnostic" in h
-    assert "+6.0 ± 2.2 pts · 493 completed games" in h
-    assert "Not a prospective V13 record" in h
-    assert "not the locked pregame quotes" in h
+    assert "Historical family vs closing market" in h
+    assert "+6.0 ± 2.2 pp · 493 completed games" in h
+    assert "445 paired-snapshot V12 rows re-scored" in h
+    assert "48 native V13 games" in h
+    assert "35–13; native closing margin +1.8 ± 6.9 pp" in h
+    assert "Near-zero Δ leans can change sides" in h
+    assert "not the quote shown for this game" in h
+    assert "not a calibrated win probability" in h
     assert "Beating this price" not in h
 
 
@@ -54,20 +53,21 @@ def test_native_aggregation_uses_original_model_tags():
         "MIN", dict(p_home=.521, home_ml=-120), "SEA", "MIN",
         ctx, .0016,
     )
-    assert f"{native['n']} completed games" in h
-    assert f"{ctx['reconstructed_n']} mixed-basis reconstructed rows" in h
+    assert f"{native['n']} native V13 games" in h
+    assert f"{ctx['reconstructed_n']} paired-snapshot V12 rows" in h
 
 
-def test_reconstructed_only_card_never_invents_native_record():
+def test_reconstructed_only_card_labels_retrospective_basis():
     ctx = {"reconstructed_n": 12, "pooled": dict(
         n=12, excess_be=.15, excess_se=.08)}
     h = b._verdict_html(
         "MIN", dict(p_home=.521, home_ml=-120), "SEA", "MIN",
         ctx, .0016,
     )
-    assert "No native V13 games graded yet" in h
-    assert "12 mixed-basis reconstructions" in h
-    assert "prospective record" in h
+    assert "+15.0 ± 8.0 pp · 12 completed games" in h
+    assert "V12 selections re-scored under V13" in h
+    assert "snapshot timing requires its own pregame audit" in h
+    assert "native V13 games" not in h
     assert "Cleared the posted price by" not in h
 
 
