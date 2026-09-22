@@ -211,11 +211,19 @@ invented.
   named, exactly once, and not scoped to one kind of clock), which is the
   frozen-literal-in-a-test anti-pattern from `CLAUDE.md` caught one more time.
 
-- **`compare_v8_v9.py` compares against a version with no graded rows.** Already
-  recorded in `CLAUDE.md` as inert and deliberately kept: the map is the
-  authority on a historical question and deleting the entry would lose the
-  answer. Repeated here only so it is not "rediscovered" and deleted as clutter
-  — that is its own anti-pattern entry in the same file.
+- **`compare_v8_v9.py` compared against a version with no graded rows —
+  RESOLVED 2026-09-22 by deleting the module, which is the opposite of what this
+  entry argued for.** It said the finding was inert and the thing was
+  deliberately kept, because "the map is the authority on a historical question
+  and deleting the entry would lose the answer". That sentence is true of
+  `_SCALE_FAMILIES`' v8 ENTRY, which stays, and it was wrong to extend to the
+  probe: a record costs nothing to keep and an instrument that scores the
+  shipped model against a version no row ever carried answers nothing. The
+  measurement it produced — v9 minus v8 sd 0.00103 against a matchup dispersion
+  of 0.01662, 0 leans flipped over 24 eligible games — is kept in the
+  `_SCALE_FAMILIES` comment that cites it, so `Deleting controls as clutter` is
+  not violated: nothing that can say whether v8 and v9 share a scale was lost.
+  Full reasoning in `CLAUDE.md`'s removal entry.
 
 - **The pitch-mix noise budget is stale in both terms.** `MATCHUP_SITE.md`
   §"Why it is dark" computed a 69% noise-to-lean ratio at `K = 100` against a

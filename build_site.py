@@ -406,9 +406,11 @@ RECORD_TAGS = tuple(
 # v9 - v8 == -(1 - q) * platoon_delta_sp * P_BP / L -- because the two forms
 # expand to the same starter phase and differ only in which lineup composite
 # meets the bullpen. Measured on the 2026-07-28 slate that term has sd 0.00103
-# against a matchup dispersion of 0.01662 (6.2%), and compare_v8_v9.py reports
-# 0 lean flips over 24 eligible games. That is a units-preserving change, so
-# the two pool for delta-scale ranking. RECORD_TAGS is a separate question and
+# against a matchup dispersion of 0.01662 (6.2%), and the v8/v9 comparison
+# probe reported 0 lean flips over 24 eligible games before it was deleted on
+# 2026-09-22 -- v8 never graded a row, so the question was unaskable. The
+# measurement stands and is recoverable from git. That is a units-preserving
+# change, so the two pool for delta-scale ranking. RECORD_TAGS is a separate question and
 # is deliberately left isolated.
 # v11 SHARES the v8/v9/v10 scale family, argued rather than inherited, and it
 # is the one decision here that is argued rather than measured -- no-lookahead
@@ -612,8 +614,8 @@ DUMP_SUFFIX = "xw"
 # record, and git history was the only surviving pregame copy.
 #
 # A rebuild is worth keeping -- it is a legitimate later view of the same
-# slate, and `compare_v8_v9` and the probes read it happily -- so it is renamed
-# rather than skipped. The prefix, not a suffix, is what makes it safe: the
+# slate, and the probes read it happily -- so it is renamed rather than
+# skipped. The prefix, not a suffix, is what makes it safe: the
 # grader globs `leans_*_xw.csv`, which matches any leans-prefixed name ending
 # `_xw.csv`, so `leans_<date>_xw_rebuild.csv` would have been ingested as a
 # real pending row. Same decision, and the same reason, as SHADOW_PREFIX.
@@ -4719,28 +4721,29 @@ def _verdict_html(fav, odds, away_abbr, home_abbr, ctx=None, delta=None):
         be = _imp_ml(price_num)
         if p_lean is not None:
             lift_pp = 100.0 * (be - p_lean)
-            # THE ONE HONEST PER-GAME NUMBER ON THIS PANEL. Every historical
-            # cut of the history is a slice of a search; the hold is a fact
-            # about THIS price, it genuinely varies (family mean 1.8 pp, sd
-            # 0.8, range 0.6 to 3.5), and it is the bar the record below has
-            # to clear. Naming the family average is what makes it readable:
-            # `+2.4 pp` alone cannot tell a reader whether that is a cheap
-            # game or an expensive one. The signed wording is kept rather than
-            # reworded to "costs N pp of hold": a devigged pair can come back
-            # underround on bad data, and `costs -2.5 pp` reads as nonsense
-            # where `requires -2.5 pp` reads as the anomaly it is.
-            pooled = (ctx or {}).get("pooled") or {}
-            typical = pooled.get("hold")
-            vs_typical = ""
-            if typical is not None and np.isfinite(typical):
-                avg_pp = 100.0 * float(typical)
-                where = ("above" if lift_pp > avg_pp + 0.05 else
-                         "below" if lift_pp < avg_pp - 0.05 else "level with")
-                vs_typical = f" · {where} the {avg_pp:.1f} pp this model usually pays"
+            # THE ONE HONEST PER-GAME NUMBER ON THIS PANEL: the hold is a fact
+            # about THIS price and it is the bar the record below has to clear.
+            # The signed wording is deliberate rather than "costs N pp of
+            # hold": a devigged pair can come back underround on bad data, and
+            # `costs -2.5 pp` reads as nonsense where `requires -2.5 pp` reads
+            # as the anomaly it is.
+            #
+            # NO COMPARISON AGAINST THE FAMILY AVERAGE, and that clause was
+            # here for four hours on 2026-09-22 before a reader's question
+            # killed it. It read `above the 1.8 pp this model usually pays`,
+            # and 1.8 is a blend of two vig regimes: this book's closing hold
+            # ran 0.93-1.00 pp through 2026-08-30 and 2.34-2.58 pp after, so
+            # 262 of 269 current-era games (97%) read "above" it. A label that
+            # can only take one value is exactly what came off this panel in
+            # the commit before -- reintroduced by hand, one function away, on
+            # the same afternoon. Against the current regime's own mean it is a
+            # 49/51 split, but that boundary was found by looking at the hold
+            # series, so fitting the reference to it would trade this defect
+            # for the searched-constant one.
             break_even_line = (
                 "<div class='vline'><span class='vk'>Posted break-even</span>"
                 f"<span>{100 * be:.1f}% · requires {lift_pp:+.1f} pp over market"
-                f"{vs_typical}</span></div>"
+                "</span></div>"
             )
         else:
             break_even_line = (
@@ -7424,8 +7427,11 @@ def hybrid_branch_records():
             "n": pooled["n"],
             "excess_be": float(pooled["actual"]) - breakeven,
             "excess_se": pooled["excess_se"],
-            "hold": breakeven - float(pooled["implied"]),
         }
+        # `hold` was here and is gone with the clause that read it: the mean
+        # hold over this family blends two vig regimes, so no card line can be
+        # read against it. A key kept for a renderer that no longer exists is
+        # the defect this projection exists to prevent.
     # Cross the fixed |delta| bands with the leaned side's closing-price rung.
     # Counts are intentionally retained even when thin because the public card
     # prints its own `n` beside every cell.

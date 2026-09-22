@@ -778,12 +778,18 @@ v9 row has. Because the two tags share a `RECORD_TAGS` family this costs the
 records nothing; it is recorded here so the ledger's lineage column is not
 read as more precise than it is.
 
-`python compare_v8_v9.py` recalculates the v8 shadow and v9 sequential formula
-from identical persisted inputs, then reports lean flips, `xw_net` changes,
-expected-IP buckets, openers, bullpen-heavy games, market disagreement, and
-flat-stake ROI when settled ledger/closing-price data exists. Pre-v9 snapshots
-are explicitly ineligible because they did not persist `B_0`; the utility never
-rebuilds an old slate from current Savant data.
+`compare_v8_v9.py` recalculated the v8 shadow and v9 sequential formula from
+identical persisted inputs and reported lean flips, `xw_net` changes and
+flat-stake ROI. **It was deleted 2026-09-22 and this paragraph is history: do
+not reach for it.** No `xw+plat_consol_v8` row ever existed in the ledger — v8
+shipped for one morning and its 11 pending rows were re-stamped under v9 before
+any graded — so it compared the shipped model against a version that never
+survived into a row, and its glob had drifted to pool v11/v12/v13 dumps besides.
+The one measurement worth keeping is in `build_site.py`'s `_SCALE_FAMILIES`
+comment, which is the argument for v8 and v9 sharing a delta scale: v9 minus v8
+has sd 0.00103 against a matchup dispersion of 0.01662 (6.2%) and flipped 0
+leans over 24 eligible games. Recoverable from git history; `CLAUDE.md`'s
+removal entry has the full reasoning.
 
 ### Pitch-mix shadow arm (not in any lean)
 

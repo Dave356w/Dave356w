@@ -926,6 +926,63 @@ HEAD = ("  arm                            n       K   K_mom  dMSE vs100"
         "   IP-eq  med BF\n  " + "-" * 74)
 
 
+def metric_standing_line():
+    """What metric the fitted K is denominated in, against what the build uses.
+
+    PRINTED, not left in the docstring, for the reason the header alone was not
+    enough: this probe builds its rates from StatsAPI box lines through
+    `WOBA_W`, so what it fits is a wOBA-denominated K. Correct when it ran --
+    the build was on wOBA and 400 shipped as wOBA v3 -- and since v11 the same
+    constant shrinks xwOBA. `K = sigma^2/tau^2` is a property of the metric, so
+    the number below is about a constant this build does not have, and the
+    standing claim that "every interval excludes 100" is a true statement about
+    a statistic the model no longer uses.
+
+    It cannot be re-pointed here: StatsAPI serves no xwOBA, and a per-past-date
+    Savant pull is the lookahead `.savant_cache/` exists to forbid. Derived
+    rather than asserted, so a wOBA build makes the mismatch clause disappear.
+
+    The import is guarded, and the third state is the point. `build_site`
+    RAISES at import on a MODEL_TAG that does not start with `xw+`, so a
+    wOBA build reaches that guard rather than the comparison below -- returning
+    None there would have this probe assert the build is fine because it could
+    not read it, which is the `_lock_note` rule inverted. An unreadable build
+    gets a line saying so, because the half of this that is UNCONDITIONAL --
+    the fit is wOBA-denominated whatever the build does -- is worth printing
+    either way.
+    """
+    try:
+        import build_site
+        label = build_site.MODEL_RATE_LABEL
+    except Exception as exc:                        # noqa: BLE001
+        return (
+            "UNIT BASIS -- the K fitted below is wOBA-denominated; the running "
+            f"build's metric could NOT be read ({type(exc).__name__}: {exc}).\n"
+            "  Rates here come from StatsAPI box lines through WOBA_W, so that "
+            "half is a property of this probe and holds regardless. Whether it\n"
+            "  MISMATCHES what ships is unknown from here -- read "
+            "`build_site.MODEL_RATE_LABEL` before quoting the fit as this "
+            "build's constant."
+        )
+
+    if label == "wOBA":
+        return None
+    return (
+        "UNIT MISMATCH -- the K fitted below is wOBA-denominated; this build "
+        f"shrinks {label}.\n"
+        "  Rates here come from StatsAPI box lines through WOBA_W, and "
+        "`K = sigma^2/tau^2` is a property of the metric: xwOBA is near enough "
+        "wOBA's\n"
+        "  conditional expectation that its per-BF sigma^2 is strictly "
+        "smaller, so the direction is toward a SMALLER K than this fit "
+        "returns.\n"
+        "  That is a direction, not a magnitude -- tau^2 is not pinned. It "
+        "cannot be re-pointed: StatsAPI serves no xwOBA and a per-past-date\n"
+        "  Savant pull is the lookahead `.savant_cache/` forbids. Read the fit "
+        "as the wOBA answer it is, never as this build's constant."
+    )
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--seasons", default="2023,2024,2025,2026",
@@ -971,6 +1028,10 @@ def main(argv=None):
 
     say("Reliever regression constant -- fitted, not inherited")
     say("=" * 78)
+    standing = metric_standing_line()
+    if standing:
+        say(standing)
+        say()
     say(f"seasons {seasons} | role cut: started <= {a.role_cut:.0%} of appearances")
     say(f"shipped XWOBA_SHRINK_K = {a.shipped:.0f} (batters, starters and relievers alike)")
     say("")

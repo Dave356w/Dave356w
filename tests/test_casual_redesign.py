@@ -539,7 +539,7 @@ class RenderTests(unittest.TestCase):
             f"Model lean</span><span>MIN · {b._model_version_short()} Δ .0016", h)
         self.assertIn("Market price</span><span>MIN -120 · 52.1% no-vig", h)
         self.assertIn("Posted break-even</span><span>54.5% · requires +2.4 pp "
-                      "over market · above the 1.8 pp this model usually pays", h)
+                      "over market</span>", h)
         self.assertIn(
             f"{b._model_version_short()} chooses the side independently of the market", h)
         self.assertIn("Δ magnitude is not a calibrated win probability", h)
@@ -674,7 +674,7 @@ class RenderTests(unittest.TestCase):
         panel reads four. Handing the whole dict over is how a
         computed-and-unrendered set appears the moment someone trusts it.
         """
-        rendered = {"n", "excess_be", "excess_se", "hold"}
+        rendered = {"n", "excess_be", "excess_se"}
         ctx = b.hybrid_branch_records()
         pooled = ctx.get("pooled")
         self.assertIsNotNone(pooled, "the card lost its only record")
@@ -684,7 +684,7 @@ class RenderTests(unittest.TestCase):
         self.assertIn(f"{100 * pooled['excess_be']:+.1f} ± "
                       f"{100 * pooled['excess_se']:.1f} pts", h)
         self.assertIn(f"· {pooled['n']} completed games", h)
-        self.assertIn(f"{100 * pooled['hold']:.1f} pp this model usually pays", h)
+        self.assertNotIn("usually pays", h)
 
     def test_the_record_does_not_move_with_this_game_delta_or_price(self):
         """The inverse of the two tests this replaces, and a stronger claim.
@@ -1492,6 +1492,50 @@ class CardCopyTests(unittest.TestCase):
         stamp = self._visible(b._legend_head("MLB matchup leans", "9:00 AM"))
         self.assertNotIn("—", stamp)
 
+
+class HoldReferenceTests(unittest.TestCase):
+    """The break-even line carries no comparison against a family average.
+
+    One shipped for four hours on 2026-09-22 and read `above the 1.8 pp this
+    model usually pays`. It was a label that could only take one value: this
+    book's closing hold ran 0.93-1.00 pp through 2026-08-30 and 2.34-2.58 pp
+    after, so the family mean of 1.84 is a blend of two vig regimes and 262 of
+    269 current-era games (97%) read "above" it. That is the same defect the
+    delta x price cells were removed for, reintroduced one function away on the
+    same afternoon.
+
+    Pinned as a RULE rather than as the one phrase, because the tempting repair
+    -- re-fit the reference to the current regime -- trades this defect for the
+    searched-constant one: the 2026-08-31 boundary was found by looking at the
+    hold series.
+    """
+
+    def test_no_family_average_hold_reaches_the_card(self):
+        ctx = b.hybrid_branch_records() or {}
+        self.assertNotIn("hold", ctx.get("pooled", {}),
+                         "a key kept for a renderer that no longer exists")
+        # Each pair prices BOTH sides: the leaned side's own moneyline is what
+        # the break-even line reads, so a one-sided fixture renders no line at
+        # all and the regex below would pass for the wrong reason.
+        for odds in (dict(p_home=.70, away_ml=200, home_ml=-260),
+                     dict(p_home=.471, away_ml=103, home_ml=-123),
+                     dict(p_home=.52, away_ml=-101, home_ml=-108)):
+            h = b._verdict_html("LAD", odds, "LAD", "ARI", ctx, .005)
+            for banned in ("usually pays", "on average", "typical", "average hold"):
+                self.assertNotIn(banned, h, banned)
+            # The per-game hold itself stays: it is a fact about this price.
+            self.assertRegex(h, r"requires [+-]\d+\.\d pp over market")
+
+    def test_the_per_game_hold_still_varies_with_the_price(self):
+        """Removing the comparison must not flatten the number it compared."""
+        ctx = b.hybrid_branch_records() or {}
+        seen = set()
+        for odds in (dict(p_home=.70, away_ml=200, home_ml=-260),
+                     dict(p_home=.471, away_ml=103, home_ml=-123),
+                     dict(p_home=.50, away_ml=-110, home_ml=-110)):
+            h = b._verdict_html("LAD", odds, "LAD", "ARI", ctx, .005)
+            seen.add(re.search(r"requires ([+-]\d+\.\d) pp", h).group(1))
+        self.assertGreater(len(seen), 1, seen)
 
 if __name__ == "__main__":
     unittest.main()

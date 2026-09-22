@@ -533,11 +533,19 @@ row has ever been graded into the ledger. v8 shipped for a single morning
 (2026-07-27); its 11 rows were all still `pending` when v9 landed, so the
 pregame refresh rebuilt them under v9 math and re-stamped them — legitimate,
 and the reason `MODEL_FAMILY_TAGS`' v8 line never prints. So `SCALE_TAGS`
-matching v8 selects nothing, and `compare_v8_v9.py` compares against a version
+matching v8 selects nothing, and `compare_v8_v9.py` compared against a version
 that never survived into a graded row. Inert, so recorded rather than patched:
 the map is the authority on a historical question and deleting the entry would
 lose the answer. What it means in practice is that "the v8/v9/v10 scale pool"
 is the v9/v10 pool, and any provenance note claiming v8 rows is wrong.
+
+**That "recorded rather than patched" covers the MAP and not the module, and the
+module is gone — deleted 2026-09-22, on this paragraph's own finding.** The
+distinction is the point: `_SCALE_FAMILIES`' v8 entry answers a historical
+question and costs nothing to keep, while a probe that scores the shipped model
+against a version no row ever carried answers nothing and invites being
+quoted. Same sentence, opposite verdicts, because one is a record and the other
+is an instrument. See the removal entry below for what was kept out of it.
 
 **v11 is the second instance and it is not inert.** No `xw+plat_consol_v11`
 row exists in the ledger at all — not graded, not pending, not void. v11 shipped
@@ -718,9 +726,11 @@ precedent — they are how the fix is known to look.
   no-lookahead forbids reconstructing them. So any measurement that joins
   ledger rows to "the dump beside them" is still reading post-hoc data for
   every slate up to 08-16 — including `FINDINGS.md`'s prior-only incidence
-  ("6 of the 403 side-games in the committed dumps"), and `compare_v8_v9.py`,
-  which globs `data/leans_*_xw.csv` and therefore compares against a v8 dump
-  that is itself a rebuild of the 07-26 slate.
+  ("6 of the 403 side-games in the committed dumps"), and — until it was deleted
+  on 2026-09-22 — `compare_v8_v9.py`, which globbed `data/leans_*_xw.csv` and
+  therefore compared against a v8 dump that is itself a rebuild of the 07-26
+  slate. The contamination is a property of the dumps, not of that reader, so it
+  still applies to every other join of a ledger row to "the dump beside it".
 
   The residue going forward is narrower and worth stating exactly. A dump is
   diverted only when **every** game on it has started, because a slate with any
@@ -744,15 +754,18 @@ precedent — they are how the fix is known to look.
   resolved entry below. The lesson cuts back here: when a new artifact adopts
   this guard, check what made the guard sufficient for dumps.
 
-  **v11 changes `compare_v8_v9`'s glob population and this is recorded, not patched.**
-  The primary dump suffix is `_xw` again, so `data/leans_*_xw.csv` now matches
-  v11 dumps alongside the pre-wOBA ones. That is not obviously wrong — the
-  script recomputes both the v8 and v9 forms from a dump's own phase columns
-  and never reads `model_tag`, and a v11 dump carries the same columns at the
-  same `K=100`, so pooling it measures the same formula difference on more
-  slates. It IS wrong to keep describing the output as "over 24 eligible games
-  of v8/v9 dumps" once v11 rows are in it. Read the row count off the run
-  rather than off any prose, here or in the script. It also biases
+  **v11 changed `compare_v8_v9`'s glob population, was recorded rather than
+  patched, and the drift it records is part of why that module was deleted on
+  2026-09-22 — read this paragraph as history.** The primary dump suffix is
+  `_xw` again, so `data/leans_*_xw.csv` matched v11 dumps alongside the pre-wOBA
+  ones. That was not obviously wrong — the script recomputed both the v8 and v9
+  forms from a dump's own phase columns and never read `model_tag`, and a v11
+  dump carries the same columns at the same `K=100`, so pooling it measured the
+  same formula difference on more slates. It WAS wrong to keep describing the
+  output as "over 24 eligible games of v8/v9 dumps" once v11 rows were in it.
+  Read a row count off the run rather than off any prose. **The glob-population
+  half of this entry applies to any module that globs `data/leans_*_xw.csv`**,
+  which is the durable part now that this one is gone. It also biases
   monitoring toward optimism: `sp_bf_per_ip` is missing on 4 of 301 committed
   side-games (1.3%), but on **3 of 22 tonight** (13.6%) — a rebuilt dump has a
   full extra day of StatsAPI behind it, so the historical rate is measured on
@@ -778,6 +791,97 @@ precedent — they are how the fix is known to look.
   `--ledger-join` so the bias can be sized rather than argued.
 
 **Removed — recorded so the reasoning is not relitigated**
+
+- **`compare_v8_v9.py`, deleted 2026-09-22 — the question was unaskable.** It
+  compared the v8 and v9 sequential forms, and **no `xw+plat_consol_v8` row has
+  ever existed in the ledger** (zero of every row, checked by running it rather
+  than recalled — a count would go stale on the next bot commit, as the 1,060
+  first written here did within the hour): v8 shipped for one morning and its 11
+  pending rows were re-stamped under v9 before any graded. So the module compared the shipped model against a version
+  that never survived into a row. Its glob had also drifted to pool v11/v12/v13
+  dumps, which this file already recorded as making its own output description
+  wrong.
+
+  It was never imported by production — the two `build_site` mentions were
+  comments, now amended rather than left as dangling references to a file that
+  does not exist. Its two tests pinned the probe's own re-implementation of both
+  forms against hand arithmetic, not production math (it never imported
+  `build_site`), so they went with it and `V8V9ComparisonTests` with them.
+
+  **The measurement it produced is kept** in the `_SCALE_FAMILIES` comment that
+  cited it — v9 − v8 has sd 0.00103 against a matchup dispersion of 0.01662
+  (6.2%) and flipped 0 leans over 24 eligible games — with the deletion date
+  beside it, because that figure is the argument for v8/v9 sharing a delta
+  scale and losing it would reopen a settled question. Recoverable from git.
+
+- **`player_prior_probe` and `reliever_shrink_probe` are DORMANT, not dead, and
+  now say so at RUNTIME.** Both answer about a metric this build does not run,
+  both said so in their headers, and a header is prose — they still ran and
+  still printed numbers a reader could quote.
+
+  * `player_prior_probe` measures a +7–25% improvement from personal shrinkage
+    targets. The frozen priors are wOBA-denominated (`priors_snapshot.RATE_COL`
+    is `woba`), `build_site.player_prior_history()` refuses them to an xwOBA
+    build, and `USE_PLAYER_PRIORS` is False — verified by running it, not read
+    off the guard. So `PLAYER_PRIORS=1` is a no-op and the figure is about a
+    shrinkage target this build cannot load.
+  * `reliever_shrink_probe` fits `K` from StatsAPI box lines through `WOBA_W`,
+    i.e. a **wOBA-denominated K**, against a build that shrinks xwOBA at 100.
+    It cannot be re-pointed: StatsAPI serves no xwOBA and a per-past-date
+    Savant pull is the lookahead `.savant_cache/` forbids.
+
+  Each now prints a standing line as the first thing in its report —
+  `DORMANT --` and `UNIT MISMATCH --` respectively — DERIVED from
+  `build_site.MODEL_RATE_LABEL` so restoring a wOBA build makes it disappear on
+  its own. Neither exits: refusing to run would destroy an instrument that
+  measures its own question correctly, and the standing rule is to label rather
+  than suppress. This is `Say what a probe cannot answer` moved from the
+  docstring to the output, which is the only place it was load-bearing.
+
+  **The first draft of that derivation crashed on the one build it was written
+  to be silent on, and the catch is the reusable part.** `build_site` RAISES at
+  import on a `MODEL_TAG` that does not start with `xw+`, so
+  `reliever_shrink_probe`'s lazy `import build_site` would have raised
+  `RuntimeError` on a restored wOBA build — where the function's whole job is
+  to return None. Its docstring said "a wOBA build makes the line disappear"
+  while the code would have taken the probe down with it: **prose asserting
+  behaviour the code does not have, in the same commit that moved a claim out
+  of a docstring because a docstring is not load-bearing.** Caught by exercising
+  the branch rather than by reading it.
+
+  Fixed asymmetrically, and the asymmetry is the point rather than an
+  inconsistency. `reliever_shrink_probe` guards the import and an unreadable
+  build gets a THIRD state — `UNIT BASIS --`, saying the fit is
+  wOBA-denominated regardless (a property of the probe, true either way) and
+  that whether it MISMATCHES what ships is unknown from here. Returning None
+  there would have the probe assert the build is fine because it could not read
+  it, which is `_lock_note`'s rule inverted: never assert coverage the artifact
+  cannot substantiate. `player_prior_probe` is deliberately UNGUARDED, because
+  it imports `build_site` at module level — a tag build_site refuses makes the
+  whole probe unimportable long before the function runs, so no such state
+  exists. `tests/test_dormant_probes.py` pins the licence (that module-level
+  import) rather than the comment explaining it, both derivation directions,
+  and that the line precedes the first value-bearing `say` — asserted by
+  walking `main` for the first f-string or formatted call, because the first
+  draft of that one used a statement-index threshold, which is a frozen literal
+  in a test. 9 of its 14 assertions go red on the pre-fix source, and forcing
+  the derivation to a literal turns the wOBA-direction one red — checked by
+  reverting, not argued.
+
+- **`abstain_test`'s pre-committed decision authorises an action already
+  taken.** It says RETIRE THE Q-GATE FADE at 82 declined games; v13 retired the
+  entire hybrid from the shipped selection on 2026-09-18. The registration is
+  NOT void — "would declining those games have beaten fading them" is a real
+  question still accruing at 19 of 82 — but a reader reaching the gate must not
+  think a decision is pending on a live branch. The block now says so, derived
+  through `market_backfill.window_is_closed` against `hybrid_v2.RULE_TAG`,
+  reusing the closure derivation rather than spelling a second one, so
+  re-shipping the rule removes the clause.
+
+  **No registered constant, selector or row set moved**, and a test pins that:
+  re-pointing the selector mid-registration restarts the test, which is the one
+  thing this module must not do. The clause is commentary on what a verdict
+  would mean, not a change to what is measured.
 
 - **The walk-forward backtest, deleted 2026-08-27 on the operator's call.**
   `walkforward.py`, `historical_data.py`, `tests/test_walkforward.py`,
@@ -813,6 +917,55 @@ precedent — they are how the fix is known to look.
   the fidelity gap above rather than rebuilding the same reconstruction.
 
 **Resolved — keep as precedent**
+
+- **A label that could only take one value, reintroduced by hand one commit
+  after the one that removed the same defect — and killed four hours later by a
+  reader's question rather than by a test.** The break-even line was given a
+  comparison, `requires +2.6 pp over market · above the 1.8 pp this model
+  usually pays`, so a bare hold figure would tell a reader whether their game
+  was cheap or dear. The reference is the mean hold over the family's 492 rows,
+  and **this book's closing hold has a step change**:
+
+  ```
+     2026-08-10/16    n= 30  mean hold 0.93 pp
+     2026-08-17/23    n= 91  mean hold 1.00 pp
+     2026-08-24/30    n= 90  mean hold 0.95 pp
+     2026-08-31/09-06 n= 96  mean hold 2.34 pp   <- regime change
+     2026-09-07/13    n= 89  mean hold 2.58 pp
+     2026-09-14/20    n= 94  mean hold 2.58 pp
+  ```
+
+  So 1.84 is a blend of two vig regimes and **262 of 269 current-era games
+  (97%) read "above" it**. Against the current regime's own mean of 2.56 it is a
+  49/51 split. That is the `50.0% vs 50.0% implied` defect and the
+  `Won (at under 45%)` defect in a third costume — **and it was written one
+  commit after the one that deleted three cells for exactly this reason,
+  by the same hand, on the same afternoon.** A rule recorded is not a rule
+  internalised; what caught it was a reader asking whether the clause meant a
+  larger-than-usual hold, not any test.
+
+  Removed rather than re-fitted, and the reason is the trade: the tempting
+  repair is to compare against the current regime's mean, but the 2026-08-31
+  boundary was found by LOOKING at the hold series, so that swaps this defect
+  for the searched-constant one. The per-game hold stays — it is a fact about
+  this price and it is the bar the record has to clear. `hold` came off the
+  projected `pooled` dict with the clause that read it, because a key kept for
+  a departed renderer is what the projection exists to prevent. Pinned as a
+  RULE (no family-average hold reaches the card, in any wording) plus a test
+  that the per-game figure still varies with the price, so the removal cannot
+  flatten the number it was comparing.
+
+  **And the regime change bears on the headline, which is NOT resolved here.**
+  Split at the same boundary, the model's clearance over the posted price reads
+  **+9.0 ± 3.4 pp (ROI +16.2%) on the 211 thin-hold rows and +3.6 ± 2.9 pp
+  (ROI +6.7%) on the 281 current-era rows**, against the published pooled
+  +5.9 ± 2.2. Against the DEVIGGED price the same split is +10.0 and +6.1, so
+  only about 1.5 pp of the 5.4 pp drop is the vig — the rest is the model's own
+  clearance falling. The regime a reader's bet actually faces does not separate
+  from zero. The split is two cells chosen by looking at a hold series, so it
+  is not a finding; it is a reason the pooled figure flatters the market a
+  reader meets today, on top of the hindsight caveat already recorded. **A
+  later reader must not treat +5.9 as the number their game faces.**
 
 - **Three cells of a 26-cell search, published as a per-game read, with the
   one figure that IS a result computed beside them and rendered nowhere.** The
@@ -890,6 +1043,21 @@ precedent — they are how the fix is known to look.
   restated rather than dropped — including two that pinned the cell TRACKING
   the game's band and price, now inverted to pin that the record does NOT move
   with either while the break-even line does.
+
+  **A near miss of the same class, and the related INERT finding beside it.**
+  `HoldReferenceTests` was first written below its file's
+  `if __name__ == "__main__": unittest.main()` guard — harmless under the gate,
+  which is `python -m pytest`, and the shape of a test that does not run.
+  Re-seated above it, and a sweep of every test file then found **three others
+  carrying 18 classes below their guard** (`test_hitter_level_probe`,
+  `test_integrity_fixes`, `test_pitch_arsenal`). Those are **inert and recorded
+  rather than patched**, because the guard in them is dead code either way:
+  there is no `conftest.py` and none of the four files puts the repo root on
+  `sys.path`, so a direct `python tests/<file>.py` cannot import `build_site`
+  at all. `python -m pytest` from the root is what makes the suite importable
+  and it collects every class regardless. The reason to write a NEW test above
+  the guard anyway is that the day someone adds a `conftest.py`, the inert
+  becomes live silently — and 18 classes is not a thing to discover then.
 
   Display-only: no lean, delta, grade or ledger row moves, no registered
   constant changes, `MODEL_TAG` unchanged.
@@ -3283,15 +3451,17 @@ registered pregame scorer excludes and counts malformed locked commitments;
 close-scored sections exclude missing `close_p_home` and their rule-specific
 inputs, while relying on the market join to supply the paired moneylines.
 
-**Probes run on demand.** Nineteen read committed artifacts and need no live
-API. The table below has TWENTY rows and that is not a miscount: `tb_probe`
+**Probes run on demand.** Eighteen read committed artifacts and need no live
+API. The table below has NINETEEN rows and that is not a miscount: `tb_probe`
 appears in both lists, because it needs StatsAPI for its feature but runs off a
 pre-computed frame via `--tb-csv`. Say which set a count is over.
 All run anywhere with one qualification, stated in its own row:
 `hitter_level_probe` executes but cannot produce a reading without the
-collector's per-PA CSV. Recount this list when you add a probe: the lead
-sentence read "seven" while the table beneath it already listed fifteen, and
-the count is the one thing here a reader cannot check without counting:
+collector's per-PA CSV. Recount this list when you add OR REMOVE a probe: the
+lead sentence read "seven" while the table beneath it already listed fifteen,
+and it read "nineteen/TWENTY" for the length of the commit that deleted
+`compare_v8_v9.py` without touching this paragraph. The count is the one thing
+here a reader cannot check without counting:
 
 | probe | question |
 |---|---|
@@ -3309,7 +3479,6 @@ the count is the one thing here a reader cannot check without counting:
 | `interaction_probe.py` | do single signals or other combiners beat `B·P/L`? |
 | `dispersion_probe.py` | does a concentrated lineup beat the mean it is averaged into? |
 | `bp_ablation.py` | does removing the bullpen term change any decision? |
-| `compare_v8_v9.py` | what the v9 sequential form changed against v8 |
 | `shadow_report.py` | what the paired metric arm can and cannot settle |
 | `reconstruct_v13.py` | writes the v13 starter-blend RECONSTRUCTION onto earlier-family ledger rows from the committed paired dumps. Additive columns only; refuses to write if a protected column moved, and appends without rewriting a byte of the existing file. Run once, not a re-runnable migration |
 | `blend_probe.py` | does a 50/50 wOBA+xwOBA blend beat either alone? Reconstructs a blended build exactly from the paired dumps (self-checked bitwise against each arm's published edge), and reports the sign criterion `shadow_report` omits |

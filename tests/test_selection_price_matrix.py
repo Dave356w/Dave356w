@@ -98,7 +98,7 @@ def test_the_card_shows_no_cell_and_the_report_still_shows_the_whole_grid():
 
     # The card carries no cell of the grid, in any spelling.
     assert [k for k in ctx if isinstance(k, tuple)] == [], list(ctx)
-    assert set(ctx["pooled"]) == {"n", "excess_be", "excess_se", "hold"}
+    assert set(ctx["pooled"]) == {"n", "excess_be", "excess_se"}
 
     # The report still renders the whole thing, and still renders what made it
     # readable: a spread per cell and a search reference. A grid published with
