@@ -4672,7 +4672,7 @@ def _xwoba_side_history(ctx, selection_ml=None):
             )
         return (
             "<div class='vprofile'>"
-            "<div class='vprofile-title'>Historical context · native V13</div>"
+            f"<div class='vprofile-title'>Historical context · native {_model_version_short()}</div>"
             "<div class='vline'><span class='vk'>Pregame V13 results</span>"
             f"<span>{w}–{l} · {n} completed {game_word}</span></div>"
             "<div class='vline'><span class='vk'>Versus historical closing prices</span>"
@@ -4688,7 +4688,7 @@ def _xwoba_side_history(ctx, selection_ml=None):
     if reconstructed_n:
         return (
             "<div class='vprofile'><div class='vprofile-title'>Historical context"
-            "</div><div class='vnote'>No native V13 games graded yet. "
+            f"</div><div class='vnote'>No native {_model_version_short()} games graded yet. "
             f"{reconstructed_n} mixed-basis reconstructions are descriptive "
             "only, not a prospective record.</div></div>"
         )
@@ -7438,8 +7438,10 @@ def hybrid_branch_records():
     if obs.empty:
         return {}
     out = {"n": int(len(obs))}
-    # THE ONE RECORD THE CARD PUBLISHES, and the only one on this data that is
-    # a result rather than a cell of a search. `excess` is against the devigged
+    # TWO provenance-distinct summaries now reach the card: the native V13
+    # record from original pregame decisions and the mixed-basis retrospective
+    # diagnostic that also includes V12→V13 reconstructions. Neither is a
+    # searched delta×price cell. `excess` is against the devigged
     # price; a BET has to clear the posted one, which is harsher by exactly the
     # hold, so the panel reads `excess_be` and the two differ by `hold`. One SE
     # serves both -- the breakeven is fixed by the market exactly as the
@@ -7453,12 +7455,9 @@ def hybrid_branch_records():
     if pooled:
         rows = obs.loc[obs["won"].notna()]
         breakeven = float(np.mean(_mb_breakeven_prob(rows["close_ml"])))
-        # PROJECTED to exactly what the card renders, the discipline the
-        # deleted `_card_record` kept: `_lean_market_agg` returns nine keys and
-        # the panel reads four, so handing the whole dict over would be a
-        # computed-and-unrendered set the moment anyone trusted it. `n` and
-        # `excess_be` +/- `excess_se` are the record line; `hold` is the
-        # family average the per-game break-even line is read against.
+        # Project only the pooled diagnostic's rendered fields; native has
+        # its own projection below. Both use closing prices and neither is
+        # attached to a current-game expected edge.
         out["pooled"] = {
             "n": pooled["n"],
             "excess_be": float(pooled["actual"]) - breakeven,
