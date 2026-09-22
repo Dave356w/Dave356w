@@ -545,15 +545,31 @@ class RenderTests(unittest.TestCase):
         self.assertIn("Δ magnitude is not a calibrated win probability", h)
         self.assertNotIn("Selection", h)
         # The record, with its spread and its own n.
-        self.assertIn("Beating this price", h)
-        self.assertIn("Cleared the posted price by</span><span>+5.9 ± 2.2 pts "
+        self.assertIn("Historical family vs closing market", h)
+        self.assertIn("Past margin over closing break-even</span><span>+5.9 ± 2.2 pp "
                       "· 492 completed games", h)
-        self.assertIn("not this game's chance of winning", h)
+        self.assertIn("not a calibrated win probability or a game-specific expected edge", h)
         # And no bucket label of any kind.
         for gone in ("Historical context", "Similar Δ", "across all prices",
                      "across all Δ", "closing ML -129 to -100", "Δ .000–.010"):
             self.assertNotIn(gone, h, gone)
         self.assertNotIn("11-4", h)
+
+    def test_native_and_rescored_v12_stay_in_comparable_family_record(self):
+        """The pooled family remains primary; provenance is visible, not a split verdict."""
+        ctx = {"pooled": dict(n=493, excess_be=.0601, excess_se=.022),
+               "native": dict(n=48, w=35, l=13, excess_be=.1, excess_se=.06),
+               "reconstructed_n": 445}
+        h = b._verdict_html(
+            "MIN", dict(p_home=.521, home_ml=-120), "SEA", "MIN", ctx, .0016)
+        self.assertIn("Historical family vs closing market", h)
+        self.assertIn("+6.0 ± 2.2 pp · 493 completed games", h)
+        self.assertIn("445 paired-snapshot V12 rows", h)
+        self.assertIn("48 native V13 games", h)
+        self.assertIn("Near-zero Δ leans can change sides", h)
+        self.assertNotIn("mixed-basis reconstructions are descriptive only", h)
+        self.assertNotIn("not a prospective V13 record", h)
+        self.assertIn("not the quote shown for this game", h)
 
     def test_no_fade_branch_renders_at_any_price(self):
         """The retired fade branch never reaches the simplified card."""
@@ -583,7 +599,7 @@ class RenderTests(unittest.TestCase):
             self.assertIn(f"· {n} completed {word}", h)
             # The spread prints at every n -- never suppressed, which is the
             # standing rule the deleted cells violated by printing none.
-            self.assertIn(f"± {100 * se:.1f} pts", h)
+            self.assertIn(f"± {100 * se:.1f} pp", h)
 
     def test_no_page_claims_a_gate_the_reader_cannot_see(self):
         """Replaces `test_the_discovery_claim_survives_off_the_card`.
@@ -650,7 +666,7 @@ class RenderTests(unittest.TestCase):
             self.assertNotIn("45%", h)
             # The record line is pooled, so no band or rung can qualify it.
             self.assertNotIn("closing ML", h)
-            self.assertEqual(h.count("Cleared the posted price by"), 1, h)
+            self.assertEqual(h.count("Past margin over closing break-even"), 1, h)
     def test_the_card_prints_no_unit_total_and_never_labels_one_roi(self):
         """Restated when the cells went: the card's only unit figures were
         theirs, so the ROI-vs-units confusion has no live instance. The RULE
@@ -679,10 +695,14 @@ class RenderTests(unittest.TestCase):
         pooled = ctx.get("pooled")
         self.assertIsNotNone(pooled, "the card lost its only record")
         self.assertEqual(set(pooled), rendered)
+        native = ctx.get("native")
+        self.assertIsNotNone(native, "no native V13 provenance")
+        self.assertEqual(set(native), {"n", "w", "l", "excess_be", "excess_se"})
+        self.assertEqual(pooled["n"], native["n"] + ctx["reconstructed_n"])
         h = b._verdict_html("LAD", dict(p_home=.70, away_ml=200, home_ml=-260),
                             "LAD", "ARI", ctx, .005)
         self.assertIn(f"{100 * pooled['excess_be']:+.1f} ± "
-                      f"{100 * pooled['excess_se']:.1f} pts", h)
+                      f"{100 * pooled['excess_se']:.1f} pp", h)
         self.assertIn(f"· {pooled['n']} completed games", h)
         self.assertNotIn("usually pays", h)
 
@@ -702,7 +722,7 @@ class RenderTests(unittest.TestCase):
                             (dict(p_home=.70, away_ml=200, home_ml=-260), .005),
                             (dict(p_home=.62, home_ml=-160), .0551)):
             h = b._verdict_html("ARI", odds, "LAD", "ARI", POOLED, delta)
-            records.add(re.search(r"Cleared the posted price by</span><span>"
+            records.add(re.search(r"Past margin over closing break-even</span><span>"
                                   r"([^<]+)", h).group(1))
             bars.add(re.search(r"Posted break-even</span><span>([^<]+)",
                                h).group(1))
@@ -713,8 +733,8 @@ class RenderTests(unittest.TestCase):
         """Historical bucket results are explicitly descriptive, not forecasts."""
         h = b._verdict_html(
             "ARI", dict(p_home=.62, home_ml=-160), "LAD", "ARI", POOLED, .02)
-        self.assertIn("A model-level average over every completed game, "
-                      "not this game's chance of winning", h)
+        self.assertIn("This is a pooled descriptive result, not a calibrated "
+                      "win probability or a game-specific expected edge", h)
         self.assertNotIn("Historical context", h)
         self.assertNotIn("Similar Δ", h)
     def test_verdict_never_claims_a_value_bet(self):
