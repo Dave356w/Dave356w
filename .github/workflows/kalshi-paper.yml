@@ -83,4 +83,4 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           python commit_data.py --branch main --path data/paper_kalshi \
-            --message "kalshi paper observation $(date -u +%FT%H:%MZ)"
+            --no-fallback --message "kalshi paper observation $(date -u +%FT%H:%MZ)"
