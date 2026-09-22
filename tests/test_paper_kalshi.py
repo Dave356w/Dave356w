@@ -167,3 +167,18 @@ def test_orderbook_failure_persists_skip_without_position(tmp_path):
     paper.run(args(tmp_path), session=FailingBook(), now=NOW)
     assert paper.read_csv(data / "paper_kalshi/observations.csv")[-1]["reason"] == "kalshi_orderbook_unavailable"
     assert paper.read_csv(data / "paper_kalshi/positions.csv") == []
+def test_live_mlb_maker_fee_series_uses_taker_curve(tmp_path):
+    # MLB series can charge both maker and taker fees; takers still use 7% quadratic.
+    class MakerFeeSeries(Session):
+        def get(self, url, params=None, timeout=15):
+            if url.endswith('/series/KXMLBGAME'):
+                return Response({"series": {"fee_type": "quadratic_with_maker_fees",
+                                            "fee_multiplier": 0.5}})
+            return super().get(url, params, timeout)
+
+    data = write_dump(tmp_path)
+    paper.run(args(tmp_path), session=MakerFeeSeries(), now=NOW)
+    positions = paper.read_csv(data / "paper_kalshi/positions.csv")
+    assert len(positions) == 1
+    assert positions[0]["estimated_fee"] == "0.09"
+    assert "quadratic_with_maker_fees" in (data / "paper_kalshi/report.txt").read_text()
