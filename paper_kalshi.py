@@ -269,6 +269,11 @@ def render(trades, audit, destination):
         {reason: sum(a["reason"] == reason for a in audit)
          for reason in sorted({a["reason"] for a in audit})}))
     if destination:
+        last_check = audit[-1]["time"] if audit else ""
+        recent = [a for a in audit if a["time"] == last_check]
+        audit_message = ("Last scan " + last_check + ": " + ", ".join(
+            f"{a['away']}-{a['home']} {a['reason']}" for a in recent)
+            if last_check else "No model games have been scanned yet.")
         fields = ("time", "selected", "ticker", "ask", "qty", "saved_pp", "status", "pnl")
         cells = "".join("<tr>" + "".join("<td>" + html.escape(str(t.get(f, ""))) +
                         "</td>" for f in fields) + "</tr>" for t in trades[-60:][::-1])
@@ -279,7 +284,8 @@ def render(trades, audit, destination):
                 'border-bottom:1px solid #ccc;text-align:left}div{overflow-x:auto}</style>'
                 '<h1>V13 Kalshi — paper only</h1><p>Indicative observed asks, estimated '
                 'fees and hypothetical fills only. No orders submitted. Not a calibrated '
-                'model edge.</p><p>' + html.escape(
+                'model edge.</p><p><strong>Recent audit:</strong> ' +
+                html.escape(audit_message) + '</p><p>' + html.escape(
                     f"{len(trades)} trades; {len(closed)} settled; P&L USD {pnl:.2f}") +
                 '</p><p><a href="index.html">Matchups</a></p><div><table><tr>' +
                 "".join("<th>" + html.escape(f) + "</th>" for f in fields) +
