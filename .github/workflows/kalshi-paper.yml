@@ -1,6 +1,11 @@
 name: Kalshi pregame paper quotes (no orders)
 
 on:
+  pull_request:
+    paths:
+      - paper_kalshi.py
+      - tests/test_paper_kalshi.py
+      - .github/workflows/kalshi-paper.yml
   workflow_dispatch:
     inputs:
       slate_date:
@@ -18,7 +23,7 @@ permissions:
 
 # Same group as build.yml: commits to data/ must not interleave.
 concurrency:
-  group: site-build
+  group: ${{ github.event_name == 'pull_request' && 'kalshi-paper-review' || 'site-build' }}
   cancel-in-progress: false
 
 jobs:
@@ -64,7 +69,16 @@ jobs:
           for path in Path('data/paper_kalshi').glob('*.csv'):
               validate_csv(path)
           PY
+      - name: Preserve diagnostic artifact (including PR live smoke)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kalshi-paper-${{ github.run_id }}
+          path: data/paper_kalshi/
+          if-no-files-found: warn
+
       - name: Persist observations separately from model ledger
+        if: github.event_name != 'pull_request'
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
