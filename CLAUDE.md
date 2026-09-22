@@ -814,6 +814,64 @@ precedent — they are how the fix is known to look.
 
 **Resolved — keep as precedent**
 
+- **A closed forward window rendering as a stall.** Two registrations can take
+  no further row and both printed a supply line trailing the ledger by four
+  slates beside a gate counting toward a number they can never reach:
+  `hybrid_v2` at **6 of ~41 switches** (its `_committed` filter requires
+  `selection_rule_tag == RULE_TAG`, and v13 retired the hybrid from the shipped
+  selection, so from 2026-09-18 the build stamps `lean`) and
+  `delta_filter_test` at **67 of ~393 dropped games** (`REGISTERED_FAMILY`
+  bounds it to v12, deliberately, because a later scale family scored under the
+  same frozen 0.012 is a different statistic).
+
+  Both closures are correct and both are argued at length in their own
+  comments. **The defect is that the artifact could not tell them from the
+  2026-09-12 stall**, which had the identical signature — a trailing
+  `last scored` clause and a live-looking gate — and which was a writer bug
+  costing two other registrations five slates. One is a bug to fix, the other
+  is the answer the registered question got, and a reader had no way to know
+  which they were looking at. Found the way that stall was: arithmetic on the
+  report, not a re-read of the code.
+
+  `row_supply_line`'s docstring deliberately refuses to issue a staleness
+  VERDICT, and that refusal is right — it cannot know the ledger's latest
+  slate. This is the other half of the same problem and it IS answerable,
+  because the module owning a registration knows what its own filter accepts.
+  Three things in the fix are the reusable part:
+
+  * **Closure is DERIVED, never asserted.** `market_backfill.window_is_closed`
+    reads the distinct values the ledger's most recent slate carries in the
+    column the registration filters on. A `CLOSED = True` literal would be the
+    constants-frozen-from-data entry in the place it does most harm: a window
+    that reopened — family restored, rule re-shipped — would go on printing
+    that it could not accrue. Keyed on the LATEST slate rather than any row
+    anywhere, because the question is what the build stamps now, and pending
+    rows count since they carry the current build's tags.
+  * **Unanswerable answers None, not True.** A slate whose column is entirely
+    null is mid-ingest, and reporting closure there would put the clause on the
+    artifact for a day on a build that is fine — the `_lock_note` rule again:
+    never assert coverage the artifact cannot substantiate.
+  * **The clause NAMES what it observed** (`the build now stamps
+    selection_rule_tag=lean`) rather than restating the reason from a literal,
+    so a third tag cannot be described as the second. One home for the wording
+    in `market_backfill`, for the same reason `row_supply_line` and
+    `chalk_is_home` are there, and a test forbids either module spelling
+    `WINDOW CLOSED` itself.
+
+  The gate is still printed, because a reader wants the sizing that was
+  registered; what does not survive is the implication that it can be reached.
+  Neither module's registered constants, row selector or reading moved, and the
+  frozen finals are the ones above. Tests pin the BICONDITIONAL over all six
+  registrations against the committed ledger, plus both directions per module
+  on frames carrying two slates — a single-slate fixture cannot represent "the
+  rule moved on", which is the trap the abstain borrow fell into. Checked
+  rather than argued: all ten go red on the pre-fix source, and forcing the
+  derivation to always-closed turns exactly the four open-direction assertions
+  red and leaves the closed ones green.
+
+  Report-only: no lean, delta, grade or ledger row moves, no registered
+  constant changes, `MODEL_TAG` unchanged.
+
 - **A model input that never reached the model, and a degrade rule that made
   it silent.** v13's whole content is the starter's centred 50/50
   xwOBA/wOBA blend. `blend_starter_rate` was correct, `STATCAST_SELECTIONS`

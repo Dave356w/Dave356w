@@ -592,6 +592,69 @@ def row_supply_line(g, noun="eligible rows"):
             f"slates (last scored {dates.max()})")
 
 
+# The clause a registration prints once its window can take no further rows.
+# ONE home, for the same reason `row_supply_line` above is here: two
+# registrations need it and they must not word it differently -- a reader
+# comparing two blocks has to be able to tell "closed" from "stalled" without
+# knowing which module wrote which line.
+def window_closed_line(reason):
+    """The WINDOW CLOSED clause. `reason` is the module's own one-sentence why.
+
+    `row_supply_line` deliberately refuses to issue a staleness VERDICT, and
+    that refusal is right: it cannot know the ledger's latest slate. This is
+    the other half of the same problem and it IS answerable, because the
+    module that owns a registration knows what its own filter accepts. Without
+    it a closed window renders exactly like the 2026-09-12 stall -- a supply
+    line trailing the ledger beside a gate that implies rows are still
+    arriving -- and the two call for opposite responses: one is a writer bug
+    to fix, the other is the answer the registered question got.
+    """
+    return f"    WINDOW CLOSED -- no further row can enter this test: {reason}"
+
+
+# Appended under a closed registration's GATE line. A gate is still printed
+# when the window shuts, because a reader wants the sizing that was registered;
+# what must not survive is the implication that it can still be reached.
+GATE_UNREACHABLE = ("      The gate is not reachable from here: the counts "
+                    "above are final, not accruing.")
+
+
+def window_is_closed(led, column, accepted):
+    """Can a registration filtering `column` to `accepted` still take a row?
+
+    Returns `(closed, observed)` -- `closed` True when the ledger's most
+    recent slate carries no accepted value, False when it carries one, and
+    None when the frame cannot answer. `observed` is the distinct non-null
+    values found on that slate, so the caller's reason can NAME what is being
+    stamped now instead of asserting it.
+
+    DERIVED, never asserted, and that is the whole design. A `CLOSED = True`
+    literal would be this repo's constants-frozen-from-data entry in the one
+    place it does most damage: a registration that reopened -- the family
+    restored, the rule re-shipped -- would go on printing that it could not.
+    Keyed on the most recent slate rather than on any row anywhere, because
+    the question is what the build stamps NOW; pending rows count, since they
+    carry the current build's tags and are the freshest evidence available.
+
+    A slate whose `column` is entirely null answers None rather than True: an
+    absent value mid-ingest is not a closed window, and reporting one would
+    put the clause on the artifact for a day on a build that is fine.
+    """
+    if led is None:
+        return None, ()
+    cols = getattr(led, "columns", ())
+    if column not in cols or "game_date" not in cols:
+        return None, ()
+    dates = led["game_date"].astype(str)
+    if not len(dates):
+        return None, ()
+    live = led.loc[dates == dates.max(), column].dropna()
+    if live.empty:
+        return None, ()
+    observed = tuple(sorted({str(v) for v in live}))
+    return not live.isin(list(accepted)).any(), observed
+
+
 def is_pickem(p_home):
     """True where the devigged home price is exactly .500. Vectorised.
 

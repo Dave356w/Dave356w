@@ -10,7 +10,8 @@ import numpy as np
 import pandas as pd
 
 import hybrid_test as v1
-from market_backfill import row_supply_line
+from market_backfill import (GATE_UNREACHABLE, row_supply_line,
+                             window_closed_line, window_is_closed)
 
 REGISTERED_ON = "2026-09-11"      # slates STRICTLY after this date are scored
 THRESHOLD = v1.THRESHOLD
@@ -102,6 +103,26 @@ def _committed(led):
                & pd.to_numeric(led["xw_net"], errors="coerce").notna()
                & led["selection_rule_tag"].eq(RULE_TAG)
                & led["hybrid_action"].isin(["FOLLOW", "FADE"])]
+
+
+def window_closed(led=None):
+    """Is this registration's window shut? `(closed, rule_tags_now_stamped)`.
+
+    `_committed` requires `selection_rule_tag == RULE_TAG`, so this window
+    closed by ITSELF the moment v13 retired the hybrid from the shipped
+    selection -- nothing was edited here and nothing had to be. That is the
+    bound `delta_filter_test` had to add deliberately, and its comment calls
+    this one an accident. An accidental bound is still a bound, and a reader
+    of `ledger_report.txt` could not see either one: the block rendered exactly
+    like the 2026-09-12 stall, which was a writer bug rather than an answer.
+
+    Derived from the tag the ledger's most recent slate carries, never a
+    literal, so re-shipping the rule reopens the window and drops this clause.
+    """
+    led = _ledger(led)
+    if led is None:
+        return None, ()
+    return window_is_closed(led, "selection_rule_tag", (RULE_TAG,))
 
 
 def scored_rows(led=None):
@@ -201,12 +222,21 @@ def report_lines(led=None):
     if g is None:
         return out + ["    ledger unavailable or missing columns -- not scored"]
     out.append(row_supply_line(g))
+    closed, rules = window_closed(led)
+    if closed:
+        out.append(window_closed_line(
+            f"the build now stamps selection_rule_tag={', '.join(rules)}, so "
+            f"no row can carry the {RULE_TAG} commitment this test scores. "
+            "v13 publishes the model's own lean and the hybrid is off the "
+            "shipped selection; the rule's instrument is retired, not deleted."))
     dropped = unscorable(led)
     if dropped:
         out.append(f"    WARNING: {dropped} committed row(s) are unscorable.")
     if not len(g):
         out.append("    nothing to score yet. Prior is NULL; all-v12 results above "
                    "are retrospective and do not count toward this gate.")
+        if closed:
+            out.append(GATE_UNREACHABLE)
         return out
     sw = g[~g["follow"]]
     n_sw = len(sw)
@@ -249,6 +279,8 @@ def report_lines(led=None):
                f"discovery-sized effect, ~{GATE_SWITCHES_REALISTIC} for a "
                "plausible +0.10u one. v2 fades STRICTLY less often than v1 "
                "did, so it reaches these more slowly, not faster.")
+    if closed:
+        out.append(GATE_UNREACHABLE)
     out.append("    The combined-hybrid line is mostly the model, not the rule: "
                "only the switched games are the hypothesis. See hybrid_v2.py.")
     return out

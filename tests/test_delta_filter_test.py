@@ -346,3 +346,57 @@ class RegisteredFamilyTests(unittest.TestCase):
         import build_site
         self.assertNotIn(build_site.MODEL_TAG,
                          dft.REGISTERED_FAMILY)
+
+
+class WindowClosureTests(unittest.TestCase):
+    """The family bound has to be VISIBLE, not only correct.
+
+    `RegisteredFamilyTests` above pins that a later family is not scored. That
+    is the behaviour; this is what a reader of `ledger_report.txt` can see. With
+    the bound working and nothing saying so, the block renders exactly like the
+    2026-09-12 stall -- a supply line trailing the ledger beside a gate that
+    implies rows are still arriving -- and those two states call for opposite
+    responses. Both directions are pinned because a test that only checked the
+    closed case would pass just as happily if the clause were printed always.
+    """
+
+    def _mixed(self, latest_tag):
+        return pd.concat([
+            _led([0.02, 0.005], date="2026-09-10"),
+            _led([0.02, 0.005], date="2026-09-20", model_tag=latest_tag),
+        ], ignore_index=True)
+
+    def test_a_later_family_on_the_latest_slate_closes_the_window(self):
+        led = self._mixed("xw+starter_blend_v13")
+        closed, tags = dft.window_closed(led)
+        self.assertTrue(closed)
+        self.assertEqual(tags, ("xw+starter_blend_v13",))
+        text = "\n".join(dft.report_lines(led))
+        self.assertIn("WINDOW CLOSED", text)
+        # It NAMES the tag it observed rather than asserting one, so a third
+        # family cannot be described as the second.
+        self.assertIn("xw+starter_blend_v13", text)
+        self.assertIn("not reachable", text)
+
+    def test_the_registered_family_on_the_latest_slate_leaves_it_open(self):
+        led = self._mixed(dft.REGISTERED_FAMILY[0])
+        self.assertEqual(dft.window_closed(led)[0], False)
+        text = "\n".join(dft.report_lines(led))
+        self.assertNotIn("WINDOW CLOSED", text)
+        self.assertNotIn("not reachable", text)
+
+    def test_the_clause_survives_an_empty_forward_sample(self):
+        """Zero scored rows is exactly when a reader needs to know whether any
+        are still coming -- the empty path prints a gate too."""
+        led = _led([0.02], date="2026-08-01", model_tag="xw+starter_blend_v13")
+        self.assertEqual(len(dft.scored_rows(led)), 0)
+        text = "\n".join(dft.report_lines(led))
+        self.assertIn("WINDOW CLOSED", text)
+        self.assertIn("not reachable", text)
+
+    def test_closure_is_not_read_off_the_running_build(self):
+        """Derived from the ledger, so a frame disagreeing with today's build
+        answers about the frame. Reading `build_site.MODEL_TAG` instead would
+        make the clause a property of the process rather than of the data."""
+        led = _led([0.02], date="2026-09-20", model_tag=dft.REGISTERED_FAMILY[0])
+        self.assertEqual(dft.window_closed(led)[0], False)

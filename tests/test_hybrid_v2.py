@@ -449,3 +449,59 @@ def test_a_migration_leaves_every_cell_it_did_not_change_byte_identical(tmp_path
     assert b[hdr.index("d_lineup")] == precise      # untouched, not truncated
     moved = {hdr[i] for i, (x, y) in enumerate(zip(a, b)) if x != y}
     assert moved == set(migrate_hybrid_v2.V1_ARCHIVE)
+
+
+def _mixed_rule_tags(latest_tag):
+    """A scored v2 slate, plus a later slate stamped with `latest_tag`.
+
+    The fixture has to carry `selection_rule_tag` on two DATES for the closed
+    state to be representable at all -- a single-slate frame cannot distinguish
+    "the rule moved on" from "this registration never had rows". That is the
+    trap the abstain borrow fell into: three tests passed on a frame carrying
+    none of the column the claim turned on.
+    """
+    scored = _rows(.40, .005, date="2026-09-12")
+    later = _rows(.60, .020, date="2026-09-20")
+    later["selection_rule_tag"] = latest_tag
+    later["game_pk"] = 2
+    return pd.concat([scored, later], ignore_index=True)
+
+
+def test_retiring_the_rule_from_the_shipped_selection_closes_the_window():
+    led = _mixed_rule_tags("lean")
+    closed, rules = hybrid_v2.window_closed(led)
+    assert closed is True
+    assert rules == ("lean",)
+    text = "\n".join(hybrid_v2.report_lines(led))
+    assert "WINDOW CLOSED" in text
+    # Names what it observed, so a later rule tag cannot be reported as "lean".
+    assert "selection_rule_tag=lean" in text
+    assert "not reachable" in text
+
+
+def test_a_slate_still_carrying_the_rule_leaves_the_window_open():
+    led = _mixed_rule_tags(hybrid_v2.RULE_TAG)
+    assert hybrid_v2.window_closed(led)[0] is False
+    text = "\n".join(hybrid_v2.report_lines(led))
+    assert "WINDOW CLOSED" not in text
+    assert "not reachable" not in text
+
+
+def test_the_closure_clause_reaches_the_empty_forward_path_too():
+    """No scored rows is when a reader most needs to know whether any can
+    arrive; the empty branch prints a gate, so it prints the clause."""
+    led = _rows(.40, .005, date="2026-08-01")
+    led["selection_rule_tag"] = "lean"
+    assert len(hybrid_v2.scored_rows(led)) == 0
+    text = "\n".join(hybrid_v2.report_lines(led))
+    assert "WINDOW CLOSED" in text
+    assert "not reachable" in text
+
+
+def test_closure_says_the_instrument_is_retired_and_not_deleted():
+    """`hybrid_action` still writes the ledger's capture columns under v13, and
+    three live registrations read them. The clause must not imply otherwise --
+    retiring a rule and deleting the thing that measures it are different acts
+    and only the first was done."""
+    text = "\n".join(hybrid_v2.report_lines(_mixed_rule_tags("lean")))
+    assert "retired, not deleted" in text

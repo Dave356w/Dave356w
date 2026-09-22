@@ -87,7 +87,9 @@ import pandas as pd
 
 # One home for "which side is chalk", so this control and the site's cannot
 # answer it differently on a game with no favourite. See market_backfill.
-from market_backfill import chalk_is_home, row_supply_line
+from market_backfill import (GATE_UNREACHABLE, chalk_is_home,
+                             row_supply_line, window_closed_line,
+                             window_is_closed)
 
 # ---------------------------------------------------------------------------
 # FROZEN REGISTRATION BLOCK. Changing any value below invalidates the test and
@@ -246,6 +248,26 @@ def scored_rows(led=None):
     return apply_filter(g)
 
 
+def window_closed(led=None):
+    """Is this registration's window shut? `(closed, tags_now_stamped)`.
+
+    `REGISTERED_FAMILY` above says the window closes at a family change, and
+    says it in a comment. This is the part a READER of `ledger_report.txt` can
+    see: without it the block renders identically to a stalled one -- the same
+    trailing supply line, the same gate -- and the stall it would be confused
+    with was a writer bug that cost two other registrations five slates.
+
+    Derived from what the ledger's most recent slate is stamped with, never
+    from a literal, so restoring the family reopens the window and this clause
+    disappears on its own.
+    """
+    if led is None:
+        if not os.path.exists(LEDGER):
+            return None, ()
+        led = pd.read_csv(LEDGER, low_memory=False)
+    return window_is_closed(led, "model_tag", REGISTERED_FAMILY)
+
+
 def _excess(won, p):
     """(excess, se) of a realised rate against its own implied rate.
 
@@ -289,6 +311,14 @@ def report_lines(led=None):
         out.append("    ledger unavailable or missing columns -- not scored")
         return out
     out.append(row_supply_line(g))
+    closed, tags = window_closed(led)
+    if closed:
+        out.append(window_closed_line(
+            f"the build now stamps {', '.join(tags)}, outside the "
+            f"{', '.join(REGISTERED_FAMILY)} family this |xw_net| gate was "
+            "registered against. A later scale family scored under the same "
+            "frozen 0.012 is a different statistic wearing the registered "
+            "constant's name."))
     if not len(g):
         out.append(f"    nothing to score yet. Prior is {PRIOR.upper()}: on the "
                    "discovery rows the model beat always-chalk by MORE on the "
@@ -300,6 +330,8 @@ def report_lines(led=None):
                    f"(~{GATE_DROPPED / 4.32:.0f} slates at "
                    f"{DISCOVERY_DROP_RATE:.2f} of a slate). Read nothing "
                    "before then.")
+        if closed:
+            out.append(GATE_UNREACHABLE)
         return out
 
     dropped = g[~g["kept"]]
@@ -345,6 +377,8 @@ def report_lines(led=None):
                f"discovery-sized effect, ~{GATE_DROPPED_REALISTIC} for a "
                f"plausible 3pp one (~253 slates at {DISCOVERY_DROP_RATE:.2f} "
                "of a slate).")
+    if closed:
+        out.append(GATE_UNREACHABLE)
     out.append(f"    Search test at registration put P(null best >= observed) = "
                f"{NULL_MAX_P:.3f} -- the discovery gap is SMALLER than a sweep "
                "over noise typically returns. See delta_filter_test.py.")
