@@ -24,6 +24,7 @@ that combined history with closing prices and does not change model decisions.
 | [`CLAUDE.md`](CLAUDE.md) | Working standards, the `RECORD_TAGS`/`SCALE_TAGS` family table, and the anti-pattern catalogue. |
 | [`REGISTRATIONS.md`](REGISTRATIONS.md) | Registered tests and checkpoints. Logic only — live readings are in `data/ledger_report.txt`. |
 | [`docs/repository_cleanup_review.md`](docs/repository_cleanup_review.md) | Dated repository audit, staged cleanup plan, and delta/market separation benchmark. |
+| [`docs/kalshi_paper.md`](docs/kalshi_paper.md) | Read-only prospective Kalshi MLB paper fills, saved-price comparisons and isolated audit. |
 | [`docs/win_probability.md`](docs/win_probability.md) | Regularized home-win probability mapping, chronological evaluation, and comparison with the saved pregame market. |
 | [`docs/build_logic_validation.md`](docs/build_logic_validation.md) | Historical xwOBA review; its structural checks still describe the inherited v10 construction. |
 | [`docs/f5_market_validation.md`](docs/f5_market_validation.md) | First-5-innings market capture and its data-quality audit. |
