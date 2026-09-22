@@ -164,6 +164,14 @@ jobs:
       - name: Refresh grades page from final ledger
         run: python build_site.py --grades-only
 
+      # Separate GET-only Kalshi paper shadow: failures cannot cost a V13
+      # pregame dump or prevent deploying the existing model and ledger.
+      - name: Kalshi paper shadow and independent HTML report
+        continue-on-error: true
+        env:
+          SLATE_DATE: ${{ needs.plan.outputs.slate_date }}
+        run: python paper_kalshi.py --date "$SLATE_DATE" --out-html public/paper.html
+
       # The ledger persists by being committed. commit_data.py sends the
       # pending data/ changes through the GraphQL createCommitOnBranch
       # mutation, so GitHub signs the commit and it lands Verified -- a
@@ -176,14 +184,6 @@ jobs:
       # failure of the API path falls back to that old push sequence, because
       # an unverified commit costs provenance and a lost slate costs pregame
       # rows nothing can re-derive.
-      # Separate GET-only Kalshi paper shadow: failures cannot cost a V13
-      # pregame dump or prevent deploying the existing model and ledger.
-      - name: Kalshi paper shadow and independent HTML report
-        continue-on-error: true
-        env:
-          SLATE_DATE: ${{ needs.plan.outputs.slate_date }}
-        run: python paper_kalshi.py --date "$SLATE_DATE" --out-html public/paper.html
-
       - name: Commit ledger
         env:
           GITHUB_TOKEN: ${{ github.token }}
