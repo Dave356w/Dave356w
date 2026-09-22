@@ -1,0 +1,4748 @@
+# Working standards — Dave356w/Dave356w
+
+MLB matchup-leans site. `build_site.py` renders daily cards to `public/`,
+`grade_leans.py` grades pending rows against StatsAPI linescores,
+`market_backfill.py` joins DK open/close via ESPN. GitHub Actions builds on a
+pregame trigger (`schedule_gate.py`) and commits `data/` back to the repo.
+
+Read `MATCHUP_SITE.md` for the model. Read this first for how to work here.
+
+## Method
+
+- **Evidence before conclusions.** Claims about this codebase get verified
+  against the ledger or the source, not recalled. If you assert a record, a
+  distribution, or a behaviour, run it first and paste the number.
+- **Verify, don't recall.** Do not describe what a function does from its name
+  or its docstring. Both have been wrong in this repo. Read the body.
+- **Benchmark proposed fixes before recommending them.** A change that sounds
+  principled can be worse than what it replaces. Compare candidates on the
+  metric the fix is supposed to improve, across enough seeds to see variance,
+  and report the loser honestly — including when the loser is your own proposal.
+- **Subtractive.** Prefer deleting a branch to adding one. A fix that removes a
+  special case beats a fix that adds a tier. If a change grows the code, say why
+  the simpler version fails.
+- **No sycophancy.** Do not open with praise. Lead with the finding. If a
+  request rests on a wrong premise, say so before answering it.
+
+## Model versioning — two namespaces, do not conflate
+
+`MODEL_TAG` stamps every ledger row with its lineage. Bump it on any change to
+prediction math. Two separate tag families gate two different questions:
+
+- `RECORD_TAGS` — may these rows share a win-loss line? Prediction-math
+  compatibility. Governs `_record_grades()` and the weight fit.
+- `SCALE_TAGS` — do these rows measure the primary-rate delta on the same
+  scale? (`xw_net` is the retained legacy ledger name.) Units compatibility.
+  Governs `lean_strength_scale()` only.
+
+These are different equivalence relations and they do disagree. The authority is
+`_RECORD_FAMILIES` / `_SCALE_FAMILIES` in `build_site.py` (records mirrored in
+`grade_leans.py`) — not this table, which is a reading aid. Current model is
+**v13** — Savant xwOBA with a centred 50/50 wOBA blend on the STARTER rate,
+`XWOBA_SHRINK_K = 100`, population shrinkage targets, calibrated expected
+starter IP. The hybrid selection rule is retired: the site publishes the
+model's own lean.
+
+| tag | what changed | record family | scale family |
+|---|---|---|---|
+| v2 | baseline | 2 | 2 |
+| v3 | pregame lock only, math identical to v2 | 2+3 | 3 |
+| v4 | slot-PA lineup weighting | 4 | 4 |
+| v5 | empirical-Bayes xwOBA shrinkage (halved the scale, median `\|xw_net\|` .036 → .018) | 5 | 5+6 |
+| v6 | expected-IP starter/bullpen blend; inherits v5 shrinkage | 6 | 5+6 |
+| v7 | centre-matched shrinkage moments; full precision; zero = abstention | 7 | 7 |
+| v8 | fixed `K=100` shrinkage, widening the delta distribution | 8 | 8+9+10 |
+| v9 | starter/bullpen phases split; handedness applies to starter innings only | 9+10 | 8+9+10 |
+| v10 | phases weighted by PA share (measured BF/IP) not innings share | 9+10 | 8+9+10 |
+| wOBA v1 | observed wOBA replaces xwOBA in every active rate input; v10 construction fixed | wOBA v1 | wOBA v1 |
+| wOBA v2 | exposure-centred 0.021 starter platoon gap replaces universal ±0.010 | wOBA v2 | wOBA v1+v2 |
+| wOBA v3 | `XWOBA_SHRINK_K` 100 → 400 (fitted); reliever target moves to the relief pool's own unweighted centre | wOBA v3 | wOBA v3 |
+| wOBA v4 | shrinkage *target* becomes the player's own recency-weighted 2023–2025 history, not a population centre | wOBA v4 | wOBA v4 |
+| wOBA v5 | abstain when a side's starter has no measured season line | wOBA v5 | wOBA v4+v5 |
+| split v1 | one-slate wOBA-lineup/xwOBA-arms test; abandoned before grading | split v1 | split v1 |
+| v11 | revert to xwOBA + K=100 + population target, keeping v2's platoon centring, v3's relief-pool target and v5's abstention | v11 | 8+9+10+11 |
+| v12 | `expected_sp_ip` calibrated per build against its own backfilled actuals (over-dispersed, slope 0.735) | v12 | 8+9+10+11+12 |
+| v13 | starter's allowed rate becomes a centred 50/50 xwOBA/wOBA blend; hybrid selection rule retired | v12+v13 | v13 |
+
+The wOBA forward test is intentionally isolated from xwOBA in both namespaces.
+Observed wOBA changes the predictions and its sampling distribution is not the
+xwOBA delta scale. v2 starts a clean record because the platoon prior moves
+predictions, but shares v1's strength scale: the metric is unchanged and each
+handedness pair retains essentially the same total gap (0.021 versus 0.020).
+Internal `xwOBA`/`xw_*` dump and ledger keys remain a compatibility schema for
+immutable history; every row must carry `model_metric` explicitly. Under v11
+that schema and the statistic agree again, which is *more* dangerous rather than
+less: the keys stop being an obvious lie and start looking like documentation.
+They are not. Read the metric from `model_metric`, never from a key name and
+never from the running build's constants — `market_backfill.metric_label()` is
+the one derivation, and `shadow_report.dump_metric()` is its per-dump twin.
+
+**v12 is the counter-precedent to v11 on the record question: a bump whose
+decision-equivalence measurement argued for *sharing* and which isolated
+anyway, for a reason that has nothing to do with the model.** The expected-IP
+calibration flips 1 lean in 254 with mean |Δ net| 0.00067 against a median
+|xw_net| of 0.01694 — the same order as v10's reweight, which earned a shared
+line. Sharing a record exists to avoid resetting a *graded sample* for a change
+that decides the same games; v11 had no graded rows, so there was no sample to
+protect and a clean line was free. Read that as cost-benefit, not as "a bump
+means isolate" — if v11 had graded rows, the measurement above argues the other
+way, and it is recorded in `_RECORD_FAMILIES` so a later reader can see which
+way the evidence pointed independently of what the reset happened to cost. The
+scale half is the ordinary v10 argument and is measured: `q` is a convex weight
+between the same two phases, so the units are untouched.
+
+**v13 SHIPPED WITHOUT BLENDING ANYTHING FOR ITS FIRST TWO SLATES, and this
+is the first thing to know about the tag.** From the bump until 2026-09-18 the
+live build stamped `xw+starter_blend_v13` on rows carrying v12 math: the
+starter's published rate was the pure shrunk xwOBA on 28 of 28 side-rows of
+`leans_2026-09-18_xw.csv` and 18 of 18 of the 09-17 rebuild, `starter_rate_
+blended` False and `starter_rate_blend_in` null on every one. The cause and
+the fix are the anti-pattern entry below; what belongs here is what it means
+for the tag. Nothing graded — all 13 ledger rows were that morning's, pending,
+and `MODEL_FIELDS` re-derives a pending row on every pregame poll, so they
+were rebuilt under real v13 math before first pitch (the v8 precedent). So
+`_RECORD_FAMILIES` and `_SCALE_FAMILIES` are untouched and no tag moved: v13's
+first blended row is the first v13 row that ever graded. What does NOT survive
+is the sentence "v13 has graded no rows of its own" being read as neutral
+bookkeeping — for two slates it was the only thing standing between the tag
+and a graded row built under the previous model.
+
+**And the retrospective was blending the whole time, which is the part a later
+reader will trip on.** `reconstruct_v13` calls `blend_starter_rate` directly
+with the paired dumps' own values and never touches the frame, so it was never
+exposed to the gap. For those two slates the published v13 record — 449 of 449
+reconstructed — described a construction the live build was not running. That
+is the artifacts-disagreeing defect with the two artifacts being the model and
+its own retrospective, and the only reason it cost nothing is that the live
+arm produced no graded rows to disagree with.
+
+**v13 ships the starter blend and retires the hybrid rule, and this entry's
+job is to record that it was shipped AGAINST the measurements, on the
+operator's instruction.** Every reading in `blend_probe.py` and the sessions
+behind it says the blend does not clear its own noise: paired d_corr against
+the shipped arm +0.0117 with se 0.0112 (z +1.05) on 448 reconstructed rows,
+against a noise bar of ~2.04 for the constructions searched; the ROI gain is
++10.57u over 32 flipped games of which the top three carry +7.42u; the
+null-max test returns P = 0.39; and applying the published hybrid rule on top
+of it made things WORSE, not better (−10.21u). None of that is retracted here
+and none of it should be quoted as support. **The model changed because it was
+directed to, not because a measurement argued for it.** A later reader must
+not convert this into evidence — the same instruction this file gives about
+v11, for the same reason.
+
+What IS measured and did decide something smaller: of the three candidate
+constructions (raw average, centred, raw-with-blended-baseline) all three flip
+the same 32 leans and post the same record, so the choice cost nothing and was
+made on principle — the centred form, blending deviations against each
+metric's own league centre, because a raw average carries a ~0.002 level shift
+into the starter phase only and this repo's own "store the deviation, not the
+level" rule forbids it.
+
+**The RECORD namespace was isolated and then un-isolated on the operator's
+instruction; the scale namespace stayed isolated.** The first reading is
+recorded because it was the measured one: 32 of 448 flips (7.1%) changes
+which games are decided, so on this file's own precedent v12's line is not
+v13's. The instruction was that this is a minor tag bump and v12's rows are
+to be retained and shown under v13 logic, so `_RECORD_FAMILIES` now maps v13
+to `(v12, v13)`.
+
+**The share is coherent only because the retained rows are RE-DECIDED, and
+that is the whole of what makes it different from the "wOBA full 217-164"
+substitution.** `_published_grades` is the one derivation: a v13 row passes
+through as it was decided, a retained v12 row is scored on
+`reconstruct_v13`'s v13 re-decision of it, and a retained row with no
+reconstruction is dropped rather than carried over on its own lean. Carrying
+one over WOULD be that substitution exactly — another model's result under
+this model's name.
+
+**What it costs is stated plainly and was not measured away: the retained
+rows are hindsight.** The reconstruction's wOBA half comes from paired shadow
+dumps, and only **214 of 1,066** side-rows were written before their own first
+pitch, so on ~80% of them the rate was read off a leaderboard the game had
+already finished inside. A re-decision made after the result is known is not
+a selection anyone could have taken. As of the bump the published line is
+**449 of 449 reconstructed** — v13 has graded no rows of its own — so the
+public record is at present entirely hindsight.
+
+**And on a second instruction, 2026-09-18, the pages no longer say so.** A
+per-row `rebuilt` badge, a marker on the record tile of both the strip and
+the grades header, and a provenance note on the grades and calibration pages
+were all built, rendered, and then removed: the instruction was to blend the
+retained and live rows silently. What survives is where an analyst looks, not
+where a reader does — `reconstruct_v13` prints the pregame split on every run,
+`grade_leans._published_basis_lines` puts a BASIS clause in
+`ledger_report.txt` saying that the pages re-decide those rows and this report
+does not, and `xw_lean` / `xw_full` are untouched in the ledger so the
+reconstruction can always be separated back out. **A later reader must not
+take the published record as a track record, and must not take this file's
+silence on any page as evidence there was nothing to declare.** It is the
+shape of the defect this file records shipping once by accident; the
+difference is that this one is deliberate and written down.
+
+Two things fell out of the share that are worth keeping as mechanics. The
+reconstructed GRADE is now DERIVED (`build_site.recon_grade`) from the
+recon lean and the row's own two finals rather than stored, which is this
+file's standing rule for a deterministic function of write-once columns —
+and it is what lets a still-PENDING retained row publish the day it settles
+instead of carrying a NaN grade forever from a migration that runs once. And
+`_row_selection` keys on `MODEL_TAG`, never on `RECORD_TAGS`: those stopped
+being the same question at the share, and keyed on the family the table would
+have printed v12's pick under a header scoring v13's — the
+artifacts-disagreeing defect in the one form a reader can actually see.
+
+**The writer is where a migration's columns survive, and this was learned the
+expensive way.** `reconstruct_v13` wrote its columns in PR #216 and the very
+next bot ledger commit erased all of them, because `grade_leans.load_ledger`
+reindexes the frame to its own column lists and a column it has never heard
+of does not survive the round trip. The names now live in `market_backfill`
+(the one module both the site and the grader can import) and the grader
+preserves them when present — deliberately *preserved, never minted*, because
+minting them empty would make the append-only migration refuse to run.
+
+Scale: `xw_net` is no longer a pure xwOBA difference — half of
+each starter's deviation is a wOBA deviation, and a delta whose sampling
+distribution is a MIXTURE of two metrics' spreads is a different scale
+whatever the median does (it moves +1.9%, which is small and is deliberately
+not the basis for sharing). The consequence this file already warned about
+then fired: a new `_SCALE_FAMILIES` entry invalidates every delta-gated
+REGISTRATION. `hybrid_v2` self-bounds because it filters on
+`selection_rule_tag` and the rule is no longer published; `delta_filter_test`
+had NO such guard and would have gone on appending v13 rows to a v12 window
+under the same frozen 0.012, so it now carries `REGISTERED_FAMILY` and its
+window closes at the bump. That is the honest outcome rather than a
+workaround: a registered question was asked of a specific statistic.
+
+**The hybrid rule is retired from the SHIPPED selection and its instrument is
+not destroyed.** `hybrid_action` still writes the ledger's capture columns,
+because those are the pregame evidence for four live registrations and a
+decision-time price that was never captured cannot be re-derived later.
+`abstain_test`'s pre-committed decision (17 of 82 declined games, reading
+−0.336u ± 0.199) keeps accruing. Retiring a rule and deleting the thing that
+measures it are different acts; only the first was done.
+
+**And on 2026-09-18 it came off every user-facing page, on the operator's
+instruction — the instrument still untouched.** What went: the grades page's
+`Retired hybrid rule` tile and its `Discovery … 45% price and .012 |Δ| gates`
+note; the calibration page's gate tiles, its `By branch` table and the
+`Always chalk · MARKET OVER LEAN rows only` row; and the per-game card's
+`Rule` heading, its `XWOBA SIDE` / `MARKET OVER LEAN` labels and the
+unreachable FADE body of `_branch_history`. The card now heads its row
+`Selection` and names the club.
+
+**`Deleting controls as clutter` is the entry this trades against and it is
+not violated, which is worth stating rather than assuming.** That entry
+protects a TRIVIAL BASELINE beside a record; always-chalk and always-home are
+both still rendered on `market-calibration.html` over the identical rows. A
+retired selection rule was never one of those, and its forward reading — the
+only thing that can say whether it worked — is untouched in
+`ledger_report.txt`.
+
+Three things fell out and each is the shape of a rule this file already has.
+**The card's delta × price cells were the retired rule's selected side over
+its FOLLOW subset**, which on a faded row named the opposite club at the
+opposite price and, once the rule was off the pages, was a row set defined by
+something nothing runs; they now score the lean's own columns over every
+decided row, and `grade_leans._selection_price_matrix_lines` moved with them
+in the same commit so the two artifacts cannot disagree. **Six `hybrid_*`
+columns on the observation frame lost their last reader** and went with the
+renderers rather than being left to trip the `column carried to no surface`
+test that exists to catch exactly them. And **`hybrid_public_label`,
+`HYBRID_DELTA_THRESHOLD`, `BRANCH_RECORD_MIN` and the per-branch price bands
+were deleted AT the removal** — the seventh instance of the
+callee-outliving-its-call-site pattern, and the second caught by running the
+reference count before the edit instead of days later.
+
+**A sanity check of the matrix then found the disagreement the rebase was
+supposed to prevent, and this is the entry to read.** The PR body claimed the
+card and `_selection_price_matrix_lines` "cannot disagree" because a test
+holds them equal cell by cell. They disagreed on **24 of 26 cells** in
+production. The card bands on the RECONSTRUCTED delta and scores the
+re-decided lean; the report read `xw_net` / `xw_lean` / `xw_full` straight
+off the ledger, which on a retained row is v12's. Over 452 rows the deltas
+differed on 444 by up to 0.0215 — wider than a whole band — the lean differed
+on 39, and the two artifacts published 282-170 against 273-171.
+
+**The test passed throughout, and the comment explaining why is the
+confession.** It patched `MODEL_TAG` to the family, with a note saying that
+leaving it alone "would compare a re-decided cell against a published one and
+fail for a reason that has nothing to do with the shared construction under
+test". Exactly backwards: the block's own docstring calls it the grid the
+card shows one cell of, so a re-decided cell against a published one IS the
+construction under test. The patch made the fixture unable to represent the
+only disagreement that could occur — the same trap as `abstain_test`'s
+borrowed selector, reintroduced by hand one day after the entry recording it
+was written.
+
+Fixed by giving the substitution one home, `market_backfill.publish_recon‐
+struction`, which build_site renders from and grade_leans now scores from —
+the `chalk_is_home` precedent, for the same reason: grade_leans cannot import
+build_site, and spelled twice it drifted. Scoped to that one block; family
+history lines and every registration still score the lean each build actually
+published, which is what `_published_basis_lines` declares. The test drops
+the `MODEL_TAG` patch, a second test asserts the disagreement is
+REPRESENTABLE at all (retained rows exist whose published lean or delta
+differs from their stored one), and reverting the one line turns the equality
+test red — checked, not assumed.
+
+**A second sanity check, on the report the build then produced, found the
+larger defect: the reconstruction was resurrecting every ABSTENTION.** The
+header read `453 graded games (445 with a lean, 8 abstained)` while the grid
+below it scored `453 decidable rows` and the grades page reported `0
+abstained`. All 8 are `starter_unmeasured_no_lean` — v5's rule, which v11
+kept and which v13 did not touch, because v13 changed the starter's RATE and
+not the gate. `reconstruct_v13` computes a net from the paired dumps with no
+abstention check, so each one carried a `v13_lean_recon`, and
+`publish_reconstruction` substituted it.
+
+**A live v13 build facing those games publishes nothing.** So this was not a
+re-decision at all — it was a selection the model itself would refuse, which
+is the "a selection nobody could have made" defect the ledger table was gated
+on `RECORD_TAGS` to prevent, arriving through the reconstruction instead.
+Measured: the published headline read **282-171** where the rows this model
+would decide are **278-167**, and the 8 resurrected games went 4-4.
+
+Fixed in `publish_reconstruction`, which every surface reads, so the record,
+the ROI, the delta × price grid and the Graded tile all corrected together.
+An abstained retained row passes through **kept, not substituted and not
+dropped** — dropping it would relabel a declined game as one the migration
+could not rebuild, and every surface already knows how to skip an abstention
+(`_rec()` skips it, the tile counts `xw_lean.isna()`, the observation frame's
+home-or-away test excludes it). `reconstruct_v13` stops writing them too, so
+a re-run does not re-create what the reader would filter out. The signal is
+`xw_lean.isna()` rather than `pitching_basis_*`, because a second spelling
+would miss v7's zero-delta rule if it ever fired.
+
+**The cross-surface test written the day before is what caught the second
+half**, and that is the entry: `_row_selection` still handed those rows a
+recon pick, so the table's row set disagreed with the header's. It went red
+on exactly the rows the reconstruction had resurrected. A test restated to
+follow its subject caught a defect introduced a day later in a different
+function — which is the argument for restating rather than deleting.
+
+**What the matrix says once it is right: less than it did when it was
+wrong.** Scored on the published v13 rows the |Δ| band excesses run +4.9,
++15.3, −3.7, +9.5, +8.4 pp — chi-squared 8.21 on 4 dof, no structure beyond
+noise, rank trend r = +0.03. On the v12 deltas it had been reading +6.0,
++2.9, +6.5, +8.4, +9.5 with **r = +0.78**, which looks like conviction
+paying off monotonically and is an artifact of banding on the wrong delta.
+Neither is a finding — both are inside their own error bars, and the grid
+prints a null maximum of +40.8 pp against an observed best of +46.0 on a
+one-game cell — but a reader who had quoted the +0.78 trend would have been
+quoting the previous model's delta under this one's name.
+
+One caveat was deleted rather than restated, and the reason is the rule about
+caveats one level out. `test_the_discovery_claim_survives_off_the_card`
+pinned the `Discovery, not a forward test` note on two pages, and it existed
+because this file once asserted a third carrier that did not exist. Its
+SUBJECT is now invisible: no gate, branch or rule record renders anywhere, so
+a caveat about a fitted threshold describes a diagnostic the reader cannot
+see. It is replaced by `test_no_page_claims_a_gate_the_reader_cannot_see`,
+which walks both pages for every trace of the rule and asserts the surviving
+controls are still there — a stronger claim than the one it replaces, and
+the reason the deletion is safe. Its first draft searched for a bare `.012`
+and matched a per-row `Δ0.012` in the ledger table, which is the text-window
+defect this file records; it matches a threshold beside a COMPARISON now.
+
+**The retrospective is a RECONSTRUCTION and must never be read as a record.**
+`reconstruct_v13.py` writes `v13_*_recon` columns onto earlier-family rows from
+the committed paired dumps, using `build_site.blend_starter_rate` itself so it
+cannot drift into a second spelling. It refuses to write if any protected
+column moved — `xw_net`, `xw_lean`, `xw_full` and the market columns are
+immutable pregame records AND the control this model is read against — and it
+appends columns without rewriting a byte of the existing file, because a
+whole-file `to_csv` re-renders every float and this ledger has already lost a
+digit of `xw_net` that way once. Measured provenance, printed rather than
+asserted: only **222 of 1,066** shadow side-rows were written before their own
+first pitch, so most of the wOBA half is post-hoc and every reconstructed
+selection is hindsight at worst and mixed-basis at best. The strip, the grades
+header and every ledger row carrying one are marked `rebuilt`.
+
+**v11 reverts the metric to xwOBA and `K` to 100 and the shrinkage target to the
+population centre, and this table's job is to stop that being read as a
+finding.** No measurement said xwOBA beat wOBA: the paired shadow arm exists
+because the era comparison cannot answer it, and at six slates it reported
+d_corr +0.008 with CI [-0.108, +0.128]. (At 40 slates it reports d_corr +0.0001
+with CI [-0.047, +0.047] on correlation and p = 0.029 for xwOBA on the sign
+criterion — see the shadow-arm section, and note that a measurement arriving
+five weeks later does not turn a prior decision into an evidence-based one.)
+No measurement said K=100 beat K=400 —
+`reliever_shrink_probe` fits K three ways on n=53,464 and every interval
+excludes 100. No measurement said the population centre beat personal priors —
+the out-of-sample probe says the opposite, the forward lineup-component read
+says the reverse, and bootstrapped that forward read is +0.128 with CI
+[-0.054, +0.301]. It was an operator decision taken with all of that on the
+table, and the code comments state it that way at each site. Do not let a later
+reader convert it into evidence, and do not quote the wOBA lineage's 63-76 as
+the reason: over those same rows always-home ran .604.
+
+**One correction to that paragraph, and it cuts the other way on K.** The
+sentence above is right that no measurement favoured 100, but wrong to leave
+the K fit standing as a live objection to it. `reliever_shrink_probe` builds
+its rates from StatsAPI box lines (`WOBA_W`, `woba()`), so what it fits is a
+**wOBA-denominated K** — correct when it ran, because the build was on wOBA and
+400 shipped as wOBA v3. Under v11 the same constant shrinks xwOBA, and
+`K = σ²/τ²` is a property of the metric: xwOBA is near enough wOBA's
+conditional expectation given batted-ball shape, so by the law of total
+variance its per-BF `σ²` is strictly smaller. `τ²` is not pinned, so that is a
+direction and not a magnitude — but the direction is toward a *smaller* K, i.e.
+toward the 100 now shipped. So K=100's status under v11 is **unmeasured, not
+overridden**, and "every interval excludes 100" is a true statement about a
+statistic this build does not use.
+
+It also cannot be re-measured here: StatsAPI serves no xwOBA and a per-past-date
+Savant pull is the lookahead `.savant_cache/` exists to forbid, so the probe
+cannot be re-pointed at the live metric. Re-running it answers the wOBA
+question again, accurately, about a constant this build no longer has. The same
+metric-denomination caveat applies to `player_prior_probe`'s +7–25%: the frozen
+priors are wOBA and `player_prior_history()` refuses them to an xwOBA build, as
+the priors section below already states. Neither retracts a fit; both narrow
+what the fit is about.
+
+What v11 does *not* revert is the part with evidence independent of those three
+knobs — v2's exposure-centred platoon offsets (a construction fix: the season
+line is already exposure-weighted), v3's relief-pool shrink target (the league
+batter centre is the centre of no subpool; the relief pool sits 0.0102 below
+it, at any `K`), and v5's abstention. That split is the whole content of the
+change and it is argued piece by piece in `_RECORD_FAMILIES`.
+
+v11 is also the counter-precedent for a **shared scale across a reverted
+metric**: it isolates its record and joins the v8/v9/v10 delta pool, because
+the three ways it differs from v10 are each scale-preserving on a precedent
+already in this table (platoon centring moved median |net| 0.7% at v1→v2;
+abstention left v4/v5 quantiles identical; a uniform re-centring cancels in a
+difference). Unlike v3, v4 and v10, that half is **argued, not measured** — no
+lookahead means a past slate cannot be rebuilt to check it. The falsifier is
+named in `_SCALE_FAMILIES`: compare median |xw_net| on the first graded v11
+rows against the v9/v10 pool, and split the family if it moved. **It has since
+been run to its limit and closed — the share stands.** v11 graded no rows so
+the check fell to v12; see the "Instrumented and waiting" entry for the three
+reads and for why the test cannot be sharpened by waiting.
+
+The frozen `data/woba_priors_*.csv` are wOBA-denominated and stay that way.
+`priors_snapshot.RATE_COL` is pinned to `woba` rather than following the build,
+and `player_prior_history()` refuses to serve them to a non-wOBA build — so
+`PLAYER_PRIORS=1` under v11 does nothing at all. Restoring v4 needs a wOBA
+build, or an xwOBA prior set under its own filenames.
+
+v3 and v4 each isolate in **both** namespaces, and in both cases the scale half
+is arithmetic rather than judgement — which is what makes them the useful
+counter-precedent to v10. v3 quadruples `K`, so every input keeps less of its
+deviation and `|xw_net|` compresses (a 400-PA batter drops from 400/500 = 80% of
+his deviation to 400/800 = 50%). v4 is the same argument with the sign reversed:
+shrinking toward a *personal* prior instead of one shared centre lets two players
+with equal samples keep different centres, so the delta distribution widens. Same
+wOBA units both times, materially different spread, which is exactly what a scale
+family separates. Neither inherited anything; both are argued in the comments
+above `_RECORD_FAMILIES` and `_SCALE_FAMILIES`, which is where the argument
+belongs.
+
+**wOBA v5 is the counter-precedent to v4, one namespace at a time.** It answers
+the two questions differently, and both halves are measured. Record: isolated,
+because it changes *which games are decided* — 6 of the 185 ledger rows that
+carried starter/bullpen instrumentation at the bump (3.2%) had a prior-only
+starter on one side and would now publish nothing — and a win-loss line is a
+property of the decided set, not only of the arithmetic. Scale: **shared with
+v4**, because every surviving `|xw_net|` is bit-identical (the abstention only
+nulls an edge; it never rescales one) and dropping the abstained games moves no
+cutoff — pooled p33/p80 over those 185 rows is 0.0090 / 0.0283 with them and
+0.0090 / 0.0283 without, and within v9/v10 alone 0.0127 / 0.0343 either way.
+That is v6's precedent (a new prediction family inheriting a scale) applied to
+a filter rather than to a construction change. The reset costs v4's graded
+rows, whose count you should read off the ledger rather than from here.
+
+The `185` is a correction: the PR, `MATCHUP_SITE.md` and this file all said
+`187`, and no row set of that size exists. The quoted quantiles pin the set
+exactly — `starter_xwoba_*` / `bullpen_xwoba_*` / `expected_sp_ip_*` /
+`pitching_basis_*` all resolve to the same 185 rows in the ledger as of
+`6b540ae~1`, and all four give 0.0090 / 0.0283. Nothing downstream moves; the
+argument was right and its denominator was not. Same category as the count
+below it, which is why both are fixed here rather than restated.
+
+Two things not to read into it. The 6 abstained games graded 3-3 against
+96-82 (.539) on the rest; at n=6 that is incidence, not evidence they were bad
+picks, and the argument for abstaining does not depend on it — the input was
+never measured either way. And v5 is the first mechanism in this repo that can
+produce a **graded row with no lean** — and as of 2026-08-09 it has. The
+sentence here used to read "the ledger holds no undecided rows yet"; it fired on
+2026-08-08, DET@SF, where Jackson Jobe carried no measured season line
+(`pitching_basis_away=starter_unmeasured_no_lean`), and that row has since
+graded. **It is no longer the only one**: a second fired on 2026-08-12,
+CHC@WSH, on the home side (`pitching_basis_home=starter_unmeasured_no_lean`),
+and has also graded. This sentence has now been wrong twice in the same way —
+it read "no undecided rows yet", then "the only leanless row in 482" — so it is
+fixed here as a mechanism rather than a count: **v5 abstentions are rare, they
+accrue, and the number is `xw_lean.isna()` on the graded rows, not a figure in
+this file.** v7's zero-delta abstention still has never once fired at full
+precision, so v5 remains the only mechanism that actually produces these.
+`_rec()` drops those rows while `len()` counts them, so every count that mixes
+the two must say which it is — see the controls entry below for the one surface
+that did not, now a live discrepancy rather than an armed one.
+`ledger_report.txt` states the split per family on its history lines (the wOBA
+v5 line carries its own `(n abstained)` marker), and the grades page scores its
+controls on the decided rows. Read both off the artifacts; the quoted
+`55 graded games (54 with a lean, 1 abstained)` that stood here was a
+current-family line from a family that is no longer current.
+
+`split v1` remains an isolated historical namespace because its dump and
+pending ledger rows existed before full wOBA was restored. It is not an active
+alternative and shares neither records nor delta scale with wOBA v1. Current
+wOBA dumps ingest after split dumps, so any same-day pending split snapshot is
+re-stamped into the restored lineage before first pitch; settled rows remain
+immutable.
+
+Two entries earn their keep as precedent. **v6 shares v5's units but not its
+record line** — a new prediction family can inherit a scale. **v10 shares both
+of v9's** — the PA-share reweight is a convex combination of the same two
+phases, so units are untouched, and it flips 0 of 14 leans on measured rates,
+so the win-loss line is shared rather than reset for the eighth time in a month.
+A bump does not automatically mean isolation; argue it.
+
+Known latent gap, found 2026-09-16 while asking whether anything in the phase
+work implied a hybrid update: **`hybrid_v2.DELTA_THRESHOLD` and
+`delta_filter_test.DELTA_THRESHOLD` are denominated in the current delta
+scale, and nothing recorded that.** `xw_net` is an xwOBA difference whose
+spread is a property of the prediction math — v5 halved it (median `|xw_net|`
+.036 → .018) and v3's `K` quadrupling compressed it again — so a frozen 0.012
+tracks a different quantile after any `_SCALE_FAMILIES` entry. That is exactly
+the `LEAN_STRENGTH_FALLBACK` dependency one file out, and that constant has a
+whole anti-pattern entry while these two had no comment at all. Measured on the
+current family (421 decidable rows, median `|xw_net|` 0.01836): the fade branch
+holds **19** rows at the frozen gate, **31** if the scale halves and **12** if
+it doubles — a 2.6x range on the only branch the rule owns.
+
+**The response is NOT to re-derive it, and that is the part worth keeping.**
+These are registered constants, frozen on 2026-09-11 and 2026-09-03 and pinned
+by tests precisely so they cannot be edited while reaching for something else.
+Re-fitting one to the live pool would make its registration meaningless. What a
+scale change invalidates is not the number but the REGISTRATION: the forward
+window would have been scoring a different statistic than the one registered,
+and the honest response is a new registration with a fresh window. So a
+`MODEL_TAG` bump that lands a new `_SCALE_FAMILIES` entry has a consequence
+this file never stated — **it resets every delta-gated registration's forward
+window, not just the record and the strength cutoffs.** Recorded at both
+constants; no number moved.
+
+Known latent gap: v3's scale family is `(3,)` because `_SCALE_FAMILIES` has no
+v3 entry, though v3's math is identical to v2 and the two must share units.
+Inert — `SCALE_TAGS` only ever derives from the *current* tag — so it is
+recorded, not patched.
+
+Second, same category: **v8 has no rows.** The table above and `_SCALE_FAMILIES`
+both treat v8 as a member of the current scale pool, but no `xw+plat_consol_v8`
+row has ever been graded into the ledger. v8 shipped for a single morning
+(2026-07-27); its 11 rows were all still `pending` when v9 landed, so the
+pregame refresh rebuilt them under v9 math and re-stamped them — legitimate,
+and the reason `MODEL_FAMILY_TAGS`' v8 line never prints. So `SCALE_TAGS`
+matching v8 selects nothing, and `compare_v8_v9.py` compared against a version
+that never survived into a graded row. Inert, so recorded rather than patched:
+the map is the authority on a historical question and deleting the entry would
+lose the answer. What it means in practice is that "the v8/v9/v10 scale pool"
+is the v9/v10 pool, and any provenance note claiming v8 rows is wrong.
+
+**That "recorded rather than patched" covers the MAP and not the module, and the
+module is gone — deleted 2026-09-22, on this paragraph's own finding.** The
+distinction is the point: `_SCALE_FAMILIES`' v8 entry answers a historical
+question and costs nothing to keep, while a probe that scores the shipped model
+against a version no row ever carried answers nothing and invites being
+quoted. Same sentence, opposite verdicts, because one is a record and the other
+is an instrument. See the removal entry below for what was kept out of it.
+
+**v11 is the second instance and it is not inert.** No `xw+plat_consol_v11`
+row exists in the ledger at all — not graded, not pending, not void. v11 shipped
+and v12 bumped before any of its rows survived a pregame refresh, exactly as v8
+did. So the current scale pool is v9/v10/**v12**, and every sentence in this
+file describing v11's units as "argued, not measured, first graded v11 rows are
+the check" was describing rows that will never exist. The check fell to v12
+instead, and it has now run — see the falsifier entry under "Instrumented and
+waiting", which carries the measurement. What is *not* inert is the reading:
+the revert's scale claim was never tested on the revert, only on the version
+after it. That is fine here because v12's own scale argument is independent and
+measured, but do not write "v11 joined the pool and its rows confirmed it."
+
+Third, **now settled the way it was predicted to settle: wOBA v3's graded rows
+arrived the day after the note that assumed them.** The `_RECORD_FAMILIES`
+comment on `woba+plat_consol_v4` says "The v3 family had its own graded rows
+and they stay immutable." Written 2026-08-05, the day v3 shipped, that
+described rows which did not exist: v3 held 4 rows, all `pending`, none ever
+graded. They graded overnight. As of 2026-08-06 the ledger holds 4 graded v3
+rows and no pending ones, and `data/ledger_report.txt` prints
+`wOBA v3 n=4  wOBA full 3-1 (0.750)  F5 4-0 (1.000)`.
+
+So the sentence in the source is true today, and it was left alone rather than
+corrected and re-corrected — which is why this was recorded here instead of
+patched. Keep the instance anyway: it is the third case of a version note
+asserting rows a build had not yet produced (v8 above, and the
+`wOBA full 217-164` front-page incident), and turning out right a day later
+does not convert an assumption into a measurement. **Check the ledger before
+quoting a family's record**; a 4-row line is not one either way.
+
+When you bump `MODEL_TAG`, decide both questions explicitly in the PR body.
+Silence defaults to a new record family and inherited units — which is wrong
+about half the time. And when you bump it, grep for the tag: it must live in
+exactly one place per module. See the workflow-pin anti-pattern below.
+
+Display-only changes do not bump `MODEL_TAG`. Card layout, copy, CSS, legend
+text: no bump. Anything that moves a lean, a delta, or a grade: bump.
+
+## Anti-patterns with instances in this repo
+
+Each entry names a real commit in this repo. Resolved ones are kept as
+precedent — they are how the fix is known to look.
+
+**Live — not yet fixed**
+
+- **Constants frozen from data.** `LEAN_STRENGTH_FALLBACK` was a literal copy of
+  the pooled p33/p80 at the time it was written, and stayed there through two
+  model versions that changed the distribution underneath it. It was re-derived
+  for the v9/v10 xwOBA family, and **every wOBA bump since has re-staled it** —
+  a new `_SCALE_FAMILIES` entry is exactly the invalidation its own comment
+  names, and there have now been four (wOBA v1, v2 sharing v1, then v3 and v4
+  each isolating). It was deliberately not re-derived at the time: the wOBA pool
+  was still small enough that its p33/p80 was noise, and freezing that would
+  have been this anti-pattern with a fresher date on it. Shrinkage plus the
+  slate top-up held the line meanwhile — recompute the pool before quoting it
+  rather than reading a number off this file, which is the same discipline the
+  controls entry below demands.
+
+  **It has since been re-derived, on 2026-09-15, and the entry stays live
+  anyway.** The number is still a literal frozen off data, which is the class
+  this entry names; what changed is that it is now a *defensible* one, fitted
+  to n=519 rather than n=24 and with the interval that justifies it recorded
+  beside it. The refresh is argued in full further down this entry, including
+  the one thing that licensed it (bootstrap CIs excluding the old pair) and the
+  one thing it costs (shrinkage is a no-op against the pool at the instant of
+  freezing).
+
+  The one directional reading this entry used to carry — that as of 2026-08-04
+  (wOBA v1+v2, n=16) the observed p80 ran well under the 0.032 prior while p33
+  sat close to 0.015 — **no longer describes the current scale family and has
+  been retired rather than restated.** v3 and v4 each started a fresh
+  `_SCALE_FAMILIES` entry. Note what counts: `lean_strength_scale()`
+  takes every `SCALE_TAGS` row regardless of grade status, because `|xw_net|`
+  is a pregame quantity — so "v5 has no graded rows" is true and irrelevant
+  here, and the constraint is thinness, not gradedness.
+
+  This paragraph used to name a pool — "`SCALE_TAGS` today selects v4 alone,
+  n=11, observed p33/p80 0.0059 / 0.0153" — and **that went stale within a day
+  of being written**, which is this very entry's own failure mode in prose. v5
+  shares v4's scale family, so `SCALE_TAGS` resolves to `(v4, v5)` and the pool
+  is both families' rows, not v4's. The figure is deliberately not refreshed to
+  a new literal: call `lean_strength_scale()` and read `.size`, then take the
+  quantiles off what it returns. Carrying the old direction
+  forward would have been the anti-pattern itself: a number measured on one
+  distribution, quoted against another, with a bump in between that provably
+  changed the spread in a *known direction opposite to v3's*. Recompute from
+  whatever `SCALE_TAGS` resolves to at the time, once that family passes ~60
+  rows. Expect that to take a while — the pool has restarted twice in two days.
+  If a constant was read off the ledger, comment where it came from and what
+  would invalidate it. Note the
+  asymmetry the comment there spells out: a *scale-family* change invalidates
+  it, but mere pool growth does not — it is a prior, and re-deriving it from the
+  family it is shrunk against would make it the data.
+
+  **v11 lands this entry somewhere it has not been before: back on the family
+  the constant was fitted to.** `SCALE_TAGS` now resolves to the
+  v8/v9/v10/v11 pool, which is the v9/v10 rows plus whatever v11 writes, and
+  `LEAN_STRENGTH_FALLBACK` was re-derived for exactly that family. Measured at
+  the revert, n=99, observed p33/p80 **0.0127 / 0.0343** against the frozen
+  0.015 / 0.032 — the same distribution it was read off, close enough that the
+  prior is doing its job rather than fighting the data. So the five wOBA-era
+  bumps did not leave a stale constant behind; they left a constant temporarily
+  pointed at the wrong family, and the revert points it back.
+
+  That is a reprieve, not a fix, and the entry stays live for the reason it was
+  written: the number is still a literal, and the next `_SCALE_FAMILIES` entry
+  re-stales it exactly as the last four did. Do not quote 0.0127 / 0.0343
+  either — recompute from whatever `SCALE_TAGS` resolves to when you need it.
+  Note also that v11 is *pooled into* this family on an argued rather than
+  measured basis, so the first graded v11 rows are the check on both things at
+  once: if median |xw_net| has moved, the family split is wrong AND this
+  constant is stale again.
+
+  **Re-derived 2026-09-15 to 0.0120 / 0.0345, and the reason matters more than
+  the number: the reprieve above did not survive its own re-measurement.** At
+  n=99 the frozen 0.015 / 0.032 was called "close enough" against an observed
+  0.0127 / 0.0343. At n=519 the same family reads **p33 0.0120 ± 0.0009, CI
+  [0.0106, 0.0138]** and **p80 0.0345 ± 0.0012, CI [0.0322, 0.0363]** — the old
+  literal is **outside both** (4000-resample bootstrap, seed 0). The n=99 read
+  was not converging toward it; it was already the same answer this one gives,
+  and "close enough" was a judgement made without an interval. **A gap you
+  cannot reject and a gap you have not put an error bar on are different
+  things**, and this file made the second look like the first.
+
+  What the old literal actually was: v9's own quantiles. That sub-pool alone
+  (n=28) still reads 0.0149 / 0.0357, essentially the frozen pair — it was the
+  noisiest sub-family and, at n=24 on 2026-07-28, it was the whole sample. So
+  this is a sampling artifact corrected once, **not drift being chased**, and
+  the distinction is the entire licence for the change: pool growth is still
+  not an invalidation, and a gap reopening later is the shrinkage working
+  rather than a reason to go again. Re-derive twice on drift and the prior is
+  the data with extra steps.
+
+  Two things checked rather than assumed. Pooling the sub-families is licensed
+  by their agreeing — v9 n=28 median 0.0188, v10 n=71 median 0.0186, v12 n=420
+  median 0.0181 — which is also the closest thing to a direct measurement the
+  v12 scale-share has received, and it agrees with the share. And the cost is
+  stated: setting the prior to the pool's own quantiles makes the shrinkage a
+  no-op *at that instant*, so what the refresh buys is confined to the n=0 and
+  thin-pool cases the prior actually exists for. There it is a strict
+  improvement, since a prior outside its family's CI pulls a fresh family AWAY
+  from the population quantile — the fidelity half of the `K = 100` benchmark.
+  Live impact is small because the prior was already outweighed 0.838/0.162:
+  cutoffs 0.01245/0.03412 → 0.01196/0.03452, relabelling **10 of 519 rows
+  (1.9%)**, all into `clear`. Display-only; no lean, delta, grade or ledger row
+  moves, so no `MODEL_TAG` implication.
+
+  Do not quote 0.0120 / 0.0345 from here either. The rule is unchanged and it
+  is the one thing in this entry with no expiry: recompute.
+
+  `HEAT_DOMAINS` is the same shape one level out, and v11 changes what is known
+  about it rather than settling it. Its saturation ranges were calibrated on the
+  xwOBA spread and the model is back on xwOBA, so the mismatch the entry was
+  filed for is gone for now. The measurement behind it stands and is worth
+  keeping: the one slate built under both metrics showed the starter-allowed
+  rate widening under wOBA (sd 0.0161 → 0.0215) while the lineup composite did
+  not move (0.0089 both ways) — a starter rate is one player's observed outcome,
+  a lineup is nine shrunk ones averaged. n=14 is one slate, not a distribution,
+  and it is now a fact about the metric the model does not run. Display-only,
+  so no `MODEL_TAG` implication either way.
+
+- **Every dump written before 2026-08-16 is a rebuild, and a mid-slate dump is
+  still a mixture.** The overwrite itself is fixed — see the resolved entry
+  below — but the fix is not retroactive and does not cover the intra-day case,
+  so both halves of this stay live.
+
+  The history: `SLATE_DATE` rolls over at 3am ET and the daily grading cron
+  fires at 04:17 UTC — 00:17 ET — so it still names *yesterday's* slate,
+  re-runs the full build against today's Savant leaderboard, and used to
+  rewrite that slate's dump in place. Measured across every committed dump
+  carrying `snapshot_utc`, every past slate's dump was a post-first-pitch
+  rebuild. `leans_2026-08-05_woba.csv` carries `model_tag=woba+plat_consol_v5`
+  and `snapshot_utc=2026-08-06T04:18Z`, while all 15 of that slate's ledger
+  rows are v3/v4 with pregame snapshots and different numbers — game 822866's
+  `starter_xwoba_away` is 0.327266 in the ledger and 0.336786 in the dump. The
+  dump on disk is stamped with a tag whose math produced none of that slate's
+  rows. **Nothing recovers those**; the pregame versions were overwritten and
+  no-lookahead forbids reconstructing them. So any measurement that joins
+  ledger rows to "the dump beside them" is still reading post-hoc data for
+  every slate up to 08-16 — including `FINDINGS.md`'s prior-only incidence
+  ("6 of the 403 side-games in the committed dumps"), and — until it was deleted
+  on 2026-09-22 — `compare_v8_v9.py`, which globbed `data/leans_*_xw.csv` and
+  therefore compared against a v8 dump that is itself a rebuild of the 07-26
+  slate. The contamination is a property of the dumps, not of that reader, so it
+  still applies to every other join of a ledger row to "the dump beside it".
+
+  The residue going forward is narrower and worth stating exactly. A dump is
+  diverted only when **every** game on it has started, because a slate with any
+  pregame game left is not a reconstruction. The 15-90 minute pregame polls and
+  any push to main therefore still rewrite the live dump mid-slate, and a
+  late-window build carries pregame rows for the night games beside post-hoc
+  rows for the afternoon ones. Measured on the committed dumps: 13 of the 43
+  instrumented ones are full rebuilds, and most of the rest are mixtures of
+  exactly this kind — `shadow_2026-08-11_xw.csv` was written at 00:45Z with 12
+  of its games not yet started. Each row is labelled honestly by `lock_status`,
+  the ledger takes only the pregame ones, the CARD no longer reads the mixture
+  (see the pregame-freeze entry below), and shrinking the window further
+  means merging dumps rather than naming them — a different change with a
+  different risk. Do not read "not a rebuild" as "pregame throughout".
+
+  **That residue is survivable only because the ledger filters it, which is
+  exactly why the same rule was destructive on `hitters_*`** — a file class with
+  no ledger behind it, where the all-or-nothing diversion fired once in nine
+  slates and 79.3% of committed rows ended up post-hoc. Fixed there by per-row
+  provenance and a merge rather than by changing `dump_is_post_hoc`; see the
+  resolved entry below. The lesson cuts back here: when a new artifact adopts
+  this guard, check what made the guard sufficient for dumps.
+
+  **v11 changed `compare_v8_v9`'s glob population, was recorded rather than
+  patched, and the drift it records is part of why that module was deleted on
+  2026-09-22 — read this paragraph as history.** The primary dump suffix is
+  `_xw` again, so `data/leans_*_xw.csv` matched v11 dumps alongside the pre-wOBA
+  ones. That was not obviously wrong — the script recomputed both the v8 and v9
+  forms from a dump's own phase columns and never read `model_tag`, and a v11
+  dump carries the same columns at the same `K=100`, so pooling it measured the
+  same formula difference on more slates. It WAS wrong to keep describing the
+  output as "over 24 eligible games of v8/v9 dumps" once v11 rows were in it.
+  Read a row count off the run rather than off any prose. **The glob-population
+  half of this entry applies to any module that globs `data/leans_*_xw.csv`**,
+  which is the durable part now that this one is gone. It also biases
+  monitoring toward optimism: `sp_bf_per_ip` is missing on 4 of 301 committed
+  side-games (1.3%), but on **3 of 22 tonight** (13.6%) — a rebuilt dump has a
+  full extra day of StatsAPI behind it, so the historical rate is measured on
+  data the pregame build never had.
+
+  **The shadow arm inherited this and had no ledger behind it**, which is why
+  the fix below landed on the arm and the primary together. `shadow_metric`
+  runs as a step of the same build, so the shadow dump was rewritten by the
+  same post-rollover pass: `shadow_2026-08-10_xw.csv` on disk is stamped
+  `2026-08-11T06:50Z` against a 23:07Z first pitch, and 08-09's only committed
+  version is the 03:06Z rebuild — the arm landed at 02:56Z that morning, so a
+  pregame 08-09 dump never existed. For the primary this costs provenance and
+  the ledger holds the pregame truth; for the shadow arm the dump *is* the
+  record, and git history was the only place a pregame version survived (08-10
+  has four, the last at 23:01Z, six minutes before first pitch).
+  What this does **not** break is the pairing, and that distinction is the
+  whole reason the arm is worth reading: primary and shadow are written 20-40
+  seconds apart in the same job from the same leaderboard, so dump-against-dump
+  is honest even when both are rebuilds. It is dump-against-*ledger* that is
+  contaminated — a pregame wOBA decision against an xwOBA one with an extra day
+  behind it. `shadow_report.py` pairs the dumps for that reason, prints each
+  slate's provenance instead of assuming it, and will run the ledger join under
+  `--ledger-join` so the bias can be sized rather than argued.
+
+**Removed — recorded so the reasoning is not relitigated**
+
+- **`compare_v8_v9.py`, deleted 2026-09-22 — the question was unaskable.** It
+  compared the v8 and v9 sequential forms, and **no `xw+plat_consol_v8` row has
+  ever existed in the ledger** (zero of every row, checked by running it rather
+  than recalled — a count would go stale on the next bot commit, as the 1,060
+  first written here did within the hour): v8 shipped for one morning and its 11
+  pending rows were re-stamped under v9 before any graded. So the module compared the shipped model against a version
+  that never survived into a row. Its glob had also drifted to pool v11/v12/v13
+  dumps, which this file already recorded as making its own output description
+  wrong.
+
+  It was never imported by production — the two `build_site` mentions were
+  comments, now amended rather than left as dangling references to a file that
+  does not exist. Its two tests pinned the probe's own re-implementation of both
+  forms against hand arithmetic, not production math (it never imported
+  `build_site`), so they went with it and `V8V9ComparisonTests` with them.
+
+  **The measurement it produced is kept** in the `_SCALE_FAMILIES` comment that
+  cited it — v9 − v8 has sd 0.00103 against a matchup dispersion of 0.01662
+  (6.2%) and flipped 0 leans over 24 eligible games — with the deletion date
+  beside it, because that figure is the argument for v8/v9 sharing a delta
+  scale and losing it would reopen a settled question. Recoverable from git.
+
+- **`player_prior_probe` and `reliever_shrink_probe` are DORMANT, not dead, and
+  now say so at RUNTIME.** Both answer about a metric this build does not run,
+  both said so in their headers, and a header is prose — they still ran and
+  still printed numbers a reader could quote.
+
+  * `player_prior_probe` measures a +7–25% improvement from personal shrinkage
+    targets. The frozen priors are wOBA-denominated (`priors_snapshot.RATE_COL`
+    is `woba`), `build_site.player_prior_history()` refuses them to an xwOBA
+    build, and `USE_PLAYER_PRIORS` is False — verified by running it, not read
+    off the guard. So `PLAYER_PRIORS=1` is a no-op and the figure is about a
+    shrinkage target this build cannot load.
+  * `reliever_shrink_probe` fits `K` from StatsAPI box lines through `WOBA_W`,
+    i.e. a **wOBA-denominated K**, against a build that shrinks xwOBA at 100.
+    It cannot be re-pointed: StatsAPI serves no xwOBA and a per-past-date
+    Savant pull is the lookahead `.savant_cache/` forbids.
+
+  Each now prints a standing line as the first thing in its report —
+  `DORMANT --` and `UNIT MISMATCH --` respectively — DERIVED from
+  `build_site.MODEL_RATE_LABEL` so restoring a wOBA build makes it disappear on
+  its own. Neither exits: refusing to run would destroy an instrument that
+  measures its own question correctly, and the standing rule is to label rather
+  than suppress. This is `Say what a probe cannot answer` moved from the
+  docstring to the output, which is the only place it was load-bearing.
+
+  **The first draft of that derivation crashed on the one build it was written
+  to be silent on, and the catch is the reusable part.** `build_site` RAISES at
+  import on a `MODEL_TAG` that does not start with `xw+`, so
+  `reliever_shrink_probe`'s lazy `import build_site` would have raised
+  `RuntimeError` on a restored wOBA build — where the function's whole job is
+  to return None. Its docstring said "a wOBA build makes the line disappear"
+  while the code would have taken the probe down with it: **prose asserting
+  behaviour the code does not have, in the same commit that moved a claim out
+  of a docstring because a docstring is not load-bearing.** Caught by exercising
+  the branch rather than by reading it.
+
+  Fixed asymmetrically, and the asymmetry is the point rather than an
+  inconsistency. `reliever_shrink_probe` guards the import and an unreadable
+  build gets a THIRD state — `UNIT BASIS --`, saying the fit is
+  wOBA-denominated regardless (a property of the probe, true either way) and
+  that whether it MISMATCHES what ships is unknown from here. Returning None
+  there would have the probe assert the build is fine because it could not read
+  it, which is `_lock_note`'s rule inverted: never assert coverage the artifact
+  cannot substantiate. `player_prior_probe` is deliberately UNGUARDED, because
+  it imports `build_site` at module level — a tag build_site refuses makes the
+  whole probe unimportable long before the function runs, so no such state
+  exists. `tests/test_dormant_probes.py` pins the licence (that module-level
+  import) rather than the comment explaining it, both derivation directions,
+  and that the line precedes the first value-bearing `say` — asserted by
+  walking `main` for the first f-string or formatted call, because the first
+  draft of that one used a statement-index threshold, which is a frozen literal
+  in a test. 9 of its 14 assertions go red on the pre-fix source, and forcing
+  the derivation to a literal turns the wOBA-direction one red — checked by
+  reverting, not argued.
+
+- **`abstain_test`'s pre-committed decision authorises an action already
+  taken.** It says RETIRE THE Q-GATE FADE at 82 declined games; v13 retired the
+  entire hybrid from the shipped selection on 2026-09-18. The registration is
+  NOT void — "would declining those games have beaten fading them" is a real
+  question still accruing at 19 of 82 — but a reader reaching the gate must not
+  think a decision is pending on a live branch. The block now says so, derived
+  through `market_backfill.window_is_closed` against `hybrid_v2.RULE_TAG`,
+  reusing the closure derivation rather than spelling a second one, so
+  re-shipping the rule removes the clause.
+
+  **No registered constant, selector or row set moved**, and a test pins that:
+  re-pointing the selector mid-registration restarts the test, which is the one
+  thing this module must not do. The clause is commentary on what a verdict
+  would mean, not a change to what is measured.
+
+- **The walk-forward backtest, deleted 2026-08-27 on the operator's call.**
+  `walkforward.py`, `historical_data.py`, `tests/test_walkforward.py`,
+  `docs/walkforward.md`, `walkforward.yml`, `export-savant-cache.yml` (which
+  existed only to feed the replay's `exact_pregame` fidelity) and both
+  `data/walkforward_*` artifacts. Recoverable from git history; nothing else
+  imported them, and `reliever_shrink_probe`'s own walk-forward K fit is
+  unrelated and untouched.
+
+  **What was and was not established, because the removal followed a review
+  and should not be read as that review's conclusion.** Three defects were
+  found and fixed first: the replay cache was keyed on raw file bytes so any
+  edit (comments included) discarded it and restarted from the first slate;
+  the report printed `Games 690` beside a 500-row frame with no marker; and a
+  450-second bound inside `build.yml` meant it never finished. Those were
+  plumbing. The prediction math was NOT found wrong — the replay imported
+  `build_site` and ran the same code, with inputs correctly bounded to
+  `slate_date - 1` and no lookahead.
+
+  What stayed open was narrower: the replay reconstructed rates from Savant's
+  `statcast_search` while the live build reads the leaderboard, and 0 of 500
+  rows used the archived-cache `exact_pregame` path. That is an **unmeasured
+  fidelity gap, not a demonstrated error**, and it was never closed.
+
+  **What the repository loses.** The backtest was the only out-of-sample
+  control on the model, and it disagreed with the live panel: over 490
+  replayed decisions it scored -1.6pp against price (z -0.74, -7.0% flat ROI)
+  where the live v12 window over 160 rows scored +7.9pp (z +2.03, +11.8%).
+  Against always-chalk the same two windows are +1.8pp and -3.7pp, so most of
+  the raw 63.1%-vs-52.9% gap was base rate. With the replay gone, nothing
+  contradicts the live figure, and `Deleting controls as clutter` below is the
+  entry this trades against. Anyone reinstating a backtest should start from
+  the fidelity gap above rather than rebuilding the same reconstruction.
+
+**Resolved — keep as precedent**
+
+- **A label that could only take one value, reintroduced by hand one commit
+  after the one that removed the same defect — and killed four hours later by a
+  reader's question rather than by a test.** The break-even line was given a
+  comparison, `requires +2.6 pp over market · above the 1.8 pp this model
+  usually pays`, so a bare hold figure would tell a reader whether their game
+  was cheap or dear. The reference is the mean hold over the family's 492 rows,
+  and **this book's closing hold has a step change**:
+
+  ```
+     2026-08-10/16    n= 30  mean hold 0.93 pp
+     2026-08-17/23    n= 91  mean hold 1.00 pp
+     2026-08-24/30    n= 90  mean hold 0.95 pp
+     2026-08-31/09-06 n= 96  mean hold 2.34 pp   <- regime change
+     2026-09-07/13    n= 89  mean hold 2.58 pp
+     2026-09-14/20    n= 94  mean hold 2.58 pp
+  ```
+
+  So 1.84 is a blend of two vig regimes and **262 of 269 current-era games
+  (97%) read "above" it**. Against the current regime's own mean of 2.56 it is a
+  49/51 split. That is the `50.0% vs 50.0% implied` defect and the
+  `Won (at under 45%)` defect in a third costume — **and it was written one
+  commit after the one that deleted three cells for exactly this reason,
+  by the same hand, on the same afternoon.** A rule recorded is not a rule
+  internalised; what caught it was a reader asking whether the clause meant a
+  larger-than-usual hold, not any test.
+
+  Removed rather than re-fitted, and the reason is the trade: the tempting
+  repair is to compare against the current regime's mean, but the 2026-08-31
+  boundary was found by LOOKING at the hold series, so that swaps this defect
+  for the searched-constant one. The per-game hold stays — it is a fact about
+  this price and it is the bar the record has to clear. `hold` came off the
+  projected `pooled` dict with the clause that read it, because a key kept for
+  a departed renderer is what the projection exists to prevent. Pinned as a
+  RULE (no family-average hold reaches the card, in any wording) plus a test
+  that the per-game figure still varies with the price, so the removal cannot
+  flatten the number it was comparing.
+
+  **And the regime change bears on the headline, which is NOT resolved here.**
+  Split at the same boundary, the model's clearance over the posted price reads
+  **+9.0 ± 3.4 pp (ROI +16.2%) on the 211 thin-hold rows and +3.6 ± 2.9 pp
+  (ROI +6.7%) on the 281 current-era rows**, against the published pooled
+  +5.9 ± 2.2. Against the DEVIGGED price the same split is +10.0 and +6.1, so
+  only about 1.5 pp of the 5.4 pp drop is the vig — the rest is the model's own
+  clearance falling. The regime a reader's bet actually faces does not separate
+  from zero. The split is two cells chosen by looking at a hold series, so it
+  is not a finding; it is a reason the pooled figure flatters the market a
+  reader meets today, on top of the hindsight caveat already recorded. **A
+  later reader must not treat +5.9 as the number their game faces.**
+
+- **Three cells of a 26-cell search, published as a per-game read, with the
+  one figure that IS a result computed beside them and rendered nowhere.** The
+  card's `Historical context · descriptive only` block showed the |Δ| x
+  closing-price cell for the game in front of the reader plus its two
+  margins — `28 games · 16-12 · +2.27u`, `97 games · 53-44 · -6.80u`,
+  `135 games · 73-62 · +2.60u` — with no error bar, no reference and no note
+  that they overlap.
+
+  **Every one of the three is noise, measured against the POSTED price, which
+  is the bar a bet clears and is harsher than the devigged one by the hold:**
+  +5.9 ± 9.4, −1.3 ± 5.0, +2.3 ± 4.3 pp. And the three are one cell and its two
+  margins — 204 distinct games, not 260 — so they read as three corroborating
+  samples and are one sample counted three ways.
+
+  **The bands are not ordered, and that is the finding rather than the
+  sample size.** Against breakeven they run +2.6, +14.5, **−3.2**, +8.3,
+  +7.8 pp, rank correlation of band index against ROI **r = −0.06**. A
+  reader whose game landed in the .020–.030 band was shown −7.0% ROI under
+  their own Δ — and a market with no edge produces that band's number about
+  **a third of the time** (its own-prices null has sd 8.9 pp, 5–95 range
+  [−18.0, +11.3], P(≤ −7.0%) = 0.33). The band immediately below theirs is
+  the best of the five.
+
+  **It is a search, so no n rescues it.** Simulated at the rows' own closes
+  under "market correct, no edge", the best of the 26 non-empty cells clears
+  breakeven by **+39.6 pp on average** against an observed best of +45.0,
+  P = 0.590. `_selection_price_matrix_lines` prints exactly that reference
+  beside its copy of the identical grid and says a cell is read against it,
+  never against zero. The card printed three cells of it with neither.
+
+  **And `out["pooled"]` was written every build and read by nothing** — found
+  by walking the AST, not by grepping — with a comment saying "retained for
+  other reporting surfaces" when there were none. That is `column carried to
+  no surface` on the best-estimated number the panel had available: the lean
+  clears the posted price by **+5.9 ± 2.2 pp over 492 rows**. The panel was
+  dropping the result and publishing the noise.
+
+  Fixed subtractively: the three cells go, the pooled margin renders with its
+  spread and its own `n`, and the full 5x8 grid survives WITH its error bars
+  and its null maximum in `ledger_report.txt` — moved, not deleted, per
+  `Deleting controls as clutter`. The one honest per-game number is the HOLD,
+  which genuinely varies (family mean 1.84 pp, sd 0.84, range 0.63–3.47), so
+  the break-even line now names the family average beside this game's figure:
+  `+2.4 pp over market · above the 1.8 pp this model usually pays`.
+
+  **The hindsight basis is NOT stated, on the operator's instruction, and that
+  is the cost written down rather than argued.** 445 of the 492 rows are v13
+  re-decisions of v12 rows; native-only reads +13.2 ± 7.1 pp over 47 games,
+  an interval containing zero. So the published +5.9 ± 2.2 is ~90% a
+  re-decision made after the results were known, and the card says a
+  model-level average without saying that. It is the same call as 2026-09-18,
+  taken again with the native figure and its interval on the table. **A later
+  reader must not read the line as a track record.** The clean sample needs
+  ~15 more slates to reach a ±3.0 pp interval.
+
+  Four things fell out and each is a rule this file already has. `_card_record`
+  and the three cell keys went WITH the renderer rather than being left behind,
+  and `pooled` is projected to exactly the four keys the card reads for the
+  same reason. `_LEAN_HISTORY_BINS`, `_lean_history_bucket`,
+  `_lean_history_range` and `delta` on `_branch_history` lost their last
+  readers and went in the same commit — the eighth instance of the
+  callee-outliving-its-call-site pattern, caught by running the reference count
+  before the edit. The wording `costs -2.5 pp of hold` was caught by RENDERING
+  the panel rather than reading the source, and reverted to the sign-safe
+  `requires +N pp over market`. And `grade_leans`' matrix header still read
+  `the grid the game card shows one cell of` — caught by the one test that
+  reads both surfaces at once, which is why that test was restated rather than
+  deleted when its subject went.
+
+  **Nine tests in `HybridRuleTests` were defined twice and the first copy of
+  each had never run**, found while restating them: Python keeps the last
+  definition, the pairs were byte-identical, and the shadowed nine could have
+  drifted from their live twins at any time. Deleted. Six other tests were
+  restated rather than dropped — including two that pinned the cell TRACKING
+  the game's band and price, now inverted to pin that the record does NOT move
+  with either while the break-even line does.
+
+  **A near miss of the same class, and the related INERT finding beside it.**
+  `HoldReferenceTests` was first written below its file's
+  `if __name__ == "__main__": unittest.main()` guard — harmless under the gate,
+  which is `python -m pytest`, and the shape of a test that does not run.
+  Re-seated above it, and a sweep of every test file then found **three others
+  carrying 18 classes below their guard** (`test_hitter_level_probe`,
+  `test_integrity_fixes`, `test_pitch_arsenal`). Those are **inert and recorded
+  rather than patched**, because the guard in them is dead code either way:
+  there is no `conftest.py` and none of the four files puts the repo root on
+  `sys.path`, so a direct `python tests/<file>.py` cannot import `build_site`
+  at all. `python -m pytest` from the root is what makes the suite importable
+  and it collects every class regardless. The reason to write a NEW test above
+  the guard anyway is that the day someone adds a `conftest.py`, the inert
+  becomes live silently — and 18 classes is not a thing to discover then.
+
+  Display-only: no lean, delta, grade or ledger row moves, no registered
+  constant changes, `MODEL_TAG` unchanged.
+
+- **An instrument that went dark at a bump and said so only as a warm-up
+  count.** `win_probability.py` is the repo's one calibrated delta-to-P(home)
+  map. From the v13 bump on 2026-09-18 it scored **zero games for four days**:
+  it fitted one exact `MODEL_TAG`, v13 had 47 eligible rows against a
+  `min_train` of 100, and the report rendered that as
+  `Warm-up/unscored: 47` beside two `no eligible games` lines. True, and
+  indistinguishable from an empty ledger, a broken join or a bad filter.
+
+  Two separate defects, and the scoping one is the smaller:
+
+  * **The row set was the wrong equivalence relation.** This maps `xw_net` to
+    a probability, and `xw_net`'s units are a property of `_SCALE_FAMILIES`,
+    so `SCALE_TAGS` decides its rows. `MODEL_TAG` alone discards same-scale
+    rows and resets the sample at every bump; `RECORD_TAGS` is wrong the other
+    way, pooling v12 with v13 across a deliberate scale change. Fixed to the
+    family, comma-separated so a tag or an older family can still be pinned.
+    **It buys nothing today and that is stated rather than implied**: v13's
+    scale family is v13 alone, and on the committed ledger every pre-v12 row
+    carries a NULL `model_metric` and is refused by the `not_xwoba` check
+    (99 of 99 on v9/v10) — correctly, since the metric is a property of the
+    row and cannot be inferred from its tag. What it buys is that the next
+    bump sharing a scale carries the sample forward instead of restarting it.
+  * **The blindness was not announced, and that is the half that mattered.**
+    `blind_reason` now prints `SCORES NOTHING — this evaluation is BLIND on
+    <family>: needs <the binding shortfall>`, derived from the settings and
+    the rows so it names whichever threshold actually binds and disappears on
+    its own. This is the standing rule reached from the other side: **when a
+    function degrades silently by design, print the count** — the same rule
+    `_log_starter_blend` exists for, applied to a whole instrument rather
+    than to one input.
+
+  `docs/win_probability.md` said "only the exact requested source model tag is
+  fitted" and led with a measurement it no longer produces; both are corrected,
+  and the v12 figures are labelled with the family and the flag that reproduces
+  them. Prose asserting behaviour the code does not have is the defect class
+  this file tracks, and the doc was the last place still describing it.
+
+  **NOT done, and recorded so it is not mistaken for an oversight:**
+  `min_train = 100` is a hard `>= N`, which is the threshold cliff this repo
+  has removed four times, and the ridge already shrinks the slope toward zero
+  so the gate is arguably redundant with it. Making the warm-up a weight is
+  the idiomatic fix and it changes the calibrator's method, its version and
+  the measurement the doc records — a separate change, not one to make while
+  fixing the reporting.
+
+  Report and scope only: no lean, delta, grade or ledger row moves, no
+  registered constant changes, `MODEL_TAG` unchanged.
+
+- **A closed forward window rendering as a stall.** Two registrations can take
+  no further row and both printed a supply line trailing the ledger by four
+  slates beside a gate counting toward a number they can never reach:
+  `hybrid_v2` at **6 of ~41 switches** (its `_committed` filter requires
+  `selection_rule_tag == RULE_TAG`, and v13 retired the hybrid from the shipped
+  selection, so from 2026-09-18 the build stamps `lean`) and
+  `delta_filter_test` at **67 of ~393 dropped games** (`REGISTERED_FAMILY`
+  bounds it to v12, deliberately, because a later scale family scored under the
+  same frozen 0.012 is a different statistic).
+
+  Both closures are correct and both are argued at length in their own
+  comments. **The defect is that the artifact could not tell them from the
+  2026-09-12 stall**, which had the identical signature — a trailing
+  `last scored` clause and a live-looking gate — and which was a writer bug
+  costing two other registrations five slates. One is a bug to fix, the other
+  is the answer the registered question got, and a reader had no way to know
+  which they were looking at. Found the way that stall was: arithmetic on the
+  report, not a re-read of the code.
+
+  `row_supply_line`'s docstring deliberately refuses to issue a staleness
+  VERDICT, and that refusal is right — it cannot know the ledger's latest
+  slate. This is the other half of the same problem and it IS answerable,
+  because the module owning a registration knows what its own filter accepts.
+  Three things in the fix are the reusable part:
+
+  * **Closure is DERIVED, never asserted.** `market_backfill.window_is_closed`
+    reads the distinct values the ledger's most recent slate carries in the
+    column the registration filters on. A `CLOSED = True` literal would be the
+    constants-frozen-from-data entry in the place it does most harm: a window
+    that reopened — family restored, rule re-shipped — would go on printing
+    that it could not accrue. Keyed on the LATEST slate rather than any row
+    anywhere, because the question is what the build stamps now, and pending
+    rows count since they carry the current build's tags.
+  * **Unanswerable answers None, not True.** A slate whose column is entirely
+    null is mid-ingest, and reporting closure there would put the clause on the
+    artifact for a day on a build that is fine — the `_lock_note` rule again:
+    never assert coverage the artifact cannot substantiate.
+  * **The clause NAMES what it observed** (`the build now stamps
+    selection_rule_tag=lean`) rather than restating the reason from a literal,
+    so a third tag cannot be described as the second. One home for the wording
+    in `market_backfill`, for the same reason `row_supply_line` and
+    `chalk_is_home` are there, and a test forbids either module spelling
+    `WINDOW CLOSED` itself.
+
+  The gate is still printed, because a reader wants the sizing that was
+  registered; what does not survive is the implication that it can be reached.
+  Neither module's registered constants, row selector or reading moved, and the
+  frozen finals are the ones above. Tests pin the BICONDITIONAL over all six
+  registrations against the committed ledger, plus both directions per module
+  on frames carrying two slates — a single-slate fixture cannot represent "the
+  rule moved on", which is the trap the abstain borrow fell into. Checked
+  rather than argued: all ten go red on the pre-fix source, and forcing the
+  derivation to always-closed turns exactly the four open-direction assertions
+  red and leaves the closed ones green.
+
+  Report-only: no lean, delta, grade or ledger row moves, no registered
+  constant changes, `MODEL_TAG` unchanged.
+
+- **A model input that never reached the model, and a degrade rule that made
+  it silent.** v13's whole content is the starter's centred 50/50
+  xwOBA/wOBA blend. `blend_starter_rate` was correct, `STATCAST_SELECTIONS`
+  requested the second rate, `load_stat_lookups` mapped it to
+  `wOBA_blend`, `compute_league_baseline` built its centre — and the blend
+  fired **zero times in production**, because `build_tables` populates each
+  frame row from `STAT_COLS` and then PROJECTS on `STAT_COLS`, and the blend
+  rate is deliberately in neither that list nor `STATCAST_RATE_COLS`. So
+  `segment_pitcher_blocks` passed each starter's whole row through to the
+  blend site with no blend rate in it, `pr.get(BLEND_RATE_INTERNAL_COL)`
+  returned None, and `blend_starter_rate` returned the primary unchanged.
+
+  **The degrade rule is what turned a missing column into two silent slates.**
+  Its docstring is explicit and RIGHT: "a missing optional input costs the
+  refinement, never the slate", because a slate's pregame rows cannot be
+  re-derived afterwards without lookahead. A rule written for the exception
+  fired on every row, and by construction it cannot log, raise or mark —
+  the flag that would have said so, `starter_rate_blended`, was False on
+  every row and nothing reads it. **When a function degrades silently by
+  design, the thing that has to be tested is that its input ARRIVES.**
+
+  Not a Savant outage, checked rather than assumed: the paired shadow dump
+  for the same slate carries a measured wOBA-allowed line for **18 of 18** of
+  09-17's starters. Reconstructed from those two dumps through
+  `blend_starter_rate` itself, the blend moves a starter's published rate by
+  mean **0.00738**, median 0.00393, max **0.01908** — against a median
+  `|xw_net|` of ~0.018, i.e. a starter input moving by up to a whole lean.
+  Consistent with the reconstruction's 32 flips in 448.
+
+  **Three tests covered v13 and all three passed, because every one of them
+  starts downstream of the gap.** Two pin constants
+  (`BLEND_RATE_SOURCE_COL`, `STARTER_BLEND_WEIGHT`, the cache namespace) and
+  the third pins `load_stat_lookups`' output dict — which is the LAST place
+  the value is still correct. Same shape as `abstain_test`'s borrowed
+  selector and the `MODEL_TAG`-patched matrix fixture: a fixture that cannot
+  represent the failure passes for a reason that has nothing to do with the
+  claim. `tests/test_starter_blend.py` drives the real path instead —
+  `build_tables` -> `build_xwoba_matchup` -> `_df_to_combined_games` ->
+  `_side_html` — and 6 of its 11 assertions go red on the pre-fix source,
+  checked by reverting rather than argued.
+
+  The fix is `BLEND_FRAME_COLS`, written on EVERY stat row (NaN on hitters,
+  who have no reader for it) and added to the projection. Written
+  unconditionally on purpose: an absent key raises in the projection, and a
+  build that raises because Savant dropped an optional column costs the
+  slate — the degrade rule reached from the other side. The blend rate still
+  stays out of `STATCAST_RATE_COLS`, so it acquires no matchup value, no edge
+  and no percentile bar; a test asserts that too, because carrying it into
+  that list is the obvious wrong fix.
+
+  `MODEL_TAG` is NOT bumped: the tag already names the blend, and the change
+  makes the code do what the tag says. See the v13 entry above for why that
+  costs no graded rows.
+
+  **The build now SAYS whether it blended, and that half is the durable one.**
+  `_log_starter_blend` prints `starter blend: n/N` every run, and
+  `load_stat_lookups` prints whether each requested rate was served at all --
+  because the two causes are indistinguishable in the dump (both leave
+  `starter_rate_blended` False) and one of them, a column Savant declines to
+  serve, arrives as a silently absent COLUMN rather than an error. This is
+  `shadow_metric`'s `rate column 'xwoba' resolved on 20/20 players` line, the
+  precedent that put a Savant column on the critical path safely, applied to
+  the primary build it was supposed to protect. Log-only, and it swallows its
+  own exceptions: a log line that can raise on the path that commits
+  irreplaceable pregame rows is worse than no log line. **Standing rule: when
+  a function degrades silently by design, print the count.**
+
+  **One display consequence, on the operator's instruction and recorded
+  because the label is now a mixture.** The card's cell keeps reading
+  `starter_xwOBA`, so the blended rate publishes under the label it already
+  had — `xwOBA agn` — with no code change and no badge. That label now names
+  one metric over a value that is half another, which is the class of defect
+  this file has an entry for (`wOBA full 217-164`, and "read the metric from
+  `model_metric`, never from a key name"). It is a deliberate operator call,
+  the same one that took the `rebuilt` badges off the pages the same day, and
+  the auditability is unchanged: `starter_rate_primary`,
+  `starter_rate_blend_in` and `starter_rate_blended` are in the dump on every
+  row, the ledger carries none of them, so **the blend is auditable from the
+  dump or not at all**. One thing rides along unexamined and is flagged
+  rather than fixed: `pit_xw_pctile` ranks that blended rate against
+  `_pctile_ref_pit`, a pure-xwOBA reference population. Display-only, small
+  against the bar's own resolution, and not measured.
+
+- **A retirement that silently retired two tests nobody retired.** From
+  2026-09-12 to 2026-09-17 three of the five registrations accrued no forward
+  rows at all, and every one of them went on printing a gate. `hybrid_test`
+  froze at 126 rows over 10 slates, `abstain_test` at 103 over 8, and
+  `dog_contrast_test` at 16 dog leans over 7, while `forward_test` and
+  `delta_filter_test` ran on to 2026-09-16. Found by arithmetic on the report
+  rather than in the code: saved pregame prices cover every slate from
+  2026-09-01, so a saved-pregame test reporting 8 slates where the
+  closing-price one beside it reports 13 is missing 5, and the missing 5 were
+  exactly the slates after v1's migration.
+
+  The mechanism is one filter. `hybrid_test._committed` selects on
+  `hybrid_v1_action`, and `migrate_hybrid_v2` carried
+  `minting = not out["hybrid_v1_action"].notna().any()` -- mint only if NO row
+  anywhere has an archive -- so it was False from the first migration onward
+  and `grade_leans` wrote NaN into the column on every insert after it. The
+  comment above that flag argued the case correctly for the module it was
+  looking at: v1 is a retired registration and widening a frozen test's row
+  set is not a repair. **What it did not ask is who else reads the column.**
+  `abstain_test` and `dog_contrast_test` are live registrations with open
+  gates and both delegate row selection to `hybrid_test.scored_rows`, so
+  retiring v1's archive retired them too. The cost, measured over 09-12..09-16
+  alone: 11 declined games and 18 dog leans, more than doubling both samples.
+  Worse, `abstain_test`'s decision was PRE-COMMITTED on 2026-09-16 -- five days
+  after the rows stopped -- at a gate of 82 declined games it could never
+  reach, and the report printed `not at the gate: 5 of 82` as though it might.
+
+  **The guard written for exactly this could not see it, and that is the
+  reusable half.** `hybrid_test.unscorable()` exists because "a forward sample
+  whose denominator can shrink invisibly is worse, because nobody is watching
+  a number that is not printed". It counts rows dropped BY the filters below
+  `_committed`; the freeze happened INSIDE `_committed`, so the denominator
+  itself stopped growing and `unscorable` read 0 throughout. A counter aimed
+  at a denominator's contents cannot see the denominator move.
+
+  Four parts to the fix:
+
+  * **The v1 decision got one home**, `hybrid_test.locked_v1_decision`. The
+    gate lived in `hybrid_test` while the arithmetic reading it was spelled
+    inline in `migrate_hybrid_v2` -- "one value, three homes" across a module
+    boundary. All three writers now call it and a test forbids a second
+    spelling in either file.
+  * **The writer, not the repair, is where the gap closes.**
+    `grade_leans._mint_v1_archive` writes the archive for every PENDING
+    current-family row at ingest, so the column can no longer gap; the
+    migration only repairs the 80 rows written while it was open. Pending
+    only: a graded archive is immutable, and a pending one must be re-derived
+    every poll because `MODEL_FIELDS` rebuilds the lean and the price under it.
+  * **Backfilling is a re-derivation, not new evidence, and that was checked
+    rather than argued.** Every input is write-once once a row grades, so
+    re-running the derivation over the 141 archives that WERE minted live
+    reproduces all four fields on all 141. Nothing already written changed:
+    392 cells, all previously empty.
+  * **A repair's diff has to be reviewable, so `to_csv` is not good enough.**
+    `write_changed_cells` writes only the cells whose value moved, at
+    `migrate`'s own tolerance so the row count it reports and the cells it
+    writes cannot disagree. The first attempt rewrote 989 of 997 lines for 80
+    changed rows, on two pre-existing quirks neither of which is a migration's
+    to commit: `gamePk` carries NaN so `read_csv` gives float64 and a plain
+    rewrite renders `822884.0`, where the build gets `Int64` from
+    `attach_market`; and **`read_csv`'s default float parser is inexact**,
+    reading this ledger's `0.0008232366754536979` as `...4536`, so any rewrite
+    truncates a cell `build_site` wrote at full repr and nothing has
+    round-tripped yet. That second one is every reader in this repo, not this
+    one -- `float_precision="round_trip"` at the reads is the fix, with the
+    whole ledger downstream of it, and it is NOT attempted here.
+
+  Two smaller things found in the same pass. The 2026-09-17 correction naming
+  the q-gate rather than the shipped branch had rewritten every copy inside
+  `abstain_test` and missed the retrospective line in `grade_leans`, which is
+  the MORE prominent of the two -- it prints near the top of the report while
+  the corrected wording sits 300 lines below. Third instance of a caveat
+  travelling with the line someone wrote it on rather than with the statistic,
+  and the test now asserts the property on both surfaces at once. And the
+  `eligible rows since registration` line was spelled six times in six
+  modules; it is `market_backfill.row_supply_line` now, and it names the last
+  slate the registration actually scored, so the NEXT stall is visible on the
+  artifact instead of waiting to be found by hand.
+
+  What this does NOT do is re-point any registration's selector.
+  `abstain_test` still declines the q-gate's fades rather than v2's, which is
+  the mismatch its own 2026-09-17 note records; re-aiming it mid-registration
+  restarts the test. Only the row SUPPLY was restored, and the rule it feeds
+  is untouched. No lean, delta, grade, `xw_full` or registered constant moves,
+  and `MODEL_TAG` is unchanged.
+
+- **A tie-break, not a row set: the same control published two records.** On
+  2026-09-17 `data/ledger_report.txt` said always-chalk went **257-179** over
+  the current family's 436 rows and `grades.html` said **256-180** over the
+  identical 436. Every control note on the site promises the controls are
+  scored on the model's own rows, and they were; what differed was what each
+  surface does with a game priced at exactly .500, which has no favourite for
+  always-chalk to back.
+
+  Three conventions were live, in one repo and two of them in one file:
+
+  * `p_home > .5`, **dropping** the game, on the favourite tile of
+    `market-calibration.html` — with the reasoning written out in a comment
+    beside it, and correct there;
+  * `close_p_home >= .5`, **tie to home**, in the band block, `hybrid_test`,
+    `delta_filter_test` and `_baseline_controls`;
+  * `market_p >= .50` — the **LEANED side's** price — in build_site's
+    always-chalk control, 150 lines below the comment explaining the first.
+    On a pick'em that hands the row to whichever side the model picked, so
+    **the control was defined in terms of the thing it controls**, on exactly
+    the near-pick'em games where this file's own measurements put most of the
+    model's contribution. Live cost: both current-family pick'ems were model
+    losses, so the control was charged two it never chose, and the two
+    artifacts disagreed by one game.
+
+  Fixed by giving the convention one home, `market_backfill.chalk_is_home`,
+  for the reason `excess_se` and `ladder_rung` are already there: grade_leans
+  cannot import build_site, so a rule both need is either in that module or
+  spelled twice — and spelled twice, it drifted. Four things in it are the
+  reusable part:
+
+  * **The tie goes to home, and the point is that it is arbitrary WITH RESPECT
+    TO THE MODEL.** Any model-independent answer would do; the one thing a
+    control may not do is consult the lean.
+  * **The row is kept, not dropped, and that is a fact about CONTROLS
+    specifically.** A chalk record over n−2 beside a model record over n is
+    the defect the grades page already shipped once. The favourite POOL on the
+    calibration page keeps dropping them and is untouched: one observation per
+    game, so a game with no favourite can leave and nothing is unpaired. Two
+    right answers to one question, distinguished by what the denominator has
+    to line up with.
+  * **The footprint is printed rather than absorbed.** Both surfaces now say
+    how many rows closed at exactly even money, when any did. A shared
+    convention is only auditable if its size is visible.
+  * **The tests ask each module the question rather than grepping for the
+    spelling**, and they were checked against the old code: reverting the one
+    line turns four of them red, including on the committed ledger.
+
+  One latent bug fell out of it. `lean_is_home` was a local computed BEFORE
+  the observation frame was filtered and read three times after, so the first
+  row that filter ever dropped would have raised on a shape mismatch. It is a
+  column now.
+
+  Display-only: no lean, delta, grade or ledger row moves, so no `MODEL_TAG`
+  implication. What changed is that two artifacts publishing the same control
+  now publish the same number.
+
+- **A caveat that covered one component and named the wrong test.** The
+  component block's interpretability note — "neither is interpretable unless
+  the lineup row of the target-reliability block clears F=1" — sat inside
+  `if comp == "lineup"`. The reliability block beside it has TWO failure
+  modes, and BP fails the second: `F=1.131 (p=0.288)` reads **UNMEASURABLE —
+  not separated from chance**, while BP's `slope +0.94±0.36` printed bare. So
+  a reader applying the caveat to BP by analogy gets the wrong answer twice
+  over — no marker on the row, and a stated test (`clears F=1`) that 1.131
+  passes.
+
+  Fixed by deriving the marker per component from the same ANOVA the block
+  below prints, via `_reliability_verdict` / `reliability_verdicts`, and by
+  pointing the lineup caveat at that row's own verdict instead of restating
+  half of it. The verdicts are computed on the UNSCOPED frame while the
+  component rows stay family-scoped — the realised rate is metric-free, so
+  scoping the ANOVA would discard rows for a reason that cannot apply, which
+  is the `a probe's row set is a parameter` rule applied inside one block.
+
+  The test is the property — for every component, marked if and only if its
+  own verdict says unmeasurable — asserted against the committed ledger,
+  because the constructed frames in that suite carry a lineup component only
+  and the defect was on BP. **A caveat does not travel with the statistic; it
+  travels with the line someone wrote it on.** Third instance in this file.
+  Diagnostic only.
+
+- **A verdict that turned on the fourth decimal and printed as a clean pass.**
+  The market-band block's pooling licence read `max |z| 2.04 over 8 comparable
+  bands, against 2.04 expected from noise -- at or below what a search this
+  wide returns from noise, so pooling the families is licensed.` It cleared by
+  **0.00038** (2.038953 against 2.039334) in the `-107..+105` band — a margin
+  both figures round away, on a bar that is the MEAN of simulated maxima
+  rather than a threshold. The code was right; the rendering turned a coin
+  flip into a licence.
+
+  Fixed with a third branch — `level with it`, naming the margin and reading
+  it as a tie — and by printing three decimals so a reader can do the
+  comparison the line asks them to. **A derived verdict needs a rendering its
+  own inputs can be told apart in**; two decimals is not a display choice when
+  the verdict is a comparison between the two numbers being displayed. Note
+  that three decimals does not rescue this one either — 2.039 against 2.039 —
+  which is why the tie test is `_prints_the_same`, asking the line's OWN
+  format whether the two render identically, rather than a tolerance. A
+  tolerance is a second number to justify and it can disagree with what the
+  line shows; the rendering cannot.
+
+  The same audit found the other half: `_magnitude_price_grid_lines` and
+  `_selection_price_matrix_lines` both printed a null-maximum reference, told
+  the reader a cell is read against it and never against zero, and then left
+  the comparison undone — while both observed bests were ABOVE their reference
+  on the committed ledger. `_search_verdict` is now one home for that clause,
+  and its ABOVE branch says in full that a search clears the null maximum's
+  mean about half the time under no effect, so the reading cannot be quoted as
+  a finding. Diagnostic only.
+
+- **The one surface that recomputed its own published decision.** The lean
+  page card derives `net = a["xw_edge"] - h["xw_edge"]` from the live build on
+  every run. That is right up to first pitch and wrong after it: from then on
+  the build re-derives the lean from a Savant leaderboard and a lineup the
+  pregame row never had, so the page could publish a side nobody could have
+  taken while `grades.html` one click away published the locked one — the
+  artifacts-disagreeing entry below, with the disagreement inside a single
+  build and both halves public.
+
+  Measured before fixing, over 351 v12 side-comparisons between committed
+  `leans_*_xw` dumps and their ledger rows: **0 of 77 disagree while a game is
+  still pregame, 6 of 274 after it starts**, and the disagreements sit
+  entirely in the thinnest leans — 11.9% below |net| 0.005, 1.2% in
+  0.005–0.015, **0% above 0.015**. 2026-09-10 TEX@SEA is the worked case:
+  locked at +0.000191 (SEA, graded W), rebuilt four hours after first pitch at
+  −0.004925 (TEX). Both starters' rates were bit-identical between the two;
+  what moved was Texas's batting order, worth +0.0055 on their lineup
+  composite against a lean margin of 0.0002.
+
+  Fixed by having a started game's card read the ledger row instead. Four
+  things in it are the reusable part:
+
+  * **The freeze condition IS the grader's lock rule.** `game_is_post_hoc`
+    compares this build's snapshot against that game's scheduled start — the
+    per-game form of `grade_leans._lock_status` — so the card freezes at
+    exactly the instant the ledger would refuse the row the build just
+    computed. Deliberately not the schedule feed's `abstract_state`: a second
+    definition of "started" is a second thing to keep in sync. A test walks
+    both functions across the boundary rather than pinning either.
+  * **The substitution happens on the INPUT rows, before `mk()` reads them.**
+    The lean, the read sentence, the side panels and the percentile bars then
+    all derive from one basis, and no renderer below needs a branch. Freezing
+    the outputs instead would have meant a conditional at every site that
+    prints a number.
+  * **The card's fallback reads are frozen too.** `mk()` takes `pit_xwOBA` and
+    `opp_xwOBA` when the columns above them are absent, so freezing only the
+    primaries leaves a live value one `or` away from a card claiming to be
+    pregame.
+  * **What cannot be frozen is named on the card.** The ledger carries no
+    per-hitter rows, so the lineup list stays live and the note says so; the
+    total is dropped rather than carried over, because a closing total beside
+    two locked moneylines is the mixed basis the freeze exists to remove; and
+    a started game with NO locked row renders as a rebuild and says THAT,
+    counted from its own state rather than assumed from the other. That is
+    `_lock_note`'s rule one surface out: never assert coverage the artifact
+    cannot substantiate, and never publish provenance only when the answer is
+    clean.
+
+  Display-only: no lean, delta, grade or ledger row moves, the dump keeps its
+  live values and its honest `lock_status`, and the grader keeps rejecting it.
+  What changed is which of two existing artifacts the card reads. No
+  `MODEL_TAG` implication.
+
+  **A pre-existing defect on the same fault line, found by running the gate
+  and fixed with it.** `test_the_site_and_the_forward_test_decide_every_row_identically`
+  recomputed every row's branch from the CLOSE and held `_row_hybrid` against
+  it — while `_row_hybrid` prefers the locked pregame action, exactly as
+  `hybrid_test` itself does in `apply_locked_rule`. So what it really asserted
+  was that the pregame and closing prices never straddle 0.45, which is not a
+  property of the code. It went red on 2026-09-07 NYM@MIA: locked q=0.4576
+  (FOLLOW, and that IS the bet the rule made), closed q=0.4406. Each row is
+  now held against the basis it was decided on, and a locked row's stored
+  action is additionally checked against its own locked price. **A test that
+  recomputes a stored decision must recompute it from the inputs the decision
+  was stored from** — otherwise it pins the market as well as the code, and
+  the market moves.
+
+
+- **The page that leads with the rule's z-score was the one page that never
+  said the threshold was fitted on its own rows.** `grades.html` headlines
+  `z +2.86 · +8.5 pp · +36.10u` over 277 decided v12 rows, under a rule whose
+  45% threshold was chosen on those same rows. The calibration panel says so in
+  its lead, the per-game card stamps `not a forward test` on every branch
+  history, and this file already claimed "each surface says so in its own copy
+  (… a note on the grades page)". There was no such note. The most prominent
+  copy of the number carried the least framing — which is the direction that
+  matters, since the strip and the ledger header are what a casual reader
+  meets first.
+
+  Fixed by putting the caveat where the number is, pointing at
+  `data/ledger_report.txt` for the registered forward version, and reading the
+  threshold off `HYBRID_THRESHOLD` rather than restating `45%` in prose.
+
+  Three smaller things found in the same audit, each verified against the
+  ledger rather than read off a comment:
+
+  * **A denominator the reader had to reach by subtraction.** The header tiles
+    are scored on decided AND settled AND two-sidedly priced rows (277), while
+    the Graded tile named only `284 graded · 15 pending · 7 abstained`. Today
+    284 − 7 lands exactly on 277 and nothing is wrong; a tie or a decided row
+    with no close would move the record's denominator with nothing on the page
+    saying so. The tile now states the scored count and names every excluded
+    row **from its own columns** — `unpriced`, `unsettled` — never by
+    subtracting one denominator from another. That required
+    `_lean_market_observations` to keep the ledger's row labels instead of a
+    fresh `RangeIndex`: membership is what lets a surface name what it dropped.
+  * **One `ML` heading, two prices.** 54 of the 284 graded family rows render
+    the locked pregame price and the rest render the close, while every record,
+    ROI and z on the page is scored at the close. Measured: mean |Δp| 0.0029,
+    max 0.0196, and it flips **no** branch — the locked action equals the one
+    the closing price implies on all 54. So it is a labelling gap and not a
+    scoring error, and the page now says which basis each column is on. Every
+    pending row is necessarily on the pregame basis, since no-lookahead keeps a
+    close off an ungraded row; that is the reason the mixture exists and the
+    reason it cannot simply be removed.
+  * **An unreachable clause that would have been false if it had fired.** The
+    empty-family message offered to count "N rows graded under earlier families
+    … listed below". `N` came from the already family-filtered frame, so it was
+    0 exactly when that branch ran; and the table below is filtered to the
+    current family, so no such row is listed. Deleted. Two comments in the same
+    function were stale in the same direction — "the TABLE below still lists
+    every row the ledger holds" (it does not) and "`_record_scope_note` is
+    printed rather than left implicit" (its scope string was discarded, and is
+    empty by construction on this page).
+
+  **The general lesson: a caveat belongs on the surface that carries the
+  number, and it does not travel with the statistic.** Three pages published
+  the same rule; the framing was written twice and the omission survived
+  because this file asserted the third one. Same failure mode as the
+  `_record_grades()` note recorded above: prose in CLAUDE.md is not evidence
+  about the code, and the way it was caught was rendering the page and reading
+  it.
+
+  **The lock claim came back, and the test that pinned its absence was
+  rewritten rather than worked around.** `_lock_provenance()` had no
+  production caller: the V12 redesign cut its call site and left three tests
+  behind it, one asserting the page omitted it, while this file went on
+  listing it as a standing monitor of that page. The redesign was right about
+  the three-clause block and wrong about the claim — the no-lookahead
+  invariant is the reason this ledger is worth reading, and the page said
+  nothing about it. It is now one sentence inside the header note, and what
+  the old test was really protecting is pinned directly instead: the claim
+  appears once, inline, never as a section. Two properties are pinned beside
+  it, because a provenance line can fail in both directions — it never
+  asserts the whole when a row is unverified, and it is never dropped on a
+  mixed page, which would publish the claim exactly when it flatters.
+
+  **The fade branch is no longer published as `MARKET FAVORITE`, on the
+  operator's reading that the label names the ticket and hides the decision.**
+  It is `MARKET OVER LEAN`. Every such selection IS the favourite — that is a
+  property of the threshold and the control row measures it — but what the
+  rule did was prefer the market's read to the model's on a game the model
+  still chose, and the market-overpricing note above measures the difference:
+  the 20 favourites the branch takes beat their price by +11.5pp against
+  +5.0pp for the favourites it passes on. The rename was one line because the
+  label now has one home, `hybrid_public_label()`; it had been restated as a
+  literal at seven call sites and in six tests, which is the "one value, three
+  homes" defect in copy rather than in config. The tests read it from that
+  function now, so the next rename cannot leave a page disagreeing with
+  itself.
+
+  **The page copy was cut back at the same time, also on the operator's
+  call.** Every claim survives; the justification for each claim does not —
+  that belongs in the code comment beside it, where these entries have always
+  said it belongs, and a reader of a scoreboard does not need the argument
+  that produced the caveat. The ladder note went from 130 words to 70, the
+  controls lead lost the clause its own note already carried, and the grades
+  header states four things in four clauses. What must NOT be trimmed is a
+  claim itself: the discovery framing, the chalk identity, the ML basis and
+  the lock split are each load-bearing, each has an entry in this file behind
+  it, and each is pinned by a test asserting the CLAIM rather than its
+  wording — which is what made the trim safe to do in one pass.
+
+  Display-only: no lean, delta, grade or ledger row moves, so no `MODEL_TAG`
+  implication. Verified while auditing and NOT changed, because each was
+  already right: the table's own Result column tallies to exactly the header
+  record (180-97 over 277, row by row), the per-slate records score the
+  displayed grades so they cannot drift from the Result column, the controls
+  come from one aggregate over one row mask, and the z uses the
+  Poisson-binomial SE rather than one estimated from the outcomes under test.
+
+- **A headline that could not take another value, published with the tightest
+  error bar on the page.** `market-calibration.html` led with three tiles —
+  Both sides / Home / Away — over 1,642 side-observations. The pooled tile read
+  `50.0% vs 50.0% implied (-0.0 ± 1.2) · n=1642` and always will: the two
+  devigged sides of a game sum to 1 and exactly one of them wins, so pooling
+  every observation is an identity, not a measurement. The other two were exact
+  mirrors — same n, same SE, `-0.5` against `+0.5` — so the strip showed one
+  number three times, and the copy of it that says nothing carried the smallest
+  `±` on the page.
+
+  The repository already knew. `test_both_sides_implied_and_actual_are_exactly
+  _one_half` pinned the identity, docstring reading "forced by construction, so
+  a deviation is a bug, not a result", while the page rendered the same quantity
+  as a result. **An invariant asserted in the suite and published as a finding
+  is the internal-and-public-artifacts-disagreeing entry with the disagreement
+  inside one commit.**
+
+  Fixed by deleting both degenerate tiles rather than annotating them — the
+  ratio precedent below, one surface out. What replaces the pooled tile is the
+  non-degenerate form of the same question and the one the page's own note
+  already named: the **favourite** side at its own close, one observation per
+  game instead of two, so nothing cancels. Measured at the fix, 57.7% against
+  57.1% implied (+0.6 ± 1.7) over 810 games — the favourite-longshot axis,
+  reading null, which is a null the data can actually produce. Pick'em games
+  (11 of 821) carry no favourite and are dropped rather than handed to the home
+  side, so a tie-break convention cannot move a published rate. `totals["all"]`
+  is gone from `_market_calibration_rows` entirely: the identity is still
+  asserted, now on the two totals that ARE rendered, because a value computed
+  and not rendered is how this one got published in the first place.
+
+  Two smaller things in the same commit, both the standing rules applied to the
+  one surface that had escaped them. The "Market response" slope printed bare;
+  it is now `+2.04 ± 0.25 pp` (t = 8.1 — a real effect, which is not the point:
+  the reader could not have known that from the tile). And the Controls table
+  said "the same rows scored two other ways" above four rows, with nothing
+  saying that the last of them must equal the fade branch exactly —
+  the clause `_verdict_html` already carries in words on the per-game card,
+  missing on the page where the two identical lines sit four rows apart.
+
+  **The general lesson: before publishing a pooled figure, ask what else it
+  could have been.** A statistic whose value is fixed by the partition rather
+  than by the data is not a weak result, it is not a result — and pooling
+  across a partition that sums to one is the common way to build one by
+  accident.
+
+  Display-only: no lean, delta, grade or ledger row moves, so no `MODEL_TAG`
+  implication. What changed is which figures the page publishes, not any
+  figure's value.
+
+- **A timeout that kills the step but not the process.** The walk-forward
+  append was `continue-on-error` with `timeout-minutes: 8` precisely so a slow
+  replay could never cost a slate. It cost one anyway. (The replay itself has
+  since been removed — see the entry below — so this reads as history. The
+  RULE survives it, which is the point of keeping it: the hazard belongs to
+  the pattern, not to that step. `WorkflowStepTimeoutTests` still enforces it
+  against any future step, and now guards zero live instances by design.) A step timeout kills the
+  step's shell and moves on; the `python walkforward.py` child survives as an
+  orphan the runner only reaps in post-job cleanup, and it rewrites
+  `data/walkforward_ledger.csv` after every date it finishes. Run
+  33073467257: the step timed out at 12:55:07, the commit step ran
+  `git add data/` and committed at 12:55:50, the orphan rewrote the ledger a
+  fraction of a second later, and `git pull --rebase origin main` refused with
+  `cannot rebase: You have unstaged changes`. The build was otherwise clean —
+  7 games, 13 sides, both dumps written, 6 new ledger rows ingested — and none
+  of it was pushed. Pregame rows, so no-lookahead means the next run cannot
+  re-derive them.
+
+  Fixed by bounding the **process**, not the step:
+  `timeout --signal=INT --kill-after=60 450 python walkforward.py`. `timeout`
+  blocks until the child is dead, so no step after this one can find `data/`
+  moving underneath it; `timeout-minutes: 8` becomes a backstop that should
+  never fire. SIGINT rather than SIGTERM because `_atomic_csv`'s `finally`
+  removes its temp file on a `KeyboardInterrupt` and not on a default-handled
+  SIGTERM — verified, `finally ran` — with SIGKILL 60s behind it. `*.tmp` is
+  now gitignored for the case where it does not: `git add data/` runs *after*
+  `validate_data_files.py`, so a temp file appearing in that gap would stage a
+  partial CSV past the one check written to catch exactly that. The ignore
+  still carries that weight under `commit_data.py`, which enumerates
+  `git status --porcelain` and therefore never sees an ignored file either.
+
+  **The general lesson: `continue-on-error` and `timeout-minutes` bound the
+  step's effect on the job, not the process's effect on the working tree.** Any
+  step that writes to `data/` and expects to be cut off has to bound its own
+  process. Pinned by `WorkflowStepTimeoutTests`, which asserts it of *every*
+  step-level `timeout-minutes` in `build.yml` rather than of this one step, so
+  the next such step inherits the rule. No lean, delta, grade or ledger row
+  moves; no `MODEL_TAG` implication.
+
+- **A raw win-loss quoted where only a price-relative one means anything.** The
+  per-game "Model vs market" row printed the lean's raw record in its bucket —
+  side × agree/disagree with the closing favourite. Those four buckets spanned
+  **24 points** of win rate (.603 home-agree down to .360 home-disagree) and
+  every one of those points was base rate: scored against their own devigged
+  prices the same buckets read +1.5, +0.3, +1.1 and −11.4 pp, each inside
+  1.2 se of zero. A reader was shown the market's opinion of the matchup and
+  invited to read it as the model's skill — the same defect as publishing a
+  record with no control beside it, one surface out.
+
+  Fixed by banding on the **leaned side's** own devigged price and reporting
+  that band's gap against price with `_excess_se`, the derivation both
+  calibration surfaces already share. The old home-relative split also filed
+  the 10 graded rows priced at exactly .500 as "home favoured" — and the 6 of
+  those where the model leaned away as *disagreeing with a market that had no
+  favourite*. A band has no such boundary claim to make. `VERDICT_CONTEXT_MIN`
+  went 10 → 25: a raw rate is unreadable at n=10 and a price-relative one is
+  honest at any n, but a band still needs enough games for its se to mean
+  something.
+
+  **The band is gone; the finding is not.** The V12 rewrite replaced it with
+  the direction-specific conviction cell (`_conviction_tail`), because a band
+  pools a favourite and an underdog into one historical result and erases the
+  direction the panel exists to show. That rewrite removed the three call
+  sites and left the callees behind, so `price_band_records`,
+  `_price_band_tail`, `_price_band`, `_PRICE_BANDS` and `VERDICT_CONTEXT_MIN`
+  sat for two days as a fully-tested surface no page rendered — six tests
+  pinning a function with no production caller, the same shape as the
+  `_record_grades()` note in the controls entry below. All of it is now
+  deleted. The numbers above are the reason the raw record went, and they
+  stay here because this file is where that measurement lives; do not read
+  them as describing code that still exists.
+
+  Display-only; no lean, delta, grade or ledger row moves.
+
+  **Second instance, in the internal artifact rather than on a page, and this
+  one had a control beside it and was still unreadable.** The fixed |Δ| band
+  block in `ledger_report.txt` prints each magnitude band's record with the
+  closing favourite's record on the identical rows — controls done right — and
+  the top band came back .050+ **20-6 (.769) with the favourite also 20-6
+  (.769)**. A reader takes two things from that, and both are wrong: that a
+  band's historical rate is a probability for the next game in it, and that
+  the favourite tie means the model added nothing there. The first is wrong
+  because magnitude is an xwOBA difference and this repo has **no validated
+  mapping from it to a win probability**; the second because a favourite
+  control is one binary comparison, where the games' own prices are 26 of
+  them — scored that way the same band reads **+12.5 ± 9.3 pp** over its mean
+  close of .644, which is neither the null the tie implied nor a result.
+
+  The cause is that the two axes are not independent: over the current family
+  `corr(|xw_net|, q)` is **+0.485** at the close and **+0.574** on the
+  pregame-priced rows, where `q` is the market's probability of the leaned
+  side. Banding on magnitude alone therefore bands substantially on price, so
+  a band's rate moves with the schedule it drew. The .050+ band is the limit
+  case: **every** pregame-priced row in it is priced at or above .55 for the
+  model's side, so the cells that would show a strong disagreement at a large
+  delta are empty, and no amount of accumulation in that band answers the
+  question a reader is asking of it.
+
+  Fixed by crossing the bands with the market axis — `_magnitude_price_grid_lines`
+  in `grade_leans.py`, printed directly beneath the band block. Four things in
+  it are the reusable part, and none is new to this file:
+
+  * **The cell's comparison is its own games' prices, not another rule's
+    record.** Each cell prints n, record, mean `q`, excess, and the
+    Poisson-binomial SE at those prices — the same `excess_se` the calibration
+    surfaces use, now with one home in `market_backfill` because `grade_leans`
+    cannot import `build_site` (that module refuses a non-xwOBA `MODEL_TAG` at
+    import and this one supports wOBA tags).
+  * **Empty cells are rendered.** "The model never strongly disagrees with the
+    market at a large delta" is a finding about the model, and it is only
+    visible if the cell that would hold those games is printed as empty rather
+    than skipped.
+  * **A grid is a search, so it prints its own null maximum.** The best of the
+    non-empty cells is compared against what the best cell averages when every
+    game settles at its own price — the rule this file already states for band
+    grids, computed rather than asserted, at a fixed seed so a committed
+    artifact does not churn. At current cell sizes that reference is large,
+    which is the honest reading: thin cells cannot be read at all.
+  * **Saved pregame prices only.** `pregame_p_home` with no close fallback,
+    because that is the price the decision was locked against — so the grid
+    covers fewer rows than the band block above it and names its own earliest
+    date rather than leaving full coverage to be assumed.
+
+  What the grid does NOT do is turn magnitude into a probability, and its own
+  copy says so twice. Nothing here is a selection rule, no cell is registered,
+  and no constant was fitted on it: the magnitude edges are the block's own,
+  and the price edges are `.500` plus the shipped rule's gate and its mirror,
+  imported from the registration rather than restated.
+
+  Diagnostic only; no lean, delta, grade or ledger row moves, so no
+  `MODEL_TAG` implication.
+
+- **The value-bet signal that does not exist, and the measurement that says so.**
+  Asked for a per-game "this is a value bet" badge, the honest answer turned
+  out to be that no such badge is available in this data, and the naive version
+  is **inverted**. Recorded here because the request is a natural one and will
+  recur.
+
+  Walk-forward over 552 games / 42 slates, fitting only on prior slates:
+
+  * Flagging the largest model-vs-market probability gaps selects the **losing**
+    subset, monotonically: gap > 0.00 → −9.5% ROI, > 0.06 → −20.2%, > 0.10 →
+    −33.0% (n=40). Flagged bets total −18.00u over 89 bets across 31 slates.
+  * It is not "the model's dog picks lose". Controlling for price band, the
+    above-median-gap half loses to the below-median half in **all four** bands
+    (big dog −18.3% vs +10.5%; small dog −14.1% vs −10.0%; small fav −7.6% vs
+    +9.8%; big fav −7.6% vs −1.5%).
+  * Does the delta add anything *on top of* price? Joint logit, n=627:
+    market logit **+1.25 ± 0.35** (consistent with 1.00 — the close needs no
+    correction), `z(xw_net)` **−0.09 ± 0.12, z = −0.78**. Out-of-sample log
+    loss ranks **raw close 0.6768 < market-fitted 0.6823 < price+delta 0.6888 <
+    delta alone 0.6991** — adding the delta to the price makes prediction
+    *worse*, which is what a noise feature does.
+  * Every arm lands within 1.4 se of its own market and loses units at the
+    close: model full-game z +0.29 (−15.28u over 627), platoon full-game
+    z −1.41 (−46.69u over 493), platoon vs the F5 close — the market it
+    actually targets — z +0.50 (−14.59u over 417).
+
+  So the verdict row reports price *context* and never a recommendation, and a
+  test pins that its copy contains no betting language. **Do not re-derive this
+  by hand and do not ship a value call without re-running the walk-forward
+  first**: the failure mode is that a hot current family (v12 ran .646 over 79
+  games while always-chalk ran .633 on the identical rows, in a stretch where
+  favourites beat their pooled rate) makes the badge look justified on the
+  rows in front of you.
+
+  **That rule named an instrument that had been deleted, and `value_probe.py`
+  is what makes it satisfiable again.** The walk-forward went on 2026-08-27,
+  so between then and now "re-run the walk-forward first" could not be
+  complied with — the one guardrail on the most-likely-to-recur request in this
+  repo was a dangling pointer. The probe is a walk-forward over *ledger rows*
+  rather than a replay: every row is a decision actually published pregame,
+  joined to its own close, fitted only on prior slates. That is strictly less
+  than the replay could do — it cannot score a version that never shipped, and
+  its header says so — but it is enough for this question and it never
+  reconstructs a prediction, so the fidelity gap that removed the replay does
+  not apply to it.
+
+  **Re-measured 2026-08-29 on 716 graded rows (the entry's own numbers were
+  n=552/627), and every leg reproduces.** The naive bet is still inverted and
+  still monotone: all bets −3.1%, gap > 0.00 −9.7%, > 0.02 −11.4%, > 0.04
+  −13.3%, > 0.06 −17.7%, > 0.10 −28.8% (n=32). Within-band median-gap splits
+  still lose in all three bands thick enough to split. The joint logit still
+  says nothing: market logit +1.137 ± 0.294, `z(xw_net)` **−0.013 ± 0.095,
+  z = −0.13**, and out-of-sample log loss still ranks raw close 0.6751 <
+  market-fitted 0.6799 < price+delta 0.6841 < delta alone 0.6946.
+
+  **And the trap fired exactly as predicted, which is the part to keep.** Read
+  alone, v12 looks like a system: .624, +0.0725 against price, z = +1.98,
+  +10.7% ROI over 181 rows. Two things dissolve it, and both are printed beside
+  it by design — always-chalk ran **.613 on those identical games**, leaving a
+  +1.1pp edge rather than a .624 one; and the same statistic per family flips
+  sign with the era (v5 +1.09, v7 −0.68, v9 −0.50, v10 +0.73, wOBA v5 −2.74,
+  v12 +1.98), which is noise, not edge. Do not quote any of these figures from
+  here — run the probe.
+
+  **Banding the delta does not rescue it, and section 5 of the probe is there
+  because that is the natural next idea.** A 3-band |Δ| × 5-band price grid was
+  measured on the same 716 rows, both markets. The grid looks alive — full-game
+  cells run from −28.7% to +21.5% — and it is entirely noise: no cell reaches
+  even 2 sd (largest deviation −1.63), because at 21–82 rows a cell's null sd is
+  8–21 **percentage points** of ROI.
+
+  The decisive comparison is against a **maximum**, not against zero, since a
+  15-cell search returns the best of 15 draws. Simulating outcomes at the
+  devigged prices under "market correct, no edge", the best of the 14 eligible
+  cells averages **+20.4%** full-game and **+16.0%** on F5 — against observed
+  bests of +21.5% and +14.6%. So the full-game winner is exactly what chance
+  produces (p = 0.38) and the F5 winner is *worse* than chance (p = 0.53).
+  Selecting the best cell on prior slates and betting it on the next loses in
+  both markets: −13.8% over 15 bets full-game, −3.0% over 50 bets on F5. Neither
+  margin ordering is monotone in either direction, which is the tell — a real
+  effect would show structure, not scatter.
+
+  **The general rule this earns: on this data, any grid search will hand back a
+  cell near +20% ROI whether or not anything is there.** Judge a cell against
+  the null max and a forward test, never against zero. Do not add bands to a
+  signal that scored z = −0.13 undiscretised — cutting noise into bins makes
+  more maxima to be fooled by, not more signal.
+
+  **The inverted version was tested too, and it is the sharpest instance of
+  search-driven self-deception in this repo.** If backing the biggest gaps
+  loses monotonically, *fading* them should win — a real over/under-valuation
+  signal with its sign flipped. On a walk-forward search it looked strong:
+  +20.2% ROI at gap > 0.10, an inversion slope whose bootstrap CI excluded zero
+  (−1.37, [−2.48, −0.15]), and — the part that made it convincing — the obvious
+  debunk failed, because always-chalk *lost* −12.3% on the identical rows, so
+  it was not simply favourite-backing.
+
+  It was an artifact of the search's own machinery. The walk-forward refits
+  `logit(p_home) ~ xw_net` each slate on prior slates only; early slates fit on
+  75–102 rows produce slopes of **+8.5 to +9.8 against a stable full-sample
+  +5.78**, and an inflated slope inflates `|gap|` on exactly those slates. So
+  "gap > 0.10" was selecting **unsettled fits, not disagreement** — 69% of that
+  set was fitted on <200 rows against a 20% base rate, and all five underdog
+  wins carrying the result landed on three consecutive slates (2026-07-08/09/10)
+  inside that region. The 27 chalk-equivalent rows contributed +3.4pp of the
+  +20.2%; the five dogs contributed +16.8pp, going 5-0 against 2.3 expected.
+  Hold the coefficients FIXED and the effect inverts — every threshold negative,
+  −5.7% / −1.8% / −0.1% / −4.2% / −7.8%. Corrected for having searched both
+  directions × five thresholds, p = 0.20.
+
+  **Three lessons, each with the instance above attached.** A statistic
+  recomputed per slate carries its own fitting noise into whatever it selects,
+  so "walk-forward" is not automatically clean — freeze the parameters and
+  re-run before believing a threshold effect. A failed debunk is not a
+  confirmation: chalk lost those rows because it lost *the same five games*,
+  one cluster counted twice. And a hypothesis generated by looking at the data
+  needs its p-value computed against the search actually performed, not against
+  zero — the nominal CI excluding zero was true and meaningless.
+
+  **The plus-money underdog cut is a separate question and it was tested
+  properly, because it is the one hypothesis here that was NOT found by
+  searching.** Favourite-longshot bias is a documented market phenomenon, so
+  this had a real prior. Measured over the 605 graded games holding a
+  plus-money dog: backing **every** dog runs 41.8% against 42.0% implied,
+  z = −0.09, ROI −3.8% — **no favourite-longshot bias in this book to harvest;
+  the dogs are priced right.** Restricting to dogs the model leans (n=128) gives
+  46.1% against 44.7% implied, z = +0.32, ROI −0.4%: better than backing them
+  all, and the selection value is +3.3pp with CI [−13.2, +20.4].
+
+  Cut by price the model's dogs at +100..+130 run **+7.5% ROI over 90 rows**,
+  and this one has properties none of the earlier candidates had — it survives
+  dropping its best three results (+7.5% → +3.5%, so it is not a cluster), and
+  walk-forward it stays positive (67 bets, +3.8%). It is still not a finding:
+  excess +4.9 ± 5.3 (z = +0.93), selection value within the band +5.7pp with
+  CI [−12.4, +23.8], and against the null the best of the cells searched
+  averages +12.3% — **P(chance ≥ observed) = 0.64**, i.e. the winner is *worse*
+  than chance across that search.
+
+  It is registered as `forward_test.py`'s **arm 2, deliberately UNBANDED**, with
+  a NULL rather than negative prior. The band is the flattering number and a
+  reader will want it registered — but it was chosen after seeing it, so
+  freezing it would smuggle the search back into a pre-registration. The
+  a-priori hypothesis is "the model leans a plus-money dog"; that is what is
+  frozen, and the bands print as context carrying no claim. A test pins the
+  distinction by asserting the headline counts every plus-money lean rather
+  than the band's subset.
+
+  `forward_test.py` is what came out of it: the rule frozen at registration
+  (2026-08-29), scoring only slates strictly after that date, printed every
+  build, with its registered prior stated as **negative** so a future hot streak
+  cannot read as a discovery. `tests/test_forward_test.py` pins every registered
+  constant — the one place in this repo where freezing measured numbers into a
+  test is correct, because there the literals *are* the subject and editing one
+  must be deliberate. Its gate is ~1,300 bets at ~1.6 a slate; read nothing
+  before then.
+
+  **The hybrid market-direction rule is the third registration, and it is the
+  clearest instance yet of the trap this whole entry exists for.** Proposed as
+  a market guardrail on top of the v12 lean — follow the lean when the market
+  gives the selected side at least 45%, back the other side below that — it
+  reproduces exactly on the ledger: 223 eligible v12 rows, hybrid 146-77 for
+  +31.50u (+14.1% ROI, z = +2.72 against price) where the plain lean ran 139-84
+  for +22.63u (+10.1%). Every figure in the proposal verified, including its
+  own bootstrap intervals. It is registered rather than shipped, and the two
+  measurements that decided that were not in the proposal:
+
+  * **The headline is mostly the model, not the rule.** The switch fires on 15
+    of 223 selections; the other 208 are v12 unaltered, which is where the
+    z = +2.72 comes from (the follow branch alone is z = +2.50). What the rule
+    *adds* is the paired switch delta: +0.592u per switched game, se 0.486,
+    **z = +1.22**, paired ROI CI [−2.6, +10.4] pp with P(≤ 0) = 0.11. So the
+    registered headline is the switch delta, never the hybrid's ROI — a
+    combined line can only restate what the model already does.
+  * **The fade branch is always-chalk, exactly and by construction.** Fading a
+    lean priced under .45 backs a side priced over .55, which is always the
+    favourite — verified 15 of 15. Its 11-4 and +23.8% *is* the always-chalk
+    record on those rows, to the unit, in a window where chalk beat its price
+    by +4.0pp over all 223 (137-86, +4.5%). A rule whose only active branch is
+    favourite-backing, measured over 15 games in a favourite-friendly stretch,
+    is this entry's own failure mode with a new formula on it.
+
+  **One thing genuinely cuts the other way, and it is recorded because the
+  honest answer is not "no".** Judged by the search test this repo demands — a
+  threshold found by looking is scored against the null maximum, never against
+  zero — 0.45 survives: sweeping 0.30..0.56 in 0.01 steps it is the argmax of
+  27 candidates at +14.1%, and under "market correct, no edge" simulated at the
+  devigged closes the best of those 27 averages +4.7%, giving
+  **P(null best ≥ observed) = 0.019**. That is a far better showing than the
+  band grid's p = 0.38. It still is not a result: the sweep is flat near +10%
+  below 0.44 because the fade branch is empty there, so the entire spike is
+  those same 15 games, and no permutation can manufacture the independent
+  sample the gate needs.
+
+  `hybrid_test.py` is what came out of it, alongside
+  `tests/test_hybrid_test.py`. Registered 2026-09-01, scoring only slates
+  strictly after, prior stated as **null**. It is a separate module rather than
+  a third arm of `forward_test.py` so neither registration's frozen block can
+  be edited while reaching for the other's. Its tests pin the constants and, in
+  addition, the two structural properties the reading turns on: that a followed
+  game has *identically* zero switch delta (so the headline cannot absorb the
+  model's own performance), and that the fade branch backs the favourite on
+  every row (so a good forward run is read against the always-chalk control the
+  module prints beside it). Two gates, because they answer different questions:
+  ~41 switches asks only whether the effect is anywhere near as large as it
+  looked, and ~1,420 is what a plausible +0.10u-per-switch edge needs — at the
+  observed 0.88 switches a slate, roughly ten seasons. **Read nothing before
+  the first, and do not read the second as reachable.**
+
+  **The |delta| conviction filter is the fourth registration, and the first
+  whose search test it FAILED rather than survived.** The proposal is the most
+  natural one left: low-conviction leans look worse than high-conviction ones,
+  so abstain below some |xw_net|. It reproduces on the ledger — over 252
+  decidable v12 rows, |d| >= 0.012 runs 109-61 for +7.3pp against price where
+  |d| < 0.012 runs 47-35 for +5.5pp. Registered rather than shipped, and
+  registered with a **NEGATIVE** prior, on three measurements:
+
+  * **The contrast is null at every threshold.** Kept-minus-dropped is
+    +1.77pp with an SE *of the difference* of 6.63 — z = +0.27. Swept
+    0.008/0.010/0.012/0.015/0.020/0.025, every z lands in [-0.18, +0.46], and
+    at 0.020 the sign flips. A filter whose benefit changes sign inside the
+    range you would plausibly pick from is not measuring conviction.
+  * **The null-max test comes back above one half.** Sweeping 0.006..0.030,
+    the best contrast the real rows offer is +4.01pp at 0.017; the best of
+    that sweep under "market correct, no edge" averages **+6.98pp**, giving
+    **P(null best >= observed) = 0.693**. The observed gap is *smaller* than
+    a search over pure noise typically returns. Set that beside the hybrid's
+    0.019 — the same test, the same code path, opposite verdicts, which is
+    what makes it worth running rather than a formality.
+  * **The always-chalk control inverts the finding, and that is the decisive
+    one.** On the games the filter DROPS the model beats chalk by +6.37pp; on
+    the games it KEEPS, by +3.14pp. The kept half only looks better because
+    it is favourite-heavy — chalk alone runs +4.17pp there against -0.84pp on
+    the dropped half. Low-|delta| games sit near pick'em (mean implied 51.8%
+    against 56.8%), which is precisely where a model has something to add
+    over backing the favourite. **The filter proposes to discard the games
+    where the model contributes most.** Bootstrapped, that +6.37pp is
+    [-7.8, +20.6] with P(<= 0) = 0.19 — not established either, but pointing
+    the wrong way for the rule.
+
+  So this is `Deleting controls as clutter` and the base-rate trap arriving
+  together on a new axis: the band looked like skill and was schedule. The
+  registered headline is therefore the **excess on the DROPPED games**, not a
+  filtered ROI — a filter's whole content is which rows it removes, so a
+  combined line could only restate the model — and the rule is vindicated only
+  if that number goes **negative**. `delta_filter_test.py` prints the chalk
+  control directly beneath it for the reason above, and its gate is ~393
+  dropped games (~91 slates) for the discovery-sized effect, ~1,090 for a
+  plausible 3pp one. Read nothing before the first.
+
+  One thing this does NOT contradict: `ledger_report.txt`'s |Δ| terciles stay
+  a standing monitor. Watching the distribution is not the same as betting on
+  it, and the monitor is what made the proposal checkable in an afternoon.
+
+  **The hybrid v1 rule had a DEAD ZONE covering 61.5% of games, and the
+  registration understated it by an order of magnitude. Read this entry as
+  the case that PRODUCED v2, not as a property of the shipped rule** — the
+  conjunctive gate dissolves most of it, measured below. `hybrid_test`'s
+  point 4 says the fade branch is always-chalk "exactly and by construction
+  -- verified, 15 of 15". True, and far too narrow: it is a property of the
+  RULE, not the branch.
+  With `q` the leaned side's price, a model leaning a favourite priced above
+  0.55 gives `q > 0.55 >= 0.45` → FOLLOW → favourite; the same game with the
+  model leaning the dog gives `q < 0.45` → FADE → favourite. Both branches
+  converge, so **whenever the favourite is priced above `1 - THRESHOLD` the
+  model cannot change the selection.**
+
+  Verified by counterfactual, not algebra: invert every lean over the 252
+  decidable v12 rows and 155 of 252 selections are unchanged, with an exact
+  split (unchanged rows' minimum favourite price 0.5511, changed rows' maximum
+  0.5455). So the chalk identity covers 155 games, not 15, and that — not the
+  fade branch's smallness — is why the combined line "mostly restates the
+  model".
+
+  **v2 dissolves most of the dead zone, and this is the measurement that says
+  so.** The algebra above turns entirely on the fade being unconditional: a
+  dog lean at `q < .45` was faded back onto the favourite, so the model's
+  opinion could not move the ticket. v2 fades only when `|xw_net| < .012` as
+  well, so a dog lean the model holds with any conviction is now FOLLOWED and
+  the ticket changes. Re-run the same counterfactual — invert every lean, count
+  the selections that do not move — over the 406 decidable current-family rows
+  at closing prices:
+
+  | rule | dead zone | share |
+  |---|---|---|
+  | v1 (fade whenever `q < .45`) | 246 of 406 | **60.6%** |
+  | v2 (fade `q < .45` AND `\|d\| < .012`) | 62 of 406 | **15.3%** |
+
+  v1 reproduces at 60.6% against the 61.5% recorded above on 252 rows, which
+  is the check that the two derivations agree. **Do not read the 15.3% as a
+  result about the rule's edge.** It says the model's opinion can now move the
+  ticket on 85% of games instead of 39%; it says nothing about whether moving
+  it helps, and the registered forward reading is the only thing that can.
+  Note also what it did NOT cost: the shipped selection differs between v1 and
+  v2 on just **14 of 406 rows** (mean `q` .412, lean 8-6). So v2 bought a
+  four-fold reduction in counterfactual deadness by changing fourteen tickets
+  — which is the same reason to be careful with it, since fourteen games is
+  not a sample either.
+
+  **The 81.3% chalk overlap is true and quoting it alone is unfair to the
+  rule** — it describes what the rule copies rather than what it adds, and
+  this file said it that way first. On the other 38.5% the rule takes
+  positions always-chalk never takes: 47 of 252 selections (18.7%) are
+  **underdogs priced 0.450–0.500**, backed because the model likes them, which
+  chalk takes none of by definition. They run 30-17 for **+16.11pp ± 7.28**
+  (z = +2.21) and +31.1% ROI — the best segment the rule has, 14.59u of its
+  34.29u from 19% of its bets, against +6.82pp on the 205 favourite
+  selections. Lead with the overlap and omit those and you have described the
+  wrong half.
+
+  **The fade branch is not content-free either**, which the registration and
+  the first version of this entry both over-read. Every faded bet IS a
+  favourite bet — that stands — but the model chooses WHICH favourites: the 20
+  it selects ran +11.48pp against +5.02pp for the 135 chalk bets above 0.55 it
+  does not select, a selection value of +6.45pp at z = +0.55. A true statement
+  about the ticket is not a statement about the information.
+
+  **The rule is also not the rule it was proposed as.** The stated intent was
+  "when the xwOBA signal is very low, use the market for additional signal".
+  It keys on `q`, never on `|xw_net|`, and the two correlate only +0.42: of
+  the 82 lowest-signal games it defers on 12, and 8 of the 20 it does fade are
+  not low-signal at all. What it does is decline to back the model's pick when
+  the market prices it under 45% — a **no-big-underdogs filter**. The lean ran
+  6-14 on exactly those games, which is the whole of its +1.8pp over the plain
+  lean.
+
+  **The conviction version was then measured directly and loses monotonically**
+  — deferring to the favourite below `|xw_net|` of 0.008/0.010/0.012/0.015/
+  0.020/0.025 scores +6.02/+5.94/+4.66/+4.14/+1.50/+1.55pp against +6.73pp for
+  never deferring and +2.54pp for always-chalk. Every level of deferral is
+  worse than none. The mechanism is the one `delta_filter_test.py` registers:
+  low-|Δ| games are near-pick'em games, which is where the model beats chalk by
+  MOST. **So the rule outperforms the idea behind it** — had it implemented the
+  stated intent it would have done worse than the plain lean. Two analyses
+  reaching the same structural fact from opposite directions is the useful
+  part: the model's contribution concentrates in near-pick'em games, the hybrid
+  dilutes them and the delta filter would discard them.
+
+  Where the model does act — the 97 games with a favourite at or under 0.55 —
+  it runs 61-36 for **+12.85pp ± 5.07** against always-chalk's −2.76pp,
+  disagreeing with chalk on 47. That is the number the dead zone is averaging
+  away.
+
+  **The dead zone re-measured on the current family, and the sharper statement
+  is about information rather than tickets.** The magnitude × price grid's two
+  outer columns ARE the dead zone, exactly: a leaned side priced under .450
+  means the other side is over .550, so q < .450 (28 rows) and q ≥ .550 (211)
+  partition the games whose favourite is priced at or above .55 — **239, which
+  is precisely the count of all sides priced ≥ .55, and 60.4% of the 396
+  decidable rows**, confirming the 61.5% measured on 252 above.
+
+  **"Dead zone" means two different things from here on, and v2 is what split
+  them.** This paragraph's is a PRICE REGION — the games whose favourite is at
+  or above .55 — and it does not move with the rule: 246 of the current
+  family's 406 decidable rows, 60.6%. The counterfactual one measured in the
+  table above is the set where the model's opinion cannot change the ticket,
+  and that IS a property of the rule: 60.6% under v1, 15.3% under v2. Under v1
+  the two are the SAME 246 rows — measured, not assumed, which is why one name
+  served. They no longer do, so a claim about
+  "the dead zone" now has to say which — the information findings below are
+  about the region and stand unchanged; the "the model cannot change the
+  selection" claims are about the rule and apply to v1 only.
+
+  Inside it the model's agreement carries **no information, not merely a chalk
+  ticket**: the 211 model-leaned sides beat their closes by +6.6 ± 3.3 pp while
+  all 239 sides at the same prices beat theirs by +6.5 ± 3.1 — **selection
+  value +0.1 pp, bootstrapped over games CI [−2.1, +2.4]**. That does NOT
+  retract the +6.45pp fade-branch selection figure recorded above: this is the
+  whole region on the current family, that is the 20 faded favourites against
+  the 135 chalk bets above .55 the rule declines, over every graded family, at
+  z = +0.55. Both can be true and the regional one is far better estimated.
+
+  **And v2's fade branch fires only inside the dead zone, by construction** —
+  `q < .45` means the favourite is above .55 — verified 16 of 16. The
+  consequence is measurable rather than rhetorical: skip the dead zone and the
+  hybrid and the plain lean return **identically +18.01u over the other 157
+  rows**. Outside the region where the model has selection value the rule has
+  no content, and inside it the model has none.
+
+  **Column stability is the diagnostic the grid was built for, and it separates
+  the four columns cleanly.** Each scored four ways — every closing row, the
+  saved-pregame subset, the rows that subset lacks, and split at 2026-09-03:
+
+  | q band | n (closes) | excess | selection value | sign stable? |
+  |---|---|---|---|---|
+  | < .450 | 28 | −5.7 ± 9.3 | +0.8, CI [−16.2, +17.7] | no (−14.7 / +8.6) |
+  | .450–.500 | 67 | +15.1 ± 6.1 | **+9.8, CI [+1.1, +18.1]** | **yes** (+13.2 / +15.6 / +13.8) |
+  | .500–.550 | 90 | +1.0 ± 5.3 | +6.2, CI [−0.6, +13.1] | no (+8.2 / −9.4) |
+  | .550+ | 211 | +6.6 ± 3.3 | +0.1, CI [−2.1, +2.4] | yes, and empty of content |
+
+  Only `.450–.500` is both sign-stable and carries selection value, and it is
+  the one region already registered — as `dog_contrast_test`'s contrast, not as
+  a band. `.500–.550`'s +1.0 is an average of +8.2 before 09-03 and −9.4 after,
+  which is what a noise cell looks like when you stop pooling it. The q < .450
+  discovery cut reproduces this file's own −11.5 ± 11.0 at n=20 exactly, which
+  is a useful check that the two derivations agree; its 8 rows since read
+  +8.6 ± 17.4, so the fade branch's discovery edge has not continued.
+
+  **Asked to update the shipped rule to maximize theoretical ROI, and
+  deliberately not done — the search is what argued against it.** Sweeping v2's
+  own parameter space (q threshold .30–.60 by .01 × |Δ| threshold 0–.05 by .002
+  plus never-fade-on-delta; 837 candidates) over the 396 decidable rows at
+  closes: plain lean **+7.32%**, shipped v2 **+10.06%**, and the maximum
+  `q < .44 & |Δ| < .012` at **+11.15%** — which differs from what ships by
+  **two games**. The null maximum under "market correct at its own devigged
+  closes" is +4.46%, P(null best ≥ observed) = 0.024, and most of the observed
+  is the plain lean, which is already +7.32% before any gate touches it.
+
+  Two things that came out of trying to state the objective, and both are the
+  reusable part. **ROI with no bet-count constraint is degenerate**: allowing
+  abstention, the maximum is "bet only q .450–.500" at **+28.02% over 67 bets**
+  — the band this file refuses to register at P = 0.2805. State the constraint
+  or the search returns the smallest cell that happened to win. And **the ROI
+  actually on the table comes from which games you decline, not from where the
+  fade gate sits**: the one variant with a mechanism rather than a fitted
+  threshold — abstain in the dead zone, bet the lean on the other 157 — scores
+  **+11.47%**, above the searched maximum over the whole parameter space.
+
+  It is not shipped, on the operator's call. A v3 would reset
+  `hybrid_v2.scored_rows`' forward window for a two-game difference, and that
+  window currently holds 30 rows over 2 slates with **zero** fades — the branch
+  carrying the rule's entire claim has not been exercised out of sample even
+  once. For a paper-traded study of market dynamics the informative region is
+  the 157 games outside the dead zone, which is where the selection can differ
+  from the price at all.
+
+  No code changed and no registered constant moved; `MODEL_TAG` is unchanged.
+
+  **Re-run 2026-09-15 on 406 rows, and the sweep reproduces almost exactly —
+  but the measurement the first pass lacked is the one that settles it.**
+  Same 837 candidates: plain lean **+8.30%**, shipped v2 **+11.41%**, maximum
+  `q < .44 & |Δ| < .012` at **+12.04%**, null max mean +4.56%,
+  P(null best ≥ observed) = 0.0155. Same argmax cell, now **three** games from
+  what ships instead of two. What is new is a walk-forward: refit the best cell
+  on prior slates, bet the next, 376 bets over 29 slates —
+  **best-cell-so-far +9.68% against shipped v2's +10.09% and the plain lean's
+  +7.20%.** Chasing the maximum LOSES to the rule it would replace. And this is
+  not the per-slate refit noise that killed `forward_test` arm 1: the pick is
+  *stable*, `(.44, .012)` on 24 of 29 slates. A stable argmax that still fails
+  forward is the sharper lesson — **passing the null-max test does not make a
+  threshold extractable.**
+
+  The three games are the whole of it, and they are worth naming because the
+  ranking is one coin-flip deep: 2026-09-07 NYM@MIA (q .4406, lean won),
+  2026-09-11 BAL@TOR (q .4482, won), 2026-09-14 ATL@CHC (q .4489, lost). The
+  leans went 2-1, which is what puts `.44` ahead by +2.56u. The surface says
+  the same thing: `.43` +9.92%, `.44` +12.04%, `.45` +11.41% — a spike beside
+  its own neighbour, not a ridge. `.45` keeps its a-priori provenance
+  (`hybrid_test`'s registration, frozen for an unrelated reason); `.44` was
+  chosen by looking. **Decision: unchanged.**
+
+  **Re-proposed 2026-09-16 as a ROAD-DOG rule — `q < .44` AND `|d| < .015` —
+  and it is the same cell in a costume.** The pitch is that the model's
+  plus-money away leans are a cohort worth their own gates: on the 67 such v12
+  rows, always-follow runs +13.48%, shipped v2 +20.98%, and the proposal
+  +27.99%. Every figure reproduces on the committed ledger. Four things kill
+  it, and the first two are arithmetic rather than statistics.
+
+  *The `|d|` half is inert.* Loosening .012 → .015 flips **nothing** — not on
+  the road dogs, not family-wide. All of the claimed +4.69u is the `q`
+  .45 → .44 move, so the proposal advertises two changes and makes one.
+
+  *There is no road-dog cohort to target.* Family-wide the two rules differ on
+  **4 games of 421**, and all four ARE those road dogs — because 32 of the 34
+  rows below the gate are away leans in the first place. Cutting to the cohort
+  does not isolate a sub-rule; it just re-describes where the gate already
+  lives. And a genuinely side-aware version is the variant this file already
+  records failing walk-forward at +3.90% against +10.09%.
+
+  *It fails the search test, and restricting to the cohort is what breaks it.*
+  The proposal is the argmax of the same 837-cell sweep run on those 67 rows.
+  Under "market correct at its own devigged closes" the best of 837 cells
+  averages **+18.37%** (sd 7.78), giving **P(null best ≥ +27.99%) = 0.113**.
+  The full-row-set version of this sweep cleared at 0.0155; narrowing to 67
+  rows raises the null max faster than it raises the observed, which is the
+  general hazard — *a search over a smaller cohort is a weaker test, not a
+  sharper one.*
+
+  *The control inverts it.* Fading a road dog backs the home favourite by
+  construction. Always-chalk over all 67 road dogs runs **−17.12%** (32-35);
+  over the 13 the proposal fades, **+27.70%**. The fade branch's entire value
+  on this cohort is that those 13 particular favourites won, in a cohort where
+  backing favourites loses badly.
+
+  One thing genuinely cuts the other way and is recorded because it does.
+  Walk-forward over 53 road-dog bets, the honest arm — re-pick the argmax on
+  prior slates only — returns **+11.62%** against always-follow's +10.30% and
+  shipped v2's +7.29%. That is a 1.3pp edge over doing nothing on 53 bets, and
+  the +16.15% that the FIXED proposed cell scores on the same window is not a
+  forward reading at all: the cell was chosen on a sample containing those 53
+  games. **Decision: unchanged, again.** The four games went 3-1.
+
+  **Side-specific rules were tested at the same time and are the best
+  cautionary instance in this file, because they passed the search test and
+  then failed worse than doing nothing.** Motivated by a real structural fact
+  (below the gate the rows are **29 away leans against 2 home**, because the
+  market prices home field and the model carries no such term, so a sub-.45
+  lean is 93.5% an away lean). Fitting a separate `(q, |Δ|)` per side over a
+  30,976-candidate joint space: retrospective **+13.07%** against shipped's
+  +11.41%, null max mean +5.07%, **P(null ≥ observed) = 0.0110** — a *better*
+  nominal p-value than the side-blind sweep. Walk-forward it returns
+  **+3.90%**, against shipped +10.09% and the plain lean +7.20%: worse than
+  not having a rule at all. The cause is visible — the searched home gate is
+  `q < .54`, fading 34 home leans that went 15-19, because there is no
+  home-side sample below .45 to fit on, so the search pushes the gate into
+  populated territory where it has no business being. The simple restrictions
+  lose too: away-only fades +10.61%, home-only +9.10%, both under side-blind.
+  **Do not make the hybrid side-aware.**
+
+  **The fade branch's value is concentrated in one 0.01-wide price band, and
+  this is not recorded anywhere else.** Of the 17 fades, 5 sit in `q .43–.44`
+  and carry **+8.60u of the branch's +12.60u switch delta (68%)**. That band
+  holds 7 leans and they went **0-7** — expected wins 3.04, P(exactly 0) =
+  0.0185, which sounds striking until you count that **25 bins of n≥5 exist
+  across the price range**, so one all-loss cell is roughly what chance
+  returns. It is *not* a single-day cluster (6 distinct slates), which is the
+  one way it differs from the 2026-07-08/09/10 artifact recorded above.
+  Granularly the sign flip at `.45` dissolves: three of the five 0.01-bins
+  below `.45` are POSITIVE, and dropping the 0-7 cell moves the whole
+  below-gate region from **−2.8pp to +9.1pp**. So "the model's edge changes
+  sign at pick'em" overstates what the rows support — what they show is a
+  broad positive plateau from ~.44 to ~.51 and a thin negative patch resting
+  on seven games.
+
+  Two things that survive that deflation. Within the narrow price band the
+  gate operates in — where prices are near-uniform at ~.43, so base rate is
+  largely controlled — the delta gate's premise holds: the leans it fades run
+  **4-13 (−18.2 ± 11.9 pp)** against **8-6 (+16.0 ± 13.1)** for the ones it
+  follows, contrast −34.2 ± 17.8, z = −1.93. And excluding the 0-7 cell
+  entirely the faded group is still 4-8 at −7.8 ± 14.2, same direction. n=31
+  either way, so this is a mechanism for why the rule works, not evidence that
+  it does; `delta_filter_test` registers the same question and reads null
+  forward (+0.70pp ± 6.82).
+
+  **The missing home-field term is not what the fade branch is patching.**
+  Away leans beat their price by **+5.7 ± 3.5 pp** against home leans' +7.2 ±
+  3.4 — a 1.5pp gap on ±3.4, nothing — and below the gate away leans land at
+  −0.2 ± 9.1, dead on price. So the 93.5% away composition is selection (home
+  teams are priced higher: mean q .5887 home-lean against .5184 away-lean),
+  not a defect the gate corrects. That is consistent with `hfa_probe`: the
+  market's home-field content reaches the selection through the price, and
+  adding it to the lean as well made the lean worse.
+
+  **Why the cliff is there at all — the market-overpricing account, which is a
+  better explanation than the mechanical one and came from the operator rather
+  than from this analysis.** xwOBA and the market normally agree (the lean is
+  the market favourite on 73.4% of games); where they diverge, the market has
+  already priced what the model is reading and the model's insistence is
+  anti-signal rather than news. As selection value — the model-leaned side
+  against ALL sides at the same price, over 1,592 sides of every graded family:
+
+  | band | model-leaned | all sides | selection value |
+  |---|---|---|---|
+  | 0.00–0.45 | n=20 −11.5pp ± 11.0 | n=468 +0.2pp | **−11.7pp** |
+  | 0.45–0.50 | n=47 +16.1pp ± 7.3 | n=318 −1.1pp | **+17.2pp** |
+  | 0.50–0.55 | n=50 +9.8pp ± 7.1 | n=338 +1.0pp | +8.7pp |
+  | 0.55–1.00 | n=135 +5.0pp ± 4.2 | n=468 −0.2pp | +5.2pp |
+
+  The model's backing makes a side better than its price everywhere except the
+  strong-disagreement region, where it makes it **worse than an average side at
+  the same price**. The market is calibrated in every band (within 1.2pp over
+  1,592 sides), so this is not the favourite-longshot bias — `value_probe`
+  looked for that separately and found none to harvest. **That calibration
+  check is the one part of this not inside the search that chose 0.45**; it
+  constrains the explanation without adding power.
+
+  A mechanism that fits: the model reads xwOBA matchup inputs only, while the
+  market also sees injuries, bullpen availability, weather, travel and late
+  scratches. When a narrow model strongly contradicts a well-informed market, a
+  blind spot is likelier than an edge — which predicts exactly this asymmetry,
+  and explains why the model's contribution concentrates near pick'em.
+  Established by none of it: n=20 below 0.45, the −11.5pp is z = −1.05, and the
+  table re-describes the rows that produced the threshold.
+
+  Nothing here is a coding defect and no registered constant moved; the rule
+  does what it says. `abstain_test.py` registers the variant this argues for —
+  decline those games rather than fade them, so the published record stops
+  being a model rule and a market baseline added together. Its prior is NULL:
+  the two differ by 0.25pp (+8.55 vs +8.30) and the discovery headline is
+  +0.18u per declined game at z = +0.99. It is the instrument that can separate
+  the two live accounts of those 20 games — favourite-backing in a
+  favourite-friendly window, or the model's opposition being genuinely
+  anti-signal — and if the forward reading cannot separate them that is itself
+  the case for the simpler rule.
+
+  One trap it hit on its first run, worth keeping: `abstain_test.scored_rows`
+  delegates eligibility and the follow/fade split to `hybrid_test` so the two
+  can never disagree about which games are declined — and delegating
+  *wholesale* inherited the hybrid's 2026-09-01 registration date, so it
+  scored two slates that are part of its own discovery sample. Both numbers
+  looked like forward rows. **When a registration borrows another's row
+  selector, the date bound is the one thing it must not borrow.**
+
+  **The underdog segment is the fifth registration, and what it registers is
+  NOT the segment.** The obvious thing to freeze was the 0.45–0.50 band: the
+  model's leans there run 30-17 for **+16.11pp ± 7.28** and +31.1% ROI, the
+  best slice the rule has, 14.59u of its 34.29u from 19% of its bets. Two
+  measurements say don't register that:
+
+  * **It fails its own search test.** Over the 180 contiguous price bands
+    actually searched, noise returns +12.77pp on average and clears +16.11pp
+    28% of the time (**P = 0.2805**).
+  * **It is 72% an existing registration.** `forward_test` arm 2 decomposes
+    almost exactly along this boundary — all plus-money dog leans +5.02pp;
+    inside the band +14.72pp; outside it (q < 0.45) −11.48pp. **The band is
+    arm 2 with its losing tail removed**, and refining a registered rule after
+    seeing which part worked is what pre-registration prevents. This file
+    already recorded that call on 2026-08-29, when arm 2 was registered
+    *deliberately unbanded* for exactly this reason.
+
+  So `dog_contrast_test.py` registers the **contrast** instead: among dog
+  leans, above-minus-below the hybrid's own threshold, **+27.59pp ± 13.20,
+  z = +2.09**. It uses BOTH halves, so removing the losing half is what it
+  measures rather than what it does; and its split point is not searched —
+  0.45 is `hybrid_test`'s threshold, registered two days earlier for an
+  unrelated reason, and 0.50 is the definition of an underdog. Its own
+  search test (sweeping the split 0.40–0.48) gives **P = 0.0707** against a
+  null best of +10.54pp, and the sweep's argmax IS 0.45, so fixing it a priori
+  costs nothing. Better than the band's 0.2805 and `delta_filter_test`'s
+  0.6930, short of the hybrid's 0.0190, and it does not clear 0.05.
+
+  **The gate is the most reachable of the five** — ~88 dog leans (~25 slates)
+  for a 15pp contrast, ~198 for 10pp, at 3.53 dog leans a slate. Deliberately
+  NOT sized to the discovery effect, which would show at ~26: a selected
+  maximum reproducing itself over seven slates would prove nothing.
+
+  **It is registered as explicitly NOT independent, and the report says so
+  every build.** Its below-split half is the same 20 games arm 2 bets and
+  `abstain_test` declines. Three readings of one small set of games is three
+  readings, not three samples, and a reader tallying five registrations as
+  five pieces of evidence is the error this entry exists to prevent.
+
+  One inert thing found while pinning the boundary and left alone: the shipped
+  rule's split is exact for a HOME lean (`q = p_home`) and one ULP low for an
+  away lean, because `1 - (1 - 0.45)` is `0.44999999999999996`. A game priced
+  at exactly 0.55 with an away lean therefore lands BELOW a 0.45 threshold.
+  Not fixed — changing it would move a registered rule's branch assignment for
+  a case that cannot occur, since devigged prices come from integer money
+  lines. Pinned by a test that says so rather than left to be rediscovered.
+
+  **What it cannot do, and the one thing the protocol asks for that this repo
+  cannot yet supply:** the rule is specified against the no-vig probability
+  available *at decision time*, and the ledger carries only the close, because
+  the no-lookahead invariant keeps every market column off a pending row. So
+  the module scores the closing basis — the same basis `forward_test.py` uses
+  and the same one the discovery numbers were measured on, so it is consistent,
+  but it is a CLV reading rather than an obtainable-price one. Closing that gap
+  means persisting a decision-time price pregame: `fetch_pregame_odds` already
+  computes exactly that `p_home` and renders it on the card, but it is called
+  *after* the dump is written and is never stored. Deliberately not done here —
+  it moves the critical path that commits irreplaceable pregame rows — and the
+  shape it should take if it is: leave the dump write where it is, then enrich
+  it in a second best-effort pass, so a failed fetch costs the decision price
+  and never the slate. Until then an operator paper-tracking this rule records
+  their own obtainable price separately, and the module's header says so.
+
+- **An error bar estimated from the outcomes it is testing.** Both surfaces on
+  `market-calibration.html` print a realised rate against its implied one, and
+  both sized the `±` from the results rather than from the prices. The ladder
+  used `sqrt(p̂(1−p̂)/n)`, which is exactly `0.0` on any bucket that went all-W
+  or all-L; the value panel used the sample sd of the residuals, which
+  collapses the same way because the only variation left is in `market_p`.
+  Both fail in the direction that makes noise look like signal: the *least*
+  certain buckets on the page render as the most certain.
+
+  Not latent. Two rungs were live at the fix — a one-game `≤ -250` bucket
+  publishing `+27.3` against implied with `±0.0` beside it — and the panel's
+  thinnest bucket read `−40.4 ± 1.6` against a true `±24.5`, an apparent
+  25-sigma result on four games.
+
+  Fixed by asking what null the number is testing. Each observation is an
+  independent Bernoulli at its own devigged price, so the win count is
+  Poisson-binomial: `Var(Σ wins) = Σ p(1−p)` and the SE of the mean is
+  `sqrt(Σ p(1−p))/n`. The `p_i` are fixed by the market rather than estimated
+  from the outcomes under test, so it is defined at `n=1` and cannot
+  degenerate. On the large buckets it barely moves (pooled home `.0201` →
+  `.0198`); it only bites where the old form was worthless.
+
+  Three things worth keeping. **One derivation, not two** — `_excess_se()`
+  serves both surfaces, the same move as `metric_label()` in the instance
+  below, because two copies of a statistic on one page will drift and the
+  reader cannot see which they are reading. **A statistic needs a spread on
+  every axis it consumes, not just a second row** — the same commit guarded
+  `np.corrcoef` on the sd of *both* columns, which the slope beside it already
+  did and the correlation did not; a constant column returned a silent `nan`
+  from a divide-by-zero. And **an SE of zero is never a result** — it is the
+  estimator saying it has nothing to say. Treat one as a bug on sight, in the
+  same reflex as the ratio with no sampling distribution below.
+
+  Display-only: no lean, delta, grade or ledger row moves, so no `MODEL_TAG`
+  implication. What changed is the error bars beside published numbers, not
+  the numbers.
+
+- **A column carried to no surface, second instance — and the note that made
+  it invisible.** `_lean_market_agg` computes `excess_se` for every model×market
+  bucket. The 2×3 calibration table renders it; the per-game 3×5 profile panel
+  did not, printing `Performance vs market +33.8 pp` with nothing beside it.
+
+  What kept it hidden was a docstring: `conviction_cell_records` said "the card
+  prints `n` … the calibration table carries the error bar", and that is false.
+  The table renders the **2×3 `cell`** buckets (LOW/ACTIVE × oppose/no-backing/
+  agree); the card renders the **3×5 `profile`** buckets (low/medium/high ×
+  five price bands). Different cuts, different n — a profile cell has no
+  counterpart there, so its SE reached no surface at all. Same shape as the
+  instance below: a note describing a diagnostic the reader cannot see.
+
+  Not latent, and worst exactly where it matters. `CONVICTION_CELL_MIN = 1`, so
+  a single completed game publishes a headline: live at the fix, `low × >65%`
+  read **+33.8 pp off n=1**, against an SE of **±47.3**. Three of the 14
+  published cells sat under n=5. The fix renders the SE the aggregate already
+  returned, and a test pins the n=1 case specifically — `_excess_se` is defined
+  there, where the p̂-based forms this repo already banned would print ±0.0.
+
+  Two things deliberately NOT changed, because they are the operator's call on
+  a surface requested as exploratory: the `CONVICTION_CELL_MIN = 1` floor, and
+  the `n ≥ 20 → "LARGER SAMPLE"` label (n=20 still carries ±11pp). The error bar
+  is what makes both readable rather than misleading, which is why it was the
+  half worth fixing unasked.
+
+  Display-only: no lean, delta, grade or ledger row moves.
+
+- **A column carried to no surface.** The same panel computed a per-game
+  `price_dislocation` residual, returned it on the observation frame, and
+  rendered it nowhere — and the note beside it described the invisible
+  diagnostic to the reader as though a table showed it. The prose was the
+  symptom; the unread column was the cause, because nothing tied what the note
+  claimed to what the tables emit. Deleted rather than surfaced: a residual-sign
+  cut may be worth adding later, and adding it then is cheaper than carrying a
+  column that invites a second description of something nobody can see. A test
+  now asserts the frame carries no unrendered column.
+
+- **A rebuild overwriting the record it was rebuilding.** The post-rollover
+  pass rewrote each past slate's dump in place, so the one artifact saying what
+  the model saw before first pitch was replaced by what a later model saw with
+  a later leaderboard. Three options were on the table for a year of this file:
+  skip the write, rename it, or accept it. **Renamed** — a rebuild is a
+  legitimate later view of the same slate and the probes read it happily, so
+  deleting information to protect information was the worst of the three.
+  `dump_is_post_hoc` decides and `dump_path` names; both the primary and the
+  shadow arm call them, so the two arms cannot disagree about what a slate is.
+
+  Three things in it are the reusable part:
+
+  * **The marker is a PREFIX, for the same reason `SHADOW_PREFIX` is.** The
+    grader globs `leans_*_xw.csv`, which matches any leans-prefixed name ending
+    `_xw.csv`, so `leans_<date>_xw_rebuild.csv` would have been ingested as a
+    real pending row — the highest-cost silent failure available here. A test
+    asserts every rebuild name against `grade_leans`' own globs, and a second
+    pins that the naive suffix form *would* have matched, so the first cannot
+    quietly become theatre.
+  * **The rule is read off the rows, not off the clock.** "Is this a rebuild?"
+    could have been `SLATE_DATE != today in ET`, which then has to re-derive
+    the rollover hour, hold across DST, and is simply wrong whenever
+    `SLATE_DATE` is overridden to rebuild an old slate by hand. The rows carry
+    a snapshot and a scheduled start and answer it directly.
+  * **Unknowable falls back to the live name.** No rows, no start column, an
+    unparseable stamp — all keep the name every existing glob already finds. A
+    dump wrongly marked `rebuild_` is invisible to the grader, which is the
+    same slate loss the prefix exists to prevent, reached from the other side.
+
+  Measured at the fix, on the committed dumps: 13 of the 43 instrumented ones
+  are full rebuilds that would have been diverted, including both shadow dumps
+  named in the live entry above. Display/provenance only — no lean, grade or
+  ledger row moves, so no `MODEL_TAG` implication. The ledger's own guard is
+  untouched and stays load-bearing: `ingest()` admits a row only when
+  `lock_status == "pregame"`, which is what kept every one of those rebuilds
+  out of the ledger while this was broken. This change means the grader is
+  never offered them; it does not mean the check can be relaxed.
+
+- **The same diversion, on a file with no ledger behind it — where it almost
+  never fired.** `hitter_frame` wrote through `dump_path(..., post_hoc)` from
+  the day it shipped, so it already had the entry above. It diverted **once in
+  nine slates**. `dump_is_post_hoc` returns True only when EVERY game on the
+  slate has started, and every slate has a straggler: measured at the
+  post-rollover build, 14 of 15 games started, 9 of 10, 10 of 15, 12 of 15. One
+  unstarted game keeps the live name, and the file is rewritten.
+
+  For `leans_*` that is correct and is not changed: each row carries
+  `lock_status`, `ingest()` admits only the pregame ones, and the mixture is
+  labelled and filtered downstream — which is exactly what the live entry above
+  says the residue is. **`hitters_*` has no ledger behind it. The file IS the
+  record**, so the same rule silently replaced predictions with post-hoc ones.
+  Measured before the fix: **1728 of 2178 committed rows (79.3%) were written
+  after their own game started, median 172 minutes late, worst 561** — and
+  every file held exactly one snapshot, which is the overwrite.
+
+  What that cost is not provenance but the thing itself. A frame written after
+  first pitch carries a Savant leaderboard the game is already inside, so
+  scoring it is lookahead, and `hitter_level_probe` had been doing so: its first
+  published reading, corr +0.0499 over 1832 rows, was ~79% contaminated.
+
+  Three parts to the fix, and the second is the reusable one:
+
+  * **Per-row provenance.** Each row now stores `scheduled_start_utc` and
+    `lock_status`, from `hitter_frame.lock_status()` — deliberately
+    `grade_leans._lock_status`'s rule including the strict `<`, because a
+    second definition of "started" is a second thing to keep in sync. The frame
+    could not previously answer "was I pregame?" from its own contents, so every
+    consumer had to re-join the ledger to find out, and the one that mattered
+    did not.
+  * **The merge unit is the LINEUP, not the hitter.** `merge_preserving_pregame`
+    keeps an older group only when it is wholly pregame and the incoming one is
+    not, keyed on `(game_pk, batting_side)`. Merging per hitter would mix a
+    pregame bat with a post-hoc one and produce a nine-man lineup that never
+    existed, whose composite no build ever computed — a worse artifact than
+    either input.
+  * **A later PREGAME poll still refreshes.** The rule protects a lineup from
+    being downgraded, never from being updated, so the stored row remains the
+    LAST snapshot before first pitch rather than the first.
+
+  Verified by replay rather than by argument: run the real 2026-09-06 slate and
+  its own start times through both builds and the 14 started games keep their
+  pregame values while the single straggler correctly takes the fresh refresh,
+  15 of 15. Two smaller consequences fall out — an empty build now leaves an
+  existing file alone (clearing the pregame copy on an empty slate is this same
+  defect from the other side), and an unreadable existing file is treated as
+  absent rather than fatal, since the module is best-effort and off the critical
+  path by design.
+
+  **Nothing recovers the 79%.** Those pregame frames are gone and no-lookahead
+  forbids reconstructing them; the clean sample restarts from the next build.
+
+  **The general lesson: a diversion sized for an artifact the ledger protects is
+  not sized for one that is its own record.** `dump_is_post_hoc`'s all-or-nothing
+  rule is a deliberate choice about dumps, and it was inherited by a file class
+  with no downstream filter to make the mixture safe. When a new artifact adopts
+  an existing guard, check what made the guard sufficient where it came from.
+  Diagnostic only — no lean, delta, grade or ledger row moves.
+
+- **A control on a different row set, in a probe rather than on a page.**
+  `hitter_level_probe` told its reader to compare its number against
+  `ledger_report.txt`'s component line. That line covers every v12 slate while
+  the probe covers only the slates with a persisted frame, and the two **disagree
+  in sign**: −0.039 over 792 side-games there against **+0.065 over the same 208
+  games** here. Read across those row sets the probe's +0.050 looks like evidence
+  for the aggregation hypothesis it exists to test; read against its own rows,
+  hitter-minus-team is **−0.015 ± 0.074, z = −0.21** and nothing separates.
+
+  Same rule as the abstention instance below — a control is only a control if it
+  is scored on the rows the model was scored on — with the failure one level out:
+  not a control computed wrongly, but a *pointer to a control computed
+  elsewhere*. `team_control` now derives from the probe's own joined rows so it
+  cannot drift from them. **A reading instruction is part of the instrument.**
+
+- **Threshold cliffs, fourth instance — written INTO the fix for the entry
+  above.** (The first three are further down this file; this one is here because
+  it belongs beside the control it suppressed.) `team_control` shipped with
+  `if len(agg) < 30: return None`. On the
+  first clean run the probe joined 252 hitter-games = **28 sides**, so the report
+  printed `TEAM CONTROL on these same rows: not computable from this frame` — no
+  control at all, on the run whose entire purpose was to stop a reader reaching
+  for the component line instead. The gate suppressed the number in exactly the
+  case it was needed.
+
+  Removed rather than lowered, per this file's own two rules: *print the standard
+  error, never suppress the number*, and *the fix for a hard `>= N` is almost
+  never a better `N`*. What remains are structural refusals only — missing
+  columns, a zero-variance predictor where the correlation is undefined, and
+  fewer than four sides where `1/sqrt(n−3)` is not finite. Those are arithmetic,
+  not judgement. **A gate written into a fix deserves the same suspicion as one
+  found in old code**, and this one survived review, a test suite and a PR body
+  before a real run caught it.
+
+- **A test that pinned a property by character distance.**
+  `test_a_failure_writing_the_frame_cannot_cost_the_slate` sliced 400 characters
+  around `hitter_frame.write` and asserted `try:` appeared in the window. The
+  property is real and load-bearing — the write happens after the irreplaceable
+  pregame dumps, inside a handler that swallows its failures — but adding a
+  comment beside the call pushed `try:` out of the slice and the test went red
+  for formatting. It now walks the AST for the `Try` node that actually encloses
+  the call. **A structural claim needs a structural assertion**; a text window
+  fails for reasons that have nothing to do with the claim, and the cheapest way
+  to "fix" such a red is to delete the assertion.
+
+- **A monitor that measures its own correction.** `sp_ip_calibration()` reads
+  `expected_sp_ip_raw` where present precisely so the fit cannot feed on its own
+  output — and the standing monitor that prints its slope every build,
+  `actuals_backfill.paired_sp_ip`, read the *published* column. From v12 that
+  column is calibrated, so the printed "IP calibration slope" became a mixture:
+  604 raw side-games and 30 corrected ones, with no label saying which. It read
+  `+0.762` while the fit on the same 634 rows read `+0.756`.
+
+  Harmless at 5% contamination and not harmless later, which is why it was
+  fixed at sighting rather than gated. A calibrated pred is compressed by
+  `w·b + (1−w) = 0.774` (measured: sd 1.338 raw → 1.017 published on those 30
+  rows), so an all-v12 sample prints ≈0.98 — a monitor announcing that the
+  defect it exists to watch has resolved, on a slope whose subject never moved.
+  The deferral entry below it only worked because the instrument reported the
+  estimator; an instrument reporting the estimator-plus-its-fix reports nothing.
+
+  Fixed by giving the monitor the fit's own rule (raw where present, published
+  where not) rather than by adding a second line for the published value.
+  Nothing is lost: published is a deterministic function of raw and the fit, so
+  monitoring raw monitors both. **When a correction ships, check what its
+  monitor is now reading** — the column it always read may have changed meaning
+  underneath it. Diagnostic only; no lean, grade or ledger row moves, so no
+  `MODEL_TAG` implication.
+
+- **A statistic with no usable sampling distribution.** `ledger_report.txt`
+  printed `implied w = b_sp/b_lineup` from the SP-vs-lineup logit fit, with no
+  standard error beside it — because it has none. `b_lineup` is not
+  distinguishable from zero (+0.122 ± 0.227 over the 82 graded v9/v10 rows), so
+  the ratio is Cauchy-like: bootstrapped, its median is +0.02 but **48% of
+  resamples flip its sign**, 3.6% land beyond |5|, and its mean and sd do not
+  converge with resample count. On the same ledger it read +0.12 on v9/v10,
+  −2.61 pooled and +4.77 on the wOBA rows — three numbers, one underlying
+  non-result, each of which reads as a measurement of a relative weight.
+
+  Fixed by **deleting** the ratio, not by widening its gate. The hypothesis is
+  unchanged and is now well posed: `w = 1` is `b_sp = b_lineup` in native
+  units, so the report prints the contrast `b_lineup − b_sp·(sd_lu/sd_sp)` with
+  the standard error from `c′·cov·c`. That is why `_logit_fit` now returns the
+  full covariance rather than its diagonal — the off-diagonal term is part of a
+  difference's variance, and discarding it is what left the ratio as the only
+  available form. Same data, readable answer: `+0.107 ± 0.245, z = +0.44`, no
+  departure from equal weight.
+
+  **The gate came down as a consequence, and that is the reusable part.**
+  `N_FIT_MIN` was 120 — sized to hide a statistic that is unreadable at small
+  n, not to establish evidence. Coefficients printed with their standard errors
+  are honest at *any* size (`+0.122 ± 0.227` says "indistinguishable from zero"
+  without needing suppression), so the floor dropped to 30 and now covers only
+  logit convergence. When a threshold exists to hide an unreadable number, fix
+  the number and the threshold dissolves — the same move as the shrinkage
+  weights elsewhere in this file, one level up: the cure for a hard gate is
+  usually to remove whatever needed gating.
+
+  Diagnostic only. Nothing in this fit feeds back into a lean, a delta or a
+  grade — verified, not assumed: `b`, `se` and `cov` are locals inside
+  `report()` and reach only `say()`. No `MODEL_TAG` implication.
+
+- **A deferred defect, shipped at its own gate.** `expected_sp_ip` was measured
+  **over-dispersed** on the first backfilled actuals (2026-08-04): slope
+  0.756 ± 0.063 over 306 side-games, 3.9 se below 1.0, bias +0.096 IP
+  (t = 1.31) — a spread problem, not a level one. It was deliberately NOT
+  fixed then, on two grounds: it flipped 1 lean in 80, so the case was
+  correctness of a directly-observed input rather than performance, and 306
+  side-games of July/August is thin for a slope that is plausibly seasonal.
+  The entry set an explicit gate — **re-fit at ~600 side-games** — and had
+  `actuals_backfill` print `IP calibration slope` every build so the number
+  would arrive without anyone remembering to look.
+
+  It arrived. At n=586 the slope read **+0.735 ± 0.048**, 5.5 se below 1.0,
+  and v12 shipped the fix. Keep the whole shape as precedent: a measured
+  defect, a stated reason not to act, a numeric gate, a self-reporting
+  instrument, and a fix at the gate rather than at the first sighting.
+
+  **What it shipped as matters as much as when.** The deferral warned that a
+  fitted literal would be the constants-frozen-from-data entry with a fresher
+  date on it, so `sp_ip_calibration()` re-fits from the ledger on every build
+  and no `a + b·pred` appears in the source. Two design points came out of the
+  other entries here rather than out of this one:
+
+  * The correction is shrunk toward the **identity map** by sample size,
+    `cal(p) = w·(a + b·p) + (1−w)·p` with `w = n/(n+K)`, so `n = 0` returns `p`
+    exactly. No `if n >= N`, no day on which every workload estimate jumps —
+    the threshold-cliff entry applied a third time.
+  * `K = 50` was picked by **walk-forward benchmark**, not taste: fit on every
+    prior slate, score the next, over 586 side-games and 23 slates. Calibration
+    beats no-calibration by +4.1% / +4.0% / +3.8% out-of-sample IP MSE at
+    K = 25 / 50 / 100, against +3.4% at K = 0 — so the shrinkage earns its
+    place early. Bootstrapped over slates, K=50 is the argmin most often
+    (131/400) and every candidate's CI excludes zero. The curve is flat from
+    10 to 100 and the comment says so: what is distinguishable is calibrated
+    from uncalibrated, not 25 from 50.
+
+  The one genuinely new hazard was **a fit that consumes its own output**.
+  From v12 the published `expected_sp_ip` is calibrated, so refitting against
+  it would compound the correction every build and pull the estimator toward
+  the mean without limit. The dump and ledger therefore carry
+  `expected_sp_ip_raw_*`, and the fit reads raw where present, falling back to
+  the published column for pre-v12 rows — which are raw by definition, and are
+  the entire sample on the first build after the bump. A correction that
+  feeds on its own output has no fixed point worth having; store the input.
+
+  Two companion readings from the same backfill are still **not** acted on.
+  The realized phase weight (`act_sp_bf / act_pa`) carries the same
+  over-dispersion in the units that matter — slope 0.746, bias +0.017, MAE
+  0.101 over 210 side-games — which is why the fix targets the workload
+  estimate and not the BF/IP conversion. And the rate metric still says
+  nothing: calibration slope 0.953 ± 0.380, corr 0.178 ± 0.070 against a 0.196
+  ceiling, a CI spanning near-zero to above that ceiling. Do not quote those
+  two as findings.
+
+- **One value, two namespaces — and a comparison that graded the mismatch a
+  loss.** `attach_hybrid_snapshot` wrote `hybrid_selection` as a club
+  ABBREVIATION drawn from `build_site.ABBR`, which follows StatsAPI (`AZ` for
+  Arizona). `grade_leans` copied that column into the ledger verbatim while
+  deriving `home`, `away` and `xw_lean` through its OWN map, which persists
+  ESPN/ledger-style `ARI`. Every other team field crosses that boundary as a
+  full team name and is abbreviated once, on the ledger side; this was the only
+  one that crossed already abbreviated, so it was the only one that could
+  disagree. Exactly one club differs, which is why it survived review.
+
+  **Both consequences were silent, and the worse one fabricated a result.**
+  `_wlt` compared the selection against the two clubs and fell through to
+  `else: "L"` — so an Arizona selection graded a LOSS whichever side won,
+  into `hybrid_full`, which is immutable once written. Separately
+  `hybrid_test.scored_rows` requires the selection to name one of the two
+  clubs, so the same row vanished from the registered forward test's
+  denominator with nothing anywhere recording a rejection. The two masked each
+  other: the fabricated grade never reached the registered headline because the
+  filter had already dropped the row.
+
+  Caught before it cost a graded row — at the sighting the ledger held 29
+  locked rows and the one Arizona selection among them (2026-09-02 PHI@ARI) was
+  still pending. Standing exposure is not negligible: ARI is 6.7% of the
+  current family's decidable rows and the rule selects ARI on 38% of them, so
+  roughly 2.5% of forward rows would have been mis-graded and silently
+  excluded, against a near gate of 41 switches.
+
+  Three parts to the fix, and the third is the reusable one:
+
+  * **The alias got a name, not a second copy.** `build_site.ledger_abbr()`
+    is the inline conditional that was already inside `_ledger_club_labels`,
+    lifted out and called from both sites. `pick` stays in the model namespace
+    while it is compared against `home`/`away` to select the money line, and is
+    translated on the way OUT — translating earlier would have stored the wrong
+    side's price. build_site owns the translation because it holds BOTH maps;
+    grade_leans holds only its own, so putting it there would have meant a
+    sixth copy of the `AZ`/`ARI` alias (`ledger_abbr` itself, `_ESPN2SA`,
+    `market_backfill.LEDGER2SA`, `market_backfill.ESPN2SA` and
+    `pythag_control_probe.LEDGER2SA` are the five that exist). Collapsing
+    those five is a separate change and is not attempted here.
+  * **`_wlt` no longer invents a grade.** A selection naming neither club
+    returns `None` — an abstention — rather than `L`. The guard sits before the
+    tie branch, so an unrecognised selection is not a tie either.
+  * **The dropped rows are counted and printed.** `hybrid_test._committed` is
+    now the denominator `scored_rows` is a subset of, and `unscorable()` is the
+    difference; the report prints a WARNING line when it is non-zero. This is
+    the controls entry's rule applied to a pre-registered test: a record over
+    223 of 244 rows must say where the other 21 went, and a forward sample
+    whose denominator can shrink invisibly is worse, because nobody is watching
+    a number that is not printed.
+
+  **The general lesson: an identifier that crosses a module boundary already
+  encoded is a namespace, and two namespaces will differ in exactly the place
+  nobody checks.** Prefer passing the unencoded form (here, the full team name,
+  which is what every other field does) so the receiver encodes once. Where you
+  cannot, make the mismatch LOUD — `tests/test_selection_namespace.py` walks
+  all 30 clubs through both maps rather than asserting `AZ -> ARI`, because
+  pinning the instance would pass while a thirty-first divergence went by. And
+  an equality test whose else-branch is a RESULT (`"W" if ... else "L"`) is a
+  silent-failure generator: give it a third answer.
+
+  No lean, delta or ledger row moves; `MODEL_TAG` is unchanged. What changes is
+  which club a persisted selection names, and that an unscorable row is
+  reported rather than absorbed.
+
+- **One value, three homes.** `.github/workflows/build.yml` pinned `MODEL_TAG`,
+  `RECORD_TAGS`, and `SCALE_TAGS` job-level while both modules also defaulted
+  them. The v10 commit bumped the modules and missed the workflow; the env wins,
+  so CI ran v10's PA-share weighting and stamped every row `v9`. The 14 rows
+  built 2026-07-28 carry v10 math under a v9 tag and are immutable. Detectable
+  only because they hold a non-null `sp_bf_per_ip`, which no genuine v9 row has.
+  Fixed in `2f5d922` by **deleting** the pins rather than syncing them, leaving
+  a comment where they were that says why the block is empty — otherwise the
+  next person re-adds them. A config value that duplicates a code default will
+  drift; delete the copy rather than syncing it.
+
+- **Freezing a measured number into a test.** Same shape as the constants entry
+  above, one level out: `test_record_reproduces_ledger_report` asserted the
+  ablation replay scored `39-32`, a literal copied out of `ledger_report.txt`.
+  The Actions bot graded more slates, the real record moved to `45-37`, and the
+  suite failed for a reason with nothing to do with the replay — the one gate
+  this repo has, red on arrival. Fixed by *reading* the expected record off the
+  report it names and intersecting the two row sets, so the assertion still
+  fails for its real causes (replay drift, or a report not regenerated beside
+  its ledger) and never for arithmetic the bot did overnight. A test that
+  cross-checks two artifacts should read both, never memorise one.
+
+  **Second instance, 2026-09-18, and the frozen literal is a SPELLING rather
+  than a number.** `test_ledger_invariants._version` matched
+  `(xw|woba|split)\+plat_consol_v(\d+)` — the lineage stem the ledger happens
+  to be full of, hardcoded in the one file whose own docstring forbids frozen
+  snapshots. `xw+starter_blend_v13` turned the gate red the morning its first
+  row landed, for a reason with nothing to do with any diff. Same fix: the
+  current stem is read off `build_site.MODEL_TAG` and retired stems are
+  listed, so the next lineage rename carries the gate forward instead of
+  breaking it. A widened guard is a weakened guard unless you say what it
+  still rejects, so a companion test pins the rejections — a typo'd stem, a
+  missing version, an unknown metric, a shadow tag — which is the assertion
+  that separates this from deleting the check. Checked rather than assumed
+  while writing this: the other `_version` caller,
+  `test_zero_delta_abstains_on_every_row_built_since_v7`, was NOT silently
+  exempting v13 — an unrecognised tag returns None and its `v is not None`
+  clause fails on it, so a violation would have been caught, just reported as
+  an unrecognised tag instead of as an abstention breach.
+
+- **Deleting controls as clutter.** The walk-forward Pythagorean control arm was
+  added, then removed in a UI declutter three commits later, leaving the
+  always-home F5 baseline in `ledger_report.txt` as the only control anywhere —
+  and none at all on the public page, which published `200-151 (.570)` with
+  nothing to read it against. Fixed by `_baseline_controls()`: always-home and
+  always-chalk, scored on the identical graded rows, muted tiles in the same
+  strip as the record. They are what makes the headline a result: at the time
+  of that fix the pooled line read .570 against .504 always-home and .563
+  always-chalk. Controls establish whether the model beats a trivial baseline;
+  if one is visually noisy, mute it or move it to the ledger as a column — do
+  not delete it.
+
+  Read those three numbers as of that commit, not as standing facts. **And do
+  not read the sentence this paragraph used to open with** — "the page scores
+  `RECORD_TAGS`, so the headline reset when v9 started a new family" — which
+  was wrong about the code when it was written and was verified so on
+  2026-08-06: `_record_grades()` then had *no production caller*, every public
+  surface rendered `_display_grades()`, and that is exactly why the front page
+  could publish `wOBA full 217-164` over 381 xwOBA games (see the metric-label
+  instance below).
+
+  **As of 2026-08-17 that sentence is true, and it is true because it was
+  made true rather than because it was right.** The record strip and the
+  grading-ledger header now score `RECORD_TAGS`, so a `MODEL_TAG` bump *does*
+  reset the public headline, and the page and `ledger_report.txt` answer the
+  same question over the same rows. Keep the history above: the lesson is not
+  "the page scores the current family" — it is that this file asserted so for
+  weeks while the code did the opposite, and the way that was caught was
+  reading `build_site.py`, not re-reading this paragraph.
+
+  Two consequences to hold onto, both deliberate:
+
+  * **An empty family publishes no record.** The surfaces do not fall back to
+    the pooled line — they say "no graded games yet under `<tag>`" and point
+    at the ledger. A silent fallback would be the `wOBA full 217-164`
+    substitution with the tag rather than the metric label as the lie, and
+    v11 is the proof it would fire: it shipped and was superseded without ever
+    grading a row. `RecordScopeTests` pins this.
+  * **The pooled surfaces stayed pooled, and say so** — true when written,
+    and no longer true of any surface. Per-club accuracy went with
+    `team-grades.html`, and the market verdict's context bucket was rescoped
+    to the current family (`hybrid_branch_records` → `_lean_market_observations`
+    → `_record_grades`). That left `_display_grades()` with **no production
+    caller**, and this bullet, plus two docstrings in `build_site.py`, went on
+    asserting it had one. All three are now corrected and the function is
+    deleted, alongside `_ledger_club_labels` and `_team_record_parts` — the
+    other two helpers the team-page deletion orphaned — and `opener_pids`, a
+    backward-compatible shim whose last caller was `opener_classifications`
+    itself. Measured before deleting: zero references in any `.py`, `.yml` or
+    `.html`; the two `opener_pids` tests were repointed rather than dropped,
+    and the suite holds at 1054 passed either side.
+
+    **This is the fifth instance of the same shape** — `_lock_provenance`,
+    `price_band_records`, the unrendered `price_dislocation` column, and
+    `interaction_probe`'s stale row selector are the others. The pattern is
+    always a deletion that removes call sites and leaves the callee, with a
+    note in this file describing the surface that used to read it. The cheap
+    detection is a whole-repo reference count per top-level function, not a
+    re-read of the prose.
+
+  The 45-37 (.549) / 42-40 / 49-33 line quoted here for 2026-08-02 was the
+  *report's* current-family line, not the page's — which at that date were
+  different numbers, and now would not be.
+
+  Controls, whatever the row set: the model ahead of the coin-flip control and
+  behind the closing line, on a sample far too small to separate them — which
+  is the controls doing their job. Do not quote a control figure from this
+  file; recompute it. Since 2026-08-06 they are scored on the **decided** rows,
+  not every graded one — see the abstention instance below.
+
+- **Twenty-one published cells collapsed to two, and the surface renamed to
+  the rule it actually publishes.** The site used to show a per-game 3×5
+  delta × price *profile* grid on the leans page and a 2×3 delta × direction
+  *discovery matrix* plus three direction totals on the calibration page — 21
+  cells over the same few hundred rows, several of them one game. All of them
+  are gone, replaced by the hybrid rule's two branches (`hybrid_action`,
+  `hybrid_selection`), and `team-grades.html` is deleted outright.
+
+  **The delta axis was the problem, not the cell counts.** Both grids bucketed
+  on |Δ|, which the published rule does not read at all and which
+  `value_probe`'s joint logit puts at z = −0.13 against price — adding it to
+  the close makes out-of-sample prediction *worse*. So 21 cells were cutting
+  the ledger on a null axis, and that is precisely the surface the same entry
+  warns about: on this data any grid search returns a cell near +20% ROI
+  whether or not anything is there, because at 21–82 rows a cell's null sd is
+  8–21 percentage points of ROI. Two branches at n=208 and n=15 cannot produce
+  that artifact the way fifteen cells at n=1 could.
+
+  **Three things the collapse forced, each worth keeping.** The family-wise bar
+  moved 2.7 → 2.2 (`_BRANCH_FAMILYWISE_Z`) because it is a property of how many
+  cells are published, not a constant — a bar sized for 15 draws is simply
+  wrong for 2, and leaving it would have been a stale constant of exactly the
+  kind recorded above. `_lean_market_agg` became column-parameterised so the
+  record, the rule's selection and both controls are **one** aggregate over
+  **one** row mask. And every control is now derived in
+  `_lean_market_observations` beside the record, which is what finally makes
+  "controls on the same rows" true by construction rather than by a `n=`
+  marker reconciling two derivations — the marker that went blind in the one
+  case it existed to catch.
+
+  **The load-bearing display fact, and the reason the control sits inside the
+  panel rather than under it: the FADE branch is always-chalk, exactly.**
+  Fading a lean priced below .45 backs a side priced above .55, which is the
+  favourite on every such game — verified 15 of 15, and `("chalk", "FADE")`
+  comes back *equal to* `("branch", "FADE")` on the committed ledger, which a
+  test now asserts as a construction rather than observes as a coincidence. A
+  reader shown 11-4 / +23.8% without that adjacency reads a chalk result as the
+  rule's own skill, in a window where chalk beat its price by +4.0pp.
+
+  **That adjacency has since been MOVED off the per-game card, on the
+  operator's call, and this paragraph no longer describes that surface.**
+  2026-09-15: the FADE card carried the chalk row and the identity clause
+  under a record identical to both — `13-4 (76.5%)` three times over. The row
+  went first as a literal duplicate, then the clause. What the card keeps is
+  the record and `within noise`, so the number is still not published as
+  reliable; what it loses is the attribution.
+
+  Read this as the entry's own remedy applied rather than as its violation —
+  `Deleting controls as clutter` says a noisy control is muted or **moved**,
+  never deleted, and `market-calibration.html` carries both halves together:
+  the `Always chalk · MARKET OVER LEAN rows only` row AND "the other side is
+  always the favourite, so the two are the same bet". That is more than the
+  card ever showed, on the page whose subject is controls. The test asserts
+  BOTH ends — absent from the card, present on the calibration page — because
+  a test that only checked the card would pass just as happily if the claim
+  vanished from the site entirely, which is the deletion this entry forbids.
+
+  The live exposure is worth stating plainly rather than arguing away: the
+  front page is where a casual reader meets the rule, and on a FADE game it
+  now shows a 76.5% record whose chalk-identity is one click away instead of
+  in place. If that reads wrong in practice, the fix is to restore the clause
+  — the control itself never left.
+
+  **`HYBRID_THRESHOLD` is imported from `hybrid_test`, never restated**, and a
+  test greps the source to forbid a second `= 0.45` assignment. Two copies of a
+  threshold is the "one value, three homes" defect one file out: the display
+  could then drift from the registration and publish a selection the forward
+  test would not score. Note the historical coincidence and do not read it as
+  evidence — `_CONVICTION_DEEP_OPPOSE` was *already* 0.45, so the hybrid's
+  threshold matches a boundary that was chosen for a display band before it was
+  chosen for a rule.
+
+  Every branch record these pages publish is a **discovery** figure and each
+  surface says so in its own copy (`NOT A FORWARD RESULT` on the card, a lead
+  sentence on the calibration panel, a note on the grades page), pointing at
+  `data/ledger_report.txt` for the registered out-of-sample version. That is
+  the whole reason the rule could be published at all: the site shows what the
+  rule selects, and `hybrid_test.py` — not the site — is what will eventually
+  say whether it works.
+
+  **`team-grades.html` went with them, and that is a deletion to justify rather
+  than assume.** It pooled every graded family because one family leaves most
+  clubs one or two games, so it was the last surface on the site answering a
+  different question over a different row set from everything beside it — and
+  club identity is not an input to the rule. It is NOT a control (the entry
+  below is about controls, and always-home and always-chalk both survive and
+  are now scored on stricter rows than before), and nothing else read
+  `_team_performance_rows`. Recoverable from git history if per-club accuracy
+  is ever wanted back.
+
+  **The front-page strip moved with them, and it had to.** It headlined the raw
+  lean (139-84, z +2.11) while the grades page one click away headlined the
+  rule's selection (146-77, z +2.72) — the artifacts-disagreeing entry below,
+  with *both* artifacts public and the reader able to see both. It now reads
+  the same aggregate, carries always-chalk beside it, and keeps the metric
+  label read off the rows: the existing provenance test caught the label being
+  dropped, which is the "wOBA full 217-164" guard doing exactly its job.
+
+  **Two follow-ups, both recorded because they are the shape of the mistake
+  rather than one-off copy edits.** First, the per-game panel led its history
+  block with `Selection won 73.3%` directly under tonight's two clubs. That is
+  the rate at which PAST picks in the same branch won, and this site publishes
+  no per-game probability at all — but placed there it reads as one, and the
+  line below it (`Market implied 58.6%`) sat two rows under the same game's own
+  `37.4% no-vig` with nothing saying the two percentages measure different
+  things. The panel is now split into a labelled `This game` zone and a
+  `Past V12 FADE picks · 15 completed games` zone, every history row is past
+  tense (`Won 11-4 (73.3%)`, `Their average price`, `Beat that price by`), and
+  the decision line carries a plain-English reason — on a FADE the selected
+  club otherwise appears nowhere else on the panel. **A number is not made
+  unambiguous by being correct; it is made unambiguous by what sits next to
+  it.** The same commit found adjacency alone had failed for the chalk control:
+  on FADE it is equal to the record above it *to the decimal*, so without a
+  clause saying why, a reader sees duplicated data or a bug rather than "this
+  branch has no model content". It now says so in words.
+
+  Second, the ledger table applied the rule to **every** family. `_row_hybrid`
+  is now gated on `RECORD_TAGS`: the rule is registered against the current
+  family, and applying it to an older one publishes a selection nobody could
+  have made — under lean math the rule was never paired with, and with a grade
+  the function then inverts. Earlier rows are marked `lean only`. The three
+  reasons the rule cannot act — out of family, no lean, no price — now carry
+  three distinct marks, because a lean sitting unlabelled under a "Selection"
+  heading is the substitution recorded further down this file. And the header
+  now accounts for **every** row of the family (223 decided of 244; 6 with no
+  lean, 15 pending), since a record quoted over 223 of 244 without saying where
+  the other 21 went invites the reader to assume the rule decided them all —
+  the same defect as a control whose denominator is never stated.
+
+  Display-only throughout: no lean, delta, grade or ledger row moves, and
+  `MODEL_TAG` is unchanged. What did change is which rows the published record
+  is scored on — current family, decided, settled AND priced — because the
+  rule needs a price to act, so a record over rows it could not have acted on
+  is not this rule's record. Where no row carries a price the surfaces fall
+  back to the model's own lean and **say which one they are showing**; the
+  controls survive that path too, since always-home needs no price.
+
+- **Threshold cliffs, third instance — a credibility label keyed on a row
+  count.** The per-game profile panel graded its own sample
+  `THIN / DEVELOPING / LARGER SAMPLE` at `n >= 10` and `n >= 20`. One completed
+  game moved a cell from DEVELOPING to LARGER SAMPLE with no change in what the
+  cell knew, and "LARGER SAMPLE" described an n=20 cell still carrying ±11pp —
+  the label was least accurate exactly where it sounded most confident.
+
+  Fixed the way the two below were: delete the tiers, and let the read move
+  with a continuous quantity — here the cell's own standard error. The bar is
+  the **family-wise** one (|z| ≥ 2.7 across the 15-cell grid), not 2 sd,
+  because a cell's excess is the largest of up to 15 draws and at 2 sd roughly
+  one cell clears it every build by chance. Measured on the live grid: 3 of 14
+  cells cleared 2.0, **none** cleared 2.7, and `value_probe`'s permutation put
+  the best cell at p = 0.20. A test pins that n crossing an old boundary with
+  the excess and se held fixed changes nothing.
+
+  The same commit gave the panel the **pooled current-family line** as its
+  reference. The cell's median SE is ~15pp; pooled over the same rows it is
+  ~3.6pp, so the reader's anchor had been the least measurable number on the
+  card with no way to see it was a slice of something better estimated. The
+  pooled figure is context and never an edge — `value_probe` measures that
+  same statistic flipping sign family to family (v7 −0.68, wOBA v5 −2.74,
+  v12 +1.98), which is why it prints its own spread too.
+
+  Display-only: no lean, delta, grade or ledger row moves.
+
+- **Threshold cliffs.** Two instances, same shape. The old
+  `use = fam if len(fam) >= 60 else pooled` scale selector switched
+  discontinuously and mixed incompatible units; `SCALE_TAGS` removed that
+  branch. Then `lean_strength_scale()` was found returning `None` below
+  `LEAN_STRENGTH_MIN = 30`, so the cutoffs swapped the frozen
+  `LEAN_STRENGTH_FALLBACK` for the pool's own p33/p80 in one step — worth up to
+  0.0096 on p80, relabelling every game in the crossed band with no change to
+  any lean. Fixed by deleting the gate and shrinking the observed quantiles
+  toward the prior by pool size, `c = (n·c_obs + K·c_prior)/(n + K)` — the
+  empirical-Bayes form already used for xwOBA, applied to a quantile. The
+  prior stops being a branch and becomes the `n = 0` limit of one expression.
+  **The general lesson:** when a selector has a hard `>= N`, the fix is usually
+  not a better `N` — it is to make `N` a weight so nothing switches. And pick
+  the weight by benchmark: the obvious `K = 30` (the old gate reinterpreted)
+  measured *worse than the gate* on label stability; `K = 100` cut the worst
+  single-row step 4.4× and landed nearer the population quantile.
+- **Public claims the data can't support.** `grades.html` asserted every row
+  locked before first pitch while `lock_status` was null on the pre-v3 rows.
+  Fixed by `_lock_provenance()`, which now states the split instead of the
+  whole — "*n* of *N* rows carry a pregame lock timestamp; 149 legacy rows
+  predate that instrumentation." Only the 149 is fixed; the verified count and
+  the total move with every build, so read them off the page or call
+  `_lock_provenance()` rather than quoting a pair from here. (A pair frozen
+  into this file on 2026-08-02 read 168 of 317 and was 277 of 426 four days
+  later — the constants-frozen-from-data entry above, in prose.)
+  Report provenance, don't assert coverage.
+  The same entry recurred one level down: `_lock_provenance()` counted the
+  unverified remainder *by subtraction* and the page labelled all of it
+  "legacy rows predate that instrumentation", which would have described a
+  `late_snapshot` row — instrumented and failed — as uninstrumented. Zero such
+  rows exist today, so it was a claim waiting to go wrong rather than a live
+  one. Now each outcome is counted from its own label. A count you derived by
+  subtracting cannot carry a name you did not measure.
+
+  Third instance, and the sharpest: the wOBA v1 commit replaced the literal
+  `"xwOBA"` with `MODEL_RATE_LABEL` on the record strip, the grades headline and
+  the team page. All three render `_display_grades()` — *every* graded family
+  pooled — so the front page published **`wOBA full 217-164 (.570)`** over 381
+  games of which exactly zero were wOBA; the first wOBA row had not graded yet.
+  The same substitution broke the vs-market cell: `vs_market_summary()` keys its
+  bucket off the rows (`"xwOBA"`), the caller looked it up under
+  `MODEL_RATE_LABEL` with an `or "Model"` fallback that only fires on *mixed*
+  metrics, so both missed and `z +1.09 (+3.14u)` — "the primary metrics" —
+  silently vanished from two pages instead of raising. Fixed in `2d369c4`
+  by `market_backfill.metric_label()`: one derivation, read off `model_metric` with
+  the tag prefix as the legacy fallback, used by both the bucket and every
+  lookup so a mismatch is now unrepresentable. A build-time constant must never
+  name historical rows — the metric is a property of the rows, and the tag flips
+  a slate before the first row under it grades.
+
+  Fourth instance, found by an end-to-end check on 2026-08-06 and fixed the
+  same day: **the grades page scored its baseline controls on every graded row
+  while scoring the model on the decided ones.** A control needs no lean to
+  score a game — always-home only reads the final score — so the moment v5's
+  first abstention grades, `Always home` covers one more game than the record
+  beside it, under a note reading "controls on the same graded rows". The `n=`
+  marker that exists to catch exactly this compared the control's `w + l`
+  against `len(g)`, the *graded* count, which is also inflated by the
+  abstention — so the one discrepancy it was written for is the one it cannot
+  see. Reproduced on a three-row frame (two decided, one abstained): the page
+  rendered `wOBA · full 1-1 (.500)` beside `Always home 2-1 (.667)`, no `n=`,
+  the control apparently beating the model on a game the model declined to
+  call. Fixed by deriving `decided = g[g["xw_lean"].notna()]` once and passing
+  it to the record, the controls and the marker alike, with the abstained count
+  stated on the Graded tile from `xw_lean.isna()` — measured, not subtracted,
+  per the instance above. Zero rows are affected today; v5 shipped the
+  mechanism that arms it. **A control is only a control if it is scored on the
+  rows the model was scored on — when a model gains the ability to abstain,
+  every baseline beside it inherits that filter.**
+- **The same entry, fourth instance, caused by a display change.** The site's
+  move to publish the hybrid rule left `ledger_report.txt` headlining the raw
+  lean — 139-84 in the report against 146-77 on the page it links to, the same
+  games, both called "the model's record". The display PR checked that the
+  strip and the grades page agreed with each other and stopped there; the
+  internal artifact was not in the diff and so was not in the check.
+
+  **The fix is to print both, not to pick a winner.** The lean line is the
+  control the hybrid line is read against, and always-chalk on the identical
+  rows is the control they both are; the report now carries all three plus a
+  `RETROSPECTIVE` marker pointing at the registered forward block further down
+  the same file. The arithmetic moved into `hybrid_test.apply_rule`, a pure
+  function with **no date filter**, so the retrospective and forward readings
+  cannot drift; the filter stays in `scored_rows` alone, because the whole
+  value of the registration is that its row set is decided in exactly one
+  place.
+
+  **The general lesson: when a display change alters what a published number
+  MEANS, the internal artifact is part of that change even when it is not in
+  the diff.** Grep for the other place the statistic is printed before opening
+  the PR, not after.
+
+- **Regrading the ledger under a derived rule — asked for, and correctly not
+  done.** The natural follow-up to publishing the hybrid is to write it back
+  into `data/mlb_lean_ledger.csv`. It is recorded here because the request is
+  reasonable and will recur.
+
+  `xw_full` is the LEAN's grade. Overwriting it under the hybrid would mutate
+  immutable graded rows; destroy the lean-alone control the hybrid is read
+  against, so the published comparison would become the rule against itself;
+  make v12's history incomparable with every other family's on a report whose
+  per-family lines exist precisely to be comparable; and silently change what
+  `bp_ablation` and the SP-vs-lineup weight fit are measuring, since both read
+  `xw_full` as a statement about the model's prediction rather than about a
+  betting rule layered on it.
+
+  Adding a *new* stored column was also rejected at the time, for a weaker but
+  sufficient reason: the hybrid grade is a deterministic function of `xw_lean`,
+  `home`, `close_p_home` and `xw_full`, all of which are write-once
+  (`attach_market` never revises a close it has already set). Storing it
+  creates a second home for a value that can then drift from its derivation —
+  the defect that put v10 math under a v9 tag. So the rule was a VIEW over the
+  ledger, derived at read time, and a test asserted no `hybrid*` column existed
+  in the artifact or in the writer's column lists.
+
+  **That second half was reversed by the v2 migration on 2026-09-11, and the
+  reason it had to be is worth more than the columns.** The derivation argument
+  is sound for the CLOSING basis and only for it: `close_p_home` is write-once
+  and still present at read time, so a closing-priced hybrid grade genuinely is
+  recomputable and nothing needs storing. The registered forward test does not
+  score that basis. It scores the PREGAME one — the decision and the price a
+  bettor could actually have taken — and those are **not** re-derivable at any
+  later read, because the no-lookahead invariant keeps market columns off
+  pending rows and a decision-time price that was never captured is simply
+  gone. A rule registered against an obtainable price therefore cannot be a
+  pure view; the capture is the evidence.
+
+  So the ledger now stores `hybrid_action`, `hybrid_selection`, `hybrid_p`,
+  `hybrid_ml` and `hybrid_full`, plus the archived `hybrid_v1_*` set, and
+  **no test forbids them** — a grep for one is the mistake this paragraph
+  exists to stop. The drift hazard the rejection named is real and is handled
+  rather than avoided: `hybrid_price_source` records per row which basis that
+  row's fields were captured on (`saved_pregame` or `closing`), so a mixed
+  population can be split instead of silently averaged, and the report prints
+  the split. **What did NOT change is the first half** — `xw_full` is still the
+  lean's grade and is still never overwritten, which is the part of this entry
+  that was load-bearing.
+
+- **Internal and public artifacts disagreeing.** `data/ledger_report.txt` once
+  said the current family had no graded games while the site published a pooled
+  record. Both now render from the same ledger through
+  `RECORD_TAGS` — the report shows the current family plus immutable per-family
+  history, the site shows the pooled headline. When you change one, change the
+  other or state in the PR why they should differ.
+
+## No-lookahead
+
+`.savant_cache/` is gitignored and keyed by slate date. Leaderboard state as of
+a past game is not recoverable, so historical rows cannot be re-derived from
+today's Savant pull — that is lookahead, not backfill. Pending rows never
+receive closing lines (`run_market_update.py` invariant). Do not relax either.
+
+The one Savant pull that is *not* slate-dependent is a **completed** season:
+2024's final line reads the same whenever it is fetched. `priors_snapshot.py`
+freezes those into `data/woba_priors_<season>.csv` plus the per-season pool
+centres in `data/woba_prior_centres.csv`, and the distinction is enforced
+rather than trusted — it refuses any season not strictly earlier than
+`build_site.SEASON`, and refuses to overwrite an existing season file without
+`--force`. Both refusals are load-bearing. A season file is **immutable**: a
+ledger row built against a prior has to stay reconcilable, and Savant does
+occasionally revise history. Rewrite one only to repair a known-bad file, and
+say so in the PR.
+
+Store the deviation, not the level. A rate is only comparable across seasons
+against the centre it was earned under, which is why the centres file exists
+and why `centred_history()` carries `theta_s − mu_s` rather than `theta_s`.
+Using a stored rate without its centre imports that season's run environment
+into today's prediction — the same error as freezing a constant off the ledger,
+one artifact out.
+
+## The metric shadow arm
+
+`shadow_metric.py` writes one extra dump per slate: the same games, built on
+whichever rate the primary build is **not**. It publishes nothing — no lean, no
+`index.html`, no ledger row — and its rows carry a `shadow_*` tag deliberately
+absent from `_RECORD_FAMILIES` and `_SCALE_FAMILIES`. **Never pool a shadow row
+into a record or a delta scale.** A test asserts the tag is in neither map.
+
+**It swapped sides at v11 and that is the point, not a complication.** Until
+v11 the primary ran wOBA and the arm ran xwOBA (`shadow_<date>_xw.csv`,
+`shadow_xw+plat_consol_v1`); since v11 the primary runs xwOBA and the arm runs
+wOBA (`shadow_<date>_woba.csv`, `shadow_woba+plat_consol_v1`). So *"the shadow
+dump"* names a **side of the comparison, not a statistic**, and the committed
+dumps hold both assignments. Anything reading them must key off `model_metric`
+— `shadow_report.dump_metric()` does, falling back to the filename suffix only
+for dumps written before that column existed, and `build_frame` assigns
+`net_w`/`net_x` by metric so `d_corr` means "xwOBA minus wOBA" on every slate
+either side of the changeover. Keying off primary-vs-shadow would silently flip
+the sign of half the sample.
+
+It exists because the wOBA-versus-xwOBA question **cannot be settled by
+comparing the two eras**, and the temptation to try is exactly what produced
+v11. The wOBA rows sit at 63-76 against always-home 84-55 while the xwOBA rows
+sat at 217-164 against 193-188; the v9/v10-versus-wOBA-v5 gap is z = +1.63.
+Real, and not evidence: the eras were *different games* — always-home ran .515
+over the xwOBA rows and .604 over the wOBA ones — and five things changed in
+six days, of which only wOBA v1+v2 isolates the metric, at n=16.
+
+**The arm has passed its own power gate, and the figures this file used to
+quote are five weeks stale.** It read "6 paired slates, 68 graded, d_corr
++0.008 with CI [-0.108, +0.128]" and projected 80% power on a 0.09 gap at ~18
+slates. As of 2026-09-17 it holds **40 paired slates and 517 graded games with
+both arms decided**, metrics correlating **+0.84** on net (not +0.91 — that was
+68 games), **93 of 517 leans flipped (18.0%)**, and **d_corr +0.0001 with CI
+[-0.047, +0.047]**. Recompute rather than quoting any of that; the point is the
+reading, which has changed category. The projection was met: the interval is
+now half-width 0.047, so **a 0.09 metric gap is excluded in both directions**.
+"It does not separate" is no longer a statement about an underpowered sample —
+on this criterion the two metrics are measurably close.
+
+**On the OTHER criterion they are not, and that is the part to carry forward.**
+Over those same 517 games the records read wOBA 286-231 (.553) against xwOBA
+307-210 (.594) — a 21-game gap on identical schedules, which this file has
+always read as the illusion pairing exists to remove. Paired properly it is not
+purely that. The arms disagree on 93 games and xwOBA takes **57 of them to
+wOBA's 36**, McNemar **z = +2.18, p = 0.029**. So `d_corr` reads +0.0001 while
+the sign criterion reads p = 0.029 on the same rows, and both are correct: a
+correlation is magnitude-weighted, while a lean is a SIGN and the record and
+every registered rule key off nothing else. **`shadow_report` reports only
+`d_corr`, so the arm has been under-reading its own sample** —
+`blend_probe.sign_contrast` is where the paired sign test lives until that is
+fixed. Two caveats and they are load-bearing: the sign criterion was reached by
+noticing the record gap rather than registered in advance, so its p carries a
+second look and lands near 0.06 corrected; and none of this retroactively makes
+v11 a finding — it was an operator decision taken with no such measurement on
+the table, and a result arriving afterwards does not convert it into one.
+
+So v11 reverted the metric **without** the arm having answered the question,
+and the arm keeps running so the question keeps accumulating a paired answer
+under the revert. Do not retire it because the primary is back on xwOBA — that
+is precisely when a one-sided read would look most convincing.
+
+Two things to know before touching it. It makes its **own** Savant fetch under
+its own `STATCAST_CACHE_NS`, because it requests a different column and reusing
+a cache written under another selection set returns a CSV missing the rate —
+`STATCAST_SELECTIONS` and the cache namespace are a pair and must move together.
+`patch()` now reads the primary column off `build_site` before overwriting it
+rather than naming it as a literal, which is what let the two arms swap without
+touching that function. And the dump is `shadow_*`, not `leans_*`, because
+`grade_leans` globs `leans_*_xw.csv`, which matches any leans-prefixed name
+ending `_xw.csv`: a suffix-based name would have been ledgered as a real
+pending row. That is a prefix decision, not a naming preference, and a test
+pins both halves — under both suffixes — against `grade_leans`' actual globs
+rather than a copy of them.
+
+**The arm paid for itself before v11 shipped, and this is the precedent to
+keep.** `xwoba` is now on the primary build's critical path. It is there safely
+only because the arm resolved the name against the live endpoint first: Savant
+is unreachable from the dev environment and from CI, so the selection name had
+never been confirmed until Actions run 31435698461 logged `shadow: rate column
+'xwoba' resolved on 20/20 players` and printed a distinct league baseline
+(xwOBA 0.31548 against wOBA 0.31628, same slate, same leaderboard) — proving
+the column exists and is not a relabelled copy. **Never put an unverified
+Savant column on the path that produces irreplaceable pregame rows.** Verify it
+on the shadow arm, where being wrong costs a log line, and promote it after.
+
+## Probes and standing monitors
+
+Before proposing an improvement, check whether an instrument for it already
+exists — several questions in this repo have been asked twice because the
+answer was sitting in a probe nobody ran. And before *deferring* one, leave an
+instrument behind: the expected-IP fix landed at its stated gate only because
+`actuals_backfill` printed its slope every build, and the same deferral without
+that line would still be waiting.
+
+**Standing monitors** print on every build and need no one to remember them.
+`ledger_report.txt` also prints each registration's RETROSPECTIVE reading over
+the current family beside its forward block — the rules can be computed over
+the rows that already exist, and that is where every frozen discovery constant
+came from. Two things keep that honest: each line comes from the registering
+module's own pure function, so it cannot drift from the forward block; and the
+row count is split at the registration date, because a retrospective over "all
+v12" is a MIXTURE of the rows a rule was found on and the rows that arrived
+after. **Watching a retrospective grow is not watching evidence accumulate.**
+`data/ledger_report.txt` carries the current-family record and F5, the |Δ|
+terciles, the fixed |Δ| bands and their crossing with the market's probability
+of the leaned side, the equal-count market calibration bands, the per-family
+and per-slate predicted-vs-actual, the component error
+(SP / BP / lineup each against its own realised phase), the IP calibration
+slope, the SP-vs-lineup coefficients and their symmetry contrast, and the five
+pre-registered forward tests (`forward_test.py`, `hybrid_test.py`,
+`delta_filter_test.py`, `abstain_test.py`, `dog_contrast_test.py` — the count
+read "two" beside a list of five until 2026-09-17, which is the same recount
+this file demands of the probe table below). The grades
+page carries the baseline controls and the lock provenance. Read these before
+writing a new probe.
+
+The equal-count band block is the ONE market surface not on the fixed
+`ODDS_LADDER`, and it does not replace it. The ladder is a-priori and its rungs
+mean the same thing on the per-game card, on `market-calibration.html` and in
+`_selection_price_matrix_lines`, which is why it is shared and why its labels
+must not move; what it is not is balanced, and on the current rows its coverage
+runs 11 to 510 sides, so its SE runs ~1.5 to ~13pp. The new block asks the same
+question on a partition that equalises n (~±3pp throughout) and states in its
+own copy that its labels are a property of the build and are comparable neither
+across builds nor with the ladder. **Do not "fix" the ladder by percentiling
+it**: the edges move — all 7 shifted, by up to 12 cents, between the first and
+second halves of one season — and because percentile edges are a function of
+the row set, four call sites reading different row sets would publish different
+prices under one label, which is the artifacts-disagreeing defect the shared
+ladder exists to prevent. Measured at the fix, neither partition detects
+anything (max |z| 1.07 fixed, 0.92 percentile), so the balance buys readability
+and not a finding. Scoped to the WHOLE ledger rather than `RECORD_TAGS`,
+because a realised rate against a devigged close is arithmetic on a box score
+and a price and does not know which model wrote the row; the pooling licence is
+printed, not assumed — and it is printed as a DERIVED verdict, so when the
+per-band max |z| lands above what a search that wide returns from noise the
+line says so rather than asserting "no sign".
+
+**Ledger-report field and price conventions.** Matchup-rate suffixes identify
+the pitching side faced: `mx_xwoba_away` is Home offense vs away pitching and
+pairs with `act_woba_home`; `mx_xwoba_home` is Away offense vs home pitching
+and pairs with `act_woba_away`. The `mx_xwoba_sp/bp_*`, `edge_xwoba_*`,
+`opp_xwoba_neutral/vs_sp/sd_*`, and pitch-mix matchup families follow that
+offense cross. Pitcher talent/workload fields do not: `starter_xwoba_*`,
+`bullpen_xwoba_*`, `expected_sp_ip_*`, `expected_sp_ip_raw_*`, and `act_sp_*`
+remain same-team paired. Never reverse suffixes wholesale and never rename the
+stored CSV schema to make the display convention look simpler.
+
+The report also names each test's price columns. Historical Hybrid and all
+registration retrospectives use closing prices; `forward_test` and the delta
+filter also use closes. The fixed |Δ| band block compares against the closing
+favourite; the magnitude × market grid beneath it uses saved `pregame_p_home`
+with no close fallback and therefore scores fewer rows, which is why each
+states its own denominator. The registered Hybrid, abstain-versus-fade, and dog
+sign-flip tests use saved pregame decisions, probabilities, and moneylines with
+no close fallback. Do not standardize these snapshots: identical selections
+and results can earn different units at different American-odds payouts. The
+registered pregame scorer excludes and counts malformed locked commitments;
+close-scored sections exclude missing `close_p_home` and their rule-specific
+inputs, while relying on the market join to supply the paired moneylines.
+
+**Probes run on demand.** Eighteen read committed artifacts and need no live
+API. The table below has NINETEEN rows and that is not a miscount: `tb_probe`
+appears in both lists, because it needs StatsAPI for its feature but runs off a
+pre-computed frame via `--tb-csv`. Say which set a count is over.
+All run anywhere with one qualification, stated in its own row:
+`hitter_level_probe` executes but cannot produce a reading without the
+collector's per-PA CSV. Recount this list when you add OR REMOVE a probe: the
+lead sentence read "seven" while the table beneath it already listed fifteen,
+and it read "nineteen/TWENTY" for the length of the commit that deleted
+`compare_v8_v9.py` without touching this paragraph. The count is the one thing
+here a reader cannot check without counting:
+
+| probe | question |
+|---|---|
+| `value_probe.py` | is there a tradable relationship between `xw_net` and price? (incl. band grids) |
+| `forward_test.py` | pre-registered fade rule, frozen 2026-08-29 (also prints every build) |
+| `hybrid_test.py` | retired v1 hybrid registration, frozen 2026-09-01; reads archived `hybrid_v1_*` saved-pregame decisions |
+| `hybrid_v2.py` | current hybrid rule, registered 2026-09-11; fade only at q < .45 AND |xw_net| < .012. A library, not a script — it has no `__main__`, and `build_site`/`grade_leans` print its reading into `ledger_report.txt` every build |
+| `delta_filter_test.py` | pre-registered |delta| conviction filter, frozen 2026-09-03; NEGATIVE prior (also prints every build) |
+| `abstain_test.py` | pre-registered abstain-vs-fade variant of the hybrid, frozen 2026-09-03 (also prints every build) |
+| `dog_contrast_test.py` | pre-registered underdog sign-flip contrast, frozen 2026-09-03; NOT independent of arm 2 (also prints every build) |
+| `hfa_probe.py` | does adding a home-field term to the lean improve it? (no) |
+| `lineup_window_probe.py` | is the negative lineup component slope an artifact of the SP/BP scoring window? (no) |
+| `hitter_level_probe.py` | does a hitter's predicted xwOBA predict his OWN plate appearances? (forward only; runs anywhere and reads the committed `hitters_*` frames, but scores nothing without the collector's per-PA CSV passed to `--pa` — that CSV needs `batter_id` from `lineup_window_collect.py`, and StatsAPI is unreachable from the dev environment, so the `lineup-window-collect` workflow is the only place it produces a reading) |
+| `lineup_agg_probe.py` | which composite of the nine hitters, if any — closes the weight family and the log-odds variant by arithmetic, then scores only what is left, paired against what ships |
+| `interaction_probe.py` | do single signals or other combiners beat `B·P/L`? |
+| `dispersion_probe.py` | does a concentrated lineup beat the mean it is averaged into? |
+| `bp_ablation.py` | does removing the bullpen term change any decision? |
+| `shadow_report.py` | what the paired metric arm can and cannot settle |
+| `reconstruct_v13.py` | writes the v13 starter-blend RECONSTRUCTION onto earlier-family ledger rows from the committed paired dumps. Additive columns only; refuses to write if a protected column moved, and appends without rewriting a byte of the existing file. Run once, not a re-runnable migration |
+| `blend_probe.py` | does a 50/50 wOBA+xwOBA blend beat either alone? Reconstructs a blended build exactly from the paired dumps (self-checked bitwise against each arm's published edge), and reports the sign criterion `shadow_report` omits |
+| `phase_benchmark_probe.py` | should each phase's ratio have its own peer benchmark? Closes the hitter half and the uniform-centre case by arithmetic, then decides the rest on the realised SP-minus-BP gap rather than on a correlation |
+| `tb_probe.py` | does 60-day team total-bases context add anything to the closing price, and anything on top of `\|xw_net\|`? Conditional logit, because the proposed median split has 80% power only against a 13.4pp gap. Needs StatsAPI for the feature, or a pre-computed frame via `--tb-csv` |
+
+Eight need a live API and therefore a GitHub runner — `espn_403_probe`,
+`matchup_form_probe`, `phase_actuals_probe`, `pitch_arsenal_probe`,
+`player_prior_probe`, `pythag_control_probe`, `reliever_shrink_probe`,
+`tb_probe`. Each has a workflow under `.github/workflows/` and each says so in
+its own header. Savant and StatsAPI are unreachable from the dev environment —
+the proxy answers 403 to CONNECT on `statsapi.mlb.com`, which is what the
+`--tb-csv` path exists for — so a probe that needs them cannot be smoke-tested
+locally; run the workflow.
+
+### Measured and rejected
+
+- **The 50/50 wOBA+xwOBA blend, and the identity that makes it unshippable.**
+  Proposed as a balance between surface results and contact quality: average
+  the two rates, and the lean reads neither pure luck nor pure expectation.
+  Measured 2026-09-17 by `blend_probe.py` over the 40 paired shadow slates
+  (517 graded games, all three arms decided). Not shipped, `MODEL_TAG`
+  unchanged, and the reason is arithmetic rather than a thin sample.
+
+  **The reconstruction is exact, which is what makes this cheap.** A blended
+  build is a deterministic function of the two committed dumps: shrinkage is
+  affine in the raw rate at the same `n` and `K`, lineup aggregation is a
+  weighted mean, and `sp_share` is a workload share that reads no rate (bitwise
+  equal across arms on every paired side-row). So blend-then-shrink and
+  shrink-then-blend agree identically, and only `matchup_value` — a ratio,
+  therefore bilinear — has to be recomputed from blended components rather than
+  averaged. The probe rebuilds each shipped arm's own published `edge_xwOBA`
+  from its own persisted components first and **refuses to report unless that
+  is exact**; it is, on all 2,226 side-rows. No Savant call, no rebuilt slate,
+  no lookahead.
+
+  **The whole measured gain is the noise-averaging identity.** For two
+  standardised predictors the equal-weight average correlates
+  `(r_w + r_x)/sqrt(2 + 2*rho)` with the outcome. The arms score +0.1541 and
+  +0.1542 and correlate +0.8396 on net, so the formula returns **+0.1607**; the
+  reconstructed blend scores **+0.1606**, a difference of 0.00009. That gain
+  would be there for ANY two predictors this correlated and this equally good
+  — it is a statement about `rho`, not about wOBA or xwOBA — and it is bounded
+  above by `1/sqrt((1+rho)/2)`, i.e. **+0.0066 on a correlation of 0.154**.
+
+  **So the effect is half its own measurement error, by construction.** Paired
+  bootstrap se is 0.0124 at n=517, so the CEILING is 0.53 se. This is not a
+  wait-and-see: separating the maximum possible effect from zero at 2 se needs
+  **~7,400 games, about 570 slates**. An instrument whose best case cannot
+  clear its own noise for three seasons is answering the question now.
+
+  **And on the criterion the site actually publishes it is behind.** `d_corr`
+  is magnitude-weighted; a lean is a SIGN, and the record and all five
+  registrations key off nothing else. McNemar over the games the arms call
+  differently: the blend goes **20/25 against the shipped xwOBA arm
+  (z = −0.75)** while going 32/16 against wOBA (z = +2.31). Its record is
+  302-215 where the shipped arm is 307-210. **The only criterion on which the
+  blend leads is the one the site does not use, and on that criterion the lead
+  is exactly the arithmetic above.**
+
+  **The distribution argument behind the proposal inverts once the baseline is
+  right.** The pitcher-level table offered with it reads sd .0292 (wOBA) →
+  .0269 (blend) as "compression of spread, softening luck-driven spikes" — true
+  against wOBA, and wOBA is not what ships. Against xwOBA's own .0267 the blend
+  is marginally WIDER, and its own numbers imply `rho ≈ 0.85`, which is the
+  same place the gain comes from. At the level that matters the sign is the
+  same: median `|net|` runs .01755 shipped → **.01833** blended, +4.4%, which
+  is a `_SCALE_FAMILIES` question and not a reduction in anything.
+
+  **The cost is the part no correlation could have paid for.** A rate change
+  bumps `MODEL_TAG`, and at the time of measuring that resets a **448-row
+  graded current-family line over 34 slates**, plus — via a new
+  `_SCALE_FAMILIES` entry, which the +4.4% median move argues for — **every
+  delta-gated registration's forward window**: `hybrid_v2` 74 rows,
+  `delta_filter_test` 179, `abstain_test` 179, `dog_contrast_test` 36,
+  `forward_test` 243. It also re-stales `LEAN_STRENGTH_FALLBACK`, re-derived
+  only two days earlier at n=519. Paying that for 45 flipped leans of 517
+  (8.7%) on a correlation gain that is provably an identity is the trade this
+  entry exists to refuse.
+
+  **One thing genuinely cuts the other way and is recorded because it does.**
+  The weight sweep's best RECORD is not at 0.5 but at λ=0.1 (310-207, .600
+  against the shipped 307-210), while the best CORRELATION is at 0.5. Two
+  criteria disagreeing about where the optimum sits, across a curve that moves
+  by three games, is what noise looks like — and picking either would be the
+  fitted-literal defect. `BLEND_LAMBDA` is fixed at the proposal's own 0.5 and
+  the sweep is printed as context registering nothing.
+
+- **Phase-matched peer benchmarks, and the correlation that preferred
+  deleting a real effect.** Proposed as a well-specification fix: give every
+  ratio in `matchup_value` the benchmark of its own population — a
+  starters-allowed centre for the SP phase, an available-bullpen centre for
+  the BP phase, and a lineup benchmark built the same way the lineup composite
+  is, platoon adjustment included. Measured 2026-09-16 by
+  `phase_benchmark_probe.py` over the 444 v12 rows. Not shipped, `MODEL_TAG`
+  unchanged, and the reason is the ground-truth measurement rather than the
+  correlation.
+
+  **Two premises had to be corrected first, and both change what is left to
+  fix.** The model does not shrink pitching toward "one general pitching
+  mean": relievers already shrink toward the relief pool's own unweighted
+  centre (wOBA v3's half that v11 retained) and starters shrink toward the
+  league BATTER centre. So the population-shrinkage proposal is already
+  shipped on the bullpen side. On the starter side it is measured and small —
+  `prior_population_centres` prints it every build, and on 2026-09-16 the
+  slate probables sat **−0.0016** from the shared target for a displacement of
+  **−0.0004** on a published starter rate (mean prior weight 0.258, because a
+  probable carries ~430 BF). Pooled across 33 slates of published values the
+  ledger reads the same gap at −0.0027. Against a median `|xw_net|` of 0.0181
+  there is nothing there to correct.
+
+  **What arithmetic closes.** *Peer-reporting only* — computing the separate
+  averages and displaying them — is a no-op on every lean by construction, so
+  it is not a variant. *The pitcher benchmark cancels out of `M` whenever the
+  phase's expected level equals what that phase's pitchers allow*, surviving
+  only in the baseline `edge` subtracts: phase matching is a re-centring, and
+  its whole content is that the two phases are centred in different places.
+  Give both phases ONE centre and `net` is multiplied by a positive constant —
+  the delta stretches, no sign flips, every correlation is unchanged. That is
+  a scale statement, not an identity, and the first draft of the test asserted
+  the identity and was falsified by its own frame. *The hitter half cannot
+  matter much*: the pitcher centres differ by 0.0156 and the hitter centres by
+  0.0016, ten times less. Measured, the hitter knob flips **0** leans at mean
+  `|Δ net|` 0.00032. The user-facing refinement is the smallest thing on the
+  table.
+
+  **The whole effect is the pitcher knob, and it points the right way without
+  separating**: 12 flips of 444, mean `|Δ net|` 0.00260, paired **d_corr
+  +0.0105 ± 0.0065 (z +1.62)** against a 3-comparison noise bar of 1.48.
+  Swept as a dial from shipped to fully matched, d_corr rises **monotonically**
+  and never separates at any point on it.
+
+  **The measurement that decides it is not a correlation.** The shipped form
+  predicts an SP-minus-BP phase gap of **+0.01730**, because the bullpen
+  composite is a usage-weighted aggregate of the arms a club actually uses and
+  sits 0.0183 below the league batter centre it is divided by. Full phase
+  matching predicts **+0.00001**. The ledger already holds the answer:
+  `act_sp_*` is the starter's allowed line and the team batting line minus it
+  is the bullpen's, so the realised gap is computable from committed rows with
+  no API call and no lookahead.
+
+  **This entry shipped with that measurement scoped to the current family, and
+  the scoping was wrong — the correction is recorded here rather than
+  overwritten, because the mistake is the reusable part.** `phase_lines` reads
+  box scores. The realised gap therefore does not know which model wrote the
+  row, and restricting it to `RECORD_TAGS` threw away 537 games for no reason.
+  At the family's own 429 games the read was **+0.01085 ± 0.00579, CI
+  [−0.00050, +0.02236]**, which contains the shipped +0.0173, and this file
+  said "the actuals do not separate them". Over **every** row — 1,923 sides /
+  966 games, pooling licensed because in-family minus out-of-family is
+  **+0.00759 ± 0.00783, z +0.97** — it reads **+0.00664 ± 0.00395, CI
+  [−0.00108, +0.01446]**, and the shipped +0.0173 is **OUTSIDE** it.
+
+  So the finding is not the null it was published as. **The shipped
+  construction overstates the phase gap by ~2.6x, and that overstatement is
+  rejected at 95% on the properly-powered row set.** What is NOT established is
+  the other end: zero is inside the interval too, so the data constrains the
+  true gap to roughly [0, +0.014] and rules out +0.017 — it does not say
+  relievers suppress nothing. The correlation column is unchanged and still
+  never separates (d_corr +0.0105 ± 0.0065), and the realised gap now implies
+  **λ = 0.686** against d_corr's preference for λ = 1.
+
+  **Two things not to take from the correction.** It does not make a fitted λ
+  shippable: a λ read off the ledger is the constants-frozen-from-data entry
+  with a fresh date, it would cost a `MODEL_TAG` bump and a reset record
+  family, and the decision-level effect still does not clear its own noise bar
+  (12 flips of 444). And it does not vindicate FULL phase matching, which sets
+  the gap to zero — a value the interval contains but does not prefer over
+  half the range above it. What it does is convert this from "measured and
+  rejected" to a **measured over-dispersion with a numeric gate**, the same
+  shape as the `expected_sp_ip` deferral: the instrument prints the interval
+  and the containment every run, and the question is worth reopening when the
+  CI's upper end falls below the shipped +0.0173 by a margin rather than by a
+  hair — roughly a doubling of the sample.
+
+  **The general lesson, which is why this stayed rather than being edited
+  away: a probe's row set is a parameter, and scoping it to the model's own
+  family is the intuitive default and was the wrong one here.** The predicted
+  gap is family-scoped because it is in the family's rate units; the realised
+  gap is not, because it is arithmetic on a box score. `load_all` and
+  `pooling_licence` now separate the two halves and print the licence instead
+  of assuming it. Note which way the error cut: the under-powered row set was
+  the one that exonerated the version already shipping.
+
+  A middle λ is exactly the fitted literal this file's constants entry
+  forbids, and it would buy a `MODEL_TAG` bump, a reset record family and a
+  fresh `_SCALE_FAMILIES` question for a change that moves 12 of 444 leans on
+  a statistic that never clears its own noise bar. Read the closure as the
+  durable part: *most of what looks like four preregistrable variants is one
+  predictor, and three of the four are answered on paper.*
+
+  **One live defect fell out of it and is fixed here.** The build log's
+  `pitchers:RP` row claimed in its comment to describe "the pool
+  `bullpen_xwoba_aggregate` actually shrinks -- not a proxy for it." It does
+  not: `relief_pitcher_ids` walks a club's ACTIVE ROSTER and additionally
+  requires `appearances > 0`, while the diagnostic walks the whole Savant
+  leaderboard, which carries the marginal arms no club rosters. On the
+  2026-09-16 build the two read **0.3250** and **0.3000** against a target of
+  0.31463 — same magnitude, **opposite sign**, so a reader answering exactly
+  the question above off that row would conclude the relief pool sits above
+  the league centre when the pool the model uses sits below it. The row is now
+  `pitchers:RP(leaderboard)` and the real target is on the line immediately
+  above it, where `relief_pool_prior` already logged it. Pinned by a test that
+  asserts the PROPERTY — a pitcher on no roster still appears, and the
+  function takes no roster argument — because pinning the spelling would pass
+  just as happily if a later rename kept the meaning wrong. Log-only; no lean,
+  delta, grade or ledger row moves.
+
+  **What none of this bears on: `K`.** Whether starters and relievers want
+  different `K` is a question about `sigma^2/tau^2` per population, which
+  needs per-player raw rates and sample sizes; the ledger stores shrunk
+  aggregates only, and `reliever_shrink_probe` fits a wOBA-denominated `K`
+  this build does not use. Unmeasured, as the model-versioning section already
+  records — not answered here in either direction.
+
+- **A sweep of every unused pregame column for a signal against price — 26
+  hypotheses, nothing above the noise floor.** Recorded so it is not re-run:
+  the answer is no, and the way to see that is the search correction, not any
+  individual number. Asked "are there unused signals that correspond with wins
+  or losses", measured 2026-09-15 over the 406 decidable v12 rows.
+
+  Two rules made it answerable. Every `act_*` column is a POST-GAME actual, so
+  using one is lookahead and all are excluded — the panel is strictly pregame.
+  And every candidate is scored **against price**, never on raw win rate:
+  `corr(|xw_net|, q) = +0.486`, so a raw rate mostly measures favourite-ness
+  (all-v12 `|d|>=.012` wins 65.1% against 55.5%, which is base rate, not edge).
+
+  Thirteen candidates, each oriented to the leaned side, tested by median split
+  and by joint logit `P(lean wins) ~ logit(q) + z(signal)`. Best by logit:
+  SP sample BF diff **+1.91**, F5-minus-full-market **+1.71**, `d_sp` **+1.45**,
+  own expected SP IP +1.17; `d_lineup` **−1.00**, line movement **−0.23**.
+  **Zero signals reached |z| > 2, against an expected max of ~2.26 from 13
+  independent nulls** — the best result in the panel is smaller than what a
+  search this wide typically returns from noise.
+
+  Three readings worth keeping. **Line movement toward the model's side is the
+  cleanest null**: it had a real prior (the classic CLV story) and came back
+  −0.23, if anything the wrong way. **`d_lineup` points negative in both
+  tests**, matching the component monitor and `interaction_probe`; still every
+  interval contains zero, so "not measurably contributing", not "inverted".
+  And **four of the thirteen were mislabelled as unused** — `d_sp`, `d_lineup`,
+  `expected_sp_ip` and SP phase share are model INPUTS, so a null on top of
+  price means already consumed, not uninformative. The genuinely unused ones
+  were line movement, F5 divergence, bullpen depth and fatigue, lineup
+  dispersion, savant backfill count and the platoon differential.
+
+  `expected_sp_ip` was then tested in **nine** forms on request — calibrated
+  and raw differentials, own and opposing starter, min, sum, and the v12
+  calibration's own correction (`calib − raw`). Max |z| = **1.18** against an
+  expected max of ~2.10; weaker than the main panel. Two by-products: the
+  calibrated and raw differentials are indistinguishable (+0.084 vs +0.084),
+  which is a free confirmation that the v12 fit compresses the estimate
+  without reordering it; and `calib − raw` scores −1.18, so the correction is
+  not itself predictive, which is what a variance fix should look like.
+
+  **The OPS arm is the one cut that looked alive and did not survive
+  conditioning.** `consensus` (AGREE/DIVERGE) is genuinely unread by the
+  shipped rule and had a real prior. Agreement runs **+9.9 ± 3.2 pp** against
+  divergence's +1.3 ± 5.7, contrast +8.6 ± 6.5, **z = +1.32** — and the
+  divergence half behaving as the story predicts is why it deserved a proper
+  test rather than dismissal. It fails three ways. Most of it is
+  *reliability*, not agreement: `ops_valid` alone splits +6.2 ± 5.8, while
+  `ops_delta` magnitude splits null at z = −0.47. The arms are not independent
+  — both read the same lineups and starters, agreeing on 75.9% of games by
+  construction. And in a joint logit with price and `|xw_net|`, `ops_delta`
+  enters **−0.174 ± 0.121**, the wrong sign for a confirmation story.
+
+  Raw `ops_delta` thresholds were then swept three ways and none helps.
+  Replacing `|xw_net|` with it in the gate tops out at +9.39% against shipped's
+  +11.41%. As a THIRD gate the optimal threshold is **inert** — best +11.41% at
+  `ops_delta < 0.17`, identical to shipped to the decimal, because p75 is 0.120
+  so that cutoff excludes nothing; across 39 thresholds the best the search can
+  do is switch the gate off. As a standalone abstention filter every threshold
+  underperforms betting all 406 (+8.30%), and the ordering is scatter —
+  6.30 / 3.21 / 5.86 / 5.55 / 7.58 / 1.29 / 4.12 — which is the tell. Note the
+  scales differ by ~4x (`ops_delta` median 0.0787 against `|xw_net|`'s 0.0182),
+  so no threshold transfers between them and each must be swept on its own.
+
+  One trap to avoid re-reading: the third-gate sweep prints P(null ≥ obs) =
+  0.0000, and that is NOT a passing search test for `ops_delta`. Every
+  candidate in it already contains the shipped `q` and `|Δ|` gates, so the
+  p-value measures whether the SHIPPED RULE beats chance, not whether the added
+  gate contributes. **A search whose candidate set contains the baseline cannot
+  test the increment.**
+
+  Diagnostic only; nothing shipped, no constant moved, `MODEL_TAG` unchanged.
+
+- **The lineup component's negative slope as a window artifact.** The component
+  block scores each term "against its own realised phase", and the SP/BP
+  boundary is endogenous to lineup quality — a strong lineup chases the starter
+  early and is scored over a short window, a weak one gets a long window with
+  third-time-through PAs in it. That is a good story for why the lineup slope
+  (-0.83 +/- 0.51, corr -0.066) disagrees in SIGN with the weight fit
+  (b_lineup +0.158 +/- 0.130, symmetry z = +0.37) on the same family.
+  Pre-registered in `docs/lineup_window_registration.md` before any output was
+  computed, with the falsifier stated numerically. **It failed at the
+  falsifier.** Conditioning on starter batters faced moves the slope from
+  -0.828 to **-0.829** — 100x short of the registered ~0.1 bar — and the SP
+  control does not move either (+0.606 -> +0.610). Full read in
+  `docs/lineup_window_findings.md`.
+
+  **The mechanism fails at its first link, and that is the reusable part.** An
+  added covariate can only move a coefficient to the extent it correlates with
+  the regressor, and `corr(predicted lineup, starter BF)` is **-0.045** over
+  598 side-games. Predicted lineup quality does not predict how long the
+  opposing starter lasts, so no conditioning on the boundary could have
+  rescued the slope whatever the residual did. **Check the covariate's
+  correlation with the regressor before running a conditioning test**: where it
+  is ~0 the test is answered in advance, and reading its null as evidence about
+  the outcome variable would be reading the wrong thing.
+
+  What is NOT established: that the lineup term is worthless. -0.83 +/- 0.51
+  and +0.158 +/- 0.130 both contain zero, and "contributing noise" is what
+  both are consistent with — the same reading `interaction_probe`'s v12 block
+  already carries. And the window question is not closed in general: a
+  fixed-window rescore (score the lineup over the first N batters faced
+  regardless of when the starter left) is a different measurement, and it is
+  **not computable from committed artifacts** — `act_sp_bf_<side>` is a
+  per-start COUNT, enough to condition on window length and not enough to
+  redefine it.
+
+  **The two halves of that rescore are blocked for different reasons, and the
+  batting order is not the missing piece.** The build DOES carry a
+  batting-order index — `hitter_rows` assigns it as `enumerate(lu, start=1)`
+  and `slot_pa_weights` is the v4 weighting — and then aggregates it away: the
+  dumps persist `opp_xwOBA_neutral`, `opp_xwOBA_sd` and `n_opp`, never a slot
+  or a per-hitter rate. So the PREDICTED half is blocked by aggregation only,
+  and 18 batters is the special case where it would be trivial in-build (two
+  turns through the order makes the slot weights uniform, so the fixed-window
+  prediction is the unweighted nine-hitter mean; it is NOT recoverable from a
+  dump, since weighted-minus-unweighted depends on the covariance of slot
+  weight with hitter rate). The ACTUAL half is blocked by the source and is
+  binding: a box score gives a whole-game total and a starter-allowed total,
+  neither a PREFIX of the game. Play-by-play ingestion is what settles it —
+  backfill, not lookahead, since a finished game's play-by-play is immutable
+  the same way its box score is — and is not proposed. **Persisting
+  `batting_order` would not make Task 3 computable**, which is the trap: the
+  available half is not the binding one. The conditioning is also descriptive rather than causal:
+  starter BF is a post-treatment outcome of the same game.
+
+  Diagnostic only; no lean, delta, grade or ledger row moves, so no
+  `MODEL_TAG` implication.
+
+- **Home-field in the lean.** The model's lean is `net = home_off - away_off`
+  with **no home-field term anywhere** — verified in the source, not recalled;
+  the `HFA=+0.177` in `ledger_report.txt` is a diagnostic F5 logit intercept
+  that never touches a lean. The market by contrast prices it exactly: over
+  766 home closes, 53.0% actual against 53.2% implied, and the model leans home
+  on 50.7% of 758 graded rows while home wins 53.2%. So the omission is real
+  and the natural proposal is to add the term. **Measured, it makes the lean
+  worse.** `hfa_probe.py` is the instrument.
+
+  Fitting `P(home) = σ(a + b·xw_net)` puts the correctly-centred decision
+  boundary at `xw_net = -a/b`, so the shift is `h = a/b`. Inside the current
+  scale family (n=320): `a = +0.156 ± 0.115` (z = +1.35, home-field present but
+  **not** significant), `b = +19.04 ± 4.75` (z = +4.01, the delta itself
+  clearly does predict), `h = +0.0082`, flipping 11.6% of leans.
+
+  Walk-forward over 253 rows / 19 slates, refitting `h` on prior slates only:
+  current lean 156-97 (+6.4 ± 3.1 vs price, ROI +8.7%) against the corrected
+  lean's 153-100 (+5.3 ± 3.1, ROI +6.3%). On the 25 flipped games the paired
+  delta is **−0.238u per flip, z = −0.62, CI [−0.98, +0.51]**. A fixed-h
+  holdout (fit on the first 160, scored on the last 160) agrees in sign and
+  magnitude at −0.223u per flip, so this is not the per-slate refit noise that
+  killed `forward_test`'s arm 1. Neither is significant; nothing here says the
+  correction hurts, only that there is no evidence it helps.
+
+  **Three things worth keeping.**
+
+  *The scale family is load-bearing and nearly produced a much bigger wrong
+  answer.* Fitting across every graded family gives `b = +6.56` and
+  `h = +0.0198` — flipping 25% of leans and pushing the home-lean share to
+  75.5% against a 53.2% home win rate. That fit pools incompatible `xw_net`
+  units, which attenuates `b`; and since `h = a/b`, an attenuated `b`
+  **inflates** the correction, here by 2.4x. `_SCALE_FAMILIES` exists for
+  exactly this, and a probe that ignored it would have reported a change
+  2.4x more consequential than the one that exists.
+
+  *`h` is not a constant.* Across the 19 walk-forward slates it ranged
+  −0.0104..+0.0114 (sd 0.0055) and **3 of 19 slates fitted a NEGATIVE h** —
+  16% of the time the data says correct toward the away side. A parameter that
+  changes sign is not a home-field advantage.
+
+  *Why it fails mechanically, which is the reusable part.* A constant shift
+  only changes the decision where `|xw_net| < |h|` — the model's **weakest**
+  leans. There it replaces a weak matchup read with "pick home", and home wins
+  only ~53%, while the current lean beats always-home by eight points
+  (61.7% against 53.8%). **Being blind to a factor is not the same as being
+  improved by adding it**: the delta is doing real work, and a constant
+  degrades the games where that work is thinnest. The market's home-field
+  content is worth having when PRICING a game, and the published hybrid rule
+  already consults the price — so it reaches the selection through the market,
+  where it is handled once. Adding it to the lean too double-counts it.
+
+  **Two predictions made before measuring were wrong, recorded because the
+  errors are the instructive part.** It was predicted that an HFA-aware lean
+  would "likely dissolve the fade branch": measured, fades go 15 → 13 of 223.
+  `h` is small relative to the price distance needed to cross the 45%
+  threshold, so the branch barely moves. And it was implied the correction
+  would obviously improve accuracy, on the reasoning that the model was
+  missing something real. It was missing something real, and adding it still
+  lost. Gate if anyone revisits: ~1,469 flipped games (~1,100 slates) to
+  separate a +0.10u/flip effect, so this cannot be settled by waiting.
+
+### Rules these have earned
+
+- **A delegated row selector pins you to the module you delegate to, not to
+  production.** `abstain_test` borrows `hybrid_test`'s follow/fade split so
+  the two can never disagree, and read that as agreement with what ships.
+  Those stopped being the same thing the day v2 shipped, and the borrow went
+  on working — 43% of the "games the shipped rule fades" are games it
+  follows. When you delegate a selector, say which module it tracks, and test
+  the delegation against a fixture that can REPRESENT the disagreement: the
+  three tests that pinned this borrow all passed, because the frame they used
+  carried none of the column the new gate reads.
+- **A derived verdict needs a rendering its own inputs can be told apart in.**
+  The pooling licence compared 2.038953 against 2.039334 and printed
+  "2.04 against 2.04 ... licensed". Two decimals is not a display choice when
+  the verdict is a comparison between the two numbers displayed; print the
+  margin, and give a tie its own branch.
+- **A probe's ROW SET is a parameter, and the family filter is not a safe
+  default.** A statistic computed from box scores does not depend on which
+  model wrote the row, so scoping it to `RECORD_TAGS` halves the sample for
+  nothing. The phase-gap read did exactly that and the wider row set
+  reversed its verdict — from "the actuals cannot separate them" to "the
+  shipped gap is rejected". Ask of every statistic whether the family is
+  part of its definition, and print the pooling licence rather than
+  assuming it.
+- **Ask what a change's effect is BOUNDED by before measuring whether it
+  helps.** An equal-weight average of two predictors correlating `rho` scores
+  `(r_1 + r_2)/sqrt(2+2*rho)` — an identity, so the blend's whole headroom over
+  the better arm is `1/sqrt((1+rho)/2)`. At `rho = 0.84` that is +0.0066 on a
+  correlation of 0.154, half the paired se at n=517 and three seasons from
+  resolvable. The ceiling was computable before any scoring and it, not the
+  sample, is what decides the question. Same shape as the phase-benchmark
+  closure: derive first, score only what is left.
+- **A gain that any two equally-good correlated predictors would show is not a
+  finding about these two.** The blend's +0.0064 matched its closed form to
+  0.00009. Before reading an improvement, ask what the number would have been
+  under no effect at all — the analogue of the null-maximum test for a search,
+  applied to a construction.
+- **`d_corr` is not the criterion this site publishes, and the two can
+  disagree sharply on one sample.** Over 517 paired games the metrics read
+  d_corr +0.0001 while the sign criterion read p = 0.029, because a
+  correlation is magnitude-weighted and a lean is a sign. Score a proposed
+  change on the criterion the artifact keys off — record, selection, units —
+  and report the other beside it rather than instead of it.
+- **A correlation cannot tell "removes a bias" from "removes a real effect".**
+  When a proposed change makes a directly observable prediction, measure that
+  first and let it decide. Phase matching scored d_corr +0.0105 (z +1.62) and
+  would have set the predicted SP-minus-BP gap to ~0 against a realised
+  +0.01085 — the correlation preferred deleting an effect the box scores say
+  is there. A scoring metric ranks; only the mechanism's own observable says
+  which direction is right.
+- **Ask what a variant list closes before you score it.** Four preregistered
+  variants of the phase-benchmark change were one predictor plus three
+  paper answers: peer-reporting-only cannot move a lean by construction, a
+  uniform centre only rescales the delta, and the hitter half has ten times
+  less room than the pitcher half and flipped nothing. Scoring all four would
+  have been a four-cell search over one effect.
+- **The null-max test is necessary and NOT sufficient; only a walk-forward
+  closes a threshold question.** Two variants cleared the search test and then
+  failed forward: the ROI-tuned cell (P = 0.0155, then +9.68% against shipped's
+  +10.09%) and the side-specific rule (**P = 0.0110 — a better nominal p-value
+  than the rule it would replace** — then +3.90%, worse than having no rule at
+  all). A *stable* argmax does not rescue it either: the tuned cell was picked
+  on 24 of 29 slates and still lost. Run both tests, in that order, and treat a
+  good p-value as permission to walk-forward rather than as a result.
+- **A search whose candidate set contains the baseline cannot test the
+  increment.** Sweeping a third gate on top of the shipped rule returns
+  P(null ≥ observed) = 0.0000 — which measures the shipped rule beating chance,
+  not the new gate contributing anything. Score the increment against the
+  baseline, never the combined rule against zero.
+- **Before believing a signal, count the hypotheses and compare against the
+  expected maximum, not against zero.** `sqrt(2·ln(k))` is the bar for `k`
+  independent nulls: ~2.10 at 9 tests, ~2.26 at 13, ~2.55 at 26. The 2026-09-15 unused-
+  signal sweep peaked at |z| = 1.91 across 26 tests, i.e. *below* what noise
+  typically returns, which is what makes "nothing here" a finding rather than a
+  failure to look hard enough.
+- **A deferred decision needs a numeric gate and a self-reporting instrument.**
+  Not one or the other. `expected_sp_ip` is the worked example: measured
+  over-dispersed, deliberately not fixed, gate set at ~600 side-games, slope
+  printed every build, fixed at the gate.
+- **Fix the test before the data exists.** `dispersion_probe` was written while
+  the column it reads had zero graded rows, so its cuts could not be chosen to
+  suit an outcome. A test written after seeing the data is a different and
+  weaker kind of evidence; if you add one later, say so in the output.
+- **Print the standard error; never suppress the number.** A statistic that is
+  unreadable at small n is a statistic to fix, not to gate — see the ratio
+  instance in the anti-patterns above. A hidden number invites someone to
+  recompute it without the caveat.
+- **Verify an unproven external input on a shadow arm before the critical
+  path.** The `xwoba` selection name reached the primary build only after the
+  arm resolved it against the live endpoint, where being wrong cost a log line
+  instead of a slate.
+- **A statistic far above its own printed bound is an instrument, not an
+  embarrassment — so print the ratio.** A ceiling exists to make a null
+  readable; a ceiling that is quietly violated makes a POSITIVE unreadable too,
+  and nothing was watching that direction. `hitter_level_probe` printed corr
+  +0.1128 against a ceiling of 0.0204 and the excess, once chased, named three
+  separate defects: a bound computed for the wrong predictor, an unweighted
+  variance fit, and a clustered SE carrying half the dependence. Same shape as
+  `an SE of zero is never a result` — an estimator saying it has nothing to
+  say, published as though it had.
+- **A clustered SE carries only the grouping you resampled.** Where the
+  dependences are CROSSED rather than nested — a hitter recurring across
+  lineups, nine hitters sharing a lineup — one-way clustering corrects one and
+  leaves the other, and the interval still reads decisive. Cameron-Gelbach-Miller
+  (`V_a + V_b − V_ab`) is three calls to the same resampler. Name the basis on
+  the line: a one-way fallback, a two-way estimate and a naive interval are
+  three different numbers and only one of them is the one you meant.
+- **Close what arithmetic closes before searching, and pair before you power
+  up.** Seven lineup composites "all inside one standard error" was a true
+  null over the least powerful statistic available: the variants share their
+  games and 99%+ of their spread, so the paired difference has a standard
+  error 26x smaller, and the family they belong to can be bounded on paper
+  before any of them is scored. A search over candidates a derivation could
+  have eliminated is how a repo ends up ranking noise — and comparing raw
+  correlations across predictors of different spread compares headroom, so
+  normalise by each one's own ceiling or do not rank at all.
+- **"Closed" and "indistinguishable" are different claims, and the tighter
+  your pairing the further apart they get.** The log-odds composite is the
+  linear one to three decimals AND separates from it at z = +2.20, because
+  pairing predictors that agree to 0.9996 leaves an interval below their
+  difference. Say which one you mean; a docstring that said the stronger thing
+  was falsified by its own module's first run.
+- **A probe that hardcodes a model constant goes stale and starts benchmarking
+  the model against an old copy of itself.** `interaction_probe` froze the IP
+  calibration slope at `0.756` and, once v12 shipped a per-build fit, would have
+  double-applied it. Read live values off the module.
+
+  **Second instance in the same file, through the row selector rather than a
+  number.** Its `__main__` listed two hardcoded blocks — `tags=(v9, v10)`, and
+  `metric="wOBA"` labelled **"(live)"**. The revert made both wrong at once:
+  the "live" block scored a lineage the build had stopped running at v11, and
+  v12 grew to 217 graded rows — the largest family in the ledger, and the one
+  actually shipping — without the probe ever scoring it. Nothing crashed and no
+  line was false on its face; the probe simply answered about a model that no
+  longer ran, which is why it survived two bumps. **A constant is not only a
+  number: the set of rows a probe reads is one too.** The current block now
+  derives from `build_site.RECORD_TAGS`, so a bump carries the probe forward
+  with no edit; the historical blocks stay pinned, because a frozen question
+  needs a frozen row set, and are labelled as history. Pinned by four tests
+  that assert the *rule* — the current family appears, only it is labelled
+  CURRENT, a historical block equal to it prints once, and no family tag
+  outside the historical list appears in the file — because pinning
+  `xw+plat_consol_v12` would reproduce the defect one file out.
+
+  The same commit fixed a `load()` docstring reading "no v12 row has graded
+  yet", which stayed there through 217 of them: the version-note-asserts-rows
+  failure recorded three times above, with the sign reversed. It now states
+  the rule (a column is absent on families older than the tag that introduced
+  it) rather than a count.
+
+  What the block was hiding is worth reading, not just the fix. On v12 the
+  shipped rule scores corr +0.167 against the realised wOBA differential, and
+  `signal: lineup only` scores **+0.017** with a paired d_corr CI of
+  [-0.287, -0.022]; the in-sample lineup weight is **-0.500 ± 0.975** beside
+  starter +0.562 and bullpen +1.104. That agrees with the component-error
+  monitor, where the lineup phase has run a negative slope against its own
+  realised rate for weeks (-0.86 → -0.78 → -0.63 as n grew to 434, corr
+  -0.050). Read it as "not measurably contributing", not as "inverted" — every
+  one of those intervals contains zero. It is un-acted-on and instrumented,
+  not a defect: `bp_ablation` covers the bullpen term and nothing covers this
+  one. The `q from calibrated IP` candidate also now reads d_corr
+  [-0.001, +0.000] on v12 rows, confirming on real rows what
+  `test_the_calibration_is_not_applied_twice_to_a_v12_row` pins on constructed
+  ones — after the bump that candidate IS the baseline.
+- **Say what a probe cannot answer.** `player_prior_probe` cannot count lean
+  flips; `shadow_report` cannot settle the metric from unpaired eras; the
+  dump-versus-ledger join is contaminated by the post-rollover rebuild. Each
+  says so in its own header, and those sentences are load-bearing.
+
+### Instrumented and waiting
+
+Do not re-derive these by hand; they have readouts.
+
+- **Lineup dispersion** — the headline slope prints in `ledger_report.txt`
+  every build once rows exist, marked UNDER-POWERED until ~347 side-games
+  (roughly 12 slates from 2026-08-15); `dispersion_probe.py` is the full read
+  and controls for the backfill count, the zero-backfill subset and the
+  game-level margin. A test pins the two together so they cannot drift into
+  disagreeing. The column ships on new rows only, and no row graded before it
+  existed can ever be backfilled — so the entry once read "zero rows today".
+
+  **The gate has since been crossed and the marker has dropped on its own,
+  which is the instrument working.** As of 2026-08-29 the report prints the
+  slope unmarked at n=367 side-games, and the first powered read is null:
+  `residual slope -0.29 +/- 0.65`, nowhere near separating from zero. Read the
+  current pair off `ledger_report.txt` rather than from here — the count moves
+  every build, and this is the one entry whose own threshold text has already
+  gone stale once.
+- **The v11/v12 scale-family share** — **settled 2026-08-29: the share
+  stands and the falsifier is closed.** Argued rather than measured at the
+  bump, because no-lookahead forbids rebuilding a past slate. Falsifier named in
+  `_SCALE_FAMILIES`: compare median `|xw_net|` on the first graded v11/v12 rows
+  against the v9/v10 pool and split the family if it moved. **First read, 15
+  graded v12 rows (v11 produced none — see above): median `|xw_net|` 0.01845
+  against the v9/v10 pool's 0.01853, difference −0.00009 with a bootstrap CI of
+  [−0.0081, +0.0183].** No sign of a shift, and read the CI before the point
+  estimate: its half-width is ±0.013 against a median of 0.018, so this can only
+  rule out a shift of roughly 70% or more. It is a check that the family is not
+  grossly wrong, not a confirmation that it is right. Re-read it at ~60 v12 rows
+  before treating the share as settled.
+
+  **Second read, 2026-08-17, 38 v12 rows (30 graded): median `|xw_net|` 0.01334
+  against the v9/v10 pool's 0.01859 over 99, difference −0.00526 with a
+  bootstrap CI of [−0.0117, +0.0002]** (graded-only: 0.01430 against 0.01853,
+  −0.00423, CI [−0.0116, +0.0007] — take the all-rows figure, `|xw_net|` is a
+  pregame quantity and gradedness is not a property of the scale). The point
+  estimate moved from −0.00009 to −0.0053 in one read and the CI now all but
+  excludes zero, which reads as the falsifier firing.
+
+  **Do not split the family on it. The falsifier as written cannot tell a units
+  change from a slate-composition change, and here the mechanism rules out the
+  units change.** v12's only difference from v10 is the IP calibration, measured
+  in `_SCALE_FAMILIES` at mean `|Δ net|` 0.00067 with a max of 0.00542 — the
+  observed gap is 8x the mean effect and larger than the largest single-row move
+  the change can produce. It cannot have caused this. What can: v12 holds 3
+  slates, and per-slate median `|xw_net|` *within* a single family moves about
+  this much on its own — sd 0.0027 across v10's 5 slates, 0.0039 across wOBA
+  v5's 9, range 0.0103–0.0184 across v12's own 3. The gap is roughly one to two
+  slate-sd on a three-slate sample.
+
+  So the ~60-row re-read stands, and it needs a better statistic than the one
+  named above: pool the slate medians rather than the rows, or size the gap
+  against the 0.00067 mechanism bound instead of against zero. A row-pooled
+  median over a handful of slates is measuring which games got played. Same
+  category as the constants entry — a number read off one distribution and
+  quoted against another — one level out into a test rather than a constant.
+
+  **Third read, 2026-08-29, at the gate: 196 v12 rows over 15 slates. The
+  falsifier does not fire, and the second read was slate composition exactly as
+  called above.** Row-pooled — the form the first two reads used, kept for
+  comparability — median `|xw_net|` 0.01774 against the v9/v10 pool's 0.01859
+  over 99, difference **−0.00085, CI [−0.0062, +0.0023]**. The point estimate
+  regressed from −0.0053 to −0.0009 on 5x the sample. The slate-pooled form
+  asked for above agrees: median of per-slate medians, 15 slates against 7, gap
+  **−0.00309 at 1.48 se, CI [−0.0063, +0.0021]**. Neither excludes zero and
+  neither excludes the 0.00067 mechanism bound.
+
+  **Do not re-read it again — it is not merely underpowered today, it is
+  underpowered by construction.** Between-slate sd of the per-slate median is
+  0.00457, **7x** the mean `|Δ net|` of 0.00067 the IP calibration can actually
+  produce, so telling the mechanism apart from slate noise needs ~730 slates per
+  arm — about 68 seasons. What the test does have power for is a gross units
+  shift: ~11 slates per arm at 0.00542, the largest single-row move the change
+  can make, and both arms clear that. It has now said the only thing it was ever
+  capable of saying, which is what closes it rather than what leaves it open.
+
+  **The reusable half is the shape of the mistake.** A two-family comparison
+  routes the question through the games that happened to get played, and the
+  noise that introduces swamped the effect by 7x — so the instrument could
+  produce a scary-looking read (the second one) without ever being able to
+  produce a decisive one. The direct paired measurement already in the v12
+  `_SCALE_FAMILIES` entry — rebuild the same 254 rows both ways, mean `|Δ net|`
+  0.00067 — answers it with no ledger accumulation and no slate-composition
+  term at all. **Prefer measuring a change against itself over measuring two
+  families against each other.** Where a falsifier needs an ever-growing sample
+  to say anything, check its power against the mechanism before banking on it.
+- **Whether the lineup term's fault is the RATE or the AGGREGATION** —
+  `hitter_frame.py` persists the per-hitter vector `aggregate_lineup` composites
+  and then discards, and `hitter_level_probe.py` scores it against the hitter's
+  own plate appearances from `lineup_window_collect.py`.
+
+  Why it exists: the team-level test cannot answer it. The composite's spread is
+  sd 0.0073 against a single-game actual of sd 0.0911, so an exactly correct
+  composite could only correlate ~0.08 — and the observed −0.066 with a 95% CI
+  of [−0.146, +0.014] already excludes that ceiling. Two hypotheses fit that
+  equally and imply opposite fixes: the per-hitter rate carries nothing, or the
+  rate is fine and the aggregation destroys it. Both are baked into the one
+  composite, so no statistic over team-game rows separates them.
+
+  **Do not reach for `XWOBA_SHRINK_K` as the fix.** For a lineup whose hitters
+  have equal PA the composite is
+  `(n/(n+k))·Σwᵢxᵢ + (k/(n+k))·p` — affine in the unshrunk weighted mean, so K
+  changes the composite's SPREAD (and the slope) and not its ORDER (and not the
+  correlation). Varying PA makes that only second-order untrue. What IS broken
+  is the correlation, so no K can fix it. Measured and also ruled out: Savant
+  backfilled hitters carry the team aggregate and sit at the mean by
+  construction, which would corrupt both — but only 23 of 598 side-games have
+  any, and the zero-backfill subset is slightly *worse* (corr −0.080 ± 0.042).
+
+  **"Varying PA makes that only second-order untrue" is false, measured
+  2026-09-16, and the premise is what falls rather than the conclusion.** The
+  equal-PA case is real algebra; the frames are not that case. Within-lineup PA
+  runs at a coefficient of variation near **0.44** (p90 0.68), and the
+  slot-weighted composites built from the raw and the shrunk rates correlate
+  **0.817** on the committed frames (Spearman 0.886) — not 1.0 to float
+  precision, which is what the affine premise would give. At the hitter level
+  it is worse: `corr(raw, shrunk) = 0.85`, and the two score +0.0840 and
+  +0.1128 against the same outcomes. So `K` moves the composite's ORDER, not
+  only its spread.
+
+  That does NOT make `K` the fix. Nothing measures whether a different `K`
+  correlates better, and no-lookahead forbids rebuilding a past slate to find
+  out, so the honest state is **reopened and unmeasured** — not "K would help".
+  The paragraph above stood for weeks as a closed door resting on a premise
+  nobody had checked against the frames, which is this file's own
+  `verify, don't recall` rule failing on its own text. `lineup_agg_probe`'s
+  `slot-weighted raw` row had been printing ρ = 0.786 against the shipped
+  composite since the panel landed; the refutation was already on the page and
+  was read as a variant score rather than as a premise check.
+
+  **Forward only, and that is structural rather than an oversight.** Rebuilding
+  a past slate's per-hitter frame needs that slate's Savant leaderboard, which
+  is exactly the lookahead `.savant_cache/` exists to forbid, so the 299 v12
+  games behind the current component block can never be scored this way. The
+  sample starts at zero, and it restarted once — see the post-hoc frame entry in
+  the anti-patterns: 79.3% of the frames written before that fix were themselves
+  post-hoc, so the probe's first published reading was contaminated and the
+  clean sample begins after it.
+
+  Read it against the probe's OWN team control, printed beside it, never against
+  `ledger_report.txt`'s component line — those are different row sets and they
+  have already disagreed in sign. Positive per-hitter beside a null control
+  implicates the aggregation; the two agreeing implicates the rate. The probe
+  prints the raw pre-shrinkage rate beside the shrunk one, which is the
+  comparison K cannot be tuned on at team level for the reason above, and the
+  SE it prints is clustered on `player_id` AND on the lineup, because the two
+  dependences are crossed: one hitter recurs across his games, and nine hitters
+  share a game and an opposing starter. Clustering on the player alone was the
+  first version and it is what let a correlation 5.5x its own ceiling print at
+  z = 2.74 — see the second reading below. The report names the basis it used
+  on every line, because a one-way fallback and a two-way estimate are not the
+  same interval and neither is the naive one.
+
+  **First clean reading, 2026-09-14: 252 hitter-games, 1002 scoring PAs, shrunk
+  corr +0.0841 ± 0.0727 clustered (z = +1.16), raw −0.0119 ± 0.0804.** Nothing
+  established, and recorded so a later reader can see the sample's origin rather
+  than a number. Note only that shrunk and raw SPLIT here, where the
+  contaminated sample had them nearly identical (+0.0499 against +0.0503) —
+  which is a reason to keep both columns, not a finding.
+
+  **Second reading, 2026-09-16, and what it actually produced was three
+  defects rather than a result.** 702 hitter-games over 338 players and 9
+  slates: shrunk corr **+0.1128 ± 0.0412** at an apparently decisive z = 2.74,
+  **against a ceiling the same run printed at 0.0204** — 5.5x its own bound.
+  The probe's text allows a real correlation to exceed the bound and cites 105%
+  as precedent. 553% is not that, and the excess was the instrument, not the
+  embarrassment: chased down it named all three.
+
+  * **The bound was for the wrong predictor.** `ceiling_and_gate` computed it
+    from the RAW rate while the report held it against the SHRUNK correlation,
+    on the affine claim the paragraph above now retracts. The bound is
+    `E[w]·τ²/(sd(P)·sd(A))` for the predictor actually scored; `E[w]` and `K`
+    are recovered from the frame's own two rate columns — `PA·(s−x)` regressed
+    on `[1, s]` returns `−K` and `K·t`, which reads 99.99 and 0.314657 at
+    R² 0.99999. Read off the DATA, never imported: a frame may have been
+    written under a different `K` than the build reading it, and `build_site`
+    refuses a non-xwOBA tag at import, so importing the constant would make the
+    probe unusable in the era where an old frame most needs reading.
+  * **The variance fit was unweighted.** `Var((x−μ)²) = 2(τ² + σ²/PA)²`, so a
+    low-PA row is not merely noisier but enormously more VARIABLE, and OLS —
+    which assumes it is not — hands the fit to it. PA runs down to 4 with 5% of
+    rows under 70. OLS returned τ = 0.0173 and σ = 0.487; IRLS at `1/fitted²`
+    returns τ = 0.0268 and σ = 0.363. A PA cutoff was the alternative and was
+    rejected as the threshold cliff this repo has removed four times. **IRLS is
+    a mitigation, not a cure**: a simulation with a model-violating low-PA tail
+    has OLS collapse τ to 0.000 and IRLS recover 0.0102 against a true 0.030 —
+    better, still biased low.
+  * **The clustering carried half the dependence.** The two groupings are
+    CROSSED — a hitter recurs across lineups, nine hitters share a lineup, a
+    game and an opposing starter — and only the first was resampled. Now
+    Cameron-Gelbach-Miller, `V = V_player + V_lineup − V_row`, falling back to
+    the wider one-way SE when the estimator goes negative and SAYING which
+    basis it used.
+
+  Together the bound moves **0.0204 → 0.0818** and the excess from 5.5x to
+  1.4x, which is the band the approximation allows. Do not read that as the
+  correlation being rescued: it was never established, and the interval it is
+  read against is now wider as well.
+
+  **The reusable half: an observed statistic far above its own printed bound is
+  an instrument, so the probe now prints the ratio and says loudly that the
+  bound or the interval is wrong.** A ceiling exists to make a null readable;
+  one that is quietly violated makes a POSITIVE unreadable too, and nothing was
+  watching that direction. Same shape as the `SE of zero is never a result`
+  entry — an estimator saying it has nothing to say, published as though it had.
+
+  Two things fell out that are worth their own line. `σ_fit` and `σ_obs` are
+  printed as a CHECK and the old copy implied they should AGREE; they should
+  not. The predictor is xwOBA and the measured σ is wOBA's, and xwOBA is near
+  enough wOBA's conditional expectation given batted-ball shape that by the law
+  of total variance its per-PA variance is strictly smaller — the same argument
+  this file already makes for `K`. **A fitted σ at or above the measured one is
+  the reading to distrust**, which is exactly what the unweighted fit produced.
+  And the fit now prints the calibrated `K* = σ²/τ²` beside the `K` recovered
+  from the frame, so the PA moderator's "K too small" reading is checkable
+  rather than rhetorical.
+
+  **Three things the team-level side has already ruled out, so the probe is not
+  chasing them.** The ceiling is arithmetic, not a fault: `d_lineup` has sd
+  0.0104 against a realised differential of sd 0.1349, so a ceiling of r = 0.077
+  — 1.5 se from zero at n=396, meaning that test cannot separate a PERFECT
+  composite from a worthless one and needs ~671 games to try (`d_sp` needs 69).
+  Per-side the ceiling is 0.079 against an observed −0.039 ± 0.036. The
+  compression is the nine-hitter mean and not a defect: within-lineup hitter sd
+  is 0.0234, divided by √9 is 0.0078, and the observed composite sd is 0.0072,
+  while a single starter carries 3.2× that spread — which is why the starter
+  term measures and the lineup term structurally cannot.
+
+  **The aggregation is not the culprit either**, measured on the committed
+  frames: seven variants over the same 210 side-games — slot-weighted shrunk
+  (shipped) +0.048, unweighted shrunk +0.047, PA-weighted raw +0.065, unweighted
+  raw +0.015, slot-weighted raw +0.021, top-4 slots +0.036, max hitter +0.056 —
+  all inside one standard error of ±0.070. Un-shrinking doubles the spread and
+  makes the correlation *worse*, so shrinkage is not eating the signal. And
+  averaging the per-game noise away does not rescue it: pooled by team over ~26
+  games each the ceiling rises to 0.37 and the correlation reads **−0.057 ±
+  0.192** across 30 teams, against the starter's +0.226.
+
+  Incidental, and worth a look if v4 is ever revisited: **slot weighting does
+  essentially nothing.** Leadoff carries 1.102 against 9th at 0.899, a 1.226:1
+  ratio with a within-lineup coefficient of variation of 0.069, and the
+  slot-weighted and unweighted composites correlate with the actual at +0.048
+  and +0.047. At n=210 that does not establish v4 was worthless; it is
+  consistent with this file's own note that two turns through the order makes
+  the weights near-uniform. Savant backfill is ruled out as a contaminant on
+  the current frames: 5 of 2,088 hitter rows (0.2%).
+
+  **Both of those paragraphs are a SEARCH, and `lineup_agg_probe.py` is what
+  replaces them.** "Seven variants, all inside one standard error of ±0.070"
+  is a true sentence and the wrong test: the variants share their games and
+  almost all of their spread, so the standalone correlation is the statistic
+  with the least power available, and comparing raw correlations across
+  composites of different spread compares HEADROOM rather than skill. The
+  paired difference against what ships is the statistic the question actually
+  asks for, and on the current frames its standard error is **26x smaller**
+  for family members — 0.0044 against a standalone 0.1155 over 78 sides.
+  The panel is built derivation-first for that reason: it closes what
+  arithmetic closes and measures only what is left.
+
+  **Closed by arithmetic, half one — the weight family.** Perturbing nine
+  weights at a coefficient of variation `c` moves a mean of nine rates whose
+  within-lineup spread is `s` by about `c·s/√9`. Measured on the committed
+  frames: `c` = 0.0692 (the slot weights' own), `s` = 0.0249, so the shift is
+  0.00057 against a composite spread of 0.00706 — and the two ends of the
+  family correlate **0.99879**. Every weighting in it is one predictor. What
+  that does NOT close is the difference in their correlations: correlation is
+  scale-free, so the 4.9% of spread a reweighting moves could in principle
+  carry the signal, and the worst case on |d_corr| is that same 0.049, the
+  size of the whole ceiling. Arithmetic narrows "which of seven" to "is the
+  moved sliver better aligned than the rest"; the paired column is what can
+  answer that, and it needs ~944 sides to.
+
+  **Closed by arithmetic, half two — the log-odds composite, and this is the
+  entry to read rather than the number.** Over the range these rates occupy
+  the logit is near-linear, so the logit composite and the linear one agree to
+  max |Δ| 0.00118 on a 0.00725 spread, pearson 0.99963. A draft of the
+  module's docstring wrote that up as "not a candidate, and no sample will
+  make it one." **The panel's own first run falsified it**: paired, the two
+  separate at +0.0047 ± 0.0021, z = +2.20 against a 7-comparison bar of 1.97.
+  Both statements are true and they are about different things — CLOSED means
+  closed as a candidate, because a change that size cannot be worth a
+  `MODEL_TAG` bump, and it does not mean indistinguishable. Pairing two
+  predictors that agree to 0.9996 leaves an interval far below their
+  difference. The claim went and the measurement stayed, and a test pins that
+  the retracted sentence does not come back.
+
+  **What the panel can already say, and it is not a null.** Every standalone
+  correlation on it is UNUSABLE at n=78 — se 0.1155 against ceilings of
+  0.08–0.21, so no row could reach |z| = 2 even if its composite were perfect,
+  and the panel prints that per row instead of an ordering. The paired column
+  is readable now for the variants that LEAVE the family by discarding
+  hitters: best bat −0.1835 ± 0.0613 (z −2.99) clears the bar, top-four slots
+  −0.0984 ± 0.0507 (z −1.94) does not. So discarding hitters is measurably
+  worse than averaging all nine, while reweighting them has little room to
+  matter however it lands. Recompute all of it; these move every slate.
+
+  **The per-hitter half is now derived rather than searched.** If a hitter's
+  rate predicts his own plate appearances with slope `β_i`, the linear
+  composite minimising squared error is `Σ w_i x_i` with `w_i ∝ E[PA_i]·β_i` —
+  algebra, not a hypothesis. The slot weights already estimate `E[PA_i]`, so
+  the one open term is whether `β` varies, and `hitter_level_probe`'s WEIGHTS
+  block fits it as an interaction (no median split, no cut point chosen by
+  looking) with the interval clustered on `player_id`. Its materiality bar is
+  derived rather than picked: `β` must vary by more than the slot weights' own
+  CV before re-weighting on it changes the composite more than the weighting
+  it would sit on. If that bar needs decades — and on the arithmetic above it
+  may — **that is the answer and not a reason to wait**, because a `β` varying
+  by less than 0.069 cannot move the composite further than the weight family
+  already spans.
+
+  **One trap inside that, and it is the reason the PA row is labelled.** On
+  the SHRUNK rate the slope is `β(PA) = (PA+K)/(PA+K*)` with `K* = σ²/τ²`, so
+  it is flat at 1 for every PA exactly when `K` is calibrated and tilts
+  otherwise. A material PA moderation is therefore a statement about `K`
+  BEFORE it is one about hitters, and the fix there is `K`, never the weights
+  — re-weighting on a `β` that is really an un-shrunk residual is a second,
+  worse copy of the shrinkage. This does not reopen the standing note above
+  that `K` cannot fix the lineup CORRELATION: shrinkage is affine, so it moves
+  the composite's spread and its slope and never its ORDER. The correlation
+  cannot depend on `K`; the weights read the slope, which can. Both sentences
+  are true and neither implies the other.
+
+  No live reading for the `β` half exists in this repo yet: it needs the
+  collector's per-PA rows, and StatsAPI is unreachable from the dev
+  environment, so the `lineup-window-collect` workflow is the only place it
+  produces one.
+
+- **The metric question** — the shadow arm, running wOBA under an xwOBA
+  primary. **The 18-slate power target has been met and passed: 40 paired
+  slates, 517 graded games.** On correlation the arms are indistinguishable and
+  a 0.09 gap is now excluded (d_corr +0.0001, CI [-0.047, +0.047]); on the sign
+  criterion xwOBA leads at p = 0.029, un-registered and therefore worth roughly
+  p = 0.06 corrected. What is still waiting is not power but a REGISTRATION:
+  the sign test was reached by looking, so the honest next step is to freeze it
+  and score forward, not to accumulate more of the sample it was found on. Read
+  both criteria off `shadow_report.py` and `blend_probe.py`, never from here.
+- **`LEAN_STRENGTH_FALLBACK`** — recompute from whatever `SCALE_TAGS` resolves
+  to rather than quoting any number in this file. Re-derived 2026-09-15 to
+  0.0120 / 0.0345 against an n=519 pool whose bootstrap CIs excluded the old
+  pair; see the anti-pattern entry for why that was a correction and not drift
+  chasing. **Nothing is waiting on this now** — the next `_SCALE_FAMILIES`
+  entry is the trigger, and a gap reopening against the live quantiles is not
+  one.
+
+## Before opening a PR
+
+```
+python validate_data_files.py     # CSV conflict markers — has failed twice in prod
+python -m pytest tests/ -q
+```
+
+`.github/workflows/tests.yml` now runs both on every pull request and every
+push to main, so this is a real gate rather than an honour system. Run it
+locally anyway when you touch `build_site.py`, `grade_leans.py`,
+`market_backfill.py` or `actuals_backfill.py`, and paste the output in the PR —
+CI tells you *that* something broke, the local run tells you before you push.
+
+`requirements.txt` still has no pytest, on purpose: the workflow installs it
+alongside, and the build job has no reason to carry a test dependency into
+production. Install it yourself to run the gate.
+
+The suite is **not** wired into `build.yml`, and that is a data-integrity
+decision. The build commits pregame snapshots, and the ledger only accepts a
+row whose snapshot predates first pitch — so a test failure blocking the daily
+build would cost that slate's rows permanently. They cannot be re-derived
+afterwards without lookahead. Tests gate the change; the build runs against a
+main branch the change already passed on.
+
+`tests/test_ledger_invariants.py` runs against the committed ledger rather than
+constructed frames: phase algebra (`mx = q·mx_sp + (1−q)·mx_bp`, shares summing
+to 1, one league baseline behind every phase edge), the PA-share weight against
+measured BF/IP, the v7 abstention rule, grades against the linescores beside
+them, and the no-lookahead invariant on pending rows. It asserts no counts or
+records — a violation there is a writer bug, not a stale expectation. Any new
+assertion added to it must hold that line.
+
+### Hybrid v2 selection namespace (2026-09-11)
+
+The live rule is `hybrid_v2.py`: fade the model only when the leaned side's
+saved no-vig probability is strictly below .45 **and** `abs(xw_net)` is
+strictly below .012; follow on either boundary and everywhere else. This is a
+selection-layer change, not prediction math, so it does not bump `MODEL_TAG`.
+`build_site.hybrid_action` is the production entry point and takes both inputs.
+
+The all-v12 v2 record is retrospective discovery, scored uniformly at closing
+prices. The registered forward v2 record starts strictly after 2026-09-11 and
+has no close fallback. Stored v2 fields retain the row's available basis:
+`saved_pregame` when captured, `closing` only for migrated legacy history, as
+recorded in `hybrid_price_source`. Never substitute one basis for the other.
+
+`hybrid_test.py` remains the frozen v1 registration. Migration advances the
+live `hybrid_*` namespace to v2 but copies deterministic v1 saved-pregame
+decisions into `hybrid_v1_*`; the v1 scorer projects those archive columns back
+into its original schema. Do not remove them or retag them as v2 evidence.
+
+**How to read the forward block, because its headline is mostly not the rule.**
+The registered v2 reading prints a combined hybrid line beside a plain-lean
+line and an always-chalk control, and at the first reads the combined line and
+the control post the SAME record — which is a coincidence of counts, not the
+same tickets. Decompose it before quoting it. At 40 eligible rows over 3
+slates (2026-09-15): hybrid 26-14 +5.69u, chalk 26-14 +3.29u, and splitting on
+whether the two name the same side gives **30 rows with an identical ticket
+(21-9, +4.43u, contributing all but +1.26u) and 10 where the model differs
+(hybrid 5-5 +1.26u against chalk 5-5 −1.14u)**. So three quarters of the
+headline is chalk the rule copied, and the rule's own content over the window
+is +2.40u on ten games. **And the fade gate — the entire difference between v1
+and v2 — has fired exactly once.** Its n=1 line reads +73.5% ROI; that is one
+game, not a rate.
+
+**The v2 forward block shipped without a registered headline or a gate, and
+that is fixed.** `hybrid_test`'s own docstring says the registered headline is
+the paired SWITCH DELTA and never the hybrid's ROI, because every followed row
+is the model untouched and a combined line can only restate what the model
+already does. v1 printed that headline and its GATE; **v2 — the rule actually
+in production — printed `combined hybrid` as its most prominent forward
+number and no gate at all.** `apply_rule` had been computing `switch_delta` the
+whole time; only the reporting was missing. The block now leads with it, states
+the favourite-by-construction check, and carries the gate (imported from v1
+rather than restated, with the note that v2 fades strictly less often and so
+reaches it more slowly).
+
+**The discovery reference added beside it caught its own defect on the first
+run, and that instance is worth more than the line.** `decidable` applies no
+tag filter — correctly, since its production caller hands it a family-scoped
+frame — so the obvious implementation, split the ledger at `REGISTERED_ON`,
+reached back through every earlier family. The `|xw_net| < .012` gate is
+denominated in the current delta scale, so that asks a different question of a
+different statistic on a wOBA-era row. Measured: the unscoped split read
+**+0.049u per switch over 44**, the family-scoped one **+0.679u over 16** — a
+reference 14x off, in the direction that FLATTERS a negative forward reading.
+The family is derived from the forward rows (current-family by construction)
+rather than imported or named, so no literal goes stale at the next bump, and
+no forward rows means no reference rather than a guessed one. **This is the
+scale-denomination entry above, reintroduced one function away from where it
+was written, within the hour.** A rule recorded is not a rule internalised;
+the thing that caught it was printing both numbers and noticing they disagreed.
+
+Do not quote those figures, recompute them: `hybrid_v2.scored_rows()` returns
+the frame, and `hybrid_p` against `chalk_p` is the ticket-agreement split. The
+gate is the same one v1 had and it is far away — read nothing until the fade
+branch alone has a sample, and note that v2 fades strictly less often than v1
+did, so it accrues one MORE slowly, not less.
+
+**The abstain decision is pre-committed, 2026-09-16, at n = 5.**
+`abstain_test.DECISION_*` freezes it: at `GATE_DECLINED` (82) declined games,
+RETIRE the q-gate fade branch unless `fade_minus_abstain` is strictly
+positive. (It read "the shipped fade branch" for one day; the correction is
+the entry below, and no frozen constant moved with it.) A point estimate with no significance requirement, and the asymmetry
+is deliberate — the prior is NULL, the two arms differ by 0.25pp
+retrospectively, fading pays vig and publishes an always-chalk ticket as a
+model selection while abstaining costs nothing, and this file's standing
+preference is subtractive. A branch must EARN its place, so under a null the
+simpler rule wins and the branch does not get the benefit of an interval
+spanning zero.
+
+Two things recorded with it. **A positive reading at the gate would mean the
+branch has not disqualified itself, not that it works** — 82 is sized for the
+DISCOVERY effect and a plausible +0.10u one needs 251. And **the live readings
+at the moment of freezing are written into the module**: forward −0.060u over
+n=5, retrospective −0.022u over n=34, against a discovery of +0.175u. Both
+negative. That is the disclosure that matters — the criterion was set to a bar
+the branch was already failing, in the direction the recommendation already
+favoured, stated in advance rather than discovered afterwards. `decision()`
+returns None below the gate so it cannot fire early, and nothing in shipping
+code consults it: it decides nothing, it records what the number was agreed to
+mean before anyone could see it.
+
+**And its subject is NOT the branch that ships — corrected 2026-09-17, one day
+after the freeze.** `abstain_test` declines the games `hybrid_test`'s selector
+fades, which is v1's unconditional `q < .45` gate. That WAS the shipped fade
+set when the module was registered on 2026-09-03 and stopped being it on
+2026-09-11, when v2 added `|xw_net| < .012` as a second condition. Measured on
+the committed ledger: the q-gate fades **37** of the 436 decidable
+current-family rows against the shipped rule's **21**, so **16 — 43% — are
+games the shipped rule FOLLOWS**, and forward the split is 2 of 5. Both forward
+cases are visible in the ledger rather than only by recomputation: 2026-09-08
+`pk 824714` and 2026-09-11 `pk 824631` carry `hybrid_action=FOLLOW` on LAA and
+PIT while this registration counts them as games the rule fades onto BOS and
+CHC.
+
+The selector is deliberately **not** re-pointed at v2: it is the registered
+rule's row selection and re-aiming it mid-registration restarts the test, which
+is the module's only property. So the q-gate set stays, every claim that it is
+the shipped fade set is corrected, and `declined_but_followed()` prints the
+split under the headline every build. What the criterion can retire is the
+q-gate fade — an implementable action, since v2's branch sits inside it — and
+what it cannot do is measure v2's branch, because the extra games are exactly
+the higher-conviction ones v2's delta gate was written to keep. A decision
+aimed at v2's branch needs its own registration.
+
+**Why it survived six days is the reusable half, and it is not "nobody
+looked".** Three tests asserted the borrow and all three passed, because the
+fixture behind them carried no `xw_net` — so every test of "the declined set
+is the hybrid's fade set" compared v1 against v1 and could not represent the
+disagreement. **A delegated row selector pins you to the module you delegate
+to, not to production**; when the thing you delegate to is superseded, the
+delegation keeps working and the claim about it quietly stops being true. The
+fixture now carries the column, and `DriftFromTheShippedRuleTests` asserts the
+property in both directions plus the unanswerable case. Same category as the
+`_record_grades()` note and the "a note on the grades page" that did not exist:
+prose in a docstring is not evidence about the code.
+
+**The per-game branch line publishes flat-stake units, reversing the
+2026-09-15 call.** `13-6 (68.4%) vs 58.0% priced` is now
+`13-6 (0.684) · +2.58u`. The old shape existed because a bare win rate is
+mostly base rate — chalk takes 76.5% of the FADE branch's games — so something
+had to keep the record price-relative, and the branch's mean implied price did
+that. Units do the same job better: a record settled at each row's own
+moneyline is priced in by construction, so 68.4% at short odds and at long odds
+are different numbers under units and the same number under `vs X% priced`.
+What is given up is stated on the surface rather than absorbed — the implied
+price no longer appears on the card, and it lives on `market-calibration.html`
+with the other controls, the same place the chalk-identity clause was moved to.
+`units` was already returned by `_lean_market_agg` for every bucket, scoped to
+the same mask as the record; it was a returned-and-unrendered key listed as
+`delegated`, and its test now requires it RENDERED. Units and not ROI, and the
+label says neither: ROI is a rate, units is a total, and `+1.57u` is
+unambiguous where `ROI +1.57u` would name one and show the other.
+
+**One card, two labels for one quantity — found by rendering both branches
+side by side, not by reading either function.** The FOLLOW intersection line
+read `ROI +4.69u` while the FADE branch line beside it read `+2.58u`. ROI is a
+RATE and units is a TOTAL, so the first named one quantity and showed another.
+It survived because the two lines were written on separate operator calls and
+neither was ever read beside the other — the "one value, three homes" defect in
+copy, the same class as the `MARKET FAVORITE` rename. Worse, the docstring
+defended it: "read the two as different surfaces on purpose, not as one
+drifting" is prose justifying an inconsistency rather than a design, and it is
+deleted rather than softened.
+
+Both card lines now read `W-L (0.xxx) · +N.NNu`. `ROI` survives only on the
+grades page, where it IS a rate and prints as `+11.4%`. Pinned by
+`test_card_units_are_never_labelled_roi`, which walks the RENDERED panel for
+both branches and forbids the word beside a unit suffix — a rule rather than
+the two instances, since pinning `ROI +4.69u` absent would pass just as happily
+if a third line reintroduced it somewhere else. The fixture asserts it reached
+a record line first, which is the trap the key-coverage test below fell into.
+
+**`within noise` is gone from the branch line too, on the operator's call, and
+the deletion it forced is the part to record.** The marker was the plain-English
+form of the error bar and had one production caller — so removing it orphaned
+`_branch_read` and `_BRANCH_FAMILYWISE_Z`, which are deleted with it rather than
+left behind. That is the sixth instance of the callee-outliving-its-call-site
+pattern this file tracks, and the first caught at the moment of the deletion
+instead of days later; the cheap detection is still a reference count, run
+before the edit rather than after.
+
+**Two comments were resting on the marker and are corrected rather than left to
+go quietly false.** `BRANCH_RECORD_MIN = 1` was justified by TWO reasons — that
+suppressing a number invites recomputation without the caveat, and that "a thin
+branch is self-describing, because `_branch_read` says 'within noise'". The
+second is void. The first stands on its own and is what keeps the floor at 1; a
+floor is emphatically NOT the answer to the marker's absence, since a hard
+`>= N` is the threshold cliff this repo has removed four times. The
+pooled-reference comment named the marker as the anchor that replaced it, and
+now names what actually remains.
+
+**What guards a thin branch now, stated plainly rather than argued away: less
+than before.** The card keeps its own `n` and the `not a prediction — and not a
+forward test` band; the error bar itself is on `market-calibration.html`, where
+`_lean_market_value_cell` renders the same `excess_se` as a `±`. That is the
+control MOVED rather than deleted, which is what `Deleting controls as clutter`
+requires — but the card is now the weaker of the two surfaces on reliability
+and the comment there says so. `excess`, `excess_se` and `implied` moved from
+`rendered` to `delegated` in the key-coverage test, verified against their real
+call sites rather than assumed.
+
+**The test that pinned the marker was restated, not deleted, and that is the
+reusable half.** `test_a_thin_branch_is_marked_thin_on_its_own_row` asserted the
+marker in both directions. Had it simply been removed with its subject, nothing
+would then have stopped a later trim taking the `n` and the discovery band as
+well — the exact deletion the test existed to prevent, arrived at one step
+later. It now pins the guards that survive and asserts the marker is gone
+rather than reworded.
+
+**The per-game card lost its discovery band too, and with it the third guard
+in one day.** On the operator's call. The sequence on the FADE block, all
+2026-09-16: the pooled reference ROW, then the `within noise` marker that had
+replaced it, then `not a prediction — and not a forward test`. Each removal was
+defensible on its own and the cumulative result is worth stating rather than
+filing as tidy-up: **the branch whose gates were fitted on exactly those 19 rows
+is now the one surface showing their record with no framing at all** — a
+record, its units, and the sample count in the heading.
+
+**"Moved, not deleted" was checked here, not asserted, and the check is the
+entry.** This file once carried an assurance that "each surface says so in its
+own copy (… a note on the grades page)" when there was no such note — the
+most-prominent copy of the number carrying the least framing. So the two
+remaining carriers were read out of the source before the band came off:
+grades.html's `<b>Discovery</b>, not a forward test: the 45% price and .012 |Δ|
+gates were chosen after examining these rows`, and market-calibration.html's
+`<b>Retrospective</b>: both v2 gates were chosen after examining these rows`.
+`test_the_discovery_claim_survives_off_the_card` pins BOTH — a test naming one
+page would pass while the other dropped it — and additionally pins that the
+card is no longer counted as a carrier.
+
+A stale comment came with it. The grades-page note explained itself as covering
+"the majority branch", because FOLLOW had lost its caveat to
+`_xwoba_side_history` while FADE still had one. It now covers every branch, so
+the comment says that instead of describing a card state that no longer exists.
+
+And `test_a_thin_branch_…` has now been restated **twice** as its subject was
+removed underneath it — pooled row, then marker, then band. That is the reason
+to keep restating rather than deleting it alongside each cut: what it pins
+narrows each time to the guards that actually survive, so the last one cannot
+leave silently. Today that is the heading's `n`.
+
+**`Won (at under 45%)` was a qualifier that could not take another value, and
+the machinery behind it was unreachable.** Flagged by the operator as confusing;
+it was worse than confusing. `_branch_history` returns to `_xwoba_side_history`
+for FOLLOW on its second line, so everything below is FADE-only — and FADE
+fires only when the leaned side is priced below `THRESHOLD`, which is exactly
+the first price band. So every fade row landed in that band, the band's record
+was **bit-identical to the branch's** (verified on the committed ledger: n=19,
+every key equal), and the label could never read anything else. Same class as
+the calibration tile that read `50.0% vs 50.0% implied` forever: a value fixed
+by the partition rather than by the data. It also printed a second, unexplained
+`45%` one line under the rule's own `market gives ATL under 45%`, which is what
+made it read as confusing rather than merely redundant.
+
+Three things went with it, and the second is the one worth the entry:
+
+  * **An unreachable ternary.** `history_branch = "model-side" if action ==
+    "FOLLOW" else "market-side"` sat below the early return, so its first arm
+    could never be taken.
+  * **Eight aggregates computed and rendered nowhere.** `("band", "FOLLOW", …)`
+    and `("bandchalk", "FOLLOW", …)` — four price bands and their chalk
+    controls — were built every call by `hybrid_branch_records` and read only
+    at the two FADE-only sites. FOLLOW bands on delta × moneyline in
+    `_xwoba_side_history` instead, so they had no consumer and never would.
+    That is the `column carried to no surface` entry, eight columns at once,
+    and it survived because the renderer that would have shown them returns
+    before reaching them. **A returned-and-unrendered key is easy to spot; an
+    unrendered key whose renderer is unreachable is not.**
+  * **`_BRANCH_PRICE_BANDS` itself**, with nothing left reading it.
+
+The record row now matches `_xwoba_side_history`'s label — `Past results` —
+since both lines describe the same kind of thing and there is no longer a row
+set to disambiguate. That immediately duplicated the phrase, because the
+discovery band above it led with `Past results, not a prediction …`; the band
+keeps the claim and drops the words the row now carries. Pinned by
+`test_the_fade_record_carries_no_price_band_qualifier`, which asserts the
+PROPERTY across prices spanning the old band edges and that the phrase appears
+exactly once — so reintroducing a selector that happens to pick the same band
+on one fixture would still fail.
+
+**The general lesson, and it is the session's third instance: the defect was
+visible only when two surfaces were put on one page.** Reading
+`_xwoba_side_history` alone shows a label and a value that each look right.
+Neither function is wrong in isolation. What was wrong was the pair, and no
+amount of re-reading either one would have surfaced it.
+
+**Two tests were found asserting nothing while the shape changed under them.**
+`test_verdict_panel_leaves_no_computed_key_unrendered` passed a FOLLOW branch
+at |Δ| .02, which routes to the delta-by-price intersection history and renders
+NOTHING from `parts` — so its `assertNotIn` was true of a panel that printed no
+record at all, and it went unnoticed until a POSITIVE assertion was added and
+failed. An absence claim needs a fixture where presence was possible; the
+fixture moved to the FADE branch and now asserts it reached the branch line
+first. And `test_the_panel_never_presents_history_as_this_games_chances`
+required two percentages to be distinctly labelled; there is now only one, so
+the claim is restated as a COUNT of percentages on the panel rather than as a
+pair of substrings — a second one reappearing anywhere fails there instead of
+silently recreating the ambiguity.
+
+Display and registration-bookkeeping only: no lean, delta, grade or ledger row
+moves, no registered constant changes, `MODEL_TAG` unchanged.
+
+Do not commit routine bot-generated `data/` changes by hand. A deliberate,
+reviewed schema/rule migration such as `migrate_hybrid_v2.py` is the exception.
+Do not commit `public/`.
+
+## Load-bearing, change with care
+
+- `concurrency: site-build` with `cancel-in-progress: false` — serializes
+  ledger commits. Removing it interleaves writes.
+- Build exits non-zero without writing `index.html` on fetch failure, so the
+  last good page stays live. Preserve that ordering.
+- `timeout-minutes` on both jobs — an upstream API hang otherwise burns minutes.
+- Score verification in `attach_market` — it correctly rejected the All-Star
+  Game join. Do not loosen to raise the match rate.
+- `commit_data.py`'s fallback to `git push`. `data/` lands through the GraphQL
+  `createCommitOnBranch` mutation so GitHub signs the commit and it shows
+  Verified — a runner holds no key, so a pushed commit never can. The API path
+  is the newer one, and a pregame slate that fails to land cannot be
+  re-derived without lookahead, so any failure falls back to the old
+  commit/rebase/push sequence with a workflow warning: an unverified commit
+  costs provenance, a dropped slate costs rows. Keep the fallback, and keep
+  `expectedHeadOid` refusing rather than overwriting when an intervening
+  commit wrote one of the files being sent — that refusal is the old
+  `git pull --rebase` conflict stop, which the API path would otherwise lose.
+  Commits made with `GITHUB_TOKEN` do not retrigger workflows whether pushed
+  or created through the API, so the no-recursion property is unchanged.
