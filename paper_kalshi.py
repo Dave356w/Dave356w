@@ -389,7 +389,8 @@ def run(args, session=None, now=None):
                   "Public upstream request failed: " + type(exc).__name__)
         return
     fee_type = series.get("fee_type", "")
-    multiplier = dec(series.get("fee_multiplier")) if fee_type == "quadratic" else None
+    multiplier = (dec(series.get("fee_multiplier")) if fee_type in
+                  {"quadratic", "quadratic_with_maker_fees"} else None)
     status = {str(g["gamePk"]): g for day in schedule.get("dates", [])
               for g in day.get("games", [])}
     existing = {"fixtures": games, "positions": {p["game_pk"] for p in positions},
@@ -404,7 +405,9 @@ def run(args, session=None, now=None):
             existing["positions"].add(game["game_pk"])
     write_csv(quotes_file, observations)
     write_csv(positions_file, positions)
-    summarize(observations, positions, root/"report.txt", now)
+    summarize(observations, positions, root/"report.txt", now,
+              "Kalshi series fee_type=" + str(fee_type) +
+              ", fee_multiplier=" + str(series.get("fee_multiplier")))
 
 
 def main():
