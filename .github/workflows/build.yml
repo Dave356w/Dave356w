@@ -245,5 +245,5 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
-          python commit_data.py --branch main --path data/paper_kalshi \\
+          python commit_data.py --branch main --path data/paper_kalshi \
             --no-fallback --message "kalshi paper $(date -u +%FT%H:%MZ)"
