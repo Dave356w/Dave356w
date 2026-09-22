@@ -304,6 +304,7 @@ def run(cfg, client=None, now=None):
     date = cfg.date or now.astimezone(ET).strftime("%Y-%m-%d")
     games = [] if cfg.settle_only else model_games(data / f"leans_{date}_xw.csv")
     if games:
+        data_unavailable = False
         try:
             schedule = client.schedule(date)
             series = client.kalshi("/series/KXMLBGAME").get("series", {})
@@ -315,11 +316,13 @@ def run(cfg, client=None, now=None):
             markets = client.markets()
         except (requests.RequestException, ValueError, KeyError, RuntimeError) as exc:
             print(f"Read-only data unavailable: {type(exc).__name__}: {exc}")
+            data_unavailable = True
             schedule, markets, mult, source = {}, [], Decimal(1), "unavailable"
         exposure = sum((Decimal(t["ask"]) * Decimal(t["qty"]) + Decimal(t["fee"])
                         for t in trades if t["status"] == "open"), Decimal(0))
         for g in games:
-            reason = pregame(g, schedule.get(g["pk"]), now, cfg.cutoff_seconds)
+            reason = ("market_data_unavailable" if data_unavailable else
+                      pregame(g, schedule.get(g["pk"]), now, cfg.cutoff_seconds))
             ticker, savings, status = "", None, "skip"
             if not reason and not markets:
                 reason = "market_data_unavailable"
