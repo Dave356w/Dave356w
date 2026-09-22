@@ -4699,12 +4699,11 @@ def _xwoba_side_history(ctx, selection_ml=None):
     )
 
 def _branch_history(ctx, action, p_lean=None, selection_ml=None):
-    """Return the model's record against the posted price, or nothing.
+    """Render clearly labelled historical closing-price context, or nothing.
 
-    `delta` left this signature with the cells that read it: the panel is a
-    pooled margin now and takes no per-game bucket, so carrying the argument
-    would be a parameter nothing reads -- the same smell one level down from
-    a column carried to no surface.
+    The retired per-game delta/price cells are intentionally absent: this
+    panel shows native V13 and separately labelled mixed-basis aggregates.
+    The preserved optional arguments maintain caller compatibility.
     """
     if not action:
         return ""
@@ -4715,8 +4714,8 @@ def _verdict_html(fav, odds, away_abbr, home_abbr, ctx=None, delta=None):
     """Per-game panel: model side, current market hurdle, descriptive history.
 
     v13 chooses the side from model inputs alone. The market supplies the
-    current price and no-vig benchmark; historical delta/price buckets are
-    context, not a calibrated probability for tonight's game.
+    current price and no-vig benchmark; native and mixed historical aggregates
+    are context, not calibrated probabilities for tonight's game.
     """
     ctx = ctx or {}
     if fav is None:
@@ -7389,9 +7388,12 @@ def _baseline_controls(g):
 
 
 def hybrid_branch_records():
-    """Current-family records the per-game card reads, keyed by cell.
+    """Current-family closing-price history for the per-game card.
 
-    Keys: ``"pooled"`` for the whole family and ``"n"``. Scored on
+    Keys: ``"n"`` total decidable V13-represented rows, ``"pooled"`` for
+    the mixed-basis family diagnostic, ``"reconstructed_n"`` for older-family
+    redecisions, and ``"native"`` for original-model-tag pregame results.
+    Scored on
     `_record_grades`, because pooling older prediction math would answer a
     different question. The three delta x price cell keys went on
     2026-09-22 with the panel that read them -- see the comment below for
@@ -7456,22 +7458,27 @@ def hybrid_branch_records():
     # prediction columns on a copy. The native sample is only rows actually
     # published pregame by the active model. Never promote a reconstruction
     # into the card's prospective record.
-    native_mask = led.loc[obs.index, "model_tag"].astype(str).eq(MODEL_TAG)
-    native_obs = obs.loc[native_mask]
-    out["reconstructed_n"] = int(len(obs) - len(native_obs))
-    if not native_obs.empty:
-        native_summary = _lean_market_agg(
-            native_obs, native_obs["won"].notna())
-        if native_summary:
-            native_be = float(np.mean(
-                _mb_breakeven_prob(native_obs["close_ml"])))
-            out["native"] = {
-                "n": native_summary["n"],
-                "w": native_summary["w"],
-                "l": native_summary["l"],
-                "excess_be": float(native_summary["actual"]) - native_be,
-                "excess_se": native_summary["excess_se"],
-            }
+    # A fixture can supply a synthetic observation frame without a row-level
+    # ledger. In that case provenance is unknown; preserve only the pooled
+    # aggregate, never invent native/reconstructed membership from labels.
+    # Production observations carry original ledger indices and model_tag.
+    if ("model_tag" in led.columns and obs.index.isin(led.index).all()):
+        native_mask = led.loc[obs.index, "model_tag"].astype(str).eq(MODEL_TAG)
+        native_obs = obs.loc[native_mask]
+        out["reconstructed_n"] = int(len(obs) - len(native_obs))
+        if not native_obs.empty:
+            native_summary = _lean_market_agg(
+                native_obs, native_obs["won"].notna())
+            if native_summary:
+                native_be = float(np.mean(
+                    _mb_breakeven_prob(native_obs["close_ml"])))
+                out["native"] = {
+                    "n": native_summary["n"],
+                    "w": native_summary["w"],
+                    "l": native_summary["l"],
+                    "excess_be": float(native_summary["actual"]) - native_be,
+                    "excess_se": native_summary["excess_se"],
+                }
     # Cross the fixed |delta| bands with the leaned side's closing-price rung.
     # Counts are intentionally retained even when thin because the public card
     # prints its own `n` beside every cell.
