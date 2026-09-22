@@ -4640,61 +4640,16 @@ def _model_version_short():
 
 
 def _xwoba_side_history(ctx, selection_ml=None):
-    """Show native pregame V13 history separately from mixed-basis hindsight.
+    """Comparable V12-to-V13 history, distinguished from tonight's price.
 
-    The current card's pooled diagnostic spans reconstructed older-family rows.
-    Those reconstructions are not live bets or a prospective V13 track record.
-    Native predictions are scored against HISTORICAL CLOSING prices here, not
-    the price offered for the current game or even each locked pregame price.
-    Keep the mixed sample visible only as an explicitly labelled diagnostic.
+    V13 changes the starter's xwOBA/wOBA rate blend; retained V12 rows are
+    re-scored using paired snapshots and native V13 rows use locked pregame
+    decisions. Keep the comparable FAMILY summary primary. Expose the two
+    sources and do not mistake a historical closing-price benchmark for this
+    game's win probability. Snapshot timestamps are a separate provenance
+    check and do not determine whether the prediction methods are comparable.
     """
     ctx = ctx or {}
-    native = ctx.get("native")
-    reconstructed_n = int(ctx.get("reconstructed_n") or 0)
-    if native and native.get("n"):
-        n, w, l = (int(native[k]) for k in ("n", "w", "l"))
-        gap = 100.0 * float(native["excess_be"])
-        se = 100.0 * float(native["excess_se"])
-        game_word = "game" if n == 1 else "games"
-        pooled = ctx.get("pooled")
-        pooled_note = ""
-        if pooled and pooled.get("n"):
-            pn = int(pooled["n"])
-            pgap = 100.0 * float(pooled["excess_be"])
-            pse = 100.0 * float(pooled["excess_se"])
-            pword = "game" if pn == 1 else "games"
-            pooled_note = (
-                "<div class='vnote'>Mixed-basis retrospective diagnostic "
-                "(includes reconstructed rows): "
-                f"{pgap:+.1f} ± {pse:.1f} pts · {pn} completed {pword} "
-                "at historical closing prices. Not a prospective V13 record."
-                "</div>"
-            )
-        return (
-            "<div class='vprofile'>"
-            f"<div class='vprofile-title'>Historical context · native {_model_version_short()}</div>"
-            "<div class='vline'><span class='vk'>Pregame V13 results</span>"
-            f"<span>{w}–{l} · {n} completed {game_word}</span></div>"
-            "<div class='vline'><span class='vk'>Versus historical closing prices</span>"
-            f"<span>{gap:+.1f} ± {se:.1f} pts (1 SE)</span></div>"
-            "<div class='vnote'>The comparison uses closing prices, not "
-            "the locked pregame quotes; it is not this game's expected edge "
-            "or win probability.</div>"
-            f"<div class='vnote'>{reconstructed_n} mixed-basis reconstructed "
-            "rows are excluded from the native V13 figures.</div>"
-            f"{pooled_note}"
-            "</div>"
-        )
-    if reconstructed_n:
-        return (
-            "<div class='vprofile'><div class='vprofile-title'>Historical context"
-            f"</div><div class='vnote'>No native {_model_version_short()} games graded yet. "
-            f"{reconstructed_n} mixed-basis reconstructions are descriptive "
-            "only, not a prospective record.</div></div>"
-        )
-
-    # Compatibility with callers providing the old, pooled-only context.
-    # Live hybrid_branch_records always supplies provenance once rows exist.
     pooled = ctx.get("pooled")
     if not pooled or not pooled.get("n"):
         return ""
@@ -4704,13 +4659,42 @@ def _xwoba_side_history(ctx, selection_ml=None):
     gap = 100.0 * float(pooled["excess_be"])
     se = 100.0 * float(pooled["excess_se"])
     game_word = "game" if n == 1 else "games"
+    native = ctx.get("native") or {}
+    native_n = int(native.get("n") or 0)
+    reconstructed_n = int(ctx.get("reconstructed_n") or 0)
+    provenance = ""
+    if native_n and reconstructed_n and native_n + reconstructed_n == n:
+        provenance = (
+            "<div class='vnote'>Comparable V12→V13 family: "
+            f"{reconstructed_n} paired-snapshot V12 rows re-scored under the "
+            f"starter blend and {native_n} native V13 games. "
+            "Near-zero Δ leans can change sides.</div>"
+        )
+    elif native_n and native_n == n:
+        provenance = (
+            "<div class='vnote'>Native pregame V13 selections only.</div>"
+        )
+    elif reconstructed_n and reconstructed_n == n:
+        provenance = (
+            "<div class='vnote'>V12 selections re-scored under V13's starter "
+            "blend from paired snapshots; snapshot timing requires its own "
+            "pregame audit.</div>"
+        )
+    else:
+        provenance = (
+            "<div class='vnote'>Combined comparable model-family history; "
+            "the native/re-scored split is unavailable.</div>"
+        )
     return (
         "<div class='vprofile'>"
-        "<div class='vprofile-title'>Beating this price</div>"
-        "<div class='vline'><span class='vk'>Cleared the posted price by</span>"
-        f"<span>{gap:+.1f} ± {se:.1f} pts · {n} completed {game_word}</span></div>"
-        "<div class='vnote'>A model-level average over every completed game, "
-        "not this game's chance of winning.</div>"
+        "<div class='vprofile-title'>Historical family vs closing market</div>"
+        "<div class='vline'><span class='vk'>Past margin over closing break-even"
+        "</span>"
+        f"<span>{gap:+.1f} ± {se:.1f} pp · {n} completed {game_word}</span></div>"
+        f"{provenance}"
+        "<div class='vnote'>Historical closing prices, not the quote shown "
+        "for this game. This is a pooled descriptive result, not a calibrated "
+        "win probability or a game-specific expected edge.</div>"
         "</div>"
     )
 
