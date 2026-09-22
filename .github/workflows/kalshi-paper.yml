@@ -22,7 +22,24 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      should_run: ${{ steps.gate.outputs.should_run }}
+      slate_date: ${{ steps.gate.outputs.slate_date }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Gate scheduled observations against the live MLB slate
+        id: gate
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_SCHEDULE: ${{ github.event.schedule }}
+        run: python schedule_gate.py
+
   observe:
+    needs: plan
+    if: needs.plan.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
@@ -35,8 +52,9 @@ jobs:
       - name: Public quote + paper fill only
         env:
           INPUT_DATE: ${{ inputs.slate_date }}
+          PLAN_DATE: ${{ needs.plan.outputs.slate_date }}
         run: |
-          DATE="${INPUT_DATE:-$(TZ=America/New_York date +%F)}"
+          DATE="${INPUT_DATE:-$PLAN_DATE}"
           python paper_kalshi.py --slate-date "$DATE"
       - name: Validate paper CSVs
         run: |
