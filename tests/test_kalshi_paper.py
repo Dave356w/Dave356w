@@ -170,7 +170,7 @@ def test_savings_threshold_and_risk_cap(tmp_path):
     expensive = FakeClient(markets=[market(yes_ask_dollars=".58")])
     t, a = p.run(config(tmp_path), expensive, NOW)
     assert not t and a[-1]["reason"] == "below_savings_threshold"
-    t, a = p.run(config(tmp_path, max_open_exposure=2), FakeClient(), NOW)
+    t, a = p.run(config(tmp_path, max_open_exposure=0.1), FakeClient(), NOW)
     assert not t and a[-1]["reason"] == "paper_risk_or_depth_limit"
 
 
