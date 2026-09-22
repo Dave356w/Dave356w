@@ -259,6 +259,8 @@ def assess(game, markets, schedule, session, multiplier, now, existing, qty, min
     if book_be is None:
         return skip("missing_sportsbook_price")
     row["sportsbook_be"] = str(book_be)
+    if game["game_pk"] in existing["positions"]:
+        return skip("already_paper_filled")
     m, match_reason = market_for(game, markets, existing["fixtures"])
     if not m:
         return skip(match_reason)
@@ -266,8 +268,6 @@ def assess(game, markets, schedule, session, multiplier, now, existing, qty, min
                market_status=m.get("status", ""))
     if m.get("status") != "active" and m.get("status") != "open":
         return skip("kalshi_market_not_open")
-    if (game["game_pk"], game["lean"]) in existing["positions"]:
-        return skip("already_paper_filled")
     book = api(session, API, "/markets/" + m["ticker"] + "/orderbook")
     # Fetch completion is the earliest defensible observation timestamp.
     observed = datetime.now(timezone.utc) if existing.get("live_clock") else now
@@ -374,7 +374,7 @@ def run(args, session=None, now=None):
     schedule = api(session, MLB, "/schedule", {"sportId": 1, "date": date})
     status = {str(g["gamePk"]): g for day in schedule.get("dates", [])
               for g in day.get("games", [])}
-    existing = {"fixtures": games, "positions": {(p["game_pk"], p["lean"]) for p in positions},
+    existing = {"fixtures": games, "positions": {p["game_pk"] for p in positions},
                 "live_clock": now == datetime.now(timezone.utc)}
     # Programmatic test clocks bypass wall-time; real CLI uses the wall clock.
     existing["live_clock"] = getattr(args, "use_wall_clock", False)
@@ -384,7 +384,7 @@ def run(args, session=None, now=None):
         observations.append(result)
         if result["status"] == "paper_filled":
             positions.append(result.copy())
-            existing["positions"].add((game["game_pk"], game["lean"]))
+            existing["positions"].add(game["game_pk"])
     write_csv(quotes_file, observations)
     write_csv(positions_file, positions)
     summarize(observations, positions, root/"report.txt", now)
