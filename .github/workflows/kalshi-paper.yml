@@ -1,0 +1,54 @@
+name: Kalshi pregame paper quotes (no orders)
+
+on:
+  workflow_dispatch:
+    inputs:
+      slate_date:
+        description: "Eastern slate YYYY-MM-DD; blank for today"
+        required: false
+        type: string
+  # Additional best-effort observations between existing hourly site builds.
+  # GitHub cron is not a precise clock: stale/post-pitch cases are rejected.
+  schedule:
+    - cron: '37 10-23 * * *'
+      timezone: America/New_York
+
+permissions:
+  contents: write
+
+# Same group as build.yml: commits to data/ must not interleave.
+concurrency:
+  group: site-build
+  cancel-in-progress: false
+
+jobs:
+  observe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install public-data client
+        run: pip install 'requests>=2.31'
+      - name: Public quote + paper fill only
+        env:
+          INPUT_DATE: ${{ inputs.slate_date }}
+        run: |
+          DATE="${INPUT_DATE:-$(TZ=America/New_York date +%F)}"
+          python paper_kalshi.py --slate-date "$DATE"
+      - name: Validate paper CSVs
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from validate_data_files import validate_csv
+          for path in Path('data/paper_kalshi').glob('*.csv'):
+              validate_csv(path)
+          PY
+      - name: Persist observations separately from model ledger
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python commit_data.py --branch main --path data/paper_kalshi \
+            --message "kalshi paper observation $(date -u +%FT%H:%MZ)"
