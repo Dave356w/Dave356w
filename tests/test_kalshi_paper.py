@@ -53,9 +53,10 @@ def market(**overrides):
 
 
 class FakeClient:
-    def __init__(self, markets=None, settled=None, schedule=None):
+    def __init__(self, markets=None, settled=None, schedule=None, event=None):
         self.items = [market()] if markets is None else markets
         self.settled = settled or {}
+        self.event = event or {}
         self.live = (dict(gamePk=822840, gameDate=START.isoformat(),
                           status={"abstractGameState": "Preview"})
                      if schedule is None else schedule)
@@ -65,6 +66,8 @@ class FakeClient:
         self.calls.append(("GET", path))
         if path == "/series/KXMLBGAME":
             return {"series": {"fee_type": "quadratic", "fee_multiplier": "0.5"}}
+        if path.startswith("/events/"):
+            return {"event": self.event}
         if path.startswith("/markets/"):
             return {"market": self.settled.get(path.rsplit("/", 1)[-1],
                                                 {"status": "active", "result": ""})}
@@ -182,3 +185,20 @@ def test_market_api_unavailable_fails_closed(tmp_path):
     import requests
     t, a = p.run(config(tmp_path), Broken(), NOW)
     assert not t and a[-1]["reason"] == "market_data_unavailable"
+
+
+def test_event_fee_override_is_not_ignored(tmp_path):
+    dump(tmp_path)
+    c = FakeClient(event={"fee_type_override": "quadratic_with_maker_fees",
+                          "fee_multiplier_override": 1.0})
+    t, a = p.run(config(tmp_path), c, NOW)
+    assert len(t) == 1 and a[-1]["status"] == "paper"
+    assert t[0]["fee_source"] == "event_override"
+    assert t[0]["fee"] == "0.18"
+
+
+def test_unsupported_event_fee_fails_closed(tmp_path):
+    dump(tmp_path)
+    c = FakeClient(event={"fee_type_override": "flat"})
+    t, a = p.run(config(tmp_path), c, NOW)
+    assert not t and a[-1]["reason"] == "event_fee_unverified"
