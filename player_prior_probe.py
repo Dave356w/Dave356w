@@ -640,6 +640,44 @@ def cross_tab(rows, spec, k, c, mu_is_base=True):
     return out
 
 
+def metric_standing_line():
+    """Whether this probe's subject can be switched on at all, and why not.
+
+    PRINTED, not left in the docstring. The header has said since v11 that the
+    frozen priors are wOBA-denominated, and a header is prose: the probe still
+    ran, still printed a +7-25% improvement, and nothing on the output said
+    that figure is about a shrinkage TARGET this build refuses to load. That is
+    the standing rule reached from the other side -- when a function degrades
+    silently by design, print the count -- applied to a whole probe.
+
+    Derived from the running build rather than asserted, so restoring a wOBA
+    build or freezing an xwOBA prior set makes the line disappear on its own.
+
+    No guard on the import, DELIBERATELY, and the asymmetry with
+    `reliever_shrink_probe.metric_standing_line` is the reason to say so here:
+    this module imports `build_site` at the top, so a MODEL_TAG that does not
+    start with `xw+` makes the whole probe unimportable long before this
+    function runs. There is no state in which this can be reached and fail to
+    read the label. That probe's copy IS guarded because it imports lazily.
+    """
+    import build_site
+    import priors_snapshot
+
+    if build_site.MODEL_RATE_LABEL == "wOBA":
+        return None
+    return (
+        "DORMANT -- this probe's subject cannot be switched on in this build.\n"
+        "  The frozen priors are wOBA-denominated (priors_snapshot.RATE_COL = "
+        f"'{priors_snapshot.RATE_COL}') and the build runs "
+        f"{build_site.MODEL_RATE_LABEL}, so `build_site.player_prior_history()` "
+        "refuses them\n"
+        "  and PLAYER_PRIORS=1 is a no-op: every caller degrades to the "
+        "population centre. Everything below is a measurement about a\n"
+        "  shrinkage target this build does not load. Restoring it needs a "
+        "wOBA build, or an xwOBA prior set under its own filenames."
+    )
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--targets", default="2024,2025",
@@ -673,6 +711,15 @@ def main(argv=None):
     def say(line=""):
         print(line)
         L.append(line)
+
+    # First line of the report when the subject is unreachable, so the figures
+    # below can never be quoted without it. Not an exit: the arms still measure
+    # the prior question correctly for a wOBA build, and refusing to run would
+    # destroy the instrument rather than label it.
+    standing = metric_standing_line()
+    if standing:
+        say(standing)
+        say()
 
     # ---- pull -------------------------------------------------------------
     print("Pulling StatsAPI season totals (history) ...", file=sys.stderr)

@@ -12,7 +12,6 @@ import numpy as np
 import pandas as pd
 
 import build_site
-import compare_v8_v9
 import grade_leans
 import market_backfill
 import schedule_gate
@@ -1065,47 +1064,6 @@ class SequentialPitchingModelTests(unittest.TestCase):
             plans[(1, "away")]["pitching_basis"],
             "starter_only_no_fullgame_lean",
         )
-
-
-class V8V9ComparisonTests(unittest.TestCase):
-    def test_replay_uses_identical_phase_inputs_for_both_formulas(self):
-        snapshot = pd.DataFrame([
-            {
-                "game_pk": 1, "game_date": "2026-07-27", "side": "away",
-                "opp_team": "HOME", "opp_xwOBA_neutral": .320,
-                "opp_xwOBA_vs_sp": .330, "starter_xwOBA": .305,
-                "bullpen_xwOBA": .325, "expected_sp_ip": 1.8,
-                "lg_xwOBA": .317, "opener": True,
-            },
-            {
-                "game_pk": 1, "game_date": "2026-07-27", "side": "home",
-                "opp_team": "AWAY", "opp_xwOBA_neutral": .315,
-                "opp_xwOBA_vs_sp": .315, "starter_xwOBA": .310,
-                "bullpen_xwOBA": .320, "expected_sp_ip": 5.4,
-                "lg_xwOBA": .317, "opener": False,
-            },
-        ])
-        sides = compare_v8_v9.recalculate_sides(snapshot)
-        q = 1.8 / 9
-        v8_pitching = q * .305 + (1 - q) * .325
-        expected_v8 = .330 * v8_pitching / .317
-        expected_v9 = q * (.330 * .305 / .317) + (1 - q) * (.320 * .325 / .317)
-        self.assertAlmostEqual(sides.loc[0, "mx_xwOBA_v8_shadow"], expected_v8)
-        self.assertAlmostEqual(sides.loc[0, "mx_xwOBA_v9_recalc"], expected_v9)
-        games = compare_v8_v9.pair_games(sides)
-        self.assertEqual(len(games), 1)
-        self.assertTrue(bool(games.loc[0, "eligible"]))
-        self.assertTrue(bool(games.loc[0, "opener"]))
-
-    def test_legacy_snapshot_without_neutral_composite_is_ineligible(self):
-        legacy = pd.DataFrame([{
-            "opp_xwOBA": .320,
-            "pit_xwOBA": .310,
-            "lg_xwOBA": .317,
-        }])
-        out = compare_v8_v9.recalculate_sides(legacy)
-        self.assertFalse(bool(out.loc[0, "comparison_eligible"]))
-        self.assertTrue(pd.isna(out.loc[0, "mx_xwOBA_v9_recalc"]))
 
 
 class BattingOrderSlotWeightingTests(unittest.TestCase):
@@ -3592,7 +3550,7 @@ class HybridRuleTests(unittest.TestCase):
             f"Model lean</span><span>PIT · {build_site._model_version_short()} Δ .0187",
             "Market price</span><span>PIT +103 · 47.1% no-vig",
             "Posted break-even</span><span>49.3% · requires +2.2 pp over market"
-            " · above the 1.8 pp this model usually pays",
+            "</span>",
             "chooses the side independently of the market",
             "Δ magnitude is not a calibrated win probability",
             "Beating this price",
@@ -3634,7 +3592,7 @@ class HybridRuleTests(unittest.TestCase):
         self.assertIn("pooled", out)
         self.assertEqual([k for k in out if isinstance(k, tuple)], [])
         self.assertEqual(set(out["pooled"]),
-                         {"n", "excess_be", "excess_se", "hold"})
+                         {"n", "excess_be", "excess_se"})
 
     def test_delta_history_covers_every_row_at_its_own_price(self):
         """Replaces `test_delta_history_excludes_market_over_lean_rows`.

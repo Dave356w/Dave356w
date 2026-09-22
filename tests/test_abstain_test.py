@@ -332,3 +332,71 @@ class ReportTests(unittest.TestCase):
 class LedgerReportWiringTests(unittest.TestCase):
     def test_grade_leans_prints_this_registration(self):
         self.assertIn("abstain_test", open("grade_leans.py").read())
+
+
+class RetiredActionTests(unittest.TestCase):
+    """The pre-commitment names an action that v13 already took.
+
+    `decision()` says RETIRE THE Q-GATE FADE at the gate, and v13 retired the
+    whole hybrid from the shipped selection on 2026-09-18. The registration is
+    NOT void -- "would declining those games have beaten fading them" is still
+    a real question and still accruing -- but a reader reaching the gate must
+    not think a decision is pending on a live branch.
+
+    Both directions, and derived rather than dated: re-shipping the rule must
+    make the clause disappear, which a date literal could not do.
+    """
+
+    def _led(self, rule_tag):
+        """Two slates, the later one stamped with `rule_tag`.
+
+        Two dates because closure is a property of what the build stamps NOW;
+        a single-slate frame cannot represent "the rule moved on", which is the
+        trap the borrowed selector itself fell into.
+        """
+        rows = []
+        for date, tag in (("2026-09-12", hv2.RULE_TAG), ("2026-09-20", rule_tag)):
+            rows.append({"game_date": date, "selection_rule_tag": tag})
+        return pd.DataFrame(rows)
+
+    def test_a_retired_rule_says_the_action_is_already_taken(self):
+        led = self._led("lean")
+        self.assertIs(at.shipped_rule_retired(led), True)
+        g = at.scored_rows(None)
+        text = "\n".join(at.decision_lines(g, led))
+        self.assertIn("ACTION ALREADY TAKEN", text)
+        self.assertIn("ratifies a retirement rather than causing one", text)
+
+    def test_a_live_rule_leaves_the_decision_pending(self):
+        led = self._led(hv2.RULE_TAG)
+        self.assertIs(at.shipped_rule_retired(led), False)
+        g = at.scored_rows(None)
+        text = "\n".join(at.decision_lines(g, led))
+        self.assertNotIn("ACTION ALREADY TAKEN", text)
+
+    def test_an_unanswerable_frame_claims_nothing(self):
+        """Missing column, no rows, all-null tag -> None, never True.
+
+        `None` is deliberately NOT in this list: it means "load the real
+        ledger", which is answerable and answers True today. Putting it here
+        was the first draft's mistake -- it would have passed for the wrong
+        reason the day the rule was re-shipped.
+        """
+        for frame in (pd.DataFrame({"game_date": ["2026-09-20"]}),
+                      pd.DataFrame({"game_date": [], "selection_rule_tag": []}),
+                      pd.DataFrame({"game_date": ["2026-09-20"],
+                                    "selection_rule_tag": [np.nan]})):
+            self.assertIsNone(at.shipped_rule_retired(frame))
+
+    def test_a_none_ledger_reads_the_real_one(self):
+        """The documented fallback, asserted so the case above cannot silently
+        become the way this function is exercised."""
+        self.assertIn(at.shipped_rule_retired(None), (True, False))
+
+    def test_the_registered_constants_did_not_move_with_the_clause(self):
+        """The clause is commentary. Re-pointing the selector or shifting the
+        gate would restart the test, which is the one thing it must not do."""
+        self.assertEqual(at.GATE_DECLINED, 82)
+        self.assertEqual(at.DECISION_KEEP_THRESHOLD, 0.0)
+        self.assertEqual(at.REGISTERED_ON, "2026-09-03")
+        self.assertEqual(at.THRESHOLD, ht.THRESHOLD)

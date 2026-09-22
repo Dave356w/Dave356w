@@ -147,7 +147,7 @@ import pandas as pd
 
 import hybrid_test
 import hybrid_v2
-from market_backfill import row_supply_line
+from market_backfill import row_supply_line, window_is_closed
 
 # ---------------------------------------------------------------------------
 # FROZEN REGISTRATION BLOCK. tests/test_abstain_test.py pins every value.
@@ -423,7 +423,31 @@ def _drift_lines(g):
     return out
 
 
-def decision_lines(g):
+def shipped_rule_retired(led=None):
+    """Has the branch this decision would retire already been retired?
+
+    Derived through `market_backfill.window_is_closed` -- the same derivation
+    `hybrid_v2.window_closed` uses, reused rather than spelled a second time --
+    because the honest answer is a property of what the build stamps, not of a
+    date literal that would go wrong if the rule were ever re-shipped.
+
+    Why it matters: the pre-commitment below says RETIRE THE Q-GATE FADE at the
+    gate. v13 retired the entire hybrid from the shipped selection on
+    2026-09-18, so the action it authorises is already taken. That does not
+    void the registration -- the question "would declining those games have
+    beaten fading them" is still a real one and still accruing -- but a reader
+    reaching the gate must not think a decision is pending on a live branch.
+    """
+    if led is None:
+        led = hybrid_test._ledger(None)
+    if led is None:
+        return None
+    closed, _observed = window_is_closed(led, "selection_rule_tag",
+                                         (hybrid_v2.RULE_TAG,))
+    return closed
+
+
+def decision_lines(g, led=None):
     """The pre-commitment, printed every build whether or not it can fire."""
     m, _se, n_d = fade_minus_abstain(g)
     out = [f"    PRE-COMMITTED {DECISION_PRE_COMMITTED_ON} (at n={DECISION_AT_N}): "
@@ -440,6 +464,15 @@ def decision_lines(g):
                    f"has not disqualified itself, not that it works — "
                    f"{GATE_DECLINED_REALISTIC} is the gate for a plausible "
                    "+0.10u effect.")
+    if shipped_rule_retired(led):
+        out.append("      ACTION ALREADY TAKEN: v13 retired the whole hybrid "
+                   "from the shipped selection, so no q-gate fade branch is "
+                   "live to retire.")
+        out.append("      The registration still measures something real -- "
+                   "whether declining those games would have beaten fading "
+                   "them -- but it is now a question about a rule nothing "
+                   "runs, and a RETIRE verdict at the gate ratifies a "
+                   "retirement rather than causing one.")
     return out
 
 
@@ -465,7 +498,7 @@ def report_lines(led=None):
         out.append(f"    GATE: 0 of ~{GATE_DECLINED} declined games "
                    f"(~{GATE_DECLINED / 1.05:.0f} slates at "
                    f"{DISCOVERY_DECLINE_RATE:.2f} of a slate).")
-        out.extend(decision_lines(g))
+        out.extend(decision_lines(g, led))
         return out
 
     m, se, n_d = fade_minus_abstain(g)
@@ -481,7 +514,7 @@ def report_lines(led=None):
     else:
         out.append("    FADE MINUS ABSTAIN (registered)    no declined games yet")
     out.extend(_drift_lines(g))
-    out.extend(decision_lines(g))
+    out.extend(decision_lines(g, led))
 
     out.append("")
     out.append(_line(kept(g), "this rule (declined out)"))
