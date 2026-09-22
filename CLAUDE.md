@@ -814,6 +814,54 @@ precedent — they are how the fix is known to look.
 
 **Resolved — keep as precedent**
 
+- **An instrument that went dark at a bump and said so only as a warm-up
+  count.** `win_probability.py` is the repo's one calibrated delta-to-P(home)
+  map. From the v13 bump on 2026-09-18 it scored **zero games for four days**:
+  it fitted one exact `MODEL_TAG`, v13 had 47 eligible rows against a
+  `min_train` of 100, and the report rendered that as
+  `Warm-up/unscored: 47` beside two `no eligible games` lines. True, and
+  indistinguishable from an empty ledger, a broken join or a bad filter.
+
+  Two separate defects, and the scoping one is the smaller:
+
+  * **The row set was the wrong equivalence relation.** This maps `xw_net` to
+    a probability, and `xw_net`'s units are a property of `_SCALE_FAMILIES`,
+    so `SCALE_TAGS` decides its rows. `MODEL_TAG` alone discards same-scale
+    rows and resets the sample at every bump; `RECORD_TAGS` is wrong the other
+    way, pooling v12 with v13 across a deliberate scale change. Fixed to the
+    family, comma-separated so a tag or an older family can still be pinned.
+    **It buys nothing today and that is stated rather than implied**: v13's
+    scale family is v13 alone, and on the committed ledger every pre-v12 row
+    carries a NULL `model_metric` and is refused by the `not_xwoba` check
+    (99 of 99 on v9/v10) — correctly, since the metric is a property of the
+    row and cannot be inferred from its tag. What it buys is that the next
+    bump sharing a scale carries the sample forward instead of restarting it.
+  * **The blindness was not announced, and that is the half that mattered.**
+    `blind_reason` now prints `SCORES NOTHING — this evaluation is BLIND on
+    <family>: needs <the binding shortfall>`, derived from the settings and
+    the rows so it names whichever threshold actually binds and disappears on
+    its own. This is the standing rule reached from the other side: **when a
+    function degrades silently by design, print the count** — the same rule
+    `_log_starter_blend` exists for, applied to a whole instrument rather
+    than to one input.
+
+  `docs/win_probability.md` said "only the exact requested source model tag is
+  fitted" and led with a measurement it no longer produces; both are corrected,
+  and the v12 figures are labelled with the family and the flag that reproduces
+  them. Prose asserting behaviour the code does not have is the defect class
+  this file tracks, and the doc was the last place still describing it.
+
+  **NOT done, and recorded so it is not mistaken for an oversight:**
+  `min_train = 100` is a hard `>= N`, which is the threshold cliff this repo
+  has removed four times, and the ridge already shrinks the slope toward zero
+  so the gate is arguably redundant with it. Making the warm-up a weight is
+  the idiomatic fix and it changes the calibrator's method, its version and
+  the measurement the doc records — a separate change, not one to make while
+  fixing the reporting.
+
+  Report and scope only: no lean, delta, grade or ledger row moves, no
+  registered constant changes, `MODEL_TAG` unchanged.
+
 - **A closed forward window rendering as a stall.** Two registrations can take
   no further row and both printed a supply line trailing the ledger by four
   slates beside a gate counting toward a number they can never reach:
