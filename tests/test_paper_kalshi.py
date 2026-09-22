@@ -140,3 +140,30 @@ def test_settlement_disagreement_stays_ungraded():
     paper.settle([row], ledger, Session(settlement={"status": "settled", "result": "yes"}), NOW)
     assert row["status"] == "needs_review"
     assert row["pnl_dollars"] == ""
+
+
+def test_upstream_failure_persists_skip_without_synthetic_fill(tmp_path):
+    class FailingSession(Session):
+        def get(self, url, params=None, timeout=15):
+            if url.endswith("/markets"):
+                raise paper.requests.ConnectionError("mock upstream down")
+            return super().get(url, params, timeout)
+
+    data = write_dump(tmp_path)
+    paper.run(args(tmp_path), session=FailingSession(), now=NOW)
+    assert paper.read_csv(data / "paper_kalshi/observations.csv")[-1]["reason"] == "upstream_market_or_schedule_unavailable"
+    assert paper.read_csv(data / "paper_kalshi/positions.csv") == []
+    assert "Public upstream request failed" in (data / "paper_kalshi/report.txt").read_text()
+
+
+def test_orderbook_failure_persists_skip_without_position(tmp_path):
+    class FailingBook(Session):
+        def get(self, url, params=None, timeout=15):
+            if url.endswith("/orderbook"):
+                raise paper.requests.Timeout("mock slow orderbook")
+            return super().get(url, params, timeout)
+
+    data = write_dump(tmp_path)
+    paper.run(args(tmp_path), session=FailingBook(), now=NOW)
+    assert paper.read_csv(data / "paper_kalshi/observations.csv")[-1]["reason"] == "kalshi_orderbook_unavailable"
+    assert paper.read_csv(data / "paper_kalshi/positions.csv") == []
