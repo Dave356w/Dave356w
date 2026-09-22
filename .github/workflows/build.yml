@@ -176,6 +176,27 @@ jobs:
       # failure of the API path falls back to that old push sequence, because
       # an unverified commit costs provenance and a lost slate costs pregame
       # rows nothing can re-derive.
+      # Observational only: no Kalshi auth, trading credentials or POSTs. Run
+      # after the pregame dump and post-build ledger ingestion. A quote outage
+      # cannot block the original site's irrevocable pregame capture.
+      - name: Kalshi read-only paper snapshot
+        id: kalshi_paper
+        continue-on-error: true
+        env:
+          SLATE_DATE: ${{ needs.plan.outputs.slate_date }}
+        run: |
+          python paper_kalshi.py --slate-date "$SLATE_DATE"
+          python - <<'PY'
+          from pathlib import Path
+          from validate_data_files import validate_csv
+          for path in Path("data/paper_kalshi").glob("*.csv"):
+              validate_csv(path)
+          PY
+
+      - name: Publish paper diagnostic (not the trading interface)
+        if: steps.kalshi_paper.outcome == 'success'
+        run: cp data/paper_kalshi/report.txt public/kalshi-paper.txt
+
       - name: Commit ledger
         env:
           GITHUB_TOKEN: ${{ github.token }}
