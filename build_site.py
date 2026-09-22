@@ -4640,27 +4640,62 @@ def _model_version_short():
 
 
 def _xwoba_side_history(ctx, selection_ml=None):
-    """The model's record against the POSTED price, pooled over the family.
+    """Show native pregame V13 history separately from mixed-basis hindsight.
 
-    ONE figure, and the delta x price cells that stood here are gone. They
-    were three of a 26-cell grid published with no error bar and no
-    reference, and no cell of that grid can be read: under "market correct,
-    no edge" its best cell clears breakeven by +39.6 pp on average. The
-    measured bands are not even ordered (+2.6, +14.5, -3.2, +8.3, +7.8 pp),
-    so a big delta is not conviction paying off, and the cell a reader lands
-    on says nothing about their game.
-
-    What IS a result is the margin, which the panel had computed all along
-    and rendered nowhere: over the family the lean clears the posted price by
-    about +5.9 +/- 2.2 pp. It is a MODEL-LEVEL average, not this game's
-    chance of winning, and the copy says so rather than leaving a percentage
-    beside two other percentages to be read as one -- the defect this panel
-    already shipped once.
-
-    Against the POSTED price, never the devigged one: a bet has to clear the
-    breakeven, and the two differ by the hold.
+    The current card's pooled diagnostic spans reconstructed older-family rows.
+    Those reconstructions are not live bets or a prospective V13 track record.
+    Native predictions are scored against HISTORICAL CLOSING prices here, not
+    the price offered for the current game or even each locked pregame price.
+    Keep the mixed sample visible only as an explicitly labelled diagnostic.
     """
-    pooled = (ctx or {}).get("pooled")
+    ctx = ctx or {}
+    native = ctx.get("native")
+    reconstructed_n = int(ctx.get("reconstructed_n") or 0)
+    if native and native.get("n"):
+        n, w, l = (int(native[k]) for k in ("n", "w", "l"))
+        gap = 100.0 * float(native["excess_be"])
+        se = 100.0 * float(native["excess_se"])
+        game_word = "game" if n == 1 else "games"
+        pooled = ctx.get("pooled")
+        pooled_note = ""
+        if pooled and pooled.get("n"):
+            pn = int(pooled["n"])
+            pgap = 100.0 * float(pooled["excess_be"])
+            pse = 100.0 * float(pooled["excess_se"])
+            pword = "game" if pn == 1 else "games"
+            pooled_note = (
+                "<div class='vnote'>Mixed-basis retrospective diagnostic "
+                "(includes reconstructed rows): "
+                f"{pgap:+.1f} ± {pse:.1f} pts · {pn} completed {pword} "
+                "at historical closing prices. Not a prospective V13 record."
+                "</div>"
+            )
+        return (
+            "<div class='vprofile'>"
+            "<div class='vprofile-title'>Historical context · native V13</div>"
+            "<div class='vline'><span class='vk'>Pregame V13 results</span>"
+            f"<span>{w}–{l} · {n} completed {game_word}</span></div>"
+            "<div class='vline'><span class='vk'>Versus historical closing prices</span>"
+            f"<span>{gap:+.1f} ± {se:.1f} pts (1 SE)</span></div>"
+            "<div class='vnote'>The comparison uses closing prices, not "
+            "the locked pregame quotes; it is not this game's expected edge "
+            "or win probability.</div>"
+            f"<div class='vnote'>{reconstructed_n} mixed-basis reconstructed "
+            "rows are excluded from the native V13 figures.</div>"
+            f"{pooled_note}"
+            "</div>"
+        )
+    if reconstructed_n:
+        return (
+            "<div class='vprofile'><div class='vprofile-title'>Historical context"
+            "</div><div class='vnote'>No native V13 games graded yet. "
+            f"{reconstructed_n} mixed-basis reconstructions are descriptive "
+            "only, not a prospective record.</div></div>"
+        )
+
+    # Compatibility with callers providing the old, pooled-only context.
+    # Live hybrid_branch_records always supplies provenance once rows exist.
+    pooled = ctx.get("pooled")
     if not pooled or not pooled.get("n"):
         return ""
     n = int(pooled["n"])
@@ -4678,6 +4713,7 @@ def _xwoba_side_history(ctx, selection_ml=None):
         "not this game's chance of winning.</div>"
         "</div>"
     )
+
 def _branch_history(ctx, action, p_lean=None, selection_ml=None):
     """Return the model's record against the posted price, or nothing.
 
@@ -7432,6 +7468,27 @@ def hybrid_branch_records():
         # hold over this family blends two vig regimes, so no card line can be
         # read against it. A key kept for a renderer that no longer exists is
         # the defect this projection exists to prevent.
+    # Provenance must stay at ledger-row resolution: _lean_market_observations
+    # preserves the original ledger index even after replacing earlier-family
+    # prediction columns on a copy. The native sample is only rows actually
+    # published pregame by the active model. Never promote a reconstruction
+    # into the card's prospective record.
+    native_mask = led.loc[obs.index, "model_tag"].astype(str).eq(MODEL_TAG)
+    native_obs = obs.loc[native_mask]
+    out["reconstructed_n"] = int(len(obs) - len(native_obs))
+    if not native_obs.empty:
+        native_summary = _lean_market_agg(
+            native_obs, native_obs["won"].notna())
+        if native_summary:
+            native_be = float(np.mean(
+                _mb_breakeven_prob(native_obs["close_ml"])))
+            out["native"] = {
+                "n": native_summary["n"],
+                "w": native_summary["w"],
+                "l": native_summary["l"],
+                "excess_be": float(native_summary["actual"]) - native_be,
+                "excess_se": native_summary["excess_se"],
+            }
     # Cross the fixed |delta| bands with the leaned side's closing-price rung.
     # Counts are intentionally retained even when thin because the public card
     # prints its own `n` beside every cell.
