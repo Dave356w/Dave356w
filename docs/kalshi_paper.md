@@ -16,6 +16,7 @@ python -m pytest tests/test_paper_kalshi.py -q  # offline fixtures
 The existing `build.yml` takes a paper snapshot after its pregame build, before
 committing data. The separate `kalshi-paper.yml` provides a manual trigger and
 an additional best-effort hourly snapshot at :37 ET during MLB daytime/evening.
+Its schedule gate skips runs without a game in the 15–360-minute pregame window.
 Both use the existing `site-build` concurrency group, so they cannot write
 over the model's ledger commit. GitHub scheduled events can be skipped or late:
 missing a first-pitch cutoff is a **skip**, never a retroactive fill. This is
