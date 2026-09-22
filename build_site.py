@@ -4667,7 +4667,10 @@ def _xwoba_side_history(ctx, selection_ml=None):
         provenance = (
             "<div class='vnote'>Comparable V12→V13 family: "
             f"{reconstructed_n} paired-snapshot V12 rows re-scored under the "
-            f"starter blend and {native_n} native V13 games. "
+            f"starter blend and {native_n} native V13 games "
+            f"({int(native['w'])}–{int(native['l'])}; native closing margin "
+            f"{100.0 * float(native['excess_be']):+.1f} ± "
+            f"{100.0 * float(native['excess_se']):.1f} pp). "
             "Near-zero Δ leans can change sides.</div>"
         )
     elif native_n and native_n == n:
