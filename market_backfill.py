@@ -560,6 +560,46 @@ def excess_se(probs):
     return float(np.sqrt(float((p * (1.0 - p)).sum())) / p.size)
 
 
+def ev_null(probs, breakevens):
+    """What a breakeven-relative excess is centred on when the market is RIGHT.
+
+    ZERO IS THE WRONG NULL FOR AN EV COLUMN, and that is the whole reason this
+    exists. `excess_se` above sizes the spread of (realised rate - a fixed
+    market reference); which reference you subtract decides where the null
+    sits, not how wide it is:
+
+      * against the DEVIGGED price, a correctly priced book gives E[excess] = 0;
+      * against the POSTED breakeven, it gives E[EV] = -(mean hold), because
+        breakeven already contains the vig the devigged price has removed.
+
+    So an EV figure read against zero is read against a null the market never
+    offered, and the error flatters the book by exactly one hold. It happened:
+    the magnitude x market grid stated that rule in its own copy and printed
+    the SE beside both columns, and a reader still compared `EV +3.0 pp` to 0
+    and called it null when its own null was -2.6 and a simulated
+    market-correct null put it at P = 0.051. Prose asserting the rule is not
+    the same as printing the number the rule is about -- the caveat-does-not-
+    travel-with-the-statistic entry, one column out.
+
+    Takes the two references a caller already holds -- the devigged prices and
+    the posted breakevens -- rather than moneylines, so it cannot disagree with
+    the `EV` figure printed next to it by re-deriving a breakeven a second way.
+    Returns the null in PROBABILITY units (negative, or 0.0 for a vig-free
+    book), so a caller renders `100 * ev_null(...)` beside a points figure.
+
+    What it deliberately does NOT return is a second standard error. The two
+    columns differ by a constant fixed by the market, so they share one
+    sampling spread: `excess / excess_se` is already the z for BOTH, and the
+    only thing a reader needs that they did not have is where the EV column's
+    centre lies. Handing back a second `se` would invite a second, wrong z.
+    """
+    p = np.asarray(list(probs), dtype=float)
+    be = np.asarray(list(breakevens), dtype=float)
+    if not p.size or p.size != be.size or not np.isfinite(be).all():
+        return np.nan
+    return float(p.mean() - be.mean())
+
+
 def row_supply_line(g, noun="eligible rows"):
     """The `<noun> since registration: N over S slates` line, plus its LAST.
 
