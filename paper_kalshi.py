@@ -268,7 +268,10 @@ def assess(game, markets, schedule, session, multiplier, now, existing, qty, min
                market_status=m.get("status", ""))
     if m.get("status") != "active" and m.get("status") != "open":
         return skip("kalshi_market_not_open")
-    book = api(session, API, "/markets/" + m["ticker"] + "/orderbook")
+    try:
+        book = api(session, API, "/markets/" + m["ticker"] + "/orderbook")
+    except requests.RequestException:
+        return skip("kalshi_orderbook_unavailable")
     # Fetch completion is the earliest defensible observation timestamp.
     observed = datetime.now(timezone.utc) if existing.get("live_clock") else now
     row["observed_utc"] = observed.isoformat()
@@ -367,17 +370,31 @@ def run(args, session=None, now=None):
     if not games:
         summarize(observations, positions, root/"report.txt", now, "empty model dump")
         return
-    markets = get_markets(session)
-    series = api(session, API, "/series/KXMLBGAME").get("series", {})
+    try:
+        markets = get_markets(session)
+        series = api(session, API, "/series/KXMLBGAME").get("series", {})
+        schedule = api(session, MLB, "/schedule", {"sportId": 1, "date": date})
+    except requests.RequestException as exc:
+        # Observability even when the entire quote source is down. Fail closed;
+        # never synthesize an ask from the last trade or yesterday's quotes.
+        for game in games:
+            row = {k: "" for k in FIELDS}
+            row.update(observed_utc=now.isoformat(), game_pk=game["game_pk"],
+                       game_date=game["game_date"], lean=game["lean"] or "",
+                       status="skipped", reason="upstream_market_or_schedule_unavailable")
+            observations.append(row)
+        write_csv(quotes_file, observations)
+        write_csv(positions_file, positions)
+        summarize(observations, positions, root/"report.txt", now,
+                  "Public upstream request failed: " + type(exc).__name__)
+        return
     fee_type = series.get("fee_type", "")
     multiplier = dec(series.get("fee_multiplier")) if fee_type == "quadratic" else None
-    schedule = api(session, MLB, "/schedule", {"sportId": 1, "date": date})
     status = {str(g["gamePk"]): g for day in schedule.get("dates", [])
               for g in day.get("games", [])}
     existing = {"fixtures": games, "positions": {p["game_pk"] for p in positions},
-                "live_clock": now == datetime.now(timezone.utc)}
-    # Programmatic test clocks bypass wall-time; real CLI uses the wall clock.
-    existing["live_clock"] = getattr(args, "use_wall_clock", False)
+                "live_clock": getattr(args, "use_wall_clock", False)}
+    # Programmatic test clocks bypass wall-time; real CLI uses receipt time.
     for game in games:
         result = assess(game, markets, status, session, multiplier, now, existing,
                         args.quantity, D(str(args.min_savings_pp)))
