@@ -1488,7 +1488,7 @@ def _selection_price_matrix_lines(g):
     n_all, w_all = len(h), int(won.sum())
     out = [
         f"{MODEL_METRIC_LABEL} |delta| x LEANED-side closing price "
-        f"(the grid the game card shows one cell of)",
+        f"(analyst-only; the game card publishes no cell of it)",
         f"  rows: all {n_all} decidable rows of the current family. The v13 "
         f"selection IS the lean, so no row is excluded for a branch; this "
         f"block scored the retired rule's FOLLOW subset until 2026-09-18.",
@@ -1497,6 +1497,11 @@ def _selection_price_matrix_lines(g):
         "row sets on purpose.",
         "  Cells are descriptive history, not a validated mapping from "
         "|delta| to a win probability, and no cell is a registered rule.",
+        "  The game card showed three of these cells until 2026-09-22 and now "
+        "shows none: no cell here is readable, because the best of them under "
+        "'market correct, no edge' clears breakeven by ~+40 pp on average and "
+        "the |delta| bands are not ordered. The grid stays HERE, beside its "
+        "spreads and its search reference, which is what the card never had.",
     ]
     width, lab_w = 12, 15
     for title, kind in (("n and W-L", "wl"),

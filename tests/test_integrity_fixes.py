@@ -3470,184 +3470,9 @@ class HybridRuleTests(unittest.TestCase):
         html = build_site._grades_day_header("2026-08-31", day, 6)
         self.assertIn("1-0", html)
         self.assertNotIn("0-1", html)
-    def test_the_summary_row_publishes_the_model_side_at_every_price(self):
-        """v13 consults the market for a PRICE, never to change the side.
 
-        The retired version asserted that a lean priced at .30 was published as
-        the opposing favourite. Both prices are kept here deliberately: the
-        second is the one the old rule faded, so a reintroduced fade shows up
-        as a failure on exactly the row that used to exercise it.
-        """
-        game = {"away_abbr": "A", "home_abbr": "H", "xw_delta": .01}
-        game["odds"] = {"p_home": .48, "home_ml": 105, "away_ml": -125}
-        self.assertEqual(build_site._summary_market_line(game, "H"),
-                         "H +105")
-        game["odds"] = {"p_home": .30, "home_ml": 220, "away_ml": -260}
-        self.assertEqual(build_site._summary_market_line(game, "H"),
-                         "H +220")
-    def test_an_exact_pickem_follows_the_model(self):
-        """A devigged .500 market still leaves v13's model side unchanged."""
-        pk = build_site._lean_implied_p(
-            {"home_ml": -110, "away_ml": -110}, "H", "A", "H")
-        self.assertEqual(pk, 0.5)
-        self.assertEqual(build_site.hybrid_action(pk, .001), "FOLLOW")
-        html = build_site._verdict_html(
-            "H", {"home_ml": -110, "away_ml": -110}, "A", "H", {}, .02)
-        self.assertIn(
-            f"Model lean</span><span>H · {build_site._model_version_short()} Δ .0200",
-            html)
-        self.assertIn("50.0% no-vig", html)
-        self.assertIn(
-            "Posted break-even</span><span>52.4% · requires +2.4 pp over market",
-            html)
-        self.assertIn("chooses the side independently of the market", html)
-        self.assertNotIn("Selection", html)
-        self.assertNotIn("XWOBA SIDE", html)
-        self.assertNotIn("verdict edge", html)
-        for banned in ("OPPOSE", "opposes", "against"):
-            self.assertNotIn(banned, html)
-    def test_no_accent_survives_the_rule_it_marked(self):
-        """No retired branch accent or branch label survives on the v13 card."""
-        for fav, odds, delta in (("H", {"home_ml": -110, "away_ml": -110}, .02),
-                                 ("A", {"home_ml": -260, "away_ml": 215}, .005)):
-            html = build_site._verdict_html(fav, odds, "A", "H", {}, delta)
-            self.assertNotIn("verdict edge", html)
-            self.assertIn(
-                f"Model lean</span><span>{fav} · {build_site._model_version_short()} Δ",
-                html)
-            self.assertNotIn("Selection", html)
-            self.assertNotIn("XWOBA SIDE", html)
-            self.assertNotIn("MARKET OVER LEAN", html)
-    def test_unusable_prices_abstain_rather_than_defaulting_to_a_branch(self):
-        """No price is not a fade. Defaulting either way invents a selection."""
-        for mp in (None, float("nan"), 0.0, 1.0, "x", -0.1, 1.5):
-            self.assertIsNone(build_site.hybrid_action(mp, .005))
-            self.assertIsNone(build_site.hybrid_selection("H", "A", "H", mp, .005))
-        self.assertIsNone(build_site.hybrid_action(.40, None))
-        # A usable price with no lean is also an abstention.
-        self.assertIsNone(build_site.hybrid_selection(None, "A", "H", .60, .01))
-        self.assertIsNone(build_site.hybrid_selection("", "A", "H", .60, .01))
 
-    def test_a_fade_selects_the_other_club_on_either_side(self):
-        """The mirror has to work whichever side the model leaned."""
-        self.assertEqual(build_site.hybrid_selection("H", "A", "H", .30, .005), "A")
-        self.assertEqual(build_site.hybrid_selection("A", "A", "H", .30, .005), "H")
-        self.assertEqual(build_site.hybrid_selection("H", "A", "H", .30, .02), "H")
-        self.assertEqual(build_site.hybrid_selection("H", "A", "H", .60, .005), "H")
-        # A lean naming neither club cannot be mirrored, so it abstains.
-        self.assertIsNone(build_site.hybrid_selection("XXX", "A", "H", .30, .005))
 
-    def test_follow_panel_shows_the_delta_by_price_intersection(self):
-        ctx = {
-            ("delta_price_follow", 1, "+100 to +129"): {
-                "model": dict(n=14, w=7, l=7, units=-1.80),
-            },
-        }
-        html = build_site._verdict_html(
-            "PIT", dict(p_home=.529, away_ml=103), "PIT", "SD", ctx, .0187,
-        )
-        self.assertIn("Historical context · descriptive only", html)
-        self.assertIn("Δ .010–.020 · closing ML +100 to +129", html)
-        self.assertIn("Similar Δ + closing-price cell", html)
-        self.assertIn("14 games · 7-7 · -1.80u", html)
-        self.assertNotIn("Past results", html)
-    def test_pit_acceptance_panel_has_the_requested_reads(self):
-        ctx = {
-            ("delta_price_follow", 1, "+100 to +129"): {
-                "model": dict(n=14, w=7, l=7, units=-1.80),
-            },
-        }
-        html = build_site._verdict_html(
-            "PIT", dict(p_home=.529, away_ml=103), "PIT", "SD", ctx, .0187,
-        )
-        for expected in (
-            "This game",
-            f"Model lean</span><span>PIT · {build_site._model_version_short()} Δ .0187",
-            "Market price</span><span>PIT +103 · 47.1% no-vig",
-            "Posted break-even</span><span>49.3% · requires +2.2 pp over market",
-            "chooses the side independently of the market",
-            "Δ magnitude is not a calibrated win probability",
-            "Historical context · descriptive only",
-            "Δ .010–.020 · closing ML +100 to +129",
-            "14 games · 7-7 · -1.80u",
-        ):
-            self.assertIn(expected, html)
-        self.assertNotIn("(MEDIUM)", html)
-        self.assertNotIn("Selection", html)
-        for banned in ("value bet", "best bet", "free money", "lock"):
-            self.assertNotIn(banned, html.lower())
-    def test_no_branch_or_threshold_key_survives_the_rule(self):
-        """Replaces `test_records_respect_the_branch_floor`.
-
-        That test patched `BRANCH_RECORD_MIN` to an unreachable value and
-        asserted the `("branch", …)` / `("chalk", …)` keys vanished. All three
-        names are gone: the keys fed `_branch_history`'s FADE body, which
-        became unreachable at v13 and was deleted with the rule on
-        2026-09-18, and the floor and the `"threshold"` key had no reader left
-        the moment that landed.
-
-        Restated rather than dropped, because deleting it would leave nothing
-        asserting that a later change cannot reintroduce a branch aggregate
-        the pages have no renderer for -- eight such keys were once computed
-        every build for a renderer that returned before reaching them, which
-        is the hardest form of `column carried to no surface` to spot.
-        """
-        out = build_site.hybrid_branch_records()
-        self.assertEqual(
-            [k for k in out if isinstance(k, tuple)
-             and k[0] in ("branch", "chalk", "band", "bandchalk")], [])
-        self.assertNotIn("threshold", out)
-        self.assertFalse(hasattr(build_site, "BRANCH_RECORD_MIN"))
-        # The keys the card actually reads must still be there.
-        self.assertIn("n", out)
-        self.assertTrue([k for k in out if isinstance(k, tuple)
-                         and k[0] == "delta_price_follow"])
-
-    def test_delta_history_covers_every_row_at_its_own_price(self):
-        """Replaces `test_delta_history_excludes_market_over_lean_rows`.
-
-        The cell used to be the retired rule's selected side over its FOLLOW
-        subset, so a same-delta faded game was excluded and the old fixture
-        asserted n=2 of 3. With the rule off the pages that is a row set
-        defined by something nothing runs -- and on the excluded row the cell
-        would have scored the OPPOSITE club at the OPPOSITE price.
-
-        So the claim inverts: every decidable row is in exactly one cell, at
-        the lean's own closing moneyline. The third row is deliberately the
-        one the old rule faded, and it is now bucketed by `close_ml` like the
-        other two -- a reintroduced branch filter fails here on exactly the
-        row that used to exercise it.
-        """
-        obs = pd.DataFrame({
-            "delta": [.005, .006, .007],
-            "won": [1.0, 0.0, 1.0],
-            "market_p": [.60, .55, .40],
-            "market_resid": [.40, -.55, .60],
-            "close_ml": [-120.0, -120.0, -120.0],
-            "profit": [.50, -1.0, 1.50],
-            "chalk_won": [1.0, 0.0, 0.0],
-            "chalk_p": [.60, .55, .60],
-            "chalk_resid": [.40, -.55, -.60],
-            "chalk_profit": [.50, -1.0, -1.0],
-        })
-        with mock.patch.object(build_site, "load_ledger_df",
-                               return_value=pd.DataFrame([{}])), \
-                mock.patch.object(build_site, "_lean_market_observations",
-                                  return_value=obs):
-            out = build_site.hybrid_branch_records()
-        bucket = out[("delta_price_follow", 0, "-129 to -100")]
-        self.assertEqual(bucket["model"]["n"], 3)
-        # Every row landed somewhere: the bands and the ladder both tile.
-        total = sum(v["model"]["n"] for k, v in out.items()
-                    if isinstance(k, tuple) and k[0] == "delta_price_follow")
-        self.assertEqual(total, len(obs))
-        # The LEAN's own results, not the retired rule's: `won` is
-        # [1, 0, 1], so 2-1. Under the old FOLLOW filter this read (1, 1),
-        # scoring `hybrid_won` over two rows -- and on the excluded row the
-        # rule's grade was the INVERSE of the lean's, which is why the count
-        # and the record both had to move.
-        self.assertEqual((bucket["model"]["w"], bucket["model"]["l"]),
-                         (2, 1))
 
     def test_no_fade_branch_record_is_published_at_all(self):
         """Replaces `test_the_fade_branch_record_equals_its_chalk_control`.
@@ -3739,39 +3564,40 @@ class HybridRuleTests(unittest.TestCase):
         # A lean naming neither club cannot be mirrored, so it abstains.
         self.assertIsNone(build_site.hybrid_selection("XXX", "A", "H", .30, .005))
 
-    def test_follow_panel_shows_the_delta_by_price_intersection(self):
-        ctx = {
-            ("delta_price_follow", 1, "+100 to +129"): {
-                "model": dict(n=14, w=7, l=7, units=-1.80),
-            },
-        }
+    def test_follow_panel_shows_the_pooled_record_and_no_intersection(self):
+        """Restated on 2026-09-22 when the delta x price cells came off.
+
+        This pinned that the panel found the cell for the game's own band and
+        rung. That was the defect rather than the feature: no cell of that
+        26-cell grid is readable -- the best under no effect clears breakeven
+        by +39.6 pp on average, and the five bands are not even ordered. The
+        claim that survives is that the panel shows the model's record against
+        the POSTED price, pooled, and names no bucket at all.
+        """
         html = build_site._verdict_html(
-            "PIT", dict(p_home=.529, away_ml=103), "PIT", "SD", ctx, .0187,
+            "PIT", dict(p_home=.529, away_ml=103), "PIT", "SD", dict(pooled=dict(n=492, excess_be=.0595, excess_se=.0221, hold=.0184)), .0187,
         )
-        self.assertIn("Historical context · descriptive only", html)
-        self.assertIn("Δ .010–.020 · closing ML +100 to +129", html)
-        self.assertIn("Similar Δ + closing-price cell", html)
-        self.assertIn("14 games · 7-7 · -1.80u", html)
-        self.assertNotIn("Past results", html)
+        self.assertIn("Beating this price", html)
+        self.assertIn("Cleared the posted price by</span><span>+5.9 ± 2.2 pts "
+                      "· 492 completed games", html)
+        self.assertNotIn("Historical context", html)
+        self.assertNotIn("closing ML", html)
+        self.assertNotIn("Similar Δ", html)
     def test_pit_acceptance_panel_has_the_requested_reads(self):
-        ctx = {
-            ("delta_price_follow", 1, "+100 to +129"): {
-                "model": dict(n=14, w=7, l=7, units=-1.80),
-            },
-        }
         html = build_site._verdict_html(
-            "PIT", dict(p_home=.529, away_ml=103), "PIT", "SD", ctx, .0187,
+            "PIT", dict(p_home=.529, away_ml=103), "PIT", "SD", dict(pooled=dict(n=492, excess_be=.0595, excess_se=.0221, hold=.0184)), .0187,
         )
         for expected in (
             "This game",
             f"Model lean</span><span>PIT · {build_site._model_version_short()} Δ .0187",
             "Market price</span><span>PIT +103 · 47.1% no-vig",
-            "Posted break-even</span><span>49.3% · requires +2.2 pp over market",
+            "Posted break-even</span><span>49.3% · requires +2.2 pp over market"
+            " · above the 1.8 pp this model usually pays",
             "chooses the side independently of the market",
             "Δ magnitude is not a calibrated win probability",
-            "Historical context · descriptive only",
-            "Δ .010–.020 · closing ML +100 to +129",
-            "14 games · 7-7 · -1.80u",
+            "Beating this price",
+            "Cleared the posted price by</span><span>+5.9 ± 2.2 pts",
+            "not this game's chance of winning",
         ):
             self.assertIn(expected, html)
         self.assertNotIn("(MEDIUM)", html)
@@ -3800,10 +3626,15 @@ class HybridRuleTests(unittest.TestCase):
              and k[0] in ("branch", "chalk", "band", "bandchalk")], [])
         self.assertNotIn("threshold", out)
         self.assertFalse(hasattr(build_site, "BRANCH_RECORD_MIN"))
-        # The keys the card actually reads must still be there.
+        # The key the card actually reads must still be there -- and it is
+        # now the ONLY one. The three delta x price cell keys went on
+        # 2026-09-22 with the panel that read them, so a tuple key of any
+        # kind reappearing here is a grid coming back.
         self.assertIn("n", out)
-        self.assertTrue([k for k in out if isinstance(k, tuple)
-                         and k[0] == "delta_price_follow"])
+        self.assertIn("pooled", out)
+        self.assertEqual([k for k in out if isinstance(k, tuple)], [])
+        self.assertEqual(set(out["pooled"]),
+                         {"n", "excess_be", "excess_se", "hold"})
 
     def test_delta_history_covers_every_row_at_its_own_price(self):
         """Replaces `test_delta_history_excludes_market_over_lean_rows`.
@@ -3837,19 +3668,21 @@ class HybridRuleTests(unittest.TestCase):
                 mock.patch.object(build_site, "_lean_market_observations",
                                   return_value=obs):
             out = build_site.hybrid_branch_records()
-        bucket = out[("delta_price_follow", 0, "-129 to -100")]
-        self.assertEqual(bucket["model"]["n"], 3)
-        # Every row landed somewhere: the bands and the ladder both tile.
-        total = sum(v["model"]["n"] for k, v in out.items()
-                    if isinstance(k, tuple) and k[0] == "delta_price_follow")
-        self.assertEqual(total, len(obs))
-        # The LEAN's own results, not the retired rule's: `won` is
-        # [1, 0, 1], so 2-1. Under the old FOLLOW filter this read (1, 1),
-        # scoring `hybrid_won` over two rows -- and on the excluded row the
-        # rule's grade was the INVERSE of the lean's, which is why the count
-        # and the record both had to move.
-        self.assertEqual((bucket["model"]["w"], bucket["model"]["l"]),
-                         (2, 1))
+        # Every decidable row is counted, at the lean's own price. The cells
+        # this used to walk are gone (2026-09-22), so the claim moves to the
+        # pooled aggregate they were built from -- which is where a
+        # reintroduced branch filter would still drop the third row.
+        self.assertEqual(out["n"], len(obs))
+        self.assertEqual(out["pooled"]["n"], len(obs))
+        # The LEAN's own results, not the retired rule's. `won` is [1, 0, 1],
+        # so the realised rate is 2/3 against a mean market_p of .5167 and a
+        # mean breakeven of .5455; under the old FOLLOW filter this scored
+        # `hybrid_won` over two rows, and on the excluded row the rule's grade
+        # was the INVERSE of the lean's.
+        self.assertAlmostEqual(out["pooled"]["excess_be"],
+                               2 / 3 - np.mean(
+                                   market_backfill.breakeven_prob(
+                                       obs["close_ml"])), places=9)
 
     def test_the_fade_branch_record_equals_its_chalk_control(self):
         """Not a coincidence to be observed -- a construction to be enforced.
@@ -3934,27 +3767,31 @@ class HybridRuleTests(unittest.TestCase):
         """Historical bucket results must not read as this game's probability.
 
         The current-game section may contain market probabilities: the no-vig
-        benchmark and the posted-price break-even hurdle. The retrospective
-        section deliberately contains counts, records, and flat-stake units,
-        but no realised percentage that could be mistaken for a forecast.
+        benchmark and the posted-price break-even hurdle. The record below it
+        publishes a points GAP and a count, never a realised percentage that
+        could be mistaken for a forecast.
+
+        Restated on 2026-09-22: the retrospective section used to be three
+        delta x price cells with records and unit totals, and is now one
+        pooled gap over the posted price. The claim is unchanged and the
+        assertion is tightened to a COUNT of percentages on the whole panel,
+        so a second one reappearing anywhere fails here rather than silently
+        recreating the ambiguity.
         """
-        ctx = {("delta_price_follow", 0, "+175 to +249"):
-               {"model": dict(n=15, w=11, l=4, units=3.56)}}
         h = build_site._verdict_html(
             "LAD", dict(p_home=.70, away_ml=200, home_ml=-260), "LAD", "ARI",
-            ctx, .005)
-        self.assertIn("Historical context · descriptive only", h)
-        self.assertIn("15 games · 11-4 · +3.56u", h)
-        self.assertNotIn("73.3%", h)
-        self.assertNotIn("(0.733)", h)
-
-        # Both percentages belong to THIS game's market, and are explicitly
-        # named. Historical context below them publishes no percentage.
+            dict(pooled=dict(n=492, excess_be=.0595, excess_se=.0221,
+                             hold=.0184)), .005)
+        # Both percentages belong to THIS game's market and are named.
         self.assertIn("30.0% no-vig", h)
         self.assertIn("33.3% · requires +3.3 pp over market", h)
-        history = h.split("Historical context · descriptive only", 1)[1]
-        self.assertIsNone(re.search(r"\d+\.\d%", history), history)
-        self.assertNotIn("58.6%", h)
+        self.assertEqual(len(re.findall(r"\d+\.\d%", h)), 2, h)
+        # The record is a gap in points, with its spread and its own n.
+        self.assertIn("+5.9 ± 2.2 pts · 492 completed games", h)
+        self.assertIn("not this game's chance of winning", h)
+        # No realised rate, in any spelling.
+        for banned in ("73.3%", "(0.733)", "58.6%", "63.4%", "(0.634)"):
+            self.assertNotIn(banned, h)
     def test_the_ledger_labels_each_undecidable_case_distinctly(self):
         """Every reason the Selection column is not a live pick gets its own mark.
 

@@ -814,6 +814,86 @@ precedent — they are how the fix is known to look.
 
 **Resolved — keep as precedent**
 
+- **Three cells of a 26-cell search, published as a per-game read, with the
+  one figure that IS a result computed beside them and rendered nowhere.** The
+  card's `Historical context · descriptive only` block showed the |Δ| x
+  closing-price cell for the game in front of the reader plus its two
+  margins — `28 games · 16-12 · +2.27u`, `97 games · 53-44 · -6.80u`,
+  `135 games · 73-62 · +2.60u` — with no error bar, no reference and no note
+  that they overlap.
+
+  **Every one of the three is noise, measured against the POSTED price, which
+  is the bar a bet clears and is harsher than the devigged one by the hold:**
+  +5.9 ± 9.4, −1.3 ± 5.0, +2.3 ± 4.3 pp. And the three are one cell and its two
+  margins — 204 distinct games, not 260 — so they read as three corroborating
+  samples and are one sample counted three ways.
+
+  **The bands are not ordered, and that is the finding rather than the
+  sample size.** Against breakeven they run +2.6, +14.5, **−3.2**, +8.3,
+  +7.8 pp, rank correlation of band index against ROI **r = −0.06**. A
+  reader whose game landed in the .020–.030 band was shown −7.0% ROI under
+  their own Δ — and a market with no edge produces that band's number about
+  **a third of the time** (its own-prices null has sd 8.9 pp, 5–95 range
+  [−18.0, +11.3], P(≤ −7.0%) = 0.33). The band immediately below theirs is
+  the best of the five.
+
+  **It is a search, so no n rescues it.** Simulated at the rows' own closes
+  under "market correct, no edge", the best of the 26 non-empty cells clears
+  breakeven by **+39.6 pp on average** against an observed best of +45.0,
+  P = 0.590. `_selection_price_matrix_lines` prints exactly that reference
+  beside its copy of the identical grid and says a cell is read against it,
+  never against zero. The card printed three cells of it with neither.
+
+  **And `out["pooled"]` was written every build and read by nothing** — found
+  by walking the AST, not by grepping — with a comment saying "retained for
+  other reporting surfaces" when there were none. That is `column carried to
+  no surface` on the best-estimated number the panel had available: the lean
+  clears the posted price by **+5.9 ± 2.2 pp over 492 rows**. The panel was
+  dropping the result and publishing the noise.
+
+  Fixed subtractively: the three cells go, the pooled margin renders with its
+  spread and its own `n`, and the full 5x8 grid survives WITH its error bars
+  and its null maximum in `ledger_report.txt` — moved, not deleted, per
+  `Deleting controls as clutter`. The one honest per-game number is the HOLD,
+  which genuinely varies (family mean 1.84 pp, sd 0.84, range 0.63–3.47), so
+  the break-even line now names the family average beside this game's figure:
+  `+2.4 pp over market · above the 1.8 pp this model usually pays`.
+
+  **The hindsight basis is NOT stated, on the operator's instruction, and that
+  is the cost written down rather than argued.** 445 of the 492 rows are v13
+  re-decisions of v12 rows; native-only reads +13.2 ± 7.1 pp over 47 games,
+  an interval containing zero. So the published +5.9 ± 2.2 is ~90% a
+  re-decision made after the results were known, and the card says a
+  model-level average without saying that. It is the same call as 2026-09-18,
+  taken again with the native figure and its interval on the table. **A later
+  reader must not read the line as a track record.** The clean sample needs
+  ~15 more slates to reach a ±3.0 pp interval.
+
+  Four things fell out and each is a rule this file already has. `_card_record`
+  and the three cell keys went WITH the renderer rather than being left behind,
+  and `pooled` is projected to exactly the four keys the card reads for the
+  same reason. `_LEAN_HISTORY_BINS`, `_lean_history_bucket`,
+  `_lean_history_range` and `delta` on `_branch_history` lost their last
+  readers and went in the same commit — the eighth instance of the
+  callee-outliving-its-call-site pattern, caught by running the reference count
+  before the edit. The wording `costs -2.5 pp of hold` was caught by RENDERING
+  the panel rather than reading the source, and reverted to the sign-safe
+  `requires +N pp over market`. And `grade_leans`' matrix header still read
+  `the grid the game card shows one cell of` — caught by the one test that
+  reads both surfaces at once, which is why that test was restated rather than
+  deleted when its subject went.
+
+  **Nine tests in `HybridRuleTests` were defined twice and the first copy of
+  each had never run**, found while restating them: Python keeps the last
+  definition, the pairs were byte-identical, and the shadowed nine could have
+  drifted from their live twins at any time. Deleted. Six other tests were
+  restated rather than dropped — including two that pinned the cell TRACKING
+  the game's band and price, now inverted to pin that the record does NOT move
+  with either while the break-even line does.
+
+  Display-only: no lean, delta, grade or ledger row moves, no registered
+  constant changes, `MODEL_TAG` unchanged.
+
 - **An instrument that went dark at a bump and said so only as a warm-up
   count.** `win_probability.py` is the repo's one calibrated delta-to-P(home)
   map. From the v13 bump on 2026-09-18 it scored **zero games for four days**:

@@ -321,6 +321,9 @@ class CurrentScoreTests(unittest.TestCase):
         self.assertIn("summaryMarket.hidden=inProgress", js)
 
 
+POOLED = {"pooled": dict(n=492, excess_be=.0595, excess_se=.0221, hold=.0184)}
+
+
 class RenderTests(unittest.TestCase):
     def _cards(self):
         ari = [_hitter(f"A{i}", "LF", "R", .33, 60) for i in range(9)]
@@ -517,41 +520,41 @@ class RenderTests(unittest.TestCase):
         self.assertNotIn("verdict edge", dis)
         self.assertNotIn("XWOBA SIDE", dis)
         self.assertNotIn("MARKET OVER LEAN", dis)
-    def test_the_panel_names_the_intersection_its_history_came_from(self):
-        """The card shows current hurdle first, then three descriptive histories."""
-        ctx = {
-            ("delta_price_follow", 0, "-129 to -100"): {
-                "model": dict(n=50, w=24, l=26, units=-4.68),
-            },
-            ("delta_all_prices", 0): {
-                "model": dict(n=140, w=79, l=61, units=10.47),
-            },
-            ("price_all_delta", "-129 to -100"): {
-                "model": dict(n=134, w=73, l=61, units=3.60),
-            },
-            ("branch", "FADE"): dict(n=15, w=11, l=4, units=3.56),
-        }
+    def test_the_panel_names_the_record_it_shows_and_no_per_game_bucket(self):
+        """Current hurdle first, then ONE pooled record against the posted price.
+
+        Restated, not deleted, when the three delta x price cells came off on
+        2026-09-22. The claim it protected -- the panel says where its number
+        came from -- survives; what changed is that the number is a family
+        margin rather than a cell, so naming a bucket is now the thing to
+        forbid. Every cell of that grid was unreadable by construction: best
+        of 26 under no effect clears breakeven by +39.6 pp on average.
+        """
+        ctx = {**POOLED,
+               ("branch", "FADE"): dict(n=15, w=11, l=4, units=3.56)}
         h = b._verdict_html(
             "MIN", dict(p_home=.521, home_ml=-120), "SEA", "MIN", ctx, .0016,
         )
         self.assertIn(
             f"Model lean</span><span>MIN · {b._model_version_short()} Δ .0016", h)
         self.assertIn("Market price</span><span>MIN -120 · 52.1% no-vig", h)
-        self.assertIn(
-            "Posted break-even</span><span>54.5% · requires +2.4 pp over market", h)
+        self.assertIn("Posted break-even</span><span>54.5% · requires +2.4 pp "
+                      "over market · above the 1.8 pp this model usually pays", h)
         self.assertIn(
             f"{b._model_version_short()} chooses the side independently of the market", h)
         self.assertIn("Δ magnitude is not a calibrated win probability", h)
         self.assertNotIn("Selection", h)
-        self.assertIn("Historical context · descriptive only", h)
-        self.assertIn("Δ .000–.010 · closing ML -129 to -100", h)
-        self.assertIn(
-            "Similar Δ + closing-price cell</span><span>50 games · 24-26 · -4.68u", h)
-        self.assertIn(
-            "Δ .000–.010 across all prices</span><span>140 games · 79-61 · +10.47u", h)
-        self.assertIn(
-            "Closing ML -129 to -100 across all Δ</span><span>134 games · 73-61 · +3.60u", h)
+        # The record, with its spread and its own n.
+        self.assertIn("Beating this price", h)
+        self.assertIn("Cleared the posted price by</span><span>+5.9 ± 2.2 pts "
+                      "· 492 completed games", h)
+        self.assertIn("not this game's chance of winning", h)
+        # And no bucket label of any kind.
+        for gone in ("Historical context", "Similar Δ", "across all prices",
+                     "across all Δ", "closing ML -129 to -100", "Δ .000–.010"):
+            self.assertNotIn(gone, h, gone)
         self.assertNotIn("11-4", h)
+
     def test_no_fade_branch_renders_at_any_price(self):
         """The retired fade branch never reaches the simplified card."""
         ctx = {
@@ -568,14 +571,20 @@ class RenderTests(unittest.TestCase):
             self.assertIn("LAD", h)
             self.assertIn("chooses the side independently of the market", h)
             self.assertNotIn("11-4", h)
-    def test_a_one_game_history_still_states_its_own_sample(self):
-        ctx = {("delta_price_follow", 0, "+175 to +249"):
-               {"model": dict(n=1, w=1, l=0, units=.51)}}
-        h = b._verdict_html(
-            "LAD", dict(p_home=.70, away_ml=210, home_ml=-250),
-            "LAD", "ARI", ctx, .005,
-        )
-        self.assertIn("1 game · 1-0 · +0.51u", h)
+    def test_the_record_line_always_states_its_own_sample_size(self):
+        """Replaces the two thin-CELL tests: a cell no longer exists, but the
+        record must still carry the n it was computed over, at any n."""
+        for n, gap, se in ((1, .5, .5), (3, .12, .28), (492, .0595, .0221)):
+            ctx = {"pooled": dict(n=n, excess_be=gap, excess_se=se, hold=.0184)}
+            h = b._verdict_html(
+                "LAD", dict(p_home=.70, away_ml=200, home_ml=-250),
+                "LAD", "ARI", ctx, .005)
+            word = "game" if n == 1 else "games"
+            self.assertIn(f"· {n} completed {word}", h)
+            # The spread prints at every n -- never suppressed, which is the
+            # standing rule the deleted cells violated by printing none.
+            self.assertIn(f"± {100 * se:.1f} pts", h)
+
     def test_no_page_claims_a_gate_the_reader_cannot_see(self):
         """Replaces `test_the_discovery_claim_survives_off_the_card`.
 
@@ -633,87 +642,81 @@ class RenderTests(unittest.TestCase):
 
     def test_the_record_row_carries_no_price_band_qualifier(self):
         """Retired fitted-gate wording stays off the descriptive history."""
-        ctx = {("delta_price_follow", 0, "+175 to +249"):
-               {"model": dict(n=19, w=13, l=6, units=2.58)}}
         for p_home in (.70, .56, .50):
             h = b._verdict_html("LAD", dict(p_home=p_home, away_ml=200,
                                             home_ml=-260),
-                                "LAD", "ARI", ctx, .005)
+                                "LAD", "ARI", POOLED, .005)
             self.assertNotIn("at under", h)
             self.assertNotIn("45%", h)
-        self.assertEqual(h.count("Similar Δ + closing-price cell"), 1, h)
-    def test_card_units_are_never_labelled_roi(self):
-        """One label per quantity: flat-stake units are never called ROI."""
-        ctx = {
-            ("delta_price_follow", 0, "+175 to +249"): {"model": dict(
-                n=19, w=13, l=6, units=2.58)},
-            ("delta_price_follow", 2, "-174 to -130"): {"model": dict(
-                n=34, w=23, l=11, units=4.69)},
-        }
-        panels = [
-            b._verdict_html("LAD", dict(p_home=.70, away_ml=200, home_ml=-260),
-                            "LAD", "ARI", ctx, .005),
-            b._verdict_html("ARI", dict(p_home=.62, home_ml=-160),
-                            "LAD", "ARI", ctx, .025),
-        ]
-        for h in panels:
-            self.assertRegex(
-                h, r"\d+ games? · \d+-\d+ · [+-]\d+\.\d{2}u")
+            # The record line is pooled, so no band or rung can qualify it.
+            self.assertNotIn("closing ML", h)
+            self.assertEqual(h.count("Cleared the posted price by"), 1, h)
+    def test_the_card_prints_no_unit_total_and_never_labels_one_roi(self):
+        """Restated when the cells went: the card's only unit figures were
+        theirs, so the ROI-vs-units confusion has no live instance. The RULE
+        is kept rather than dropped -- pinning the two old lines absent would
+        pass just as happily if a third reintroduced the mislabel elsewhere.
+        """
+        for fav, odds, delta in (("LAD", dict(p_home=.70, away_ml=200,
+                                              home_ml=-260), .005),
+                                 ("ARI", dict(p_home=.62, home_ml=-160), .025)):
+            h = b._verdict_html(fav, odds, "LAD", "ARI", POOLED, delta)
+            self.assertNotRegex(h, r"[+-]\d+\.\d{2}u")
             self.assertNotRegex(h, r"ROI\s*[+-]?\d+(\.\d+)?u")
+            self.assertNotIn("ROI", h)
+
     def test_verdict_panel_leaves_no_computed_key_unrendered(self):
-        """Card history carries only quantities that the card actually renders."""
-        model = dict(n=208, w=135, l=73, units=27.94)
-        ctx = {("delta_price_follow", 0, "+175 to +249"): {"model": model}}
-        h = b._verdict_html(
-            "LAD", dict(p_home=.70, away_ml=200, home_ml=-260), "LAD", "ARI",
-            ctx, .005,
-        )
-        self.assertIn("208 games · 135-73 · +27.94u", h)
-        rendered = {"n", "w", "l", "units"}
-        self.assertEqual(set(model), rendered)
-    def test_xwoba_side_record_intersects_delta_and_selected_price_rung(self):
-        """The narrow historical row still identifies its delta and close bucket."""
-        ctx = {
-            ("delta_price_follow", 2, "+100 to +129"): {
-                "model": dict(n=8, w=5, l=3, units=2.15),
-            },
-        }
-        h = b._verdict_html(
-            "LAD", dict(p_home=.53, away_ml=115, home_ml=-135), "LAD", "ARI",
-            ctx, .02)
-        self.assertIn("Δ .020–.030 · closing ML +100 to +129", h)
-        self.assertIn("8 games · 5-3 · +2.15u", h)
-        self.assertNotIn("45–50%", h)
-    def test_intersection_changes_with_the_selected_price_rung(self):
-        ctx = {
-            ("delta_price_follow", 2, "-129 to -100"): {
-                "model": dict(n=21, w=12, l=9, units=-0.35),
-            },
-        }
-        h = b._verdict_html(
-            "ARI", dict(p_home=.52, home_ml=-108), "LAD", "ARI", ctx, .02)
-        self.assertIn("Δ .020–.030 · closing ML -129 to -100", h)
-        self.assertIn("21 games · 12-9 · -0.35u", h)
-    def test_a_thin_history_still_states_its_own_sample_size(self):
-        ctx = {("delta_price_follow", 0, "+175 to +249"):
-               {"model": dict(n=3, w=2, l=1, units=.42)}}
-        h = b._verdict_html(
-            "LAD", dict(p_home=.70, away_ml=200, home_ml=-260), "LAD", "ARI",
-            ctx, .005,
-        )
-        self.assertIn("3 games · 2-1 · +0.42u", h)
+        """Every key `hybrid_branch_records` hands the card must reach a line.
+
+        The deleted `_card_record` projected the aggregate to exactly the
+        quantities the card rendered, and `pooled` is projected the same way
+        for the same reason: `_lean_market_agg` returns nine keys and this
+        panel reads four. Handing the whole dict over is how a
+        computed-and-unrendered set appears the moment someone trusts it.
+        """
+        rendered = {"n", "excess_be", "excess_se", "hold"}
+        ctx = b.hybrid_branch_records()
+        pooled = ctx.get("pooled")
+        self.assertIsNotNone(pooled, "the card lost its only record")
+        self.assertEqual(set(pooled), rendered)
+        h = b._verdict_html("LAD", dict(p_home=.70, away_ml=200, home_ml=-260),
+                            "LAD", "ARI", ctx, .005)
+        self.assertIn(f"{100 * pooled['excess_be']:+.1f} ± "
+                      f"{100 * pooled['excess_se']:.1f} pts", h)
+        self.assertIn(f"· {pooled['n']} completed games", h)
+        self.assertIn(f"{100 * pooled['hold']:.1f} pp this model usually pays", h)
+
+    def test_the_record_does_not_move_with_this_game_delta_or_price(self):
+        """The inverse of the two tests this replaces, and a stronger claim.
+
+        They pinned that the cell tracked the game's delta band and price
+        rung. That was the defect: the band a game lands in carries no
+        information (the five read +2.6, +14.5, -3.2, +8.3, +7.8 pp against
+        the posted price, rank r = -0.06), so a number that moved with it read
+        as a verdict on the reader's bet. The record is pooled now, so it must
+        NOT move -- while the per-game break-even line must.
+        """
+        records, bars = set(), set()
+        for odds, delta in ((dict(p_home=.53, away_ml=115, home_ml=-135), .02),
+                            (dict(p_home=.52, home_ml=-108), .02),
+                            (dict(p_home=.70, away_ml=200, home_ml=-260), .005),
+                            (dict(p_home=.62, home_ml=-160), .0551)):
+            h = b._verdict_html("ARI", odds, "LAD", "ARI", POOLED, delta)
+            records.add(re.search(r"Cleared the posted price by</span><span>"
+                                  r"([^<]+)", h).group(1))
+            bars.add(re.search(r"Posted break-even</span><span>([^<]+)",
+                               h).group(1))
+        self.assertEqual(len(records), 1, records)
+        self.assertGreater(len(bars), 1, bars)
+
     def test_follow_panel_labels_delta_records_as_past_results(self):
         """Historical bucket results are explicitly descriptive, not forecasts."""
-        ctx = {("delta_price_follow", 2, "-174 to -130"): {
-            "model": dict(n=32, w=21, l=11, units=4.62),
-        }}
         h = b._verdict_html(
-            "ARI", dict(p_home=.62, home_ml=-160), "LAD", "ARI", ctx, .02)
-        self.assertIn("Historical context · descriptive only", h)
-        self.assertIn("Similar Δ + closing-price cell", h)
-        self.assertNotIn("Past results", h)
-        self.assertNotIn(f"Past {b._model_version_short()} selections", h)
-        self.assertIn("32 games · 21-11 · +4.62u", h)
+            "ARI", dict(p_home=.62, home_ml=-160), "LAD", "ARI", POOLED, .02)
+        self.assertIn("A model-level average over every completed game, "
+                      "not this game's chance of winning", h)
+        self.assertNotIn("Historical context", h)
+        self.assertNotIn("Similar Δ", h)
     def test_verdict_never_claims_a_value_bet(self):
         """Measured walk-forward, no bucket in this ledger beats the close.
 

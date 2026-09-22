@@ -51,7 +51,8 @@ from market_backfill import (ODDS_LADDER as _mb_odds_ladder,
                              ladder_rung as _mb_ladder_rung,
                              publish_reconstruction as _mb_publish_reconstruction,
                              recon_grade as _mb_recon_grade,
-                             recon_grades as _mb_recon_grades)
+                             recon_grades as _mb_recon_grades,
+                             breakeven_prob as _mb_breakeven_prob)
 import requests
 
 import hitter_frame
@@ -4636,121 +4637,56 @@ def _model_version_short():
     return f"V{m.group(1)}" if m else MODEL_TAG
 
 
-# Reference bar for the branch read. The hybrid publishes TWO branches rather
-# than the 21 cells this replaces, so the family-wise correction that grid
-# needed (|z| >= 2.7 across 15 draws) is no longer the right bar: at two
-# branches the ~0.05 family-wise threshold is |z| ~ 2.2. Stated as a REFERENCE
-# and not a gate -- the number and its spread always print, only the sentence
-# beside them changes.
-_LEAN_HISTORY_BINS = (
-    (0.000, 0.010),
-    (0.010, 0.020),
-    (0.020, 0.030),
-    (0.030, 0.050),
-    (0.050, math.inf),
-)
+def _xwoba_side_history(ctx, selection_ml=None):
+    """The model's record against the POSTED price, pooled over the family.
 
+    ONE figure, and the delta x price cells that stood here are gone. They
+    were three of a 26-cell grid published with no error bar and no
+    reference, and no cell of that grid can be read: under "market correct,
+    no edge" its best cell clears breakeven by +39.6 pp on average. The
+    measured bands are not even ordered (+2.6, +14.5, -3.2, +8.3, +7.8 pp),
+    so a big delta is not conviction paying off, and the cell a reader lands
+    on says nothing about their game.
 
-def _lean_history_bucket(delta):
-    """Fixed ledger-style |xwOBA delta| range containing ``delta``."""
-    d = _f(delta)
-    if d is None or not np.isfinite(d) or d < 0:
-        return None
-    d = abs(d)
-    for i, (lo, hi) in enumerate(_LEAN_HISTORY_BINS):
-        if lo <= d < hi:
-            return i, lo, hi
-    return None
+    What IS a result is the margin, which the panel had computed all along
+    and rendered nowhere: over the family the lean clears the posted price by
+    about +5.9 +/- 2.2 pp. It is a MODEL-LEVEL average, not this game's
+    chance of winning, and the copy says so rather than leaving a percentage
+    beside two other percentages to be read as one -- the defect this panel
+    already shipped once.
 
-
-def _lean_history_range(lo, hi):
-    """Compact public range label matching the ledger's half-open bins."""
-    lo_txt = f"{lo:.3f}".lstrip("0")
-    if np.isinf(hi):
-        return f"{lo_txt}+"
-    return f"{lo_txt}–{f'{hi:.3f}'.lstrip('0')}"
-
-
-def _xwoba_side_history(ctx, delta, selection_ml=None):
-    """Descriptive v13 history around this game's delta and price buckets.
-
-    The intersection remains visible because it is useful context, but it is
-    not presented as this game's probability. Two broader margins sit beside
-    it: the same delta band across all closing prices, and the same closing
-    price rung across all deltas. All three are retrospective flat-stake
-    records from the same v13-represented history.
-
-    The live card uses the current pregame price while these rows are bucketed
-    on closing moneylines, so the heading says closing ML explicitly.
+    Against the POSTED price, never the devigged one: a bet has to clear the
+    breakeven, and the two differ by the hold.
     """
-    bucket = _lean_history_bucket(delta)
-    if bucket is None:
+    pooled = (ctx or {}).get("pooled")
+    if not pooled or not pooled.get("n"):
         return ""
-    i, lo, hi = bucket
-    range_txt = _lean_history_range(lo, hi)
-    ml = _f(selection_ml)
-    rung = _ladder_rung(ml) if ml is not None else None
-    if rung is None:
+    n = int(pooled["n"])
+    if pooled.get("excess_be") is None or pooled.get("excess_se") is None:
         return ""
-
-    ctx = ctx or {}
-    cell = ctx.get(("delta_price_follow", i, rung))
-    delta_all = ctx.get(("delta_all_prices", i))
-    price_all = ctx.get(("price_all_delta", rung))
-
-    def _record(parts):
-        if not parts or not parts.get("model"):
-            return None
-        model = parts["model"]
-        n = int(model["n"])
-        game_word = "game" if n == 1 else "games"
-        return (f"{n} {game_word} · {int(model['w'])}-{int(model['l'])} · "
-                f"{float(model['units']):+.2f}u")
-
-    rows = []
-    cell_txt = _record(cell)
-    if cell_txt:
-        rows.append(
-            "<div class='vline'><span class='vk'>Similar Δ + closing-price cell</span>"
-            f"<span>{cell_txt}</span></div>"
-        )
-    else:
-        rows.append(
-            "<div class='vline'><span class='vk'>Similar Δ + closing-price cell</span>"
-            f"<span>No completed {_model_version_short()} selections yet</span></div>"
-        )
-
-    delta_txt = _record(delta_all)
-    if delta_txt:
-        rows.append(
-            f"<div class='vline'><span class='vk'>Δ {range_txt} across all prices</span>"
-            f"<span>{delta_txt}</span></div>"
-        )
-
-    price_txt = _record(price_all)
-    if price_txt:
-        rows.append(
-            f"<div class='vline'><span class='vk'>Closing ML {_esc(rung)} across all Δ</span>"
-            f"<span>{price_txt}</span></div>"
-        )
-
+    gap = 100.0 * float(pooled["excess_be"])
+    se = 100.0 * float(pooled["excess_se"])
+    game_word = "game" if n == 1 else "games"
     return (
         "<div class='vprofile'>"
-        "<div class='vprofile-title'>Historical context · descriptive only</div>"
-        f"<div class='vprofile-band'>Δ {range_txt} · closing ML {_esc(rung)}</div>"
-        + "".join(rows)
-        + "</div>"
+        "<div class='vprofile-title'>Beating this price</div>"
+        "<div class='vline'><span class='vk'>Cleared the posted price by</span>"
+        f"<span>{gap:+.1f} ± {se:.1f} pts · {n} completed {game_word}</span></div>"
+        "<div class='vnote'>A model-level average over every completed game, "
+        "not this game's chance of winning.</div>"
+        "</div>"
     )
+def _branch_history(ctx, action, p_lean=None, selection_ml=None):
+    """Return the model's record against the posted price, or nothing.
 
-def _branch_history(ctx, action, p_lean=None, delta=None, selection_ml=None):
-    """Return descriptive history only when a two-sided price is available.
-
-    The model lean is shown independently of the market. History needs the
-    current price only to choose the matching closing-moneyline rung.
+    `delta` left this signature with the cells that read it: the panel is a
+    pooled margin now and takes no per-game bucket, so carrying the argument
+    would be a parameter nothing reads -- the same smell one level down from
+    a column carried to no surface.
     """
     if not action:
         return ""
-    return _xwoba_side_history(ctx, delta, selection_ml)
+    return _xwoba_side_history(ctx, selection_ml)
 
 
 def _verdict_html(fav, odds, away_abbr, home_abbr, ctx=None, delta=None):
@@ -4783,10 +4719,28 @@ def _verdict_html(fav, odds, away_abbr, home_abbr, ctx=None, delta=None):
         be = _imp_ml(price_num)
         if p_lean is not None:
             lift_pp = 100.0 * (be - p_lean)
+            # THE ONE HONEST PER-GAME NUMBER ON THIS PANEL. Every historical
+            # cut of the history is a slice of a search; the hold is a fact
+            # about THIS price, it genuinely varies (family mean 1.8 pp, sd
+            # 0.8, range 0.6 to 3.5), and it is the bar the record below has
+            # to clear. Naming the family average is what makes it readable:
+            # `+2.4 pp` alone cannot tell a reader whether that is a cheap
+            # game or an expensive one. The signed wording is kept rather than
+            # reworded to "costs N pp of hold": a devigged pair can come back
+            # underround on bad data, and `costs -2.5 pp` reads as nonsense
+            # where `requires -2.5 pp` reads as the anomaly it is.
+            pooled = (ctx or {}).get("pooled") or {}
+            typical = pooled.get("hold")
+            vs_typical = ""
+            if typical is not None and np.isfinite(typical):
+                avg_pp = 100.0 * float(typical)
+                where = ("above" if lift_pp > avg_pp + 0.05 else
+                         "below" if lift_pp < avg_pp - 0.05 else "level with")
+                vs_typical = f" · {where} the {avg_pp:.1f} pp this model usually pays"
             break_even_line = (
                 "<div class='vline'><span class='vk'>Posted break-even</span>"
                 f"<span>{100 * be:.1f}% · requires {lift_pp:+.1f} pp over market"
-                "</span></div>"
+                f"{vs_typical}</span></div>"
             )
         else:
             break_even_line = (
@@ -4800,7 +4754,7 @@ def _verdict_html(fav, odds, away_abbr, home_abbr, ctx=None, delta=None):
     )
 
     selection_ml = price if action else None
-    history = _branch_history(ctx, action, p_lean, delta, selection_ml)
+    history = _branch_history(ctx, action, p_lean, selection_ml)
 
     return (
         "<div class='verdict'><div class='l'>Model vs market</div>"
@@ -7414,7 +7368,12 @@ def _baseline_controls(g):
 def hybrid_branch_records():
     """Current-family records the per-game card reads, keyed by cell.
 
-    Keys: ``("delta_price_follow", band, rung)`` for the |delta| x\n    closing-price cell, ``("delta_all_prices", band)`` for its delta margin,\n    ``("price_all_delta", rung)`` for its price margin, ``"pooled"`` for\n    the whole family, and ``"n"``. Scored on `_record_grades`, because\n    pooling older prediction math would answer a different question.
+    Keys: ``"pooled"`` for the whole family and ``"n"``. Scored on
+    `_record_grades`, because pooling older prediction math would answer a
+    different question. The three delta x price cell keys went on
+    2026-09-22 with the panel that read them -- see the comment below for
+    the measurement, and `grade_leans._selection_price_matrix_lines` for the
+    full grid, which keeps its error bars and its null maximum.
 
     **The retired rule's keys are gone**, on the operator's 2026-09-18
     instruction to take it off every user-facing page: ``("branch", …)`` and
@@ -7440,53 +7399,51 @@ def hybrid_branch_records():
     if obs.empty:
         return {}
     out = {"n": int(len(obs))}
-    # Whole-family reference retained for other reporting surfaces.
+    # THE ONE RECORD THE CARD PUBLISHES, and the only one on this data that is
+    # a result rather than a cell of a search. `excess` is against the devigged
+    # price; a BET has to clear the posted one, which is harsher by exactly the
+    # hold, so the panel reads `excess_be` and the two differ by `hold`. One SE
+    # serves both -- the breakeven is fixed by the market exactly as the
+    # devigged price is, so neither is estimated from the outcomes under test.
+    #
+    # This key existed before, computed every build and read by nothing: its
+    # comment said "retained for other reporting surfaces" and there were
+    # none. That is the `column carried to no surface` entry, on the best
+    # estimated number the panel had available.
     pooled = _lean_market_agg(obs, obs["won"].notna())
     if pooled:
-        out["pooled"] = pooled
+        rows = obs.loc[obs["won"].notna()]
+        breakeven = float(np.mean(_mb_breakeven_prob(rows["close_ml"])))
+        # PROJECTED to exactly what the card renders, the discipline the
+        # deleted `_card_record` kept: `_lean_market_agg` returns nine keys and
+        # the panel reads four, so handing the whole dict over would be a
+        # computed-and-unrendered set the moment anyone trusted it. `n` and
+        # `excess_be` +/- `excess_se` are the record line; `hold` is the
+        # family average the per-game break-even line is read against.
+        out["pooled"] = {
+            "n": pooled["n"],
+            "excess_be": float(pooled["actual"]) - breakeven,
+            "excess_se": pooled["excess_se"],
+            "hold": breakeven - float(pooled["implied"]),
+        }
     # Cross the fixed |delta| bands with the leaned side's closing-price rung.
     # Counts are intentionally retained even when thin because the public card
     # prints its own `n` beside every cell.
     #
-    # The LEAN's own columns and every decided row. Until 2026-09-18 this
-    # scored `hybrid_won` / `hybrid_p` / `hybrid_ml` masked to `hybrid_follow`
-    # -- the retired rule's selected side, over the subset it would have
-    # followed. With the rule off the pages that is a row set defined by
-    # something nothing runs, and on a faded row it named the opposite club at
-    # the opposite price. `grade_leans._selection_price_matrix_lines` moved to
-    # the same basis in the same commit, and a test holds the two equal cell
-    # by cell.
+    # THE CELLS ARE GONE, and that is a measurement rather than a taste call.
+    # Scored against the POSTED price the |delta| bands read +2.6, +14.5, -3.2,
+    # +8.3, +7.8 pp -- not ordered, so a band is not conviction paying off --
+    # and 11 of 13 band-and-rung cuts have an interval containing zero. The
+    # grid is a 26-cell SEARCH: simulated at the rows' own closes under
+    # "market correct, no edge" the best cell clears breakeven by +39.6 pp on
+    # average against an observed best of +45.0, P = 0.590. No cell here can be
+    # read at any n, and the card was publishing three of them with no error
+    # bar and no reference while dropping `pooled`, the one figure that IS a
+    # result (+5.9 +/- 2.2 pp over the posted price on 492 rows).
     #
-    # The `("branch", action)` and `("chalk", action)` keys went with the
-    # renderer that read them: `_branch_history`'s FADE body is unreachable
-    # once `published_action` can only return FOLLOW, and a key computed for
-    # an unreachable renderer is the `column carried to no surface` entry in
-    # its hardest-to-spot form.
-    delta = pd.to_numeric(obs["delta"], errors="coerce")
-    lean_ml = pd.to_numeric(obs["close_ml"], errors="coerce")
-    price_rung = lean_ml.map(
-        lambda value: _ladder_rung(float(value)) if pd.notna(value) else None)
-    def _card_record(mask):
-        """Project an aggregate to only the quantities the game card renders."""
-        model = _lean_market_agg(obs, mask)
-        if not model:
-            return None
-        return {k: model[k] for k in ("n", "w", "l", "units")}
-
-    for i, (lo, hi) in enumerate(_LEAN_HISTORY_BINS):
-        delta_mask = delta.ge(lo) & delta.lt(hi)
-        model = _card_record(delta_mask)
-        if model:
-            out[("delta_all_prices", i)] = {"model": model}
-        for _rung_lo, _rung_hi, rung in _ODDS_LADDER:
-            model = _card_record(delta_mask & price_rung.eq(rung))
-            if model:
-                out[("delta_price_follow", i, rung)] = {"model": model}
-
-    for _rung_lo, _rung_hi, rung in _ODDS_LADDER:
-        model = _card_record(price_rung.eq(rung))
-        if model:
-            out[("price_all_delta", rung)] = {"model": model}
+    # The full 5x8 grid survives WITH its error bars and its null maximum in
+    # `grade_leans._selection_price_matrix_lines`, which is where a search
+    # belongs -- moved, not deleted, per `Deleting controls as clutter`.
     return out
 
 
