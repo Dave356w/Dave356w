@@ -13,13 +13,19 @@ python paper_kalshi.py --slate-date 2026-09-22
 python -m pytest tests/test_paper_kalshi.py -q  # offline fixtures
 ```
 
-The existing `build.yml` takes a paper snapshot after its pregame build, before
-committing data. A PR that changes the paper code triggers a public API smoke
-run, saves its diagnostics as a workflow artifact, and never writes to `main`. The separate `kalshi-paper.yml` provides a manual trigger and
+The existing `build.yml` first commits its production pregame ledger and
+uploads the Pages artifact, then runs the paper capture in a **separate,
+non-blocking job** against the freshly committed `main` branch. The public
+`/kalshi-paper.txt` contains the latest diagnostic available at site-build time
+and may lag the GitHub paper ledger by one build. A PR that changes the paper
+code triggers a public API smoke run, saves its diagnostics as a workflow
+artifact, and never writes to `main`. The separate `kalshi-paper.yml` provides a manual trigger and
 an additional best-effort hourly snapshot at :37 ET during MLB daytime/evening.
 Its schedule gate skips runs without a game in the 15–360-minute pregame window.
 Scheduled/manual writer runs use the existing `site-build` concurrency group,
-while read-only PR smoke tests use a separate group and never commit data. GitHub scheduled events can be skipped or late:
+while read-only PR smoke tests use a separate group and never commit data.
+Paper-only commits use the signed API with `--no-fallback`, so a conflict
+cannot force an unsigned push or jeopardize the model's pregame ledger. GitHub scheduled events can be skipped or late:
 missing a first-pitch cutoff is a **skip**, never a retroactive fill. This is
 observational infrastructure, not a continuous low-latency trading engine.
 
