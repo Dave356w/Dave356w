@@ -10,8 +10,8 @@ public GET endpoints exclusively and accepts no trading API credentials.
 - Existing build.yml produces the timestamped data/leans_DATE_xw.csv snapshot.
   The paper step runs **after** the main model, grading and grades-page steps,
   with continue-on-error, before the existing signed ledger commit.
-- Separate kalshi_paper.yml rechecks the latest committed snapshot at Eastern
-  10:11–23:51 every 20 minutes and again at 05:31 to reconcile settlements.
+- Separate kalshi_paper.yml rechecks the latest committed snapshot hourly at Eastern
+  10:19–23:19 and again at 05:31 to reconcile settlements.
   Both workflows share the site-build concurrency lock.
 - Public Kalshi series and markets endpoints provide KXMLBGAME markets, series
   fee multiplier, observed YES ask, top-of-book ask size and update time.
