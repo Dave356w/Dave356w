@@ -918,6 +918,63 @@ precedent — they are how the fix is known to look.
 
 **Resolved — keep as precedent**
 
+- **A stated null that was never printed, read against zero, by the one reader
+  the statement was written for.** The magnitude x market grid prints two
+  price-relative columns per cell: `excess` against the DEVIGGED price and `EV`
+  against the POSTED breakeven. Its own copy already said *"their NULLS differ
+  — excess is centred on zero when the market is right, EV on minus the
+  hold"*, and `_grid_cell_line`'s docstring said it again at more length. **The
+  null's VALUE was nowhere on the artifact**, so the comparison the sentence
+  demands could not be made from the block.
+
+  It fired. Asked whether the chalk-aligned half of the current family clears
+  its price, the answer given was `+3.0 ± 3.3 pp — z = +0.91, not separable
+  from zero` on a **vs-breakeven** figure whose own null is **−2.62 pp**, not
+  zero. Measured properly — 40,000 draws of "every game settles at its own
+  devigged close" — that cell sits at **P(null ≥ observed) = 0.051**, where the
+  quoted z implied p ≈ 0.2–0.36. **Reading an EV column against zero credits
+  the model with exactly one hold it never earned**, and the error flatters the
+  model, not the book. It was caught by the operator asking whether zero was
+  even the median of that distribution.
+
+  Two nulls were being conflated, and both are legitimate — which is why
+  naming them is the fix rather than picking one. Against *market correct* the
+  vs-BE excess is centred on −hold and the question is "is the book wrong in my
+  favour" (p = 0.051 here). Against *zero profit* it is centred on 0 and the
+  question is "could this ROI be noise around break-even" (z = +0.91, p ≈ 0.20).
+  The failure was attaching the first question's LABEL to the second's
+  arithmetic.
+
+  Fixed by printing the number rather than restating the rule:
+  `market_backfill.ev_null(probs, breakevens)` is the one home, beside
+  `excess_se` and `breakeven_prob` for the same reason they are there, and the
+  cell line now renders `EV +11.4 pp (null -2.4)`. Three things in it are the
+  reusable part.
+
+  * **It takes the two references the caller already holds**, not moneylines,
+    so it cannot disagree with the `EV` beside it by re-deriving a breakeven a
+    second way.
+  * **It returns NaN, never 0.0, on unusable input.** Zero is the one answer it
+    must never invent, because zero is the defect.
+  * **It deliberately returns no second standard error.** The two columns
+    differ by a constant the market fixes, so they share one sampling spread:
+    `excess / ±` is already the z for BOTH, and the copy now says so. Handing
+    back a second `se` would invite a second, wrong z — the same shape as the
+    ratio-with-no-sampling-distribution entry below.
+
+  **The lesson is the one this file already had and states one level too
+  abstractly: a caveat does not travel with the statistic.** This is the fourth
+  instance, and the first where the caveat was present, correct, in TWO places,
+  and still failed — because it asserted a comparison without supplying the
+  operand. `tests/test_ev_margin_column.py::EVNullTests` pins the rule over the
+  whole block (every line holding `EV` holds a `(null`) rather than one cell,
+  that the printed null equals the derivation, and that a vig-free book gives
+  exactly 0.0 so it cannot be a literal. Checked rather than argued: reverting
+  the print turns 2 red and reverting the copy turns a 3rd red.
+
+  Report-only: no lean, delta, grade or ledger row moves, no registered
+  constant changes, `MODEL_TAG` unchanged.
+
 - **A label that could only take one value, reintroduced by hand one commit
   after the one that removed the same defect — and killed four hours later by a
   reader's question rather than by a test.** The break-even line was given a
