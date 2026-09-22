@@ -323,7 +323,29 @@ def run(cfg, client=None, now=None):
                     reason = "no_exact_market" if count == 0 else "ambiguous_market"
                 else:
                     ticker = market["ticker"]
-                    t, reason, savings = quote(g, market, mult, source, now, cfg, trades, exposure)
+                    # Event-specific fees override series defaults. When an
+                    # override cannot be verified, do not invent a paper fill.
+                    try:
+                        event_info = client.kalshi(
+                            "/events/" + market["event_ticker"]).get("event", {})
+                        etype = event_info.get("fee_type_override")
+                        if etype not in (None, "", "quadratic",
+                                         "quadratic_with_maker_fees"):
+                            raise ValueError("unsupported event fee type")
+                        override = event_info.get("fee_multiplier_override")
+                        event_mult = number(override) if override is not None else None
+                        if override is not None and (event_mult is None or
+                                                     not 0 <= event_mult <= 10):
+                            raise ValueError("unsupported event fee multiplier")
+                        applied_mult = event_mult if event_mult is not None else mult
+                        applied_source = ("event_override" if event_mult is not None
+                                          else source)
+                        t, reason, savings = quote(
+                            g, market, applied_mult, applied_source, now, cfg,
+                            trades, exposure)
+                    except (requests.RequestException, ValueError, KeyError) as exc:
+                        t, reason = None, "event_fee_unverified"
+                        print(f"Kalshi event fee lookup refused {ticker}: {exc}")
                     if t:
                         trades.append(t)
                         exposure += Decimal(t["ask"]) * Decimal(t["qty"]) + Decimal(t["fee"])
