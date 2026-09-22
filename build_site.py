@@ -52,7 +52,9 @@ from market_backfill import (ODDS_LADDER as _mb_odds_ladder,
                              publish_reconstruction as _mb_publish_reconstruction,
                              recon_grade as _mb_recon_grade,
                              recon_grades as _mb_recon_grades,
-                             breakeven_prob as _mb_breakeven_prob)
+                             breakeven_prob as _mb_breakeven_prob,
+                             percentile_price_edges as _mb_percentile_price_edges,
+                             percentile_band_index as _mb_percentile_band_index)
 import requests
 
 import hitter_frame
@@ -4689,6 +4691,8 @@ def _xwoba_side_history(ctx, selection_ml=None):
             "the native/re-scored split is unavailable.</div>"
         )
     return (
+        "<details class='vhistory'>"
+        "<summary>Combined V12/V13 historical performance</summary>"
         "<div class='vprofile'>"
         "<div class='vprofile-title'>Historical family vs closing market</div>"
         "<div class='vline'><span class='vk'>Past margin over closing break-even"
@@ -4699,6 +4703,8 @@ def _xwoba_side_history(ctx, selection_ml=None):
         "for this game. This is a pooled descriptive result, not a calibrated "
         "win probability or a game-specific expected edge.</div>"
         "</div>"
+        "<a class='vhistory-link' href='grades.html'>Full model-family record →</a>"
+        "</details>"
     )
 
 def _branch_history(ctx, action, p_lean=None, selection_ml=None):
@@ -4779,6 +4785,7 @@ def _verdict_html(fav, odds, away_abbr, home_abbr, ctx=None, delta=None):
     )
 
     selection_ml = price if action else None
+    market_context = _market_band_context_html(ctx, price) if action else ""
     history = _branch_history(ctx, action, p_lean, selection_ml)
 
     return (
@@ -4791,7 +4798,7 @@ def _verdict_html(fav, odds, away_abbr, home_abbr, ctx=None, delta=None):
         f"<span>{_esc(fav)} {price_txt} · {p_txt}</span></div>"
         f"{break_even_line}"
         f"{note}"
-        f"{history}</div></div>"
+        f"{market_context}{history}</div></div>"
     )
 
 def _hitter_row_html(i, hr):
@@ -6107,6 +6114,31 @@ td.bar{width:86px;padding:4px 8px 4px 2px}
 .verdict .vprofile .vline{display:block;font-weight:600}
 .verdict .vprofile .vline + .vline{margin-top:5px}
 .verdict .vprofile .vline>span:last-child{display:block;margin-top:1px;text-align:left;color:var(--ink)}
+/* The per-game comparison leads with the market distribution. The pooled
+   model history stays available but is intentionally collapsed by default. */
+.verdict .vmarket{margin-top:10px}
+.verdict .vband-bar{display:flex;gap:3px;margin:8px 0}
+.verdict .vband-step{height:9px;flex:1;background:var(--surface-2);
+  border:1px solid var(--line-2);border-radius:3px}
+.verdict .vband-step.selected{background:rgba(var(--cool),.8);
+  border-color:rgba(var(--cool),.9)}
+.verdict .vband-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:8px;margin:8px 0;font-variant-numeric:tabular-nums}
+.verdict .vband-stats>div{min-width:0;padding:6px;background:var(--surface-2);
+  border:1px solid var(--line-2);border-radius:5px}
+.verdict .vband-stats small{display:block;color:var(--muted);
+  font:500 11px/1.4 var(--sans)}
+.verdict .vband-stats strong{display:block;font:700 15px/1.5 var(--mono);
+  color:var(--ink)}
+.verdict .vband-gap{font:700 12.5px/1.4 var(--sans);color:var(--ink)}
+.verdict .vhistory{margin-top:8px;padding-top:7px;
+  border-top:1px solid var(--line-2)}
+.verdict .vhistory summary{cursor:pointer;color:var(--muted);
+  font:700 12px/1.5 var(--sans)}
+.verdict .vhistory .vprofile{border-top:0;margin-top:2px}
+.verdict .vhistory-link{display:inline-block;margin:6px 0 1px;
+  font:600 12px/1.4 var(--sans)}
+
 
 /* hitter row: percentile column + name cell. The column is the 88px bar plus
    the cell's own gutters -- it carried a printed percentile until that was
@@ -6567,6 +6599,117 @@ def _excess_se(probs):
     """
     from market_backfill import excess_se
     return excess_se(probs)
+
+
+def _market_price_distribution(led, bands=8):
+    """Balanced closing-market distribution, scored once across ALL families.
+
+    One graded game contributes two complementary team-side observations.
+    The exact nearest-rank bin arithmetic is shared with grade_leans via
+    market_backfill, so the per-game read cannot drift from the analyst report.
+    Neither the model lean nor today's current price changes these counts.
+    """
+    cols = {"status", "full_away", "full_home", "close_p_home",
+            "close_home_ml", "close_away_ml", "game_pk"}
+    if led is None or not cols.issubset(led.columns):
+        return None
+    g = led.loc[led["status"].eq("graded")]
+    fa = pd.to_numeric(g["full_away"], errors="coerce")
+    fh = pd.to_numeric(g["full_home"], errors="coerce")
+    ph = pd.to_numeric(g["close_p_home"], errors="coerce")
+    hm = pd.to_numeric(g["close_home_ml"], errors="coerce")
+    am = pd.to_numeric(g["close_away_ml"], errors="coerce")
+    ok = (fa.notna() & fh.notna() & (fa != fh) & ph.between(0, 1, inclusive="neither")
+          & hm.notna() & am.notna())
+    if int(ok.sum()) < bands * 4:
+        return None
+    home_won = (fh[ok] > fa[ok]).to_numpy(dtype=bool)
+    prices = np.concatenate([hm[ok].to_numpy(float), am[ok].to_numpy(float)])
+    probs = np.concatenate([ph[ok].to_numpy(float), 1.0 - ph[ok].to_numpy(float)])
+    won = np.concatenate([home_won, ~home_won])
+    gpk = g.loc[ok, "game_pk"].to_numpy()
+    game = np.concatenate([gpk, gpk])
+    edges = _mb_percentile_price_edges(prices, bands)
+    idx = _mb_percentile_band_index(prices, edges)
+    rows = []
+    for j in range(len(edges) + 1):
+        m = idx == j
+        if not m.any():
+            continue
+        _, counts = np.unique(game[m], return_counts=True)
+        rows.append({
+            "index": j,
+            "lo": int(prices[m].min()),
+            "hi": int(prices[m].max()),
+            "n": int(m.sum()),
+            "pairs": int((counts == 2).sum()),
+            "actual": float(won[m].mean()),
+            "implied": float(probs[m].mean()),
+            "gap": float(won[m].mean() - probs[m].mean()),
+            "se": _excess_se(probs[m]),
+        })
+    return {
+        "games": int(ok.sum()), "sides": int(len(prices)),
+        "edges": edges, "bands": rows,
+        "price_min": float(prices.min()), "price_max": float(prices.max()),
+    }
+
+
+def _market_band_context_html(ctx, price):
+    """Describe where today's quoted price falls in HISTORICAL closing data."""
+    dist = (ctx or {}).get("market_distribution")
+    p = _f(price)
+    if not dist or p is None or not (p <= -100 or p >= 100):
+        return ""
+    # Prices outside the observed historical range have no measured band.
+    if p < dist["price_min"] or p > dist["price_max"]:
+        return (
+            "<div class='vprofile vmarket'>"
+            "<div class='vprofile-title'>Historical market context</div>"
+            "<div class='vnote'>Current quote is outside the archive's "
+            "observed closing-price range; no comparable band is shown."
+            "</div></div>"
+        )
+    ix = int(_mb_percentile_band_index([p], dist["edges"])[0])
+    rec = next((x for x in dist["bands"] if x["index"] == ix), None)
+    if not rec:
+        return ""
+    n_bands = len(dist["bands"])
+    label = (f"{rec['lo']:+d} to {rec['hi']:+d}"
+             if rec["lo"] != rec["hi"] else f"{rec['lo']:+d}")
+    bar = "".join(
+        f"<span class='vband-step{' selected' if row['index'] == ix else ''}'"
+        f" aria-label='band {j + 1} of {n_bands}'></span>"
+        for j, row in enumerate(dist["bands"])
+    )
+    gap, se = 100 * rec["gap"], 100 * rec["se"]
+    note = ("No clear departure from market-implied outcomes in this band."
+            if abs(gap) < 2 * se else
+            "Descriptive difference only; compare against uncertainty and "
+            "the full eight-band search, not a single cell.")
+    return (
+        "<div class='vprofile vmarket'>"
+        "<div class='vprofile-title'>Historical market context</div>"
+        f"<div class='vnote'>All graded families · {dist['games']} games · "
+        "closing prices only</div>"
+        f"<div class='vprofile-band'>Current {p:+.0f} falls in band "
+        f"{ix + 1} of {n_bands} · {label}</div>"
+        f"<div class='vband-bar' role='img' aria-label='Selected market "
+        f"price band {ix + 1} of {n_bands}'>{bar}</div>"
+        "<div class='vband-stats'>"
+        f"<div><small>Historic prices</small><strong>{rec['n']}</strong></div>"
+        f"<div><small>Implied wins</small><strong>{100*rec['implied']:.1f}%"
+        "</strong></div>"
+        f"<div><small>Actual wins</small><strong>{100*rec['actual']:.1f}%"
+        "</strong></div>"
+        "</div>"
+        f"<div class='vband-gap'>Historical calibration gap: "
+        f"{gap:+.1f} ± {se:.1f} pp (1 SE)</div>"
+        f"<div class='vnote'>{note} This is market calibration, "
+        "not this model's performance or a forecast for this matchup. "
+        "<a href='market-calibration.html'>Full calibration</a>.</div>"
+        "</div>"
+    )
 
 
 def _market_calibration_rows(led):
@@ -7427,6 +7570,11 @@ def hybrid_branch_records():
     if obs.empty:
         return {}
     out = {"n": int(len(obs))}
+    # Compute the full-ledger market histogram once per build, never once per
+    # matchup, and never filter by this model's wins or today's lean.
+    distribution = _market_price_distribution(led)
+    if distribution:
+        out["market_distribution"] = distribution
     # TWO provenance-distinct summaries now reach the card: the native V13
     # record from original pregame decisions and the mixed-basis retrospective
     # diagnostic that also includes V12→V13 reconstructions. Neither is a
