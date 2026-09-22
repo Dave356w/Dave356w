@@ -131,3 +131,76 @@ def test_both_surfaces_naming_the_abstain_branch_name_the_same_one():
     for name, text in surfaces.items():
         assert "q-gate fade branch" in text, name
         assert "shipped fade branch" not in text, name
+
+
+def test_window_is_closed_reads_the_latest_slate_and_never_a_literal():
+    """The closure derivation's properties, in every direction.
+
+    A `CLOSED = True` literal would be the constants-frozen-from-data defect in
+    the one place it does most harm: a registration whose family was restored
+    or whose rule was re-shipped would go on printing that it could not accrue.
+    So closure is derived from what the ledger's most recent slate is stamped
+    with, and these are the four answers that derivation has to give.
+    """
+    import market_backfill as mb
+
+    def frame(pairs):
+        return pd.DataFrame({"game_date": [d for d, _ in pairs],
+                             "tag": [t for _, t in pairs]})
+
+    # Keyed on the LATEST slate, not on any row anywhere: an old slate carrying
+    # the accepted value must not hold a closed window open.
+    old_only = frame([("2026-09-01", "keep"), ("2026-09-20", "moved on")])
+    assert mb.window_is_closed(old_only, "tag", ("keep",)) == (True, ("moved on",))
+    still_open = frame([("2026-09-01", "moved on"), ("2026-09-20", "keep")])
+    assert mb.window_is_closed(still_open, "tag", ("keep",)) == (False, ("keep",))
+
+    # Unanswerable states answer None rather than True. A slate whose column is
+    # entirely null is mid-ingest, not closed -- reporting closure there would
+    # put the clause on the artifact for a day on a build that is fine.
+    allnull = pd.DataFrame({"game_date": ["2026-09-20"], "tag": [np.nan]})
+    for cannot_tell in (
+            mb.window_is_closed(allnull, "tag", ("keep",)),
+            mb.window_is_closed(still_open, "absent", ("keep",)),
+            mb.window_is_closed(pd.DataFrame({"tag": ["keep"]}), "tag", ("keep",)),
+            mb.window_is_closed(None, "tag", ("keep",))):
+        assert cannot_tell == (None, ())
+
+
+def test_a_closed_registration_says_so_and_marks_its_gate_unreachable():
+    """Closed and stalled render identically without this, and they are opposite.
+
+    A window that can take no further row trails the ledger exactly as the
+    2026-09-12 stall did -- same supply line, same gate -- but one is a writer
+    bug to fix and the other is the answer the registered question got. Two of
+    the six are bounded today: `delta_filter_test` by `REGISTERED_FAMILY`,
+    deliberately, and `hybrid_v2` by its `selection_rule_tag` filter, which v13
+    shut on its own by retiring the rule from the shipped selection.
+
+    Asserted as a BICONDITIONAL over every registration against the committed
+    ledger, so it holds whichever of them are closed on any given day. The
+    both-directions fixtures live in each module's own test file, where the
+    frames that can represent the two states already exist.
+    """
+    import hybrid_v2
+    import market_backfill as mb
+    modules = (forward_test, delta_filter_test, hybrid_test, hybrid_v2,
+               abstain_test, dog_contrast_test)
+    led = pd.read_csv("data/mlb_lean_ledger.csv", low_memory=False)
+    for module in modules:
+        text = "\n".join(module.report_lines(led))
+        closed = bool(getattr(module, "window_closed", lambda _l: (False, ()))(led)[0])
+        assert ("WINDOW CLOSED" in text) is closed, module.__name__
+        if closed:
+            assert mb.GATE_UNREACHABLE in text, module.__name__
+        else:
+            assert mb.GATE_UNREACHABLE not in text, module.__name__
+
+    # One home for the wording, same reason as `row_supply_line` above: a
+    # module spelling the clause itself is how two blocks come to word the same
+    # state differently.
+    for module in modules:
+        src = open(module.__name__ + ".py", encoding="utf-8").read()
+        assert "WINDOW CLOSED" not in src, module.__name__
+        if hasattr(module, "window_closed"):
+            assert "window_closed_line" in src, module.__name__

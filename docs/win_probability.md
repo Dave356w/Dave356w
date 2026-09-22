@@ -28,10 +28,28 @@ are engineering defaults, not winners from a historical parameter sweep.
 The numerical fit uses stable log-sum-exp arithmetic and a damped Newton step;
 no new runtime dependency is required.
 
-Only the exact requested source model tag is fitted (default:
-`build_site.MODEL_TAG`), with `model_metric == xwOBA`. Sharing scale units is
-not enough to pool a different forecasting lineage into this calibration.
-The calibrator has its own version, `xwoba_home_logit_v1`.
+The source scope is one **scale family** (default: `build_site.SCALE_TAGS`,
+comma-separated to pin a tag or an older family by hand), with
+`model_metric == xwOBA`. A delta-to-probability map is a units question, so
+`_SCALE_FAMILIES` is the relation that decides its rows: scoping to the
+running `MODEL_TAG` alone discards same-scale rows and resets the sample at
+every bump, while `RECORD_TAGS` pools v12 with v13 across a deliberate scale
+change. The calibrator has its own version, `xwoba_home_logit_v1`.
+
+Rows whose `model_metric` is null are refused by the `not_xwoba` check and
+counted there — the metric is a property of the row and cannot be inferred
+from its tag. On the committed ledger that is every pre-v12 row, so widening
+the scope to a family buys nothing on today's history; what it buys is that
+the next bump sharing a scale carries this sample forward instead of
+restarting it.
+
+**When a run scores nothing it says so.** Below `min_train` rows or
+`min_slates` slates the walk-forward produces no predictions, and the report
+prints a `SCORES NOTHING` line naming the family and whichever threshold
+binds. That line exists because this module went dark at the v13 bump on
+2026-09-18 — 47 eligible rows against a warm-up of 100 — and for four days
+rendered as `Warm-up/unscored: 47` beside two `no eligible games` lines,
+which is indistinguishable from an empty ledger or a broken join.
 
 ## Chronological evaluation
 
@@ -100,6 +118,13 @@ The **Win probability validation** workflow runs manually or on a PR touching
 this module, its tests, or the workflow. It uploads the five outputs and has
 read-only repository permissions. It does not enter the daily site's critical
 path or automatically promote a model.
+
+## Reading these figures after a bump
+
+The measurement below is the **v12 scale family**. v13 opened a new one, so a
+default run scores nothing until that family reaches the warm-up and these
+numbers are not refreshed by it. They are reproduced with
+`--model-tag xw+plat_consol_v12`.
 
 ## Initial measurement — September 17, 2026
 

@@ -194,3 +194,88 @@ def test_preparation_and_evaluation_do_not_mutate_source_ledger():
     pred, _ = replay(frame)
     wp.evaluate(pred, bootstrap_repeats=100)
     pd.testing.assert_frame_equal(original, frame)
+
+
+def test_the_source_scope_is_the_scale_family_and_not_one_tag():
+    """A delta-to-probability map is a UNITS question, so `_SCALE_FAMILIES`
+    decides its row set -- not the running `MODEL_TAG`, which resets the
+    sample at every bump, and not `RECORD_TAGS`, which pools v12 with v13
+    across a deliberate scale change.
+
+    Asserted as the RULE against build_site rather than as a tag literal: a
+    test naming `xw+starter_blend_v13` would reproduce the very defect it
+    guards, going stale at the next bump.
+    """
+    import build_site
+
+    frame = ledger(40)
+    frame.loc[20:, "model_tag"] = "xw+plat_consol_v10"
+    both = wp.as_family([TAG, "xw+plat_consol_v10"])
+
+    rows, audit = wp.prepare_rows(frame, both)
+    assert len(rows) == 40
+    assert audit["source_tags"] == list(both)
+    assert audit["rows_by_tag"] == {TAG: 20, "xw+plat_consol_v10": 20}
+    # A tag outside the family is still excluded -- widening the scope is not
+    # the same as dropping it.
+    assert len(wp.prepare_rows(frame, TAG)[0]) == 20
+
+    # The default main() would run: the scale family, whatever it resolves to.
+    assert wp.as_family(",".join(build_site.SCALE_TAGS)) == tuple(build_site.SCALE_TAGS)
+    # Structural, not a text window: this module may DISCUSS `RECORD_TAGS` in
+    # the comment explaining why it is the wrong relation, and a substring
+    # search cannot tell that from reading it. Walk the AST for a real use.
+    import ast
+
+    tree = ast.parse(open("win_probability.py", encoding="utf-8").read())
+    used = {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)}
+    assert "SCALE_TAGS" in used
+    assert "RECORD_TAGS" not in used
+    assert "MODEL_TAG" not in used
+
+
+def test_a_run_that_scores_nothing_says_so_instead_of_printing_a_warm_up_count():
+    """The blind spot this module actually had: at the v13 bump its sample
+    reset below the warm-up and four days of runs rendered as
+    `Warm-up/unscored: 47` beside two `no eligible games` lines -- true, and
+    indistinguishable from an empty ledger or a broken join.
+
+    Both directions, because a line that always printed would be no better.
+    """
+    settings = wp.Settings(min_train=20, min_slates=2)
+
+    thin = ledger(8)                      # 8 rows over 1 slate: both bind
+    rows, audit = wp.prepare_rows(thin, TAG)
+    predictions, _ = wp.walk_forward(rows, settings)
+    assert predictions.empty
+    reason = wp.blind_reason(rows, predictions, settings, audit["source_tags"])
+    assert reason and "SCORES NOTHING" in reason
+    assert TAG in reason                          # names the family it was blind on
+    assert "12 more eligible rows" in reason      # and the binding shortfall
+    assert "1 more slates" in reason
+    assert wp.blind_reason(rows, predictions, settings, audit["source_tags"]) in \
+        wp.report_text(dict(audit=audit, source_model_tag=TAG, settings={},
+                            unscored_rows=len(rows), oos_first_date=None,
+                            oos_last_date=None, metrics=wp.evaluate(predictions),
+                            blind_reason=reason))
+
+    fat = ledger(120)                     # scores, so the line must be absent
+    rows, audit = wp.prepare_rows(fat, TAG)
+    predictions, _ = wp.walk_forward(rows, settings)
+    assert len(predictions)
+    assert wp.blind_reason(rows, predictions, settings, audit["source_tags"]) is None
+    text = wp.report_text(dict(audit=audit, source_model_tag=TAG, settings={},
+                               unscored_rows=0, oos_first_date="a", oos_last_date="b",
+                               metrics=wp.evaluate(predictions), blind_reason=None))
+    assert "SCORES NOTHING" not in text
+
+
+def test_only_the_row_count_shortfall_is_named_when_slates_already_clear():
+    """It names whichever threshold BINDS, derived, so it cannot claim a
+    shortfall that does not exist."""
+    settings = wp.Settings(min_train=200, min_slates=2)
+    rows, audit = wp.prepare_rows(ledger(60), TAG)
+    predictions, _ = wp.walk_forward(rows, settings)
+    reason = wp.blind_reason(rows, predictions, settings, audit["source_tags"])
+    assert "140 more eligible rows" in reason
+    assert "more slates" not in reason

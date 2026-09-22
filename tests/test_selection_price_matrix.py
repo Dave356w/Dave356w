@@ -69,57 +69,51 @@ def _cells(lines):
     return out
 
 
-def test_every_cell_equals_the_card_cell_for_the_same_bucket():
-    """The report and the game card must never disagree about one cell.
+def test_the_card_shows_no_cell_and_the_report_still_shows_the_whole_grid():
+    """Replaces `test_every_cell_equals_the_card_cell_for_the_same_bucket`.
 
-    Both derive from `hybrid_v2.apply_rule` and `market_backfill.ladder_rung`,
-    so this holds by construction -- which is exactly why it is worth pinning:
-    the construction is the claim, and a local copy of either would break it
-    silently while both surfaces kept rendering.
+    That test held the card's delta x price cell equal to the report's, cell
+    by cell, and it earned its place: the two HAD disagreed on 24 of 26 cells
+    in production. Its subject is gone -- the card published three cells of
+    that grid on 2026-09-22 and now publishes none -- so the equality has no
+    two surfaces to hold together.
+
+    It is RESTATED rather than deleted, which is this repo's own precedent
+    twice over (`test_a_thin_branch_…`, the `within noise` marker). Deleting
+    it would leave nothing stopping a later trim from taking the report's grid
+    as well, which is the deletion `Deleting controls as clutter` forbids: the
+    grid was MOVED to the analyst artifact, not removed. So the claim becomes
+    a biconditional across the two surfaces -- absent from the card, present
+    in full on the report, WITH the error bars and the null maximum that made
+    it readable there and never reached the card.
     """
-    # BOTH sides are scoped to the same family, and that is the whole point of
-    # the test rather than a detail of it. The report block reads the family
-    # the ledger holds; if the card were left on the build's current family the
-    # two would be compared across different row sets, and the assertion would
-    # then be about scoping rather than about the shared construction. A
-    # `MODEL_TAG` bump makes that difference real, so it is pinned explicitly.
     led = pd.read_csv(grade_leans.LEDGER_PATH)
     rows = _populated_family_rows(led)
     fam = tuple(sorted(set(rows["model_tag"].astype(str))))
-    # MODEL_TAG IS NOT PATCHED, and that is the point of this test rather
-    # than a detail of it.
-    #
-    # It was patched, for one day, with a comment saying that leaving it
-    # alone "would compare a re-decided cell against a published one and fail
-    # for a reason that has nothing to do with the shared construction under
-    # test". That reasoning was exactly backwards: this block's own docstring
-    # calls it the grid the game card shows one cell of, so a re-decided cell
-    # against a published one IS the construction under test, and patching it
-    # out made the fixture unable to represent the only disagreement that
-    # could occur.
-    #
-    # It was occurring. Measured in production with the patch in place: the
-    # card banded on the reconstructed delta and the report on the ledger's
-    # raw `xw_net`, 444 of 452 deltas differed by up to 0.0215 -- wider than
-    # a band -- the lean differed on 39 rows, and 24 of these 26 cells
-    # disagreed while this test passed green.
-    #
-    # Only RECORD_TAGS is patched now, because the family genuinely is a
-    # scoping parameter both sides must share. Everything about which SIDE
-    # and which DELTA a row publishes is left to production.
     with mock.patch.object(build_site, "RECORD_TAGS", fam), \
             mock.patch.object(grade_leans, "RECORD_TAGS", fam):
         ctx = build_site.hybrid_branch_records()
         report = _cells(_lines())
-    card = {}
-    for key, val in ctx.items():
-        if isinstance(key, tuple) and key[0] == "delta_price_follow":
-            lo, hi = build_site._LEAN_HISTORY_BINS[key[1]]
-            band = grade_leans._band_label(lo, hi).replace(" ", "")
-            rung = key[2].replace(" to ", "/").replace(" ", "")
-            card[(band, rung)] = (val["model"]["n"], val["model"]["w"])
-    assert report, "the matrix rendered no cells"
-    assert report == card
+        text = "\n".join(grade_leans._selection_price_matrix_lines(led))
+
+    # The card carries no cell of the grid, in any spelling.
+    assert [k for k in ctx if isinstance(k, tuple)] == [], list(ctx)
+    assert set(ctx["pooled"]) == {"n", "excess_be", "excess_se", "hold"}
+
+    # The report still renders the whole thing, and still renders what made it
+    # readable: a spread per cell and a search reference. A grid published with
+    # neither is what came off the card.
+    assert len(report) >= 20, f"the matrix rendered only {len(report)} cells"
+    assert "beat its own price (pp +- se)" in text
+    assert "best-cell reference" in text
+    assert "under 'every game settles at its own price'" in text
+    # And the report must not still claim the card shows a cell of it. That
+    # sentence was the header for four minutes after the cells came off, which
+    # is the "prose describing a surface that no longer exists" defect this
+    # repo records; it is caught here because this is the test that reads both
+    # surfaces at once.
+    assert "the grid the game card shows one cell of" not in text
+    assert "the game card publishes no cell of it" in text
 
 
 def test_the_two_grids_are_scored_on_the_same_published_rows():

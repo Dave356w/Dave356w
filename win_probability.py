@@ -108,8 +108,25 @@ def _utc(values):
     return pd.to_datetime(text.where(aware), utc=True, errors="coerce", format="mixed")
 
 
-def prepare_rows(ledger, model_tag):
-    """One exact source version, auditable pregame features, final W/L outcomes.
+def as_family(model_tags):
+    """Normalise one tag or many into the tuple `prepare_rows` filters on."""
+    if isinstance(model_tags, str):
+        model_tags = model_tags.split(",")
+    return tuple(t.strip() for t in model_tags if str(t).strip())
+
+
+def prepare_rows(ledger, model_tags):
+    """One SCALE FAMILY of source versions, pregame features, final W/L outcomes.
+
+A family and not a single tag, because this maps `xw_net` to a probability
+and `xw_net`'s units are a property of `_SCALE_FAMILIES`, not of one
+`MODEL_TAG`. Scoping to the running tag alone discards same-scale rows for
+no reason and resets the sample at every bump -- which is how this module
+went dark on 2026-09-18 and scored nothing for four days with only
+`Warm-up/unscored` to say so. `RECORD_TAGS` is the wrong relation in the
+other direction: it pools v12 with v13, which is a share of the WIN-LOSS
+line across a deliberate scale change, and a delta calibrated across two
+spreads is the mixture this repo already refuses elsewhere.
 
 Zero is a valid delta here, even though the directional model abstains at
 zero. Missing/infinite features are not zeros. Market availability never
@@ -118,8 +135,15 @@ determines eligibility for fitting the xwOBA-only mapping.
     missing = sorted(set(REQUIRED) - set(ledger.columns))
     if missing:
         raise ValueError("Missing ledger columns: " + ", ".join(missing))
-    g = ledger.loc[ledger.model_tag.eq(model_tag)].copy()
-    audit = {"input_rows": len(ledger), "source_rows": len(g), "excluded": {}}
+    family = as_family(model_tags)
+    if not family:
+        raise ValueError("No source model tag given")
+    g = ledger.loc[ledger.model_tag.isin(family)].copy()
+    audit = {"input_rows": len(ledger), "source_rows": len(g),
+             "source_tags": list(family),
+             "rows_by_tag": {str(k): int(v) for k, v
+                             in g.model_tag.value_counts().items()},
+             "excluded": {}}
     for c in ("xw_net", "full_home", "full_away", "game_pk"):
         g[c] = pd.to_numeric(g[c], errors="coerce")
     dates = pd.to_datetime(g.game_date, errors="coerce", format="%Y-%m-%d")
@@ -264,6 +288,39 @@ def calibration_rows(predictions):
     return pd.DataFrame(result)
 
 
+def blind_reason(rows, predictions, settings, family):
+    """Why this run scored nothing, or None when it scored something.
+
+    Standing rule from CLAUDE.md, reached from the other side: when a function
+    degrades silently by design, PRINT THE COUNT. A warm-up that swallows the
+    whole sample rendered as `Warm-up/unscored: 47` beside two `no eligible
+    games` lines -- true, and indistinguishable from an empty ledger or a
+    broken join. This module went dark at the v13 bump on 2026-09-18 and
+    nothing said so for four days.
+
+    Derived from the settings and the rows, never a literal, so it names
+    whichever threshold is actually binding and disappears on its own once
+    either clears.
+    """
+    if len(predictions):
+        return None
+    slates = 0 if rows.empty else int(rows.game_date.nunique())
+    short = []
+    if len(rows) < settings.min_train:
+        short.append(f"{settings.min_train - len(rows)} more eligible rows "
+                     f"(has {len(rows)} of {settings.min_train})")
+    if slates < settings.min_slates:
+        short.append(f"{settings.min_slates - slates} more slates "
+                     f"(has {slates} of {settings.min_slates})")
+    need = "; ".join(short) if short else (
+        "no slate cleared both thresholds with strictly earlier training rows")
+    return ("SCORES NOTHING — this evaluation is BLIND on "
+            + ", ".join(family) + f": needs {need}. "
+            "A bump that starts a new scale family resets this sample, so the "
+            "figures in docs/win_probability.md describe an earlier family "
+            "and are not refreshed by this run.")
+
+
 def report_text(summary):
     audit = summary["audit"]
     lines = ["xwOBA home-win probability — chronological retrospective evaluation",
@@ -274,6 +331,8 @@ def report_text(summary):
              f"Saved pregame market eligible: {audit['market_eligible_rows']}; exclusions: {audit['market_exclusions']}",
              f"Warm-up/unscored: {summary['unscored_rows']}; OOS dates: {summary['oos_first_date']} to {summary['oos_last_date']}",
              "Market benchmark: pregame_p_home with market timestamp <= forecast snapshot < scheduled start. No closing fallback."]
+    if summary.get("blind_reason"):
+        lines.append(summary["blind_reason"])
     for group, label in (("all_oos", "All chronological OOS games"),
                          ("paired_market", "Same-game saved-market comparison")):
         lines.append("\n" + label + " (lower Brier/log loss is better)")
@@ -297,7 +356,9 @@ def main():
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ledger", type=Path, default=Path("data/mlb_lean_ledger.csv"))
-    parser.add_argument("--model-tag", default=build_site.MODEL_TAG)
+    # The SCALE family, not the running tag: see `prepare_rows`. Comma-separated
+    # so an operator can pin one tag or an older family by hand.
+    parser.add_argument("--model-tag", default=",".join(build_site.SCALE_TAGS))
     parser.add_argument("--out-dir", type=Path, default=Path("win_probability_output"))
     args = parser.parse_args()
     settings = Settings()
@@ -309,7 +370,9 @@ def main():
                    audit=audit, unscored_rows=len(rows) - len(predictions),
                    oos_first_date=None if predictions.empty else predictions.game_date.min(),
                    oos_last_date=None if predictions.empty else predictions.game_date.max(),
-                   metrics=evaluate(predictions), final_fit=None)
+                   metrics=evaluate(predictions), final_fit=None,
+                   blind_reason=blind_reason(rows, predictions, settings,
+                                             audit["source_tags"]))
     if len(rows) >= settings.min_train and rows.game_date.nunique() >= settings.min_slates:
         summary["final_fit"] = dict(**asdict(fit_logit(rows.xw_net, rows.home_won, settings)),
                                    train_n=len(rows), train_first_date=rows.game_date.min(),
