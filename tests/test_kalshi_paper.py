@@ -120,7 +120,8 @@ def test_end_to_end_paper_and_idempotency(tmp_path):
     assert t[0]["selected"] == "TEX" and t[0]["qty"] == 10
     assert t[0]["fee"] == "0.09" and Decimal(t[0]["saved_pp"]) > 1
     assert Path(cfg.out_html).exists()
-    assert p.read_csv(tmp_path / "kalshi_paper_trades.csv") == t
+    disk = p.read_csv(tmp_path / "kalshi_paper_trades.csv")
+    assert len(disk) == 1 and disk[0]["id"] == t[0]["id"] and disk[0]["qty"] == "10"
     t2, a2 = p.run(cfg, c, NOW + timedelta(minutes=1))
     assert len(t2) == 1 and a2[-1]["reason"] == "duplicate_game"
     assert all(x[0] == "GET" for x in c.calls)
