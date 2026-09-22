@@ -3535,7 +3535,7 @@ class HybridRuleTests(unittest.TestCase):
         html = build_site._verdict_html(
             "PIT", dict(p_home=.529, away_ml=103), "PIT", "SD", dict(pooled=dict(n=492, excess_be=.0595, excess_se=.0221, hold=.0184)), .0187,
         )
-        self.assertIn("Beating this price", html)
+        self.assertIn("Historical family vs closing market", html)
         self.assertIn("Cleared the posted price by</span><span>+5.9 ± 2.2 pts "
                       "· 492 completed games", html)
         self.assertNotIn("Historical context", html)
@@ -3553,9 +3553,9 @@ class HybridRuleTests(unittest.TestCase):
             "</span>",
             "chooses the side independently of the market",
             "Δ magnitude is not a calibrated win probability",
-            "Beating this price",
-            "Cleared the posted price by</span><span>+5.9 ± 2.2 pts",
-            "not this game's chance of winning",
+            "Historical family vs closing market",
+            "Past margin over closing break-even</span><span>+5.9 ± 2.2 pp",
+            "not a calibrated win probability or a game-specific expected edge",
         ):
             self.assertIn(expected, html)
         self.assertNotIn("(MEDIUM)", html)
@@ -3745,7 +3745,7 @@ class HybridRuleTests(unittest.TestCase):
         self.assertIn("33.3% · requires +3.3 pp over market", h)
         self.assertEqual(len(re.findall(r"\d+\.\d%", h)), 2, h)
         # The record is a gap in points, with its spread and its own n.
-        self.assertIn("+5.9 ± 2.2 pts · 492 completed games", h)
+        self.assertIn("+5.9 ± 2.2 pp · 492 completed games", h)
         self.assertIn("not this game's chance of winning", h)
         # No realised rate, in any spelling.
         for banned in ("73.3%", "(0.733)", "58.6%", "63.4%", "(0.634)"):
