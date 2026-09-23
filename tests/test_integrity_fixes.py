@@ -3715,13 +3715,19 @@ class HybridRuleTests(unittest.TestCase):
                     "lean" if tag == build_site.MODEL_TAG else "recon")
 
     def test_market_and_model_percentages_are_explicitly_labeled(self):
-        """Current odds and historical band outcomes have separate labels."""
+        """Current quote and matched V13 history have different labels."""
         ctx = build_site.hybrid_branch_records()
+        dist = ctx["model_distribution"]
+        # A fixed +200 quote can be outside the observed V13 selected-price
+        # range. Choose an ACTUAL historical price to test the populated card,
+        # while the dedicated outside-range test checks its fallback.
+        rec = dist["bands"][len(dist["bands"]) // 2]
+        price = rec["lo"]
         h = build_site._verdict_html(
-            "LAD", dict(p_home=.70, away_ml=200, home_ml=-260),
+            "LAD", dict(p_home=.70, away_ml=price, home_ml=-260),
             "LAD", "ARI", ctx, .005)
         self.assertIn("30.0% no-vig", h)
-        self.assertIn("33.3% · requires +3.3 pp over market", h)
+        self.assertIn("Posted break-even", h)
         self.assertIn("Market implied", h)
         self.assertIn("V13 realised", h)
         self.assertIn("not a game-specific probability or validated edge", h)
