@@ -2042,6 +2042,28 @@ class GradesHeaderClaimsTests(unittest.TestCase):
             page = build_site.render_grades_html("test build")
         return page.split("<div class='gr-tablewrap'>")[0]
 
+    def test_each_slate_is_its_own_foldable_group_with_every_row_present(self):
+        """Folding is a browser enhancement: the markup holds every row, one
+        tbody per slate headed by its date, and no control that needs script."""
+        dates = ["2026-08-0%d" % d for d in range(1, 6)]
+        rows = [self._row(i * 10 + j, game_date=dt)
+                for i, dt in enumerate(dates) for j in range(2)]
+        led = pd.DataFrame(rows)
+        with mock.patch.object(build_site, "load_ledger_df", return_value=led):
+            page = build_site.render_grades_html("test build")
+        table = page.split("<div class='gr-tablewrap'>", 1)[1].split("</table>")[0]
+        slates = re.findall(r"<tbody class='gr-slate'>(.*?)</tbody>", table, re.S)
+        self.assertEqual(len(slates), len(dates))
+        for body in slates:
+            self.assertTrue(body.startswith("<tr class='gr-day'>"))
+            self.assertEqual(body.count("<tr class='gr-row'>"), 2)
+        self.assertEqual(table.count("<tr class='gr-row'>"), len(rows))
+        self.assertNotIn("folded", table)          # nothing folded in markup
+        self.assertNotIn("<button", table)         # controls come from script
+        self.assertIn(build_site.grades_fold_js(), page)
+        self.assertIn("var KEEP=%d;" % build_site.GRADES_OPEN_SLATES,
+                      build_site.grades_fold_js())
+
     def test_the_header_says_its_own_figures_are_a_discovery_result(self):
         """This page leads with a z-score for a rule fitted on these rows.
 
@@ -3508,7 +3530,7 @@ class HybridRuleTests(unittest.TestCase):
             html)
         self.assertIn("50.0% no-vig", html)
         self.assertIn(
-            "Posted break-even</span><span>52.4% · requires +2.4 pp over market",
+            "Posted break-even</span><span>52.4% · requires +2.4 pp over 50.0% no-vig",
             html)
         self.assertIn("chooses the side independently of the market", html)
         self.assertNotIn("Selection", html)
@@ -3553,7 +3575,7 @@ class HybridRuleTests(unittest.TestCase):
             "PIT", dict(p_home=.529, away_ml=103), "PIT", "SD",
             dict(pooled=dict(n=492, excess_be=.0595,
                              excess_se=.0221, hold=.0184)), .0187)
-        self.assertIn("Market price</span><span>PIT +103", h)
+        self.assertIn("Posted break-even</span><span>49.3%", h)   # PIT +103
         self.assertNotIn("Historical family vs closing market", h)
         self.assertNotIn("492 completed games", h)
         self.assertNotIn("Past margin over closing break-even", h)
@@ -3566,8 +3588,7 @@ class HybridRuleTests(unittest.TestCase):
         for expected in (
             "This game",
             f"Model lean</span><span>PIT · {build_site._model_version_short()} Δ .0187",
-            "Market price</span><span>PIT +103 · 47.1% no-vig",
-            "Posted break-even</span><span>49.3% · requires +2.2 pp over market",
+            "Posted break-even</span><span>49.3% · requires +2.2 pp over 47.1% no-vig",
             "chooses the side independently of the market",
             "Δ magnitude is not a calibrated win probability",
             "V13 · matched historical price band",
