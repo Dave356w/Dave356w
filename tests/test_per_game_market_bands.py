@@ -39,7 +39,7 @@ def _ledger(n=144):
             "status": "graded", "model_tag": source, "game_pk": 3000 + i,
             "game_date": "2026-09-01", "home": "H", "away": "A",
             "full_home": home, "full_away": away,
-            "xw_lean": original_lean, "xw_net": .02,
+            "xw_lean": original_lean, "xw_net": .02, "xw_delta": .02,
             "xw_full": ("W" if (original_lean == "H") == home_wins else "L"),
             "close_p_home": h / (h + a),
             "close_home_ml": hm, "close_away_ml": am,
