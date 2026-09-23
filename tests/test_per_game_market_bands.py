@@ -109,8 +109,9 @@ def test_card_compares_market_and_model_within_exact_matching_band():
     assert f"{100*rec['implied']:.1f}%" in h
     assert f"{100*rec['actual']:.1f}%" in h
     assert f"{rec['w']}–{rec['l']}" in h
-    assert f"{rec['reconstructed_n']} V12-era games re-decided by V13" in h
-    assert f"{rec['native_n']} native V13 picks" in h
+    assert "re-decided by V13" not in h
+    assert "native V13 picks" not in h
+    assert "not a game-specific probability" not in h
     assert "Market implied" in h and "V13 realised" in h
     assert "Vs market" in h and "vs closing break-even" in h
     assert h.count("vband-step selected") == 1

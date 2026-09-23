@@ -6650,11 +6650,6 @@ def _market_band_context_html(ctx, price):
         null = market_backfill.ev_null([rec["implied"]], [rec["breakeven"]])
     null_txt = (f" (null {100 * null:+.1f})" if np.isfinite(null)
                 else " (null n/a)")
-    if "native_n" in rec:
-        basis = (f" · {rec['reconstructed_n']} V12-era games re-decided by"
-                 f" V13 / {rec['native_n']} native V13 picks")
-    else:
-        basis = " · row provenance unavailable"
     return (
         "<div class='vprofile vmarket'>"
         "<div class='vprofile-title'>V13 · matched historical price band</div>"
@@ -6673,9 +6668,7 @@ def _market_band_context_html(ctx, price):
         f"<div class='vband-gap'>Vs market {gap:+.1f} ± {spread:.1f} pp"
         f" · vs closing break-even {break_even_gap:+.1f} pp{null_txt}</div>"
         f"<div class='vnote'>Same {rec['n']} V13-selected sides and "
-        f"their closing prices{basis}. Retrospective, 1 SE; not a "
-        "game-specific probability or validated edge. "
-        "<a href='grades.html'>Full history</a>.</div>"
+        "their closing prices. <a href='grades.html'>Full history</a>.</div>"
         "</div>"
     )
 

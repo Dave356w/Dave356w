@@ -3593,9 +3593,10 @@ class HybridRuleTests(unittest.TestCase):
             "Δ magnitude is not a calibrated win probability",
             "V13 · matched historical price band",
             "Market implied", "V13 realised", "Vs market",
-            "not a game-specific probability or validated edge",
         ):
             self.assertIn(expected, h)
+        self.assertNotIn("not a game-specific probability", h)
+        self.assertNotIn("re-decided by V13", h)
         self.assertNotIn("Historical family vs closing market", h)
         self.assertNotIn("completed games", h)
         for banned in ("value bet", "best bet", "free money", "lock"):
@@ -3776,7 +3777,7 @@ class HybridRuleTests(unittest.TestCase):
         self.assertIn("Posted break-even", h)
         self.assertIn("Market implied", h)
         self.assertIn("V13 realised", h)
-        self.assertIn("not a game-specific probability or validated edge", h)
+        self.assertNotIn("not a game-specific probability", h)
         self.assertNotIn("Past margin over closing break-even", h)
 
     def test_the_ledger_labels_each_undecidable_case_distinctly(self):

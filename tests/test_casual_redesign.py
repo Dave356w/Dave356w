@@ -605,7 +605,8 @@ class RenderTests(unittest.TestCase):
         self.assertIn("V13 realised", h)
         self.assertIn("60.0%", h)
         self.assertIn("12–8", h)
-        self.assertIn("15 V12-era games re-decided by V13 / 5 native V13 picks", h)
+        self.assertNotIn("re-decided by V13", h)
+        self.assertNotIn("native V13 picks", h)
         self.assertNotIn("re-scored", h)
         self.assertIn("Vs market +5.0 ± 11.1 pp", h)
         self.assertNotIn("Past margin over closing break-even", h)
@@ -765,8 +766,9 @@ class RenderTests(unittest.TestCase):
         h = b._verdict_html(
             "ARI", dict(p_home=.62, home_ml=-120), "LAD", "ARI",
             BAND_CTX, .02)
-        self.assertIn("Retrospective, 1 SE", h)
-        self.assertIn("not a game-specific probability or validated edge", h)
+        self.assertNotIn("Retrospective, 1 SE", h)
+        self.assertNotIn("not a game-specific probability or validated edge", h)
+        self.assertIn("Δ magnitude is not a calibrated win probability", h)
         self.assertNotIn("Similar Δ", h)
         self.assertNotIn("pooled descriptive result", h)
 
