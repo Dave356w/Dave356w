@@ -43,6 +43,7 @@ from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
+import market_backfill
 
 from market_backfill import (ODDS_LADDER as _mb_odds_ladder,
                              V13_RECON_COLS as _mb_v13_recon_cols,
@@ -53,8 +54,7 @@ from market_backfill import (ODDS_LADDER as _mb_odds_ladder,
                              recon_grade as _mb_recon_grade,
                              recon_grades as _mb_recon_grades,
                              breakeven_prob as _mb_breakeven_prob,
-                             percentile_price_edges as _mb_percentile_price_edges,
-                             percentile_band_index as _mb_percentile_band_index)
+                             breakeven_prob as _mb_breakeven_prob)
 import requests
 
 import hitter_frame
@@ -6119,13 +6119,13 @@ td.bar{width:86px;padding:4px 8px 4px 2px}
 .verdict .vmarket{margin-top:10px}
 .verdict .vband-bar{display:flex;gap:3px;margin:8px 0}
 .verdict .vband-step{height:9px;flex:1;background:var(--surface-2);
-  border:1px solid var(--line-2);border-radius:3px}
+  border:1px solid var(--line-2);border-radius:var(--r-s)}
 .verdict .vband-step.selected{background:rgba(var(--cool),.8);
   border-color:rgba(var(--cool),.9)}
 .verdict .vband-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));
   gap:8px;margin:8px 0;font-variant-numeric:tabular-nums}
 .verdict .vband-stats>div{min-width:0;padding:6px;background:var(--surface-2);
-  border:1px solid var(--line-2);border-radius:5px}
+  border:1px solid var(--line-2);border-radius:var(--r-s)}
 .verdict .vband-stats small{display:block;color:var(--muted);
   font:500 11px/1.4 var(--sans)}
 .verdict .vband-stats strong{display:block;font:700 15px/1.5 var(--mono);
@@ -6629,8 +6629,8 @@ def _market_price_distribution(led, bands=8):
     won = np.concatenate([home_won, ~home_won])
     gpk = g.loc[ok, "game_pk"].to_numpy()
     game = np.concatenate([gpk, gpk])
-    edges = _mb_percentile_price_edges(prices, bands)
-    idx = _mb_percentile_band_index(prices, edges)
+    edges = market_backfill.percentile_price_edges(prices, bands)
+    idx = market_backfill.percentile_band_index(prices, edges)
     rows = []
     for j in range(len(edges) + 1):
         m = idx == j
@@ -6670,7 +6670,7 @@ def _market_band_context_html(ctx, price):
             "observed closing-price range; no comparable band is shown."
             "</div></div>"
         )
-    ix = int(_mb_percentile_band_index([p], dist["edges"])[0])
+    ix = int(market_backfill.percentile_band_index([p], dist["edges"])[0])
     rec = next((x for x in dist["bands"] if x["index"] == ix), None)
     if not rec:
         return ""
