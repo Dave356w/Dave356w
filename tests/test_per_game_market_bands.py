@@ -31,7 +31,7 @@ def _ledger(n=144):
                   "xw+plat_consol_v12" if i < 120 else
                   "woba+plat_consol_v5")
         original_lean = "H" if i % 4 else "A"
-        rebuilt_lean = ("A" if original_lean == "H" else "H"
+        rebuilt_lean = (("A" if original_lean == "H" else "H")
                         if i % 7 == 0 else original_lean)
         # Original V12 result remains immutable; model uses the reconstructed
         # result for the comparable family, never the old side's record.
@@ -114,7 +114,7 @@ def test_card_compares_market_and_model_within_exact_matching_band():
     assert "Market implied" in h and "V13 realised" in h
     assert "Vs market" in h and "vs closing break-even" in h
     assert h.count("vband-step selected") == 1
-    assert "Current" not in h or "Historical market context" not in h
+    assert "Historical market context" not in h
     assert "Combined V12/V13 historical performance" not in h
     assert "+6.0 ± 2.2 pp" not in h
 
