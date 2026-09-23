@@ -444,6 +444,53 @@ class RenderTests(unittest.TestCase):
         self.assertIn("class='game-state final'", html)
         self.assertIn(">FINAL</span>", html)
 
+    def test_start_time_appears_once_on_every_game_state(self):
+        """Pregame the collapsed row carries the time; once it hides the time
+        (live or final) the detail line picks it up. Never both, never none."""
+        for state, status in (("Preview", "Scheduled"), ("Live", "In Progress"),
+                              ("Final", "Final")):
+            g, _ = self._cards()
+            g.update(abstract_state=state, status=status,
+                     away_score=1, home_score=0)
+            html = b.cmb_card(g, None)
+            summary_hidden = "class='summary-time' hidden" in html
+            detail = re.search(r"<div class='detail-context'>([^<]*)</div>",
+                               html).group(1)
+            self.assertIn("Park", detail)
+            self.assertEqual("7:05 PM ET" in detail, summary_hidden, state)
+            self.assertEqual(state != "Preview", summary_hidden, state)
+
+    def test_no_vig_cell_names_the_lean_side_and_matches_the_panel(self):
+        g_agree, g_dis = self._cards()
+        # LAD is the AWAY lean at p_home .395: the cell shows LAD's 60.5%,
+        # not the home side's 39.5%, and it is the panel's number.
+        agree = b.cmb_card(g_agree, None)
+        self.assertIn("No-vig · LAD</div><div class='v'>60.5%", agree)
+        self.assertIn("over 60.5% no-vig", agree)
+        self.assertNotIn("39.5%", agree)
+        self.assertNotIn("(devig)", agree)
+        # CLE is the away lean at +148 against a home favourite.
+        dis = b.cmb_card(g_dis, None)
+        self.assertIn("No-vig · CLE</div><div class='v'>38.0%", dis)
+        self.assertIn("over 38.0% no-vig", dis)
+        # No lean: the cell falls back to the home side rather than vanishing.
+        g_none, _ = self._cards()
+        g_none["away"]["xw_edge"] = g_none["home"]["xw_edge"] = None
+        none = b.cmb_card(g_none, None)
+        self.assertIn("No-vig · ARI</div><div class='v'>39.5%", none)
+
+    def test_panel_does_not_restate_the_moneyline_the_strip_shows(self):
+        g, _ = self._cards()
+        html = b.cmb_card(g, None)
+        panel = html.split("<div class='verdict'>", 1)[1]
+        self.assertIn("DK ML · LAD</div><div class='v'>-160", html)
+        self.assertNotIn("-160", panel)
+        self.assertNotIn("Market price", panel)
+
+    def test_panel_without_a_price_says_so(self):
+        h = b._verdict_html("LAD", {}, "LAD", "ARI", {}, .02)
+        self.assertIn("Posted break-even</span><span>no price yet", h)
+
     def test_footer_carries_no_how_to_read_guide(self):
         # The guide is gone entirely -- the card is expected to read on its own.
         self.assertFalse(hasattr(b, "_legend_guide"))
@@ -546,7 +593,10 @@ class RenderTests(unittest.TestCase):
             .0016,
         )
         self.assertIn(f"Model lean</span><span>MIN · {b._model_version_short()} Δ .0016", h)
-        self.assertIn("Market price</span><span>MIN -120 · 52.1% no-vig", h)
+        # The quote itself lives in the odds strip; the panel carries the
+        # lean-side no-vig once, inside the break-even comparison.
+        self.assertNotIn("Market price", h)
+        self.assertIn("requires +2.4 pp over 52.1% no-vig", h)
         self.assertIn("Posted break-even</span><span>54.5% · requires +2.4 pp", h)
         self.assertIn("V13 · matched historical price band", h)
         self.assertIn("band 2/3 · 20 model selections", h)
@@ -555,7 +605,8 @@ class RenderTests(unittest.TestCase):
         self.assertIn("V13 realised", h)
         self.assertIn("60.0%", h)
         self.assertIn("12–8", h)
-        self.assertIn("15 V12 re-scored / 5 native V13", h)
+        self.assertIn("15 V12-era games re-decided by V13 / 5 native V13 picks", h)
+        self.assertNotIn("re-scored", h)
         self.assertIn("Vs market +5.0 ± 11.1 pp", h)
         self.assertNotIn("Past margin over closing break-even", h)
         self.assertNotIn("492 completed games", h)
@@ -1474,8 +1525,9 @@ class CardCopyTests(unittest.TestCase):
 
     def test_verdict_uses_structured_labels_and_read_uses_sentence_punctuation(self):
         html = self._card()
-        for label in ("Model lean", "Market price", "Posted break-even", "This game"):
+        for label in ("Model lean", "Posted break-even", "This game"):
             self.assertIn(label, html)
+        self.assertNotIn("Market price", html)   # the strip carries the quote
         self.assertNotIn("Selection", html)
         self.assertIn("Δ magnitude is not a calibrated win probability", html)
         self.assertIn("That is a <b>", html)
@@ -1526,7 +1578,7 @@ class HoldReferenceTests(unittest.TestCase):
             for banned in ("usually pays", "on average", "typical", "average hold"):
                 self.assertNotIn(banned, h, banned)
             # The per-game hold itself stays: it is a fact about this price.
-            self.assertRegex(h, r"requires [+-]\d+\.\d pp over market")
+            self.assertRegex(h, r"requires [+-]\d+\.\d pp over \d+\.\d% no-vig")
 
     def test_the_per_game_hold_still_varies_with_the_price(self):
         """Removing the comparison must not flatten the number it compared."""

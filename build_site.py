@@ -4662,12 +4662,14 @@ def _verdict_html(fav, odds, away_abbr, home_abbr, ctx=None, delta=None):
     version = _model_version_short()
 
     odds = odds or {}
+    # The posted price and both sides' no-vig already sit in the odds strip
+    # above (`_market_html`), so the panel does not restate the moneyline;
+    # it carries the lean-side no-vig only inside the break-even comparison.
     price = odds.get("home_ml") if fav == home_abbr else odds.get("away_ml")
-    price_txt = _fmt_ml(price) if price is not None else "—"
-    p_txt = (f"{100 * p_lean:.1f}% no-vig" if p_lean is not None
-             else "no no-vig price yet")
 
-    break_even_line = ""
+    break_even_line = (
+        "<div class='vline'><span class='vk'>Posted break-even</span>"
+        "<span>no price yet</span></div>")
     price_num = _f(price)
     if price_num is not None and (price_num <= -100 or price_num >= 100):
         be = _imp_ml(price_num)
@@ -4694,8 +4696,8 @@ def _verdict_html(fav, odds, away_abbr, home_abbr, ctx=None, delta=None):
             # for the searched-constant one.
             break_even_line = (
                 "<div class='vline'><span class='vk'>Posted break-even</span>"
-                f"<span>{100 * be:.1f}% · requires {lift_pp:+.1f} pp over market"
-                "</span></div>"
+                f"<span>{100 * be:.1f}% · requires {lift_pp:+.1f} pp over "
+                f"{100 * p_lean:.1f}% no-vig</span></div>"
             )
         else:
             break_even_line = (
@@ -4716,8 +4718,6 @@ def _verdict_html(fav, odds, away_abbr, home_abbr, ctx=None, delta=None):
         "<div class='vprofile-title vgroup'>This game</div>"
         f"<div class='vline'><span class='vk'>Model lean</span>"
         f"<span>{_esc(fav)} · {version} Δ {delta_txt}</span></div>"
-        f"<div class='vline'><span class='vk'>Market price</span>"
-        f"<span>{_esc(fav)} {price_txt} · {p_txt}</span></div>"
         f"{break_even_line}"
         f"{note}"
         f"{market_context}</div></div>"
@@ -4873,15 +4873,19 @@ def _market_html(o, away_abbr, home_abbr, fav=None, ctx=None, delta=None):
                 f"{_esc(lab)}</div>"
                 f"<div class='v'>{_fmt_ml(cur)}{sub}</div></div>")
     tot = f"o/u {o['total']:g}" if o.get("total") is not None else "—"
-    ph = f"{o['p_home'] * 100:.1f}%" if o.get("p_home") is not None else "—"
+    # The no-vig cell names the model's side, so it reads with the verdict
+    # beneath it; with no lean it falls back to the home side, as before.
+    nv_side = fav if fav in (away_abbr, home_abbr) else home_abbr
+    p_side = _lean_implied_p(o, nv_side, away_abbr, home_abbr)
+    ph = f"{p_side * 100:.1f}%" if p_side is not None else "—"
     return (
         "<div class='market'><div class='modds'>"
         + _mlcell("DK ML", away_abbr, o.get("away_ml"), o.get("open_away_ml"))
         + _mlcell("DK ML", home_abbr, o.get("home_ml"), o.get("open_home_ml"))
         + f"<div class='mcell'><div class='l'>Total</div><div class='v'>{tot}</div></div>"
-        + f"<div class='mcell'><div class='l'>Implied "
-        + _esc(home_abbr)
-        + f" (devig)</div><div class='v'>{ph}</div></div>"
+        + f"<div class='mcell'><div class='l'>No-vig · "
+        + _esc(nv_side)
+        + f"</div><div class='v'>{ph}</div></div>"
         + "</div>"
         + _verdict_html(fav, o, away_abbr, home_abbr, ctx, delta)
         + "</div>")
@@ -5155,7 +5159,12 @@ def _pregame_lock_note(g):
 
 
 def _detail_context_html(g):
-    when = " · ".join(x for x in (g.get("time_pt"), g.get("venue")) if x)
+    # The collapsed row prints the start time until first pitch and hides it
+    # once a game is live or final (`_scoreboard_summary`). Print it here only
+    # when that row does not, so it appears exactly once either way.
+    started = str(g.get("abstract_state") or "").lower() in ("live", "final")
+    when = " · ".join(x for x in ((g.get("time_pt") if started else None),
+                                  g.get("venue")) if x)
     ctx = f"<div class='detail-context'>{_esc(when)}</div>" if when else ""
     return ctx + _pregame_lock_note(g)
 
@@ -6249,6 +6258,17 @@ tr.gr-day th{position:sticky;top:28px;z-index:1;background:var(--surface-2);
 tr.gr-day .d{color:var(--ink)}
 tr.gr-day .n{color:var(--faint);font-weight:500}
 tr.gr-day .rec{float:right;color:var(--muted)}
+/* Slate folding (grades_fold_js). The button takes over the header's whole
+   line so a tap anywhere on the date row toggles it. */
+table.gr tbody.gr-slate.folded tr.gr-row{display:none}
+.gr-day-btn{all:unset;box-sizing:border-box;display:block;width:100%;cursor:pointer}
+.gr-day-btn::before{content:'▾';display:inline-block;width:1.1em;color:var(--faint)}
+tbody.folded .gr-day-btn::before{content:'▸'}
+.gr-day-btn:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+.gr-fold{margin:0 0 8px;font:500 13px/1.4 var(--sans);color:var(--muted)}
+.gr-fold button{all:unset;cursor:pointer;color:var(--ink);font-weight:650;
+  text-decoration:underline;text-underline-offset:2px}
+.gr-fold button:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
 
 /* ---------- season leaderboard ---------- */
 /* Reuses the ledger table wholesale -- wrap, sticky head, and the phone
@@ -6631,8 +6651,8 @@ def _market_band_context_html(ctx, price):
     null_txt = (f" (null {100 * null:+.1f})" if np.isfinite(null)
                 else " (null n/a)")
     if "native_n" in rec:
-        basis = (f" · {rec['reconstructed_n']} V12 re-scored"
-                 f" / {rec['native_n']} native V13")
+        basis = (f" · {rec['reconstructed_n']} V12-era games re-decided by"
+                 f" V13 / {rec['native_n']} native V13 picks")
     else:
         basis = " · row provenance unavailable"
     return (
@@ -8393,15 +8413,75 @@ def render_grades_html(built_txt):
              + (["ML"] if show_ml else [])
              + ["Final", "Result"])
     led = led.sort_values(["game_date", "game_pk"], ascending=[False, True])
+    # One tbody per slate, so a slate can fold under its own date header
+    # while every column still shares one table's widths. Nothing is folded
+    # in the markup: `grades_fold_js` collapses older slates in the browser,
+    # and without script the whole ledger renders as before.
     body = []
     for date, day in led.groupby("game_date", sort=False):
-        body.append(_grades_day_header(date, day, len(heads)))
-        body += [_grades_row(r, show_ml) for _, r in day.iterrows()]
+        body.append("<tbody class='gr-slate'>"
+                    + _grades_day_header(date, day, len(heads))
+                    + "".join(_grades_row(r, show_ml) for _, r in day.iterrows())
+                    + "</tbody>")
     table = ("<div class='gr-tablewrap'><table class='gr'><thead><tr>"
              + "".join(f"<th>{h}</th>" for h in heads)
-             + f"</tr></thead><tbody>{''.join(body)}</tbody></table></div>")
+             + f"</tr></thead>{''.join(body)}</table></div>")
     return html_document(back + head + summary + table, built_txt,
-                         title=f"{PUBLIC_MODEL_NAME} ledger")
+                         title=f"{PUBLIC_MODEL_NAME} ledger",
+                         extra_js=grades_fold_js())
+
+
+# Slates left open when the ledger page loads; older ones fold under their
+# date header and open on a click. Display-only: every row is in the page.
+GRADES_OPEN_SLATES = 3
+
+
+def grades_fold_js():
+    """Fold all but the newest slates, and add the controls that unfold them.
+
+    The controls are created here rather than written into the markup, so a
+    reader without script never sees a button that does nothing -- they get
+    the full table instead.
+    """
+    return ("""(function(){
+  var KEEP=%d;
+  var slates=[].slice.call(document.querySelectorAll('table.gr tbody.gr-slate'));
+  if(slates.length<=KEEP) return;
+  var btns=[];
+  function set(tb,btn,open){
+    tb.classList.toggle('folded',!open);
+    btn.setAttribute('aria-expanded',open?'true':'false');
+  }
+  slates.forEach(function(tb,i){
+    var th=tb.querySelector('tr.gr-day th'); if(!th) return;
+    var btn=document.createElement('button');
+    btn.type='button'; btn.className='gr-day-btn';
+    while(th.firstChild) btn.appendChild(th.firstChild);
+    th.appendChild(btn);
+    btn.addEventListener('click',function(){
+      set(tb,btn,tb.classList.contains('folded'));
+    });
+    btns.push([tb,btn]);
+    set(tb,btn,i<KEEP);
+  });
+  var wrap=document.querySelector('.gr-tablewrap');
+  var bar=document.createElement('div'); bar.className='gr-fold';
+  var all=document.createElement('button'); all.type='button';
+  function label(){
+    var open=btns.every(function(p){return !p[0].classList.contains('folded');});
+    all.textContent=open?'Fold older slates':'Show all '+slates.length+' slates';
+    return open;
+  }
+  all.addEventListener('click',function(){
+    var open=label();
+    btns.forEach(function(p,i){set(p[0],p[1],open?i<KEEP:true);});
+    label();
+  });
+  btns.forEach(function(p){p[1].addEventListener('click',label);});
+  bar.appendChild(document.createTextNode('Older slates are folded; select a date to open it. '));
+  bar.appendChild(all); label();
+  wrap.parentNode.insertBefore(bar,wrap);
+})();""" % GRADES_OPEN_SLATES)
 
 
 def _leaderboard_table(rows, rank_start=1, invert=False):

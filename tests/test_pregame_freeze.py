@@ -310,7 +310,12 @@ class CardIntegrationTests(unittest.TestCase):
         # claim beside it.
         self.assertIn("Model lean", html)
         self.assertIn("Seattle Mariners · V13 Δ", html)
-        self.assertIn("Market price</span><span>Seattle Mariners -120", html)
+        # The locked quote reaches both the odds strip and the panel's
+        # break-even line; the live feed's 44% home no-vig reaches neither.
+        self.assertIn("DK ML · Seattle Mariners</div><div class='v'>-120", html)
+        self.assertIn("No-vig · Seattle Mariners</div><div class='v'>52.2%", html)
+        self.assertIn("54.5% · requires +2.4 pp over 52.2% no-vig", html)
+        self.assertNotIn("56.0%", html)
 
     def test_a_game_that_has_not_started_is_untouched(self):
         # The frozen path must not change a normal pregame slate at all.

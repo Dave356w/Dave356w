@@ -31,7 +31,7 @@ def test_matched_card_never_renders_full_family_average():
         "SEA", "MIN", ctx, .0016)
     assert "V13 · matched historical price band" in h
     assert "12 model selections" in h
-    assert "10 V12 re-scored / 2 native V13" in h
+    assert "10 V12-era games re-decided by V13 / 2 native V13 picks" in h
     assert "Market implied" in h and "V13 realised" in h
     assert "Retrospective, 1 SE" in h
     assert "+6.0 ± 2.2 pp · 493" not in h
@@ -76,7 +76,7 @@ def test_reconstructed_only_band_does_not_claim_native_provenance():
     h = b._verdict_html(
         "MIN", dict(p_home=.521, home_ml=-120),
         "SEA", "MIN", ctx, .0016)
-    assert "12 V12 re-scored / 0 native V13" in h
+    assert "12 V12-era games re-decided by V13 / 0 native V13 picks" in h
     assert "Full history" in h
     assert "not a game-specific probability" in h
     assert "completed games" not in h
