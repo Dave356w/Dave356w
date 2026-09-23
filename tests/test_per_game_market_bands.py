@@ -135,3 +135,32 @@ def test_thin_v13_sample_does_not_invent_price_bands():
     thin = b._market_price_distribution(_ledger(6))
     assert thin is None
     assert b._market_band_context_html({"model_distribution": thin}, -120) == ""
+
+
+def test_card_ev_line_prints_its_market_correct_null():
+    """#227 on the card: the break-even figure carries its own null, and
+    EV - null reproduces the printed no-vig excess up to display rounding."""
+    import re
+    from market_backfill import ev_null
+    dist = b._market_price_distribution(_ledger())
+    for rec in dist["bands"]:
+        h = b._market_band_context_html({"model_distribution": dist}, rec["lo"])
+        m = re.search(r"Vs market ([+-]\d+\.\d) ± [\d.]+ pp · vs closing "
+                      r"break-even ([+-]\d+\.\d) pp \(null ([+-]\d+\.\d)\)", h)
+        assert m, h
+        gap, ev, null = (float(x) for x in m.groups())
+        assert null < 0                      # posted prices carry a hold
+        assert abs((ev - null) - gap) <= 0.11
+        # The printed null is the shared helper's, on the band's own arrays.
+        assert abs(rec["ev_null"]
+                   - ev_null([rec["implied"]], [rec["breakeven"]])) < 1e-12
+        assert f"(null {100 * rec['ev_null']:+.1f})" in h
+
+
+def test_card_ev_line_never_prints_a_zero_null_it_cannot_derive():
+    dist = b._market_price_distribution(_ledger())
+    rec = dist["bands"][0]
+    bad = {**dist, "bands": [{**rec, "ev_null": float("nan")}]}
+    h = b._market_band_context_html({"model_distribution": bad}, rec["lo"])
+    assert "(null n/a)" in h
+    assert "(null +0.0)" not in h and "(null -0.0)" not in h

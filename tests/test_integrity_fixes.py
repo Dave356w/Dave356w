@@ -1953,11 +1953,11 @@ class RecordScopeTests(unittest.TestCase):
         self.assertNotIn("rebuilt", header.lower())
 
     def test_the_scope_of_the_number_is_stated_next_to_it(self):
-        """The strip states its ledger scope; the public table is v12-only."""
+        """The strip states its ledger scope; the public table does not."""
         pages = self._pages(self._mixed())
-        self.assertIn("1 of 4 graded rows", pages["strip"])
-        self.assertIn(build_site.MODEL_TAG, pages["strip"])
-        self.assertNotIn("1 of 4 graded rows", pages["grades page"])
+        self.assertIn("1 of 4 graded games count toward this record",
+                      pages["strip"])
+        self.assertNotIn("1 of 4 graded games", pages["grades page"])
         self.assertIn(f"{build_site._model_version_short()} selections and results", pages["grades page"])
 
     def test_public_record_surfaces_use_plain_current_labels(self):
@@ -1965,6 +1965,24 @@ class RecordScopeTests(unittest.TestCase):
             visible = re.sub(r"<(?:style|script)\b.*?</(?:style|script)>", "",
                              html, flags=re.S | re.I)
             self.assertNotRegex(visible.lower(), r"\bretro(?:spective)?\b", name)
+
+    def test_scope_note_does_not_claim_family_rows_carry_the_current_tag(self):
+        """v12 and v13 share one record line, so a family count is not a count
+        of MODEL_TAG rows and the note must not say it is."""
+        led = self._mixed()
+        led.loc[0, "model_tag"] = "xw+plat_consol_v12"
+        led = pd.concat([led, pd.DataFrame([self._row(
+            5, build_site.MODEL_TAG, "B", "W", 2, 4)])], ignore_index=True)
+        strip = self._pages(led)["strip"]
+        self.assertIn("2 of 5 graded games count toward this record", strip)
+        self.assertNotIn(f"graded rows are {build_site.MODEL_TAG}", strip)
+
+    def test_strip_label_names_the_same_version_as_its_ledger_link(self):
+        strip = self._pages(self._mixed())["strip"]
+        v = build_site._model_version_short()
+        self.assertIn(f"<span class='lab'>{v} record</span>", strip)
+        self.assertIn(f"{v} ledger →", strip)
+        self.assertNotIn("V12 record", strip)
 
     def test_no_scope_note_when_the_family_is_every_graded_row(self):
         """The note has to disappear on its own, or it becomes noise that a
@@ -2057,16 +2075,23 @@ class GradesHeaderClaimsTests(unittest.TestCase):
         self.assertIn("the model's own side on every game it decides", head)
 
     def test_the_ml_column_says_which_price_it_shows(self):
-        """One heading, two bases, and every aggregate scored at the close.
+        """The note names the price the column actually renders.
 
-        A row carrying a locked pregame snapshot renders that price; every
-        other row renders the close. The gap is small and flips no branch on
-        the committed ledger, but a reader reconciling a row's price against
-        the unit figures in the header cannot see which basis they are on.
+        With the hybrid rule retired the column reads the lean's CLOSING
+        moneyline on every row, the same basis as the header's records and
+        ROI. Pregame and close differ in this fixture, so a note claiming the
+        locked pregame price would be visibly contradicted by the cell.
         """
-        head = self._header(pd.DataFrame([self._row(1), self._row(2)]))
-        self.assertIn("locked pregame", head)
-        self.assertIn("scored at the close", head)
+        led = pd.DataFrame([self._row(
+            1, pregame_home_ml=-125, pregame_away_ml=105, pregame_p_home=.54)])
+        with mock.patch.object(build_site, "load_ledger_df", return_value=led):
+            page = build_site.render_grades_html("test build")
+        head, table = page.split("<div class='gr-tablewrap'>", 1)
+        self.assertIn("<b>ML</b> is the selection's closing price", head)
+        self.assertIn("record and ROI here is scored at", head)
+        self.assertNotIn("locked pregame where the row has one", head)
+        self.assertIn(">-140<", table)
+        self.assertNotIn(">-125<", table)
 
     def test_a_decided_row_the_record_cannot_score_is_named_not_subtracted(self):
         """The header's tiles are scored on a stricter set than "graded".

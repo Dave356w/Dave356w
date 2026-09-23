@@ -6579,6 +6579,9 @@ def _market_price_distribution(led, obs=None, bands=8):
             "n": n, "w": wins, "l": n - wins,
             "implied": implied, "actual": actual, "breakeven": br,
             "gap": actual - implied, "excess_be": actual - br,
+            # The EV figure's own centre under a correct market (#227): the
+            # card prints it beside `excess_be`, never leaving it read vs 0.
+            "ev_null": market_backfill.ev_null(q[take], be[take]),
             "se": _excess_se(q[take]),
         }
         if basis is not None:
@@ -6622,6 +6625,11 @@ def _market_band_context_html(ctx, price):
     gap = 100 * rec["gap"]
     spread = 100 * rec["se"]
     break_even_gap = 100 * rec["excess_be"]
+    null = rec.get("ev_null")
+    if null is None:
+        null = market_backfill.ev_null([rec["implied"]], [rec["breakeven"]])
+    null_txt = (f" (null {100 * null:+.1f})" if np.isfinite(null)
+                else " (null n/a)")
     if "native_n" in rec:
         basis = (f" · {rec['reconstructed_n']} V12 re-scored"
                  f" / {rec['native_n']} native V13")
@@ -6643,7 +6651,7 @@ def _market_band_context_html(ctx, price):
         f"{rec['w']}–{rec['l']}</strong></div>"
         "</div>"
         f"<div class='vband-gap'>Vs market {gap:+.1f} ± {spread:.1f} pp"
-        f" · vs closing break-even {break_even_gap:+.1f} pp</div>"
+        f" · vs closing break-even {break_even_gap:+.1f} pp{null_txt}</div>"
         f"<div class='vnote'>Same {rec['n']} V13-selected sides and "
         f"their closing prices{basis}. Retrospective, 1 SE; not a "
         "game-specific probability or validated edge. "
@@ -7414,7 +7422,10 @@ def _record_scope_note(led, g):
     n_fam = len(g)
     if n_fam == n_all:
         return "", n_fam, n_all
-    return (f"{n_fam} of {n_all} graded rows are {MODEL_TAG}", n_fam, n_all)
+    # `g` is the whole record family (RECORD_TAGS), not rows tagged
+    # MODEL_TAG, so the note names the family's scope, not the tag.
+    return (f"{n_fam} of {n_all} graded games count toward this record; "
+            "earlier model families are excluded", n_fam, n_all)
 
 
 def _baseline_controls(g):
@@ -7822,7 +7833,8 @@ def records_strip_html():
         if scope:
             bits.append(f"<span class='muted'>{scope}</span>")
         inner = " <span class='muted'>·</span> ".join(bits)
-    return ("<div class='gradestrip'><span class='lab'>V12 record</span>"
+    return ("<div class='gradestrip'><span class='lab'>"
+            f"{_model_version_short()} record</span>"
             f"<span>{inner}</span><span class='grade-links'>"
             "<a href='leaderboard.html'>leaderboard →</a>"
             f"<a href='grades.html'>{_model_version_short()} ledger →</a></span></div>")
@@ -8365,9 +8377,10 @@ def render_grades_html(built_txt):
             # locked price chose. Both are properties of the rule, so both
             # went with it. What the reader still needs is the ML column's
             # own basis, which is what remains.
-            notes.append("<b>ML</b> is the selection's price, locked pregame "
-                         "where the row has one. Records are scored at the "
-                         "close")
+            # `_lean_ml_cell` reads close_home_ml / close_away_ml, so the
+            # column and every record above share one basis: the close.
+            notes.append("<b>ML</b> is the selection's closing price, the "
+                         "same price every record and ROI here is scored at")
         lock = _lock_note(led)
         if lock:
             notes.append(lock)
