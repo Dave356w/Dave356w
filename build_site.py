@@ -4640,90 +4640,15 @@ def _model_version_short():
     return f"V{m.group(1)}" if m else MODEL_TAG
 
 
-def _xwoba_side_history(ctx, selection_ml=None):
-    """Comparable V12-to-V13 history, distinguished from tonight's price.
-
-    V13 changes the starter's xwOBA/wOBA rate blend; retained V12 rows are
-    re-scored using paired snapshots and native V13 rows use locked pregame
-    decisions. Keep the comparable FAMILY summary primary. Expose the two
-    sources and do not mistake a historical closing-price benchmark for this
-    game's win probability. Snapshot timestamps are a separate provenance
-    check and do not determine whether the prediction methods are comparable.
-    """
-    ctx = ctx or {}
-    pooled = ctx.get("pooled")
-    if not pooled or not pooled.get("n"):
-        return ""
-    n = int(pooled["n"])
-    if pooled.get("excess_be") is None or pooled.get("excess_se") is None:
-        return ""
-    gap = 100.0 * float(pooled["excess_be"])
-    se = 100.0 * float(pooled["excess_se"])
-    game_word = "game" if n == 1 else "games"
-    native = ctx.get("native") or {}
-    native_n = int(native.get("n") or 0)
-    reconstructed_n = int(ctx.get("reconstructed_n") or 0)
-    provenance = ""
-    if native_n and reconstructed_n and native_n + reconstructed_n == n:
-        provenance = (
-            "<div class='vnote'>Comparable V12→V13 family: "
-            f"{reconstructed_n} paired-snapshot V12 rows re-scored under the "
-            f"starter blend and {native_n} native V13 games "
-            f"({int(native['w'])}–{int(native['l'])}; native closing margin "
-            f"{100.0 * float(native['excess_be']):+.1f} ± "
-            f"{100.0 * float(native['excess_se']):.1f} pp). "
-            "Near-zero Δ leans can change sides.</div>"
-        )
-    elif native_n and native_n == n:
-        provenance = (
-            "<div class='vnote'>Native pregame V13 selections only.</div>"
-        )
-    elif reconstructed_n and reconstructed_n == n:
-        provenance = (
-            "<div class='vnote'>V12 selections re-scored under V13's starter "
-            "blend from paired snapshots; snapshot timing requires its own "
-            "pregame audit.</div>"
-        )
-    else:
-        provenance = (
-            "<div class='vnote'>Combined comparable model-family history; "
-            "the native/re-scored split is unavailable.</div>"
-        )
-    return (
-        "<details class='vhistory'>"
-        "<summary>Combined V12/V13 historical performance</summary>"
-        "<div class='vprofile'>"
-        "<div class='vprofile-title'>Historical family vs closing market</div>"
-        "<div class='vline'><span class='vk'>Past margin over closing break-even"
-        "</span>"
-        f"<span>{gap:+.1f} ± {se:.1f} pp · {n} completed {game_word}</span></div>"
-        f"{provenance}"
-        "<div class='vnote'>Historical closing prices, not the quote shown "
-        "for this game. This is a pooled descriptive result, not a calibrated "
-        "win probability or a game-specific expected edge.</div>"
-        "</div>"
-        "<a class='vhistory-link' href='grades.html'>Full model-family record →</a>"
-        "</details>"
-    )
-
-def _branch_history(ctx, action, p_lean=None, selection_ml=None):
-    """Render clearly labelled historical closing-price context, or nothing.
-
-    The retired per-game delta/price cells are intentionally absent: this
-    panel shows native V13 and separately labelled mixed-basis aggregates.
-    The preserved optional arguments maintain caller compatibility.
-    """
-    if not action:
-        return ""
-    return _xwoba_side_history(ctx, selection_ml)
 
 
 def _verdict_html(fav, odds, away_abbr, home_abbr, ctx=None, delta=None):
-    """Per-game panel: model side, current market hurdle, descriptive history.
+    """Current selection and quote plus an exact-sample historical price band.
 
-    v13 chooses the side from model inputs alone. The market supplies the
-    current price and no-vig benchmark; native and mixed historical aggregates
-    are context, not calibrated probabilities for tonight's game.
+    V13 chooses the side independently of market odds. Historical context
+    groups only V13-represented selections by their own closing prices; market
+    expectations and realised outcomes use identical selected games. This
+    descriptive band is not a game-specific win-probability estimate.
     """
     ctx = ctx or {}
     if fav is None:
@@ -4783,9 +4708,7 @@ def _verdict_html(fav, odds, away_abbr, home_abbr, ctx=None, delta=None):
         "market. Δ magnitude is not a calibrated win probability.</div>"
     )
 
-    selection_ml = price if action else None
     market_context = _market_band_context_html(ctx, price) if action else ""
-    history = _branch_history(ctx, action, p_lean, selection_ml)
 
     return (
         "<div class='verdict'><div class='l'>Model vs market</div>"
@@ -4797,7 +4720,7 @@ def _verdict_html(fav, odds, away_abbr, home_abbr, ctx=None, delta=None):
         f"<span>{_esc(fav)} {price_txt} · {p_txt}</span></div>"
         f"{break_even_line}"
         f"{note}"
-        f"{market_context}{history}</div></div>"
+        f"{market_context}</div></div>"
     )
 
 def _hitter_row_html(i, hr):
@@ -6113,8 +6036,8 @@ td.bar{width:86px;padding:4px 8px 4px 2px}
 .verdict .vprofile .vline{display:block;font-weight:600}
 .verdict .vprofile .vline + .vline{margin-top:5px}
 .verdict .vprofile .vline>span:last-child{display:block;margin-top:1px;text-align:left;color:var(--ink)}
-/* The per-game comparison leads with the market distribution. The pooled
-   model history stays available but is intentionally collapsed by default. */
+/* The per-game comparison uses the V13-selected prices for BOTH market and
+   realised outcomes. Full-family performance lives on the grades page. */
 .verdict .vmarket{margin-top:10px}
 .verdict .vband-bar{display:flex;gap:3px;margin:8px 0}
 .verdict .vband-step{height:9px;flex:1;background:var(--surface-2);
@@ -6130,13 +6053,6 @@ td.bar{width:86px;padding:4px 8px 4px 2px}
 .verdict .vband-stats strong{display:block;font:700 15px/1.5 var(--mono);
   color:var(--ink)}
 .verdict .vband-gap{font:700 12.5px/1.4 var(--sans);color:var(--ink)}
-.verdict .vhistory{margin-top:8px;padding-top:7px;
-  border-top:1px solid var(--line-2)}
-.verdict .vhistory summary{cursor:pointer;color:var(--muted);
-  font:700 12px/1.5 var(--sans)}
-.verdict .vhistory .vprofile{border-top:0;margin-top:2px}
-.verdict .vhistory-link{display:inline-block;margin:6px 0 1px;
-  font:600 12px/1.4 var(--sans)}
 
 
 /* hitter row: percentile column + name cell. The column is the 88px bar plus
@@ -6600,113 +6516,138 @@ def _excess_se(probs):
     return excess_se(probs)
 
 
-def _market_price_distribution(led, bands=8):
-    """Balanced closing-market distribution, scored once across ALL families.
+def _market_price_distribution(led, obs=None, bands=8):
+    """Eight balanced price bands on V13-represented selected sides ONLY.
 
-    One graded game contributes two complementary team-side observations.
-    The exact nearest-rank bin arithmetic is shared with grade_leans via
-    market_backfill, so the per-game read cannot drift from the analyst report.
-    Neither the model lean nor today's current price changes these counts.
+    The market expectation and V13 results are measured on identical rows:
+    one model-selected team per graded game, priced at its own historical DK
+    closing line. V12 rows enter only via publish_reconstruction's V13 re-score;
+    unrelated model families and the unselected opposing sides never enter.
+    Band edges are recomputed from this same V13-selected price population.
+    The entire calculation is descriptive, not a calibrated live forecast.
     """
-    cols = {"status", "full_away", "full_home", "close_p_home",
-            "close_home_ml", "close_away_ml", "game_pk"}
-    if led is None or not cols.issubset(led.columns):
+    if obs is None:
+        obs = _lean_market_observations(led)
+    if obs is None or obs.empty:
         return None
-    g = led.loc[led["status"].eq("graded")]
-    fa = pd.to_numeric(g["full_away"], errors="coerce")
-    fh = pd.to_numeric(g["full_home"], errors="coerce")
-    ph = pd.to_numeric(g["close_p_home"], errors="coerce")
-    hm = pd.to_numeric(g["close_home_ml"], errors="coerce")
-    am = pd.to_numeric(g["close_away_ml"], errors="coerce")
-    ok = (fa.notna() & fh.notna() & (fa != fh) & ph.between(0, 1, inclusive="neither")
-          & hm.notna() & am.notna())
-    if int(ok.sum()) < bands * 4:
+    need = {"won", "market_p", "close_ml"}
+    if not need.issubset(obs.columns):
         return None
-    home_won = (fh[ok] > fa[ok]).to_numpy(dtype=bool)
-    prices = np.concatenate([hm[ok].to_numpy(float), am[ok].to_numpy(float)])
-    probs = np.concatenate([ph[ok].to_numpy(float), 1.0 - ph[ok].to_numpy(float)])
-    won = np.concatenate([home_won, ~home_won])
-    gpk = g.loc[ok, "game_pk"].to_numpy()
-    game = np.concatenate([gpk, gpk])
-    edges = market_backfill.percentile_price_edges(prices, bands)
-    idx = market_backfill.percentile_band_index(prices, edges)
+    p = pd.to_numeric(obs["market_p"], errors="coerce")
+    ml = pd.to_numeric(obs["close_ml"], errors="coerce")
+    won = pd.to_numeric(obs["won"], errors="coerce")
+    valid = (p.between(0, 1, inclusive="neither") & p.notna()
+             & np.isfinite(ml) & ((ml <= -100) | (ml >= 100))
+             & won.isin((0, 1)))
+    h = obs.loc[valid]
+    if len(h) < bands * 4:
+        return None
+    price = ml.loc[valid].to_numpy(float)
+    q = p.loc[valid].to_numpy(float)
+    result = won.loc[valid].to_numpy(float)
+    be = np.asarray(_mb_breakeven_prob(price), dtype=float)
+    valid_be = np.isfinite(be)
+    if not valid_be.all():
+        h = h.iloc[np.flatnonzero(valid_be)]
+        price, q, result, be = (v[valid_be] for v in (price, q, result, be))
+    if len(price) < bands * 4:
+        return None
+    edges = market_backfill.percentile_price_edges(price, bands)
+    idx = market_backfill.percentile_band_index(price, edges)
+
+    # The original ledger tag, not the published/re-scored tag, is the source
+    # of native/reconstructed provenance. Synthetic observations with unknown
+    # source tags receive no manufactured basis split.
+    basis = None
+    if (led is not None and "model_tag" in led.columns
+            and h.index.isin(led.index).all()):
+        basis = led.loc[h.index, "model_tag"].astype(str).eq(MODEL_TAG).to_numpy()
+
     rows = []
     for j in range(len(edges) + 1):
-        m = idx == j
-        if not m.any():
+        take = idx == j
+        if not take.any():
             continue
-        _, counts = np.unique(game[m], return_counts=True)
-        rows.append({
-            "index": j,
-            "lo": int(prices[m].min()),
-            "hi": int(prices[m].max()),
-            "n": int(m.sum()),
-            "pairs": int((counts == 2).sum()),
-            "actual": float(won[m].mean()),
-            "implied": float(probs[m].mean()),
-            "gap": float(won[m].mean() - probs[m].mean()),
-            "se": _excess_se(probs[m]),
-        })
+        n = int(take.sum())
+        wins = int(result[take].sum())
+        implied = float(q[take].mean())
+        actual = wins / n
+        br = float(be[take].mean())
+        row = {
+            "index": j, "lo": int(price[take].min()),
+            "hi": int(price[take].max()),
+            "n": n, "w": wins, "l": n - wins,
+            "implied": implied, "actual": actual, "breakeven": br,
+            "gap": actual - implied, "excess_be": actual - br,
+            "se": _excess_se(q[take]),
+        }
+        if basis is not None:
+            row["native_n"] = int(basis[take].sum())
+            row["reconstructed_n"] = n - row["native_n"]
+        rows.append(row)
     return {
-        "games": int(ok.sum()), "sides": int(len(prices)),
-        "edges": edges, "bands": rows,
-        "price_min": float(prices.min()), "price_max": float(prices.max()),
+        "games": len(price), "edges": edges, "bands": rows,
+        "price_min": float(price.min()), "price_max": float(price.max()),
     }
 
 
 def _market_band_context_html(ctx, price):
-    """Describe where today's quoted price falls in HISTORICAL closing data."""
-    dist = (ctx or {}).get("market_distribution")
+    """Compact V13 result and market expectation on the same historical rows."""
+    dist = (ctx or {}).get("model_distribution")
     p = _f(price)
     if not dist or p is None or not (p <= -100 or p >= 100):
         return ""
-    # Prices outside the observed historical range have no measured band.
     if p < dist["price_min"] or p > dist["price_max"]:
         return (
             "<div class='vprofile vmarket'>"
-            "<div class='vprofile-title'>Historical market context</div>"
-            "<div class='vnote'>Current quote is outside the archive's "
-            "observed closing-price range; no comparable band is shown."
-            "</div></div>"
+            "<div class='vprofile-title'>V13 · matched historical price band</div>"
+            "<div class='vnote'>Current quote is outside the observed V13 "
+            "selection-price range; no historical comparison is shown.</div>"
+            "</div>"
         )
     ix = int(market_backfill.percentile_band_index([p], dist["edges"])[0])
     rec = next((x for x in dist["bands"] if x["index"] == ix), None)
     if not rec:
         return ""
-    n_bands = len(dist["bands"])
+    band_index = next(i for i, row in enumerate(dist["bands"])
+                      if row["index"] == ix)
+    total = len(dist["bands"])
     label = (f"{rec['lo']:+d} to {rec['hi']:+d}"
              if rec["lo"] != rec["hi"] else f"{rec['lo']:+d}")
     bar = "".join(
-        f"<span class='vband-step{' selected' if row['index'] == ix else ''}'"
-        f" aria-label='band {j + 1} of {n_bands}'></span>"
-        for j, row in enumerate(dist["bands"])
+        f"<span class='vband-step{' selected' if i == band_index else ''}'"
+        f" aria-label='band {i+1} of {total}'></span>"
+        for i in range(total)
     )
-    gap, se = 100 * rec["gap"], 100 * rec["se"]
-    note = ("No clear departure from market-implied outcomes in this band."
-            if abs(gap) < 2 * se else
-            "Descriptive difference only; compare against uncertainty and "
-            "the full eight-band search, not a single cell.")
+    gap = 100 * rec["gap"]
+    spread = 100 * rec["se"]
+    break_even_gap = 100 * rec["excess_be"]
+    if "native_n" in rec:
+        basis = (f" · {rec['reconstructed_n']} V12 re-scored"
+                 f" / {rec['native_n']} native V13")
+    else:
+        basis = " · row provenance unavailable"
     return (
         "<div class='vprofile vmarket'>"
-        "<div class='vprofile-title'>Historical market context</div>"
-        f"<div class='vnote'>All graded families · {dist['games']} games · "
-        "closing prices only</div>"
-        f"<div class='vprofile-band'>Current {p:+.0f} falls in band "
-        f"{ix + 1} of {n_bands} · {label}</div>"
-        f"<div class='vband-bar' role='img' aria-label='Selected market "
-        f"price band {ix + 1} of {n_bands}'>{bar}</div>"
+        "<div class='vprofile-title'>V13 · matched historical price band</div>"
+        f"<div class='vprofile-band'>{label} · band {band_index+1}/{total}"
+        f" · {rec['n']} model selections</div>"
+        f"<div class='vband-bar' role='img' aria-label='Selected V13 "
+        f"price band {band_index+1} of {total}'>{bar}</div>"
         "<div class='vband-stats'>"
-        f"<div><small>Historic prices</small><strong>{rec['n']}</strong></div>"
-        f"<div><small>Implied wins</small><strong>{100*rec['implied']:.1f}%"
-        "</strong></div>"
-        f"<div><small>Actual wins</small><strong>{100*rec['actual']:.1f}%"
-        "</strong></div>"
+        f"<div><small>Market implied</small><strong>"
+        f"{100*rec['implied']:.1f}%</strong></div>"
+        f"<div><small>V13 realised</small><strong>"
+        f"{100*rec['actual']:.1f}%</strong></div>"
+        f"<div><small>V13 record</small><strong>"
+        f"{rec['w']}–{rec['l']}</strong></div>"
         "</div>"
-        f"<div class='vband-gap'>Historical calibration gap: "
-        f"{gap:+.1f} ± {se:.1f} pp (1 SE)</div>"
-        f"<div class='vnote'>{note} This is market calibration, "
-        "not this model's performance or a forecast for this matchup. "
-        "<a href='market-calibration.html'>Full calibration</a>.</div>"
+        f"<div class='vband-gap'>Vs market {gap:+.1f} ± {spread:.1f} pp"
+        f" · vs closing break-even {break_even_gap:+.1f} pp</div>"
+        f"<div class='vnote'>Same {rec['n']} V13-selected sides and "
+        f"their closing prices{basis}. Retrospective, 1 SE; not a "
+        "game-specific probability or validated edge. "
+        "<a href='grades.html'>Full history</a>.</div>"
         "</div>"
     )
 
@@ -7533,34 +7474,13 @@ def _baseline_controls(g):
 
 
 def hybrid_branch_records():
-    """Current-family closing-price history for the per-game card.
+    """Build V13-matched market bands once for all game cards.
 
-    Keys: ``"n"`` total decidable V13-represented rows, ``"pooled"`` for
-    the mixed-basis family diagnostic, ``"reconstructed_n"`` for older-family
-    redecisions, and ``"native"`` for original-model-tag pregame results.
-    Scored on
-    `_record_grades`, because pooling older prediction math would answer a
-    different question. The three delta x price cell keys went on
-    2026-09-22 with the panel that read them -- see the comment below for
-    the measurement, and `grade_leans._selection_price_matrix_lines` for the
-    full grid, which keeps its error bars and its null maximum.
-
-    **The retired rule's keys are gone**, on the operator's 2026-09-18
-    instruction to take it off every user-facing page: ``("branch", …)`` and
-    ``("chalk", …)`` fed `_branch_history`'s FADE body, which became
-    unreachable at v13, and ``"threshold"`` had no reader at all. The cell
-    key keeps its historical name -- renaming it would move the one thing
-    `grade_leans._selection_price_matrix_lines` is held equal to by a test,
-    for no gain.
-
-    The cells score the LEAN's own columns over every decided row. They were
-    the retired rule's selected side over its FOLLOW subset until the same
-    commit, which on a faded row meant the opposite club at the opposite
-    price -- and a row set defined by a rule nothing runs.
-
-    These remain DISCOVERY rows in the sense every retrospective is, and the
-    always-chalk / always-home controls that make them readable live on
-    `market-calibration.html`, scored on the identical rows.
+    The card reads only model_distribution: one V13-represented selected side
+    per graded game, with its own closing-price market benchmark. Previously
+    exposed pooled/native family metrics are preserved solely for existing
+    provenance audits and full-record consumers, not shown per matchup.
+    No hybrid branch, odds gate or delta cell selects a side.
     """
     led = load_ledger_df()
     if led is None:
@@ -7569,24 +7489,14 @@ def hybrid_branch_records():
     if obs.empty:
         return {}
     out = {"n": int(len(obs))}
-    # Compute the full-ledger market histogram once per build, never once per
-    # matchup, and never filter by this model's wins or today's lean.
-    distribution = _market_price_distribution(led)
+    # Eight balanced bands from the same selected V13-represented rows. The
+    # model's realised rate and market expectation have identical denominators.
+    distribution = _market_price_distribution(led, obs)
     if distribution:
-        out["market_distribution"] = distribution
-    # TWO provenance-distinct summaries now reach the card: the native V13
-    # record from original pregame decisions and the mixed-basis retrospective
-    # diagnostic that also includes V12→V13 reconstructions. Neither is a
-    # searched delta×price cell. `excess` is against the devigged
-    # price; a BET has to clear the posted one, which is harsher by exactly the
-    # hold, so the panel reads `excess_be` and the two differ by `hold`. One SE
-    # serves both -- the breakeven is fixed by the market exactly as the
-    # devigged price is, so neither is estimated from the outcomes under test.
-    #
-    # This key existed before, computed every build and read by nothing: its
-    # comment said "retained for other reporting surfaces" and there were
-    # none. That is the `column carried to no surface` entry, on the best
-    # estimated number the panel had available.
+        out["model_distribution"] = distribution
+    # Retain the pooled provenance aggregate internally for grading/audit
+    # compatibility; the matchup card deliberately renders only its matching
+    # model-selection price band. Whole-family results live on grades.html.
     pooled = _lean_market_agg(obs, obs["won"].notna())
     if pooled:
         rows = obs.loc[obs["won"].notna()]
@@ -7629,24 +7539,8 @@ def hybrid_branch_records():
                     "excess_be": float(native_summary["actual"]) - native_be,
                     "excess_se": native_summary["excess_se"],
                 }
-    # Cross the fixed |delta| bands with the leaned side's closing-price rung.
-    # Counts are intentionally retained even when thin because the public card
-    # prints its own `n` beside every cell.
-    #
-    # THE CELLS ARE GONE, and that is a measurement rather than a taste call.
-    # Scored against the POSTED price the |delta| bands read +2.6, +14.5, -3.2,
-    # +8.3, +7.8 pp -- not ordered, so a band is not conviction paying off --
-    # and 11 of 13 band-and-rung cuts have an interval containing zero. The
-    # grid is a 26-cell SEARCH: simulated at the rows' own closes under
-    # "market correct, no edge" the best cell clears breakeven by +39.6 pp on
-    # average against an observed best of +45.0, P = 0.590. No cell here can be
-    # read at any n, and the card was publishing three of them with no error
-    # bar and no reference while dropping `pooled`, the one figure that IS a
-    # result (+5.9 +/- 2.2 pp over the posted price on 492 rows).
-    #
-    # The full 5x8 grid survives WITH its error bars and its null maximum in
-    # `grade_leans._selection_price_matrix_lines`, which is where a search
-    # belongs -- moved, not deleted, per `Deleting controls as clutter`.
+    # The earlier Δ × price discovery grid remains on the analyst report,
+    # not on game cards. Only the same-sample V13 price band is rendered.
     return out
 
 
@@ -8680,11 +8574,8 @@ def render_combined_html(xw_df, pl_df, pitcher_rows_df, built_txt,
         return html_document(inner, built_txt, extra_js=score_refresh_js())
     strength_scale = lean_strength_scale(_slate_deltas(games))
     logo_assets, logo_css = _logo_assets(games)
-    # Per-game history is current-family and keyed on the published rule's own
-    # branch, with the always-chalk control on the identical rows. Do not
-    # reintroduce a fallback that pools the two branches: FOLLOW and FADE are
-    # different bets at different prices, and on FADE the control is an
-    # identity rather than a comparison.
+    # One historical distribution per build, using only V13-represented
+    # selected sides. The market benchmark and realised rate share every row.
     ctx = {**(hybrid_branch_records() or {}),
            "logo_ids": set(logo_assets)}
     body = logo_css + build_combined(games, strength_scale, ctx) + footer

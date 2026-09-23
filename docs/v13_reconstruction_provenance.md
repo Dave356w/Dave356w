@@ -56,36 +56,51 @@ another reproducible proof of the precise data cutoff of its wOBA rate, not an
 assumption from paired dump proximity. Do not mark all 445 reconstructions
 pregame-locked without that evidence.
 
-## Reporting convention
+## Reporting convention — matched V13 price bands
 
-The per-game card retains the **comparable V12→V13 family**
-retrospective as the primary historical figure, rather than promoting the
-shorter native V13 sample above it. Its compact provenance note states the
-number of paired-snapshot V12 rows re-scored under the V13 starter blend and
-the number of **native pregame V13** decisions. The native record and its
-closing-price margin appear as secondary context. The current game's model
-lean, no-vig market probability and posted break-even remain distinct.
+The aggregate comparable-family result remains on `grades.html` but is **not
+repeated on each game card**. Each matchup instead displays one compact
+historical price band drawn from the *same V13-represented selections* used to
+score the model: reconstructed V12 decisions when an eligible V13 reconstruction
+exists, plus originally locked native V13 decisions. Unrelated earlier model
+families and the unselected opposing team are excluded.
 
-The overlap measurement above supports pooling these closely related model
-specifications for **descriptive family analysis**. Pooling is not proof that
-all reconstructed inputs were captured pregame: that narrower claim still
-requires the data-vintage audit described above. Neither historical figure is
-a calibrated win probability or expected edge at today's quote.
+Eight approximately equal-count bands are derived anew from the *closing
+moneylines of those selected sides*, not the all-family, two-sides-per-game
+market calibration distribution. Within each band, the **market's no-vig
+implied win rate** and the **realised V13-selected win rate** use the exact same
+games, prices and denominator. The band also shows the actual W–L record, the
+realised-minus-implied gap with its one-standard-error uncertainty, and the
+realised margin above those games' own historical closing-price break-even.
+This is a matched historical *benchmark*, not a separately estimated
+market-only outcome rate. It avoids presenting unrelated populations as a
+head-to-head model-versus-market comparison.
 
-Historical margin over break-even on these cards uses **saved historical
-closing prices**, not each game's locked pregame quote and not today's posted
-price. A positive pooled historical margin is not an expected return for a
-particular game. The complete exploratory delta × price grid and its
-multiple-search reference remain in `data/ledger_report.txt`.
+The matched band's reconstructed/native counts come from each row's
+**original ledger model tag**, not the reconstructed selection field. Native
+V13 performance is not promoted over the comparable reconstructed family, but
+neither is reconstructed history described as prospectively pregame-locked.
+The data-vintage caveat above applies unchanged.
 
-No lean formula, market selection rule, ledger source field, native grade,
-reconstruction, historical threshold, or tracked registration has changed
-in this reporting-only pass.
+These are descriptive retrospective price bands, **not** calibrated
+probabilities or a game-specific expected edge. Do not select a band based on
+its observed record or interpret one positive cell as a prospective pricing
+advantage. Bands and boundaries change as the V13-represented history grows.
+Current-game odds and its posted break-even are displayed separately from the
+historical closing-price comparison.
+
+The broader eight-band *all-family, both-side* market calibration remains an
+independent diagnostic in `data/ledger_report.txt` and on the calibration
+page. The complete exploratory Δ × price grid and multiple-search reference
+remain in `data/ledger_report.txt`. The model's selection and live pricing
+logic, ledger, reconstructions and registered tests are unchanged.
 
 ## How to verify
 
 Run `python reconstruct_v13.py --dry-run` to regenerate the reconstruction
 and snapshot split without changing the ledger. Inspect the matched dated
-shadow CSVs for row-level timestamps. The card source is
-`build_site.hybrid_branch_records` and `build_site._xwoba_side_history`.
-The reporting guard is `tests/test_v13_card_provenance.py`.
+shadow CSVs for row-level timestamps. The card's source is `build_site.hybrid_branch_records`,
+`build_site._market_price_distribution` and
+`build_site._market_band_context_html`. The reporting guards are
+`tests/test_v13_card_provenance.py` and
+`tests/test_per_game_market_bands.py`.
