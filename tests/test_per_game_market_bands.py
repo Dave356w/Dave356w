@@ -165,3 +165,48 @@ def test_card_ev_line_never_prints_a_zero_null_it_cannot_derive():
     h = b._market_band_context_html({"model_distribution": bad}, rec["lo"])
     assert "(null n/a)" in h
     assert "(null +0.0)" not in h and "(null -0.0)" not in h
+
+
+def test_market_realised_uses_both_sides_of_the_same_games_in_band():
+    """Market realised: every side of the V13-represented games whose own
+    close sits in the band (picked or not), each at its own no-vig q."""
+    led = _ledger()
+    obs = b._lean_market_observations(led)
+    dist = b._market_price_distribution(led, obs)
+    price = np.concatenate([obs["close_ml"], obs["opp_ml"]])
+    q = np.concatenate([obs["market_p"], 1 - obs["market_p"]])
+    won = np.concatenate([obs["won"], 1 - obs["won"]])
+    ix = percentile_band_index(price, dist["edges"])
+    total = 0
+    for rec in dist["bands"]:
+        mk = (ix == rec["index"]) & (price >= rec["lo"]) & (price <= rec["hi"])
+        assert rec["market_n"] == int(mk.sum())
+        assert rec["market_n"] >= rec["n"]      # the picked sides are in it
+        assert np.isclose(rec["market_implied"], q[mk].mean())
+        assert np.isclose(rec["market_actual"], won[mk].mean())
+        total += rec["market_n"]
+    assert total <= 2 * len(obs)
+
+
+def test_market_realised_ignores_unrelated_families_and_prints_on_card():
+    led = _ledger()
+    dist = b._market_price_distribution(led)
+    led.loc[led["model_tag"].eq("woba+plat_consol_v5"), "close_home_ml"] = -120
+    assert b._market_price_distribution(led) == dist
+    rec = dist["bands"][2]
+    h = b._market_band_context_html({"model_distribution": dist}, rec["lo"])
+    assert "Market realised" in h
+    assert f"{100*rec['market_actual']:.1f}%" in h
+    assert f"{rec['market_n']} sides · implied" in h
+    assert h.index("Market implied") < h.index("Market realised") \
+        < h.index("V13 realised")
+
+
+def test_card_omits_market_realised_when_distribution_lacks_it():
+    dist = b._market_price_distribution(_ledger())
+    bare = {**dist, "bands": [{k: v for k, v in r.items()
+                               if not k.startswith("market_")}
+                              for r in dist["bands"]]}
+    h = b._market_band_context_html({"model_distribution": bare},
+                                    dist["bands"][0]["lo"])
+    assert "Market realised" not in h and "V13 realised" in h

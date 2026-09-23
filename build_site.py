@@ -6053,7 +6053,7 @@ td.bar{width:86px;padding:4px 8px 4px 2px}
   border:1px solid var(--line-2);border-radius:var(--r-s)}
 .verdict .vband-step.selected{background:rgba(var(--cool),.8);
   border-color:rgba(var(--cool),.9)}
-.verdict .vband-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));
+.verdict .vband-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(96px,1fr));
   gap:8px;margin:8px 0;font-variant-numeric:tabular-nums}
 .verdict .vband-stats>div{min-width:0;padding:6px;background:var(--surface-2);
   border:1px solid var(--line-2);border-radius:var(--r-s)}
@@ -6575,6 +6575,23 @@ def _market_price_distribution(led, obs=None, bands=8):
     edges = market_backfill.percentile_price_edges(price, bands)
     idx = market_backfill.percentile_band_index(price, edges)
 
+    # Market-only control on the SAME games: both sides of every game above,
+    # each at its own closing line and no-vig q, won/lost by that side. It
+    # asks how the market's own prices in this band fared, independent of
+    # which side V13 picked. Band membership reuses the V13 edges and is also
+    # clipped to the band's printed lo..hi, so the label covers every side.
+    side_price = side_q = side_won = side_idx = None
+    if "opp_ml" in h.columns:
+        opp = pd.to_numeric(h["opp_ml"], errors="coerce").to_numpy(float)
+        side_price = np.concatenate([price, opp])
+        side_q = np.concatenate([q, 1.0 - q])
+        side_won = np.concatenate([result, 1.0 - result])
+        keep = (np.isfinite(side_price)
+                & ((side_price <= -100) | (side_price >= 100)))
+        side_price, side_q, side_won = (v[keep] for v in
+                                        (side_price, side_q, side_won))
+        side_idx = market_backfill.percentile_band_index(side_price, edges)
+
     # The original ledger tag, not the published/re-scored tag, is the source
     # of native/reconstructed provenance. Synthetic observations with unknown
     # source tags receive no manufactured basis split.
@@ -6604,6 +6621,15 @@ def _market_price_distribution(led, obs=None, bands=8):
             "ev_null": market_backfill.ev_null(q[take], be[take]),
             "se": _excess_se(q[take]),
         }
+        if side_idx is not None:
+            lo, hi = row["lo"], row["hi"]
+            mk = ((side_idx == j) & (side_price >= lo) & (side_price <= hi))
+            mn = int(mk.sum())
+            row["market_n"] = mn
+            row["market_implied"] = (float(side_q[mk].mean()) if mn
+                                     else float("nan"))
+            row["market_actual"] = (float(side_won[mk].mean()) if mn
+                                    else float("nan"))
         if basis is not None:
             row["native_n"] = int(basis[take].sum())
             row["reconstructed_n"] = n - row["native_n"]
@@ -6650,6 +6676,19 @@ def _market_band_context_html(ctx, price):
         null = market_backfill.ev_null([rec["implied"]], [rec["breakeven"]])
     null_txt = (f" (null {100 * null:+.1f})" if np.isfinite(null)
                 else " (null n/a)")
+    mn = rec.get("market_n") or 0
+    if mn and np.isfinite(rec.get("market_actual", float("nan"))):
+        market_tile = (
+            "<div><small>Market realised</small><strong>"
+            f"{100*rec['market_actual']:.1f}%</strong>"
+            f"<small>{mn} sides · implied "
+            f"{100*rec['market_implied']:.1f}%</small></div>")
+        market_note = (
+            f" Market realised: every side of those games closing at "
+            f"{label}, picked or not ({mn} sides).")
+    else:
+        market_tile = ""
+        market_note = ""
     return (
         "<div class='vprofile vmarket'>"
         "<div class='vprofile-title'>V13 · matched historical price band</div>"
@@ -6660,6 +6699,7 @@ def _market_band_context_html(ctx, price):
         "<div class='vband-stats'>"
         f"<div><small>Market implied</small><strong>"
         f"{100*rec['implied']:.1f}%</strong></div>"
+        f"{market_tile}"
         f"<div><small>V13 realised</small><strong>"
         f"{100*rec['actual']:.1f}%</strong></div>"
         f"<div><small>V13 record</small><strong>"
@@ -6668,7 +6708,8 @@ def _market_band_context_html(ctx, price):
         f"<div class='vband-gap'>Vs market {gap:+.1f} ± {spread:.1f} pp"
         f" · vs closing break-even {break_even_gap:+.1f} pp{null_txt}</div>"
         f"<div class='vnote'>Same {rec['n']} V13-selected sides and "
-        "their closing prices. <a href='grades.html'>Full history</a>.</div>"
+        f"their closing prices.{market_note} "
+        "<a href='grades.html'>Full history</a>.</div>"
         "</div>"
     )
 
