@@ -4643,11 +4643,12 @@ def _model_version_short():
 
 
 def _verdict_html(fav, odds, away_abbr, home_abbr, ctx=None, delta=None):
-    """Per-game panel: model side, current market hurdle, descriptive history.
+    """Current selection and quote plus an exact-sample historical price band.
 
-    v13 chooses the side from model inputs alone. The market supplies the
-    current price and no-vig benchmark; native and mixed historical aggregates
-    are context, not calibrated probabilities for tonight's game.
+    V13 chooses the side independently of market odds. Historical context
+    groups only V13-represented selections by their own closing prices; market
+    expectations and realised outcomes use identical selected games. This
+    descriptive band is not a game-specific win-probability estimate.
     """
     ctx = ctx or {}
     if fav is None:
@@ -7473,37 +7474,13 @@ def _baseline_controls(g):
 
 
 def hybrid_branch_records():
-    """Current-family price-band observations and full-history audit metrics.
+    """Build V13-matched market bands once for all game cards.
 
-    The per-game card reads only model_distribution. Overall pooled and native
-    aggregates remain available to existing audit tests and grades-page work.
-
-    Keys: ``"n"`` total decidable V13-represented rows, ``"pooled"`` for
-    the mixed-basis family diagnostic, ``"reconstructed_n"`` for older-family
-    redecisions, and ``"native"`` for original-model-tag pregame results.
-    Scored on
-    `_record_grades`, because pooling older prediction math would answer a
-    different question. The three delta x price cell keys went on
-    2026-09-22 with the panel that read them -- see the comment below for
-    the measurement, and `grade_leans._selection_price_matrix_lines` for the
-    full grid, which keeps its error bars and its null maximum.
-
-    **The retired rule's keys are gone**, on the operator's 2026-09-18
-    instruction to take it off every user-facing page: ``("branch", …)`` and
-    ``("chalk", …)`` fed `_branch_history`'s FADE body, which became
-    unreachable at v13, and ``"threshold"`` had no reader at all. The cell
-    key keeps its historical name -- renaming it would move the one thing
-    `grade_leans._selection_price_matrix_lines` is held equal to by a test,
-    for no gain.
-
-    The cells score the LEAN's own columns over every decided row. They were
-    the retired rule's selected side over its FOLLOW subset until the same
-    commit, which on a faded row meant the opposite club at the opposite
-    price -- and a row set defined by a rule nothing runs.
-
-    These remain DISCOVERY rows in the sense every retrospective is, and the
-    always-chalk / always-home controls that make them readable live on
-    `market-calibration.html`, scored on the identical rows.
+    The card reads only model_distribution: one V13-represented selected side
+    per graded game, with its own closing-price market benchmark. Previously
+    exposed pooled/native family metrics are preserved solely for existing
+    provenance audits and full-record consumers, not shown per matchup.
+    No hybrid branch, odds gate or delta cell selects a side.
     """
     led = load_ledger_df()
     if led is None:
@@ -7562,24 +7539,8 @@ def hybrid_branch_records():
                     "excess_be": float(native_summary["actual"]) - native_be,
                     "excess_se": native_summary["excess_se"],
                 }
-    # Cross the fixed |delta| bands with the leaned side's closing-price rung.
-    # Counts are intentionally retained even when thin because the public card
-    # prints its own `n` beside every cell.
-    #
-    # THE CELLS ARE GONE, and that is a measurement rather than a taste call.
-    # Scored against the POSTED price the |delta| bands read +2.6, +14.5, -3.2,
-    # +8.3, +7.8 pp -- not ordered, so a band is not conviction paying off --
-    # and 11 of 13 band-and-rung cuts have an interval containing zero. The
-    # grid is a 26-cell SEARCH: simulated at the rows' own closes under
-    # "market correct, no edge" the best cell clears breakeven by +39.6 pp on
-    # average against an observed best of +45.0, P = 0.590. No cell here can be
-    # read at any n, and the card was publishing three of them with no error
-    # bar and no reference while dropping `pooled`, the one figure that IS a
-    # result (+5.9 +/- 2.2 pp over the posted price on 492 rows).
-    #
-    # The full 5x8 grid survives WITH its error bars and its null maximum in
-    # `grade_leans._selection_price_matrix_lines`, which is where a search
-    # belongs -- moved, not deleted, per `Deleting controls as clutter`.
+    # The earlier Δ × price discovery grid remains on the analyst report,
+    # not on game cards. Only the same-sample V13 price band is rendered.
     return out
 
 
