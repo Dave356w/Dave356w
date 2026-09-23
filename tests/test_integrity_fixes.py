@@ -3522,46 +3522,39 @@ class HybridRuleTests(unittest.TestCase):
         # A lean naming neither club cannot be mirrored, so it abstains.
         self.assertIsNone(build_site.hybrid_selection("XXX", "A", "H", .30, .005))
 
-    def test_follow_panel_shows_the_pooled_record_and_no_intersection(self):
-        """Restated on 2026-09-22 when the delta x price cells came off.
+    def test_per_game_panel_never_renders_full_family_aggregate(self):
+        """Overall V12/V13 results belong on grades, not every game card."""
+        h = build_site._verdict_html(
+            "PIT", dict(p_home=.529, away_ml=103), "PIT", "SD",
+            dict(pooled=dict(n=492, excess_be=.0595,
+                             excess_se=.0221, hold=.0184)), .0187)
+        self.assertIn("Market price</span><span>PIT +103", h)
+        self.assertNotIn("Historical family vs closing market", h)
+        self.assertNotIn("492 completed games", h)
+        self.assertNotIn("Past margin over closing break-even", h)
+        self.assertNotIn("Similar Δ", h)
 
-        This pinned that the panel found the cell for the game's own band and
-        rung. That was the defect rather than the feature: no cell of that
-        26-cell grid is readable -- the best under no effect clears breakeven
-        by +39.6 pp on average, and the five bands are not even ordered. The
-        claim that survives is that the panel shows the model's record against
-        the POSTED price, pooled, and names no bucket at all.
-        """
-        html = build_site._verdict_html(
-            "PIT", dict(p_home=.529, away_ml=103), "PIT", "SD", dict(pooled=dict(n=492, excess_be=.0595, excess_se=.0221, hold=.0184)), .0187,
-        )
-        self.assertIn("Historical family vs closing market", html)
-        self.assertIn("Past margin over closing break-even</span><span>+5.9 ± 2.2 pp "
-                      "· 492 completed games", html)
-        self.assertNotIn("Historical context", html)
-        self.assertNotIn("closing ML", html)
-        self.assertNotIn("Similar Δ", html)
-    def test_pit_acceptance_panel_has_the_requested_reads(self):
-        html = build_site._verdict_html(
-            "PIT", dict(p_home=.529, away_ml=103), "PIT", "SD", dict(pooled=dict(n=492, excess_be=.0595, excess_se=.0221, hold=.0184)), .0187,
-        )
+    def test_pit_panel_shows_only_v13_matched_band_and_current_quote(self):
+        ctx = build_site.hybrid_branch_records()
+        h = build_site._verdict_html(
+            "PIT", dict(p_home=.529, away_ml=103), "PIT", "SD", ctx, .0187)
         for expected in (
             "This game",
             f"Model lean</span><span>PIT · {build_site._model_version_short()} Δ .0187",
             "Market price</span><span>PIT +103 · 47.1% no-vig",
-            "Posted break-even</span><span>49.3% · requires +2.2 pp over market"
-            "</span>",
+            "Posted break-even</span><span>49.3% · requires +2.2 pp over market",
             "chooses the side independently of the market",
             "Δ magnitude is not a calibrated win probability",
-            "Historical family vs closing market",
-            "Past margin over closing break-even</span><span>+5.9 ± 2.2 pp",
-            "not a calibrated win probability or a game-specific expected edge",
+            "V13 · matched historical price band",
+            "Market implied", "V13 realised", "Vs market",
+            "not a game-specific probability or validated edge",
         ):
-            self.assertIn(expected, html)
-        self.assertNotIn("(MEDIUM)", html)
-        self.assertNotIn("Selection", html)
+            self.assertIn(expected, h)
+        self.assertNotIn("Historical family vs closing market", h)
+        self.assertNotIn("completed games", h)
         for banned in ("value bet", "best bet", "free money", "lock"):
-            self.assertNotIn(banned, html.lower())
+            self.assertNotIn(banned, h.lower())
+
     def test_no_branch_or_threshold_key_survives_the_rule(self):
         """Replaces `test_records_respect_the_branch_floor`.
 
@@ -3721,35 +3714,19 @@ class HybridRuleTests(unittest.TestCase):
                     basis,
                     "lean" if tag == build_site.MODEL_TAG else "recon")
 
-    def test_the_panel_never_presents_history_as_this_games_chances(self):
-        """Historical bucket results must not read as this game's probability.
-
-        The current-game section may contain market probabilities: the no-vig
-        benchmark and the posted-price break-even hurdle. The record below it
-        publishes a points GAP and a count, never a realised percentage that
-        could be mistaken for a forecast.
-
-        Restated on 2026-09-22: the retrospective section used to be three
-        delta x price cells with records and unit totals, and is now one
-        pooled gap over the posted price. The claim is unchanged and the
-        assertion is tightened to a COUNT of percentages on the whole panel,
-        so a second one reappearing anywhere fails here rather than silently
-        recreating the ambiguity.
-        """
+    def test_market_and_model_percentages_are_explicitly_labeled(self):
+        """Current odds and historical band outcomes have separate labels."""
+        ctx = build_site.hybrid_branch_records()
         h = build_site._verdict_html(
-            "LAD", dict(p_home=.70, away_ml=200, home_ml=-260), "LAD", "ARI",
-            dict(pooled=dict(n=492, excess_be=.0595, excess_se=.0221,
-                             hold=.0184)), .005)
-        # Both percentages belong to THIS game's market and are named.
+            "LAD", dict(p_home=.70, away_ml=200, home_ml=-260),
+            "LAD", "ARI", ctx, .005)
         self.assertIn("30.0% no-vig", h)
         self.assertIn("33.3% · requires +3.3 pp over market", h)
-        self.assertEqual(len(re.findall(r"\d+\.\d%", h)), 2, h)
-        # The record is a gap in points, with its spread and its own n.
-        self.assertIn("+5.9 ± 2.2 pp · 492 completed games", h)
-        self.assertIn("not a calibrated win probability or a game-specific expected edge", h)
-        # No realised rate, in any spelling.
-        for banned in ("73.3%", "(0.733)", "58.6%", "63.4%", "(0.634)"):
-            self.assertNotIn(banned, h)
+        self.assertIn("Market implied", h)
+        self.assertIn("V13 realised", h)
+        self.assertIn("not a game-specific probability or validated edge", h)
+        self.assertNotIn("Past margin over closing break-even", h)
+
     def test_the_ledger_labels_each_undecidable_case_distinctly(self):
         """Every reason the Selection column is not a live pick gets its own mark.
 
