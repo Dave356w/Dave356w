@@ -4635,9 +4635,12 @@ def _lean_implied_p(odds, fav, away_abbr, home_abbr):
 
 
 def _model_version_short():
-    """Compact active-model label for the per-game panel (for example, V12)."""
-    m = re.search(r"_v(\d+)$", MODEL_TAG, flags=re.IGNORECASE)
-    return f"V{m.group(1)}" if m else MODEL_TAG
+    """Reader-facing model label on the public pages.
+
+    Plain "Model" rather than the version (V13): readers do not need the
+    lineage, and it lives in MODEL_TAG, MATCHUP_SITE.md and the ledger.
+    """
+    return "Model"
 
 
 
@@ -4659,7 +4662,6 @@ def _verdict_html(fav, odds, away_abbr, home_abbr, ctx=None, delta=None):
     action = published_action(p_lean, delta)
     d = _f(delta)
     delta_txt = f"{abs(d):.4f}".lstrip("0") if d is not None else "—"
-    version = _model_version_short()
 
     odds = odds or {}
     # The posted price and both sides' no-vig already sit in the odds strip
@@ -4705,11 +4707,6 @@ def _verdict_html(fav, odds, away_abbr, home_abbr, ctx=None, delta=None):
                 f"<span>{100 * be:.1f}%</span></div>"
             )
 
-    note = (
-        f"<div class='vnote'>{version} chooses the side independently of the "
-        "market. Δ magnitude is not a calibrated win probability.</div>"
-    )
-
     market_context = _market_band_context_html(ctx, price) if action else ""
 
     return (
@@ -4717,9 +4714,8 @@ def _verdict_html(fav, odds, away_abbr, home_abbr, ctx=None, delta=None):
         "<div class='vt'>"
         "<div class='vprofile-title vgroup'>This game</div>"
         f"<div class='vline'><span class='vk'>Model lean</span>"
-        f"<span>{_esc(fav)} · {version} Δ {delta_txt}</span></div>"
+        f"<span>{_esc(fav)} · Δ {delta_txt}</span></div>"
         f"{break_even_line}"
-        f"{note}"
         f"{market_context}</div></div>"
     )
 
@@ -6053,15 +6049,20 @@ td.bar{width:86px;padding:4px 8px 4px 2px}
   border:1px solid var(--line-2);border-radius:var(--r-s)}
 .verdict .vband-step.selected{background:rgba(var(--cool),.8);
   border-color:rgba(var(--cool),.9)}
-.verdict .vband-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(96px,1fr));
-  gap:8px;margin:8px 0;font-variant-numeric:tabular-nums}
-.verdict .vband-stats>div{min-width:0;padding:6px;background:var(--surface-2);
+/* Four equal tiles on desktop, a 2x2 grid on phones -- never a 3+1 wrap. */
+.verdict .vband-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));
+  gap:8px;margin:8px 0 2px;font-variant-numeric:tabular-nums}
+.verdict .vband-stats>div{min-width:0;padding:7px 9px;background:var(--surface-2);
   border:1px solid var(--line-2);border-radius:var(--r-s)}
 .verdict .vband-stats small{display:block;color:var(--muted);
-  font:500 11px/1.4 var(--sans)}
+  font:500 11px/1.4 var(--sans);overflow-wrap:anywhere}
 .verdict .vband-stats strong{display:block;font:700 15px/1.5 var(--mono);
   color:var(--ink)}
-.verdict .vband-gap{font:700 12.5px/1.4 var(--sans);color:var(--ink)}
+.verdict .vband-stats small.vsub{color:var(--faint);font-size:10.5px}
+@media (max-width:560px){
+  .verdict .vband-stats{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .verdict .vline{flex-wrap:wrap;gap:0 6px}
+}
 
 
 /* hitter row: percentile column + name cell. The column is the 88px bar plus
@@ -6641,7 +6642,13 @@ def _market_price_distribution(led, obs=None, bands=8):
 
 
 def _market_band_context_html(ctx, price):
-    """Compact V13 result and market expectation on the same historical rows."""
+    """Compact model result and market expectation on the same historical rows.
+
+    Tiles only: the market-vs-model gap line and its break-even/EV-null
+    companion were removed from the card at the owner's request (2026-09-23).
+    The band still computes `gap`, `excess_be` and `ev_null`; any surface that
+    prints the break-even figure must print its null beside it (#227).
+    """
     dist = (ctx or {}).get("model_distribution")
     p = _f(price)
     if not dist or p is None or not (p <= -100 or p >= 100):
@@ -6649,9 +6656,9 @@ def _market_band_context_html(ctx, price):
     if p < dist["price_min"] or p > dist["price_max"]:
         return (
             "<div class='vprofile vmarket'>"
-            "<div class='vprofile-title'>V13 · matched historical price band</div>"
-            "<div class='vnote'>Current quote is outside the observed V13 "
-            "selection-price range; no historical comparison is shown.</div>"
+            "<div class='vprofile-title'>Model · historical price band</div>"
+            "<div class='vnote'>Current price is outside the model's "
+            "historical selection-price range; no comparison is shown.</div>"
             "</div>"
         )
     ix = int(market_backfill.percentile_band_index([p], dist["edges"])[0])
@@ -6668,49 +6675,33 @@ def _market_band_context_html(ctx, price):
         f" aria-label='band {i+1} of {total}'></span>"
         for i in range(total)
     )
-    gap = 100 * rec["gap"]
-    spread = 100 * rec["se"]
-    break_even_gap = 100 * rec["excess_be"]
-    null = rec.get("ev_null")
-    if null is None:
-        null = market_backfill.ev_null([rec["implied"]], [rec["breakeven"]])
-    null_txt = (f" (null {100 * null:+.1f})" if np.isfinite(null)
-                else " (null n/a)")
+
+    def tile(name, value, sub=""):
+        sub = f"<small class='vsub'>{sub}</small>" if sub else ""
+        return (f"<div><small>{name}</small><strong>{value}</strong>"
+                f"{sub}</div>")
+
+    # Market realised counts every side of the same games in this band, so
+    # its denominator differs from the model's; the caption says so.
     mn = rec.get("market_n") or 0
-    if mn and np.isfinite(rec.get("market_actual", float("nan"))):
-        market_tile = (
-            "<div><small>Market realised</small><strong>"
-            f"{100*rec['market_actual']:.1f}%</strong>"
-            f"<small>{mn} sides · implied "
-            f"{100*rec['market_implied']:.1f}%</small></div>")
-        market_note = (
-            f" Market realised: every side of those games closing at "
-            f"{label}, picked or not ({mn} sides).")
-    else:
-        market_tile = ""
-        market_note = ""
+    market_tile = (
+        tile("Market realised", f"{100*rec['market_actual']:.1f}%",
+             f"{mn} sides · implied {100*rec['market_implied']:.1f}%")
+        if mn and np.isfinite(rec.get("market_actual", float("nan")))
+        else "")
     return (
         "<div class='vprofile vmarket'>"
-        "<div class='vprofile-title'>V13 · matched historical price band</div>"
-        f"<div class='vprofile-band'>{label} · band {band_index+1}/{total}"
-        f" · {rec['n']} model selections</div>"
-        f"<div class='vband-bar' role='img' aria-label='Selected V13 "
+        "<div class='vprofile-title'>Model · historical price band</div>"
+        f"<div class='vprofile-band'>{label} · band {band_index+1} of {total}"
+        f" · {rec['n']} model picks</div>"
+        f"<div class='vband-bar' role='img' aria-label='Selected model "
         f"price band {band_index+1} of {total}'>{bar}</div>"
         "<div class='vband-stats'>"
-        f"<div><small>Market implied</small><strong>"
-        f"{100*rec['implied']:.1f}%</strong></div>"
-        f"{market_tile}"
-        f"<div><small>V13 realised</small><strong>"
-        f"{100*rec['actual']:.1f}%</strong></div>"
-        f"<div><small>V13 record</small><strong>"
-        f"{rec['w']}–{rec['l']}</strong></div>"
-        "</div>"
-        f"<div class='vband-gap'>Vs market {gap:+.1f} ± {spread:.1f} pp"
-        f" · vs closing break-even {break_even_gap:+.1f} pp{null_txt}</div>"
-        f"<div class='vnote'>Same {rec['n']} V13-selected sides and "
-        f"their closing prices.{market_note} "
-        "<a href='grades.html'>Full history</a>.</div>"
-        "</div>"
+        + tile("Market implied", f"{100*rec['implied']:.1f}%")
+        + market_tile
+        + tile("Model realised", f"{100*rec['actual']:.1f}%")
+        + tile("Model record", f"{rec['w']}–{rec['l']}")
+        + "</div></div>"
     )
 
 

@@ -104,16 +104,17 @@ def test_card_compares_market_and_model_within_exact_matching_band():
     )
     band = int(percentile_band_index([-120], dist["edges"])[0])
     rec = next(x for x in dist["bands"] if x["index"] == band)
-    assert "V13 · matched historical price band" in h
-    assert f"{rec['n']} model selections" in h
+    assert "Model · historical price band" in h
+    assert f"{rec['n']} model picks" in h
     assert f"{100*rec['implied']:.1f}%" in h
     assert f"{100*rec['actual']:.1f}%" in h
     assert f"{rec['w']}–{rec['l']}" in h
     assert "re-decided by V13" not in h
     assert "native V13 picks" not in h
     assert "not a game-specific probability" not in h
-    assert "Market implied" in h and "V13 realised" in h
-    assert "Vs market" in h and "vs closing break-even" in h
+    assert "Market implied" in h and "Model realised" in h
+    assert "Vs market" not in h and "vs closing break-even" not in h
+    assert "V13" not in h
     assert h.count("vband-step selected") == 1
     assert "Historical market context" not in h
     assert "Combined V12/V13 historical performance" not in h
@@ -129,7 +130,7 @@ def test_current_quote_changes_only_selected_comparison_not_historical_rows():
     assert dist["games"] == 120
     assert b._market_band_context_html(ctx, None) == ""
     assert b._market_band_context_html(ctx, -80) == ""
-    assert "outside the observed V13" in b._market_band_context_html(ctx, -1000)
+    assert "outside the model" in b._market_band_context_html(ctx, -1000)
 
 
 def test_thin_v13_sample_does_not_invent_price_bands():
@@ -138,33 +139,25 @@ def test_thin_v13_sample_does_not_invent_price_bands():
     assert b._market_band_context_html({"model_distribution": thin}, -120) == ""
 
 
-def test_card_ev_line_prints_its_market_correct_null():
-    """#227 on the card: the break-even figure carries its own null, and
-    EV - null reproduces the printed no-vig excess up to display rounding."""
-    import re
+def test_band_keeps_its_market_correct_null_off_the_card():
+    """#227: the card no longer prints the break-even/EV figure (removed at
+    the owner's request), so it cannot print one without its null. The band
+    still carries `ev_null` from the shared helper for any surface that does,
+    and EV - null still equals the no-vig excess."""
     from market_backfill import ev_null
     dist = b._market_price_distribution(_ledger())
     for rec in dist["bands"]:
-        h = b._market_band_context_html({"model_distribution": dist}, rec["lo"])
-        m = re.search(r"Vs market ([+-]\d+\.\d) ± [\d.]+ pp · vs closing "
-                      r"break-even ([+-]\d+\.\d) pp \(null ([+-]\d+\.\d)\)", h)
-        assert m, h
-        gap, ev, null = (float(x) for x in m.groups())
-        assert null < 0                      # posted prices carry a hold
-        assert abs((ev - null) - gap) <= 0.11
-        # The printed null is the shared helper's, on the band's own arrays.
         assert abs(rec["ev_null"]
                    - ev_null([rec["implied"]], [rec["breakeven"]])) < 1e-12
-        assert f"(null {100 * rec['ev_null']:+.1f})" in h
-
-
-def test_card_ev_line_never_prints_a_zero_null_it_cannot_derive():
-    dist = b._market_price_distribution(_ledger())
-    rec = dist["bands"][0]
-    bad = {**dist, "bands": [{**rec, "ev_null": float("nan")}]}
-    h = b._market_band_context_html({"model_distribution": bad}, rec["lo"])
-    assert "(null n/a)" in h
-    assert "(null +0.0)" not in h and "(null -0.0)" not in h
+        assert rec["ev_null"] < 0                 # posted prices carry a hold
+        assert abs((rec["excess_be"] - rec["ev_null"]) - rec["gap"]) < 1e-9
+        for band in (rec, {**rec, "ev_null": float("nan")}):
+            h = b._market_band_context_html(
+                {"model_distribution": {**dist, "bands": [
+                    band if x is rec else x for x in dist["bands"]]}},
+                rec["lo"])
+            assert "break-even" not in h and "(null" not in h
+            assert "Vs market" not in h and "±" not in h
 
 
 def test_market_realised_uses_both_sides_of_the_same_games_in_band():
@@ -199,7 +192,7 @@ def test_market_realised_ignores_unrelated_families_and_prints_on_card():
     assert f"{100*rec['market_actual']:.1f}%" in h
     assert f"{rec['market_n']} sides · implied" in h
     assert h.index("Market implied") < h.index("Market realised") \
-        < h.index("V13 realised")
+        < h.index("Model realised")
 
 
 def test_card_omits_market_realised_when_distribution_lacks_it():
@@ -209,4 +202,4 @@ def test_card_omits_market_realised_when_distribution_lacks_it():
                               for r in dist["bands"]]}
     h = b._market_band_context_html({"model_distribution": bare},
                                     dist["bands"][0]["lo"])
-    assert "Market realised" not in h and "V13 realised" in h
+    assert "Market realised" not in h and "Model realised" in h

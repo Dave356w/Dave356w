@@ -568,20 +568,21 @@ class RenderTests(unittest.TestCase):
     def test_verdict_agree_and_disagree(self):
         g_agree, g_dis = self._cards()
         agree = b.cmb_card(g_agree, None)
-        self.assertIn(f"{b._model_version_short()} Δ .0920", agree)
+        self.assertIn("Δ .0920", agree)
+        self.assertNotIn("V13", agree)
         self.assertNotIn("(HIGH)", agree)
         self.assertIn("This game", agree)
         self.assertIn("60.5% no-vig", agree)
         self.assertIn("Posted break-even", agree)
-        self.assertIn("chooses the side independently of the market", agree)
-        self.assertIn("Δ magnitude is not a calibrated win probability", agree)
+        self.assertNotIn("chooses the side independently of the market", agree)
+        self.assertNotIn("Δ magnitude is not a calibrated win probability", agree)
         self.assertNotIn("Selection", agree)
         self.assertNotIn("XWOBA SIDE", agree)
         self.assertNotIn("verdict edge", agree)
 
         dis = b.cmb_card(g_dis, None)
         self.assertNotIn("Selection", dis)
-        self.assertIn("chooses the side independently of the market", dis)
+        self.assertNotIn("chooses the side independently of the market", dis)
         self.assertNotIn("verdict edge", dis)
         self.assertNotIn("XWOBA SIDE", dis)
         self.assertNotIn("MARKET OVER LEAN", dis)
@@ -592,23 +593,24 @@ class RenderTests(unittest.TestCase):
             {**BAND_CTX, ("branch", "FADE"): dict(n=15, w=11, l=4)},
             .0016,
         )
-        self.assertIn(f"Model lean</span><span>MIN · {b._model_version_short()} Δ .0016", h)
+        self.assertIn(f"Model lean</span><span>MIN · Δ .0016", h)
         # The quote itself lives in the odds strip; the panel carries the
         # lean-side no-vig once, inside the break-even comparison.
         self.assertNotIn("Market price", h)
         self.assertIn("requires +2.4 pp over 52.1% no-vig", h)
         self.assertIn("Posted break-even</span><span>54.5% · requires +2.4 pp", h)
-        self.assertIn("V13 · matched historical price band", h)
-        self.assertIn("band 2/3 · 20 model selections", h)
+        self.assertIn("Model · historical price band", h)
+        self.assertIn("band 2 of 3 · 20 model picks", h)
         self.assertIn("Market implied", h)
         self.assertIn("55.0%", h)
-        self.assertIn("V13 realised", h)
+        self.assertIn("Model realised", h)
         self.assertIn("60.0%", h)
         self.assertIn("12–8", h)
         self.assertNotIn("re-decided by V13", h)
         self.assertNotIn("native V13 picks", h)
         self.assertNotIn("re-scored", h)
-        self.assertIn("Vs market +5.0 ± 11.1 pp", h)
+        self.assertNotIn("Vs market", h)
+        self.assertNotIn("V13", h)
         self.assertNotIn("Past margin over closing break-even", h)
         self.assertNotIn("492 completed games", h)
         self.assertNotIn("Similar Δ", h)
@@ -619,12 +621,12 @@ class RenderTests(unittest.TestCase):
                excess_be=.138, excess_se=.071), "reconstructed_n": 445}
         h = b._verdict_html(
             "MIN", dict(p_home=.521, home_ml=-120), "SEA", "MIN", ctx, .0016)
-        self.assertIn("V13 · matched historical price band", h)
+        self.assertIn("Model · historical price band", h)
         self.assertNotIn("+5.9 ± 2.2 pp", h)
         self.assertNotIn("493 completed games", h)
         self.assertNotIn("35–13", h)
         self.assertNotIn("445 paired-snapshot", h)
-        self.assertIn("Full history", h)
+        self.assertNotIn("Full history", h)
 
     def test_no_fade_branch_renders_at_any_price(self):
         """The retired fade branch never reaches the simplified card."""
@@ -640,7 +642,7 @@ class RenderTests(unittest.TestCase):
             self.assertNotIn("XWOBA SIDE", h)
             self.assertNotIn("Selection", h)
             self.assertIn("LAD", h)
-            self.assertIn("chooses the side independently of the market", h)
+            self.assertNotIn("chooses the side independently of the market", h)
             self.assertNotIn("11-4", h)
     def test_each_matched_band_displays_its_own_n_and_uncertainty(self):
         for n, se in ((1, .50), (3, .28), (60, .062)):
@@ -652,8 +654,8 @@ class RenderTests(unittest.TestCase):
             h = b._verdict_html(
                 "LAD", dict(p_home=.70, away_ml=200, home_ml=-120),
                 "LAD", "ARI", ctx, .005)
-            self.assertIn(f"{n} model selections", h)
-            self.assertIn(f"± {100 * se:.1f} pp", h)
+            self.assertIn(f"{n} model picks", h)
+            self.assertNotIn("±", h)   # gap line removed from the card
             self.assertNotIn("completed games", h)
 
     def test_no_page_claims_a_gate_the_reader_cannot_see(self):
@@ -716,8 +718,8 @@ class RenderTests(unittest.TestCase):
             h = b._verdict_html(
                 "LAD", dict(p_home=p_home, away_ml=200, home_ml=-260),
                 "LAD", "ARI", BAND_CTX, .005)
-            self.assertIn("V13 · matched historical price band", h)
-            self.assertEqual(h.count("Vs market"), 1, h)
+            self.assertIn("Model · historical price band", h)
+            self.assertNotIn("Vs market", h)
             self.assertNotIn("Similar Δ", h)
             self.assertNotIn("Past margin over closing break-even", h)
 
@@ -745,7 +747,7 @@ class RenderTests(unittest.TestCase):
         h = b._verdict_html(
             "LAD", dict(p_home=.70, away_ml=200, home_ml=-260),
             "LAD", "ARI", ctx, .005)
-        self.assertIn("V13 · matched historical price band", h)
+        self.assertIn("Model · historical price band", h)
         self.assertNotIn("Past margin over closing break-even", h)
         self.assertNotIn("completed games", h)
         self.assertNotIn("usually pays", h)
@@ -755,9 +757,9 @@ class RenderTests(unittest.TestCase):
             odds = dict(p_home=.50, away_ml=200, home_ml=price)
             return b._verdict_html("ARI", odds, "LAD", "ARI", BAND_CTX, delta)
         a, z = card(-260), card(-120)
-        self.assertIn("band 1/3", a)
-        self.assertIn("band 2/3", z)
-        self.assertIn("band 2/3", card(-120, .0551))
+        self.assertIn("band 1 of 3", a)
+        self.assertIn("band 2 of 3", z)
+        self.assertIn("band 2 of 3", card(-120, .0551))
         bars = {re.search(r"Posted break-even</span><span>([^<]+)", h).group(1)
                 for h in (a, z)}
         self.assertEqual(len(bars), 2)
@@ -768,7 +770,7 @@ class RenderTests(unittest.TestCase):
             BAND_CTX, .02)
         self.assertNotIn("Retrospective, 1 SE", h)
         self.assertNotIn("not a game-specific probability or validated edge", h)
-        self.assertIn("Δ magnitude is not a calibrated win probability", h)
+        self.assertNotIn("Δ magnitude is not a calibrated win probability", h)
         self.assertNotIn("Similar Δ", h)
         self.assertNotIn("pooled descriptive result", h)
 
@@ -1531,7 +1533,7 @@ class CardCopyTests(unittest.TestCase):
             self.assertIn(label, html)
         self.assertNotIn("Market price", html)   # the strip carries the quote
         self.assertNotIn("Selection", html)
-        self.assertIn("Δ magnitude is not a calibrated win probability", html)
+        self.assertNotIn("Δ magnitude is not a calibrated win probability", html)
         self.assertIn("That is a <b>", html)
     def test_placeholder_em_dash_survives(self):
         # No market: the em-dash is data, not prose.

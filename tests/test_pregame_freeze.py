@@ -309,7 +309,7 @@ class CardIntegrationTests(unittest.TestCase):
         # rendering an empty panel -- an absence claim above needs a presence
         # claim beside it.
         self.assertIn("Model lean", html)
-        self.assertIn("Seattle Mariners · V13 Δ", html)
+        self.assertIn("Seattle Mariners · Δ", html)
         # The locked quote reaches both the odds strip and the panel's
         # break-even line; the live feed's 44% home no-vig reaches neither.
         self.assertIn("DK ML · Seattle Mariners</div><div class='v'>-120", html)

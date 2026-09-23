@@ -3526,13 +3526,13 @@ class HybridRuleTests(unittest.TestCase):
         html = build_site._verdict_html(
             "H", {"home_ml": -110, "away_ml": -110}, "A", "H", {}, .02)
         self.assertIn(
-            f"Model lean</span><span>H · {build_site._model_version_short()} Δ .0200",
+            f"Model lean</span><span>H · Δ .0200",
             html)
         self.assertIn("50.0% no-vig", html)
         self.assertIn(
             "Posted break-even</span><span>52.4% · requires +2.4 pp over 50.0% no-vig",
             html)
-        self.assertIn("chooses the side independently of the market", html)
+        self.assertNotIn("chooses the side independently of the market", html)
         self.assertNotIn("Selection", html)
         self.assertNotIn("XWOBA SIDE", html)
         self.assertNotIn("verdict edge", html)
@@ -3545,7 +3545,7 @@ class HybridRuleTests(unittest.TestCase):
             html = build_site._verdict_html(fav, odds, "A", "H", {}, delta)
             self.assertNotIn("verdict edge", html)
             self.assertIn(
-                f"Model lean</span><span>{fav} · {build_site._model_version_short()} Δ",
+                f"Model lean</span><span>{fav} · Δ",
                 html)
             self.assertNotIn("Selection", html)
             self.assertNotIn("XWOBA SIDE", html)
@@ -3587,14 +3587,18 @@ class HybridRuleTests(unittest.TestCase):
             "PIT", dict(p_home=.529, away_ml=103), "PIT", "SD", ctx, .0187)
         for expected in (
             "This game",
-            f"Model lean</span><span>PIT · {build_site._model_version_short()} Δ .0187",
+            f"Model lean</span><span>PIT · Δ .0187",
             "Posted break-even</span><span>49.3% · requires +2.2 pp over 47.1% no-vig",
-            "chooses the side independently of the market",
-            "Δ magnitude is not a calibrated win probability",
-            "V13 · matched historical price band",
-            "Market implied", "V13 realised", "Vs market",
+            "Model · historical price band",
+            "Market implied", "Market realised", "Model realised",
+            "Model record",
         ):
             self.assertIn(expected, h)
+        for removed in ("chooses the side independently of the market",
+                        "Δ magnitude is not a calibrated win probability",
+                        "Vs market", "vs closing break-even", "Full history",
+                        "V13"):
+            self.assertNotIn(removed, h)
         self.assertNotIn("not a game-specific probability", h)
         self.assertNotIn("re-decided by V13", h)
         self.assertNotIn("Historical family vs closing market", h)
@@ -3765,7 +3769,7 @@ class HybridRuleTests(unittest.TestCase):
         """Current quote and matched V13 history have different labels."""
         ctx = build_site.hybrid_branch_records()
         dist = ctx["model_distribution"]
-        # A fixed +200 quote can be outside the observed V13 selected-price
+        # A fixed +200 quote can be outside the model selected-price
         # range. Choose an ACTUAL historical price to test the populated card,
         # while the dedicated outside-range test checks its fallback.
         rec = dist["bands"][len(dist["bands"]) // 2]
@@ -3776,7 +3780,7 @@ class HybridRuleTests(unittest.TestCase):
         self.assertIn("30.0% no-vig", h)
         self.assertIn("Posted break-even", h)
         self.assertIn("Market implied", h)
-        self.assertIn("V13 realised", h)
+        self.assertIn("Model realised", h)
         self.assertNotIn("not a game-specific probability", h)
         self.assertNotIn("Past margin over closing break-even", h)
 
