@@ -53,7 +53,6 @@ from market_backfill import (ODDS_LADDER as _mb_odds_ladder,
                              publish_reconstruction as _mb_publish_reconstruction,
                              recon_grade as _mb_recon_grade,
                              recon_grades as _mb_recon_grades,
-                             breakeven_prob as _mb_breakeven_prob,
                              breakeven_prob as _mb_breakeven_prob)
 import requests
 
