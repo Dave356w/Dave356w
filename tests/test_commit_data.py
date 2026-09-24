@@ -263,3 +263,29 @@ class TestLineupReportPublish:
         for part in (head, collect, publish):
             assert "concurrency:" not in part
             assert "site-build" not in part
+
+
+class TestVelocityMigrationIsNeverStale:
+    """The migration rewrites the whole ledger file, and it queues behind
+    site-build. It must work from the tip that build left, and refuse to
+    commit if main moved -- its first run did neither and undid a build."""
+
+    def _text(self):
+        with open(os.path.join(TestWorkflowsUseIt.ROOT, ".github", "workflows",
+                               "velocity-migration.yml"), encoding="utf-8") as fh:
+            return fh.read()
+
+    def test_checks_out_the_latest_main(self):
+        t = self._text()
+        assert "uses: actions/checkout@v4\n        with:\n          ref: main" in t
+
+    def test_refuses_when_main_moved_before_compute_and_commit(self):
+        t = self._text()
+        guard = 'test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"'
+        assert t.count(guard) == 2
+        assert t.index(guard) < t.index("python reconstruct_v14_velocity.py")
+        assert t.rindex(guard) < t.index("python commit_data.py")
+
+    def test_serialised_with_the_build(self):
+        t = self._text()
+        assert "group: site-build" in t and "cancel-in-progress: false" in t
