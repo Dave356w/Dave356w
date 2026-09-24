@@ -1,0 +1,128 @@
+name: History studies
+
+# Three off-season studies on several seasons of Statcast plate appearances,
+# every rate rebuilt as of the day before the game:
+#
+#   research/starter_shrink_history.py  what K should shrink a starter's rate?
+#   research/defense_history.py         does team defence carry signal xwOBA
+#                                        strips out?
+#   research/velocity_trend.py          does a starter's recent fastball
+#                                        velocity change predict him?
+#
+# They follow the live pitcher x lineup probe, whose starter coefficient
+# (0.68 +/- 0.32, implied K ~347 vs the shipped 100) cannot settle before next
+# season on live rows alone. Reconstructed history is the right class for
+# choosing a constant or screening an input -- and never a forward record;
+# a result here earns a registered SHADOW, not a change to v13.
+#
+# Here and not in the dev sandbox because Savant is unreachable from there.
+# READ-ONLY: `contents: read`, reports and the reduced tables leave as an
+# artifact, and a final step fails the job if anything wrote to data/.
+# Outside the `site-build` group -- it never writes, so it never queues.
+on:
+  pull_request:
+    paths:
+      - 'research/statcast_history.py'
+      - 'research/starter_shrink_history.py'
+      - 'research/defense_history.py'
+      - 'research/velocity_trend.py'
+      - 'tests/test_history_studies.py'
+      - '.github/workflows/history-studies.yml'
+  workflow_dispatch:
+    inputs:
+      seasons:
+        description: 'Comma-separated seasons; the last is re-fetched through yesterday'
+        required: false
+        default: '2023,2024,2025,2026'
+      boot:
+        description: 'Cluster bootstrap resamples'
+        required: false
+        default: '200'
+
+permissions:
+  contents: read
+
+jobs:
+  studies:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300       # a cold fetch is ~a week of pitches a request
+    env:
+      HISTORY_DIR: history_cache
+      SEASONS: ${{ inputs.seasons || '2023,2024,2025,2026' }}
+      BOOT: ${{ inputs.boot || '200' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      # pybaseball is a research-only dependency and deliberately NOT in
+      # requirements.txt: the daily build never imports it.
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pybaseball pytest
+
+      - name: Verify the lookahead guards and the planted-effect recovery
+        run: python -m pytest tests/test_history_studies.py -q
+
+      # Completed seasons are immutable, so the reduced tables are cached and
+      # only the last season is re-fetched. Keyed on the reducer's own code:
+      # a change to what is kept invalidates every season at once.
+      - name: Restore reduced Statcast tables
+        uses: actions/cache@v4
+        with:
+          path: history_cache
+          key: history-${{ hashFiles('research/statcast_history.py') }}-${{ github.run_id }}
+          restore-keys: |
+            history-${{ hashFiles('research/statcast_history.py') }}-
+
+      - name: Fetch and reduce Statcast
+        run: |
+          python research/statcast_history.py --seasons "$SEASONS" \
+            --out "$HISTORY_DIR" --end "$(date -u -d yesterday +%F)"
+          ls -la "$HISTORY_DIR"
+
+      - name: Starter shrinkage
+        run: |
+          set -o pipefail
+          python research/starter_shrink_history.py --data "$HISTORY_DIR" \
+            --boot "$BOOT" | tee starter_shrink_report.txt
+
+      - name: Team defence
+        if: always()
+        run: |
+          set -o pipefail
+          python research/defense_history.py --data "$HISTORY_DIR" \
+            --boot "$BOOT" | tee defense_report.txt
+
+      - name: Velocity trend
+        if: always()
+        run: |
+          set -o pipefail
+          python research/velocity_trend.py --data "$HISTORY_DIR" \
+            --boot "$BOOT" | tee velocity_report.txt
+
+      - name: Confirm nothing was written to data/
+        if: always()
+        run: |
+          if ! git diff --quiet -- data/ || [ -n "$(git status --porcelain -- data/)" ]; then
+            echo "::error::history studies modified data/ -- they must be read-only"
+            git status --porcelain -- data/
+            exit 1
+          fi
+          echo "data/ clean"
+
+      - name: Upload
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: history-studies
+          path: |
+            starter_shrink_report.txt
+            defense_report.txt
+            velocity_report.txt
+            history_cache/*.csv.gz
+          if-no-files-found: warn
