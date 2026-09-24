@@ -165,3 +165,70 @@ def test_report_runs_and_states_empty_sample(tmp_path):
     empty = "\n".join(plp.report(frames, pa.iloc[0:0], ledger=str(path),
                                  tags=(TAG,)))
     assert "not a result" in empty
+
+
+def _sample_world(k_true, k_used=100.0, n_starters=400, pa_each=40, seed=3):
+    """Starters whose observed rate was shrunk with `k_used` while talent is
+    truly spread as if the right constant were `k_true`. Hitters are exact.
+
+    Talent sd tau and per-BF noise sigma are set so sigma^2/tau^2 = k_true:
+    the calibrated constant. Scoring is on the talent directly (plus noise),
+    so the only thing that can bend beta_p is the shrinkage mismatch."""
+    rng = np.random.default_rng(seed)
+    sigma = 0.5
+    tau = sigma / np.sqrt(k_true)
+    rows = []
+    for s in range(n_starters):
+        bf = float(rng.integers(40, 850))
+        t = rng.normal(0, tau)
+        obs = t + rng.normal(0, sigma / np.sqrt(bf))
+        p = obs * bf / (bf + k_used)           # shrunk toward the league (0)
+        for j in range(pa_each):
+            b = rng.normal(0, 0.03)
+            rows.append({"player_id": j + 1000 * (s % 7),
+                         "faced_pitcher": f"SP{s}", "sp_bf": bf,
+                         "sp_basis": "measured", "L": L,
+                         "b": b, "p": p, "bp": b * p,
+                         "y": b + t + rng.normal(0, 0.05)})
+    return pd.DataFrame(rows)
+
+
+def test_undershrunk_starters_show_beta_p_rising_with_sample():
+    r = plp.starter_sample_moderation(_sample_world(k_true=400), n_boot=40)
+    assert r["b3"] > 0
+    assert r["beta_lo"] < r["beta_hi"]
+    assert r["beta_lo"] < 0.8
+    assert r["k_star"] > 150              # well above the K=100 used
+    assert r["k_lo"] > 100                # and the range excludes it
+
+
+def test_calibrated_starters_show_flat_beta_p():
+    r = plp.starter_sample_moderation(_sample_world(k_true=100), n_boot=40)
+    assert abs(r["b3"]) < 3 * r["se_b3"] + 0.05
+    assert r["beta_med"] == pytest.approx(1.0, abs=0.15)
+    assert r["k_lo"] <= 100 <= r["k_hi"]  # the range covers the K used
+
+
+def test_prior_only_starters_are_excluded_and_counted():
+    m = _sample_world(k_true=100, n_starters=60)
+    m.loc[m.faced_pitcher == "SP0", "sp_basis"] = "prior_only"
+    r = plp.starter_sample_moderation(m, n_boot=20)
+    assert r["n_prior_only"] == 40
+    assert r["n"] == len(m) - 40
+
+
+def test_moderation_needs_the_sample_column():
+    m = _sample_world(k_true=100, n_starters=20).drop(columns="sp_bf")
+    assert plp.starter_sample_moderation(m, n_boot=10) is None
+    assert "nothing to read" in "\n".join(plp.moderation_lines(None))
+
+
+def test_starter_sample_joins_from_the_pitchers_side(tmp_path):
+    frames, led, pa = _world(n_games=6)
+    led["sp_rate_bf_away"] = 111.0
+    led["sp_rate_bf_home"] = 777.0
+    led["sp_rate_basis_away"] = "measured"
+    led["sp_rate_basis_home"] = "measured"
+    m, _, _ = _rows(frames, led, pa, tmp_path)
+    want = m["pitcher_side"].map({"away": 111.0, "home": 777.0})
+    assert (m["sp_bf"] == want).all()

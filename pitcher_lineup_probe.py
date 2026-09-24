@@ -32,18 +32,22 @@ from the data.
 
 WHAT THE SAMPLE CAN AND CANNOT RESOLVE, stated before any run so a reader does
 not wait on the wrong column. The interaction's regressor is small: with `b`
-and `p` each spread about 0.03, `b*p` is spread about 0.001, against a single
-PA's wOBA spread of about 0.5. Its standard error is therefore roughly
+and `p` each spread 0.02-0.03, `b*p` is spread well under 0.001, against a
+single PA's wOBA spread of about 0.5. Its unclustered standard error is roughly
 
-    se(beta_bp) ~ 0.5 / (0.001 * sqrt(N_PA))
+    se(beta_bp) ~ 0.5 / (sd(b*p) * sqrt(N_PA))
 
-which is ~3.5 at 20,000 PAs -- the size of the effect being tested. The main
-effects are about thirty times better determined at the same N. So the
-readable results arrive in order: `beta_p` and `beta_b` within weeks, the
-interaction only after several seasons of PAs. The report prints the PA count
-at which the interaction's |z| would reach 2 if log5 were exactly right,
-scaled from the run's OWN standard error rather than from this paragraph. A
-null interaction before that count is "not yet resolved", never "additive".
+and clustering by hitter and starter inflates it further. Dated scale check,
+not a result: the first live run (2026-09-24, 5,685 starter PAs) measured
+sd(b*p) 0.0006 and se(beta_bp) 13.4 -- about four times the 1/L being tested
+-- which puts a readable interaction near 400,000 PAs, several seasons. The
+main effects' SEs were about 0.3 on the same rows. So the readable results
+arrive in order: `beta_p` and `beta_b` first, the interaction much later. The
+report prints the PA count at which the interaction's |z| would reach 2 if
+log5 were exactly right, scaled from the run's OWN standard error rather than
+from this paragraph. A null interaction before that count is "not yet
+resolved", never "additive"; a large point estimate before it is noise-sized
+too.
 
 WHY THE STARTER'S PAs ONLY. `vs_starter` from `lineup_window_collect.py` marks
 the PAs thrown by the pitcher who actually started. The frame names the pitcher
@@ -138,6 +142,12 @@ def starter_inputs(ledger=LEDGER, tags=None):
             "ledger_sp": led.get(f"{side}_sp"),
             "P": n(f"starter_xwoba_{side}"),
             "L": L,
+            # The sample the starter's rate was shrunk on, and whether one
+            # existed at all -- what `starter_sample_moderation` reads.
+            "sp_bf": n(f"sp_rate_bf_{side}"),
+            "sp_basis": (led[f"sp_rate_basis_{side}"].astype(str)
+                         if f"sp_rate_basis_{side}" in led.columns
+                         else pd.Series("", index=led.index)),
         }))
     s = pd.concat(out, ignore_index=True).dropna(subset=["game_pk", "P", "L"])
     return s.drop_duplicates(subset=["game_pk", "pitcher_side"], keep="last")
@@ -233,6 +243,144 @@ def fit(m, rows=None, arrays=None):
     return dict(zip(("alpha",) + COEFS, map(float, coef)))
 
 
+# The one pre-specified moderator of beta_p. Named here, not searched for:
+# a shrunk rate's slope on its own outcomes is (n+K)/(n+K*) when the true
+# shrinkage constant is K* -- the same identity `hitter_level_probe` reads on
+# the hitter side -- so an under-shrunk starter rate shows as beta_p RISING
+# with the starter's sample, and a calibrated one as beta_p flat in it.
+MODERATOR = "sp_bf"
+
+
+def moderation_design(m):
+    """(X, y, z) for y ~ 1 + b + p + b*p + z + p*z, z = standardised BF.
+
+    `z` enters on its own as well as through `p*z`, so a starter's sample
+    predicting his opponents' results directly (openers, call-ups) is not
+    read as a change in how his RATE predicts them.
+    """
+    bf = pd.to_numeric(m[MODERATOR], errors="coerce").to_numpy(float)
+    z = (bf - np.nanmean(bf)) / np.nanstd(bf)
+    X = np.column_stack([np.ones(len(m)), m["b"], m["p"], m["bp"],
+                         z, m["p"].to_numpy(float) * z])
+    return X.astype(float), m["y"].to_numpy(float), bf
+
+
+def fit_moderation(X, y, rows=None):
+    if rows is not None:
+        X, y = X[rows], y[rows]
+    if len(y) < 12:
+        return None
+    xtx = X.T @ X
+    if np.linalg.matrix_rank(xtx) < X.shape[1]:
+        return None
+    c = np.linalg.solve(xtx, X.T @ y)
+    return {"beta_p": float(c[2]), "b3": float(c[5])}
+
+
+def starter_sample_moderation(m, n_boot=BOOT, k=None):
+    """Does beta_p depend on how many batters the starter's rate rests on?
+
+    Rows whose starter had NO measured sample (`prior_only`) are excluded:
+    their `p` is the shrinkage target itself, not a noisy observation of the
+    starter, so the identity above does not describe them. Counted, not
+    silently dropped.
+
+    Returns None when the frame cannot support the fit.
+    """
+    if m is None or m.empty or MODERATOR not in m.columns:
+        return None
+    basis = m["sp_basis"] if "sp_basis" in m.columns else pd.Series("", index=m.index)
+    prior_only = basis.astype(str).eq("prior_only")
+    bf = pd.to_numeric(m[MODERATOR], errors="coerce")
+    keep = ~prior_only & bf.notna() & (bf > 0)
+    d = m[keep].reset_index(drop=True)
+    if len(d) < 30 or pd.to_numeric(d[MODERATOR]).nunique() < 3:
+        return None
+    X, y, bfv = moderation_design(d)
+    est = fit_moderation(X, y)
+    if est is None:
+        return None
+    sd_bf, mean_bf = float(np.std(bfv)), float(np.mean(bfv))
+    lo, med, hi = (float(np.percentile(bfv, q)) for q in (10, 50, 90))
+    z_lo, z_hi = (lo - mean_bf) / sd_bf, (hi - mean_bf) / sd_bf
+
+    def at(z):
+        return lambda r: (lambda e: e["beta_p"] + e["b3"] * z if e else np.nan)(
+            fit_moderation(X, y, r))
+
+    player = d["player_id"].to_numpy()
+    starter = d["faced_pitcher"].astype(str).to_numpy()
+    se_b3, how = hp.cluster_se_twoway(
+        lambda r: (fit_moderation(X, y, r) or {}).get("b3", np.nan),
+        player, starter, n_boot=n_boot, seed=SEED)
+    se_lo, _ = hp.cluster_se_twoway(at(z_lo), player, starter,
+                                    n_boot=n_boot, seed=SEED)
+    se_hi, _ = hp.cluster_se_twoway(at(z_hi), player, starter,
+                                    n_boot=n_boot, seed=SEED)
+
+    k = float(build_site.XWOBA_SHRINK_K if k is None else k)
+    z_med = (med - mean_bf) / sd_bf
+    beta_med = est["beta_p"] + est["b3"] * z_med
+    se_med, _ = hp.cluster_se_twoway(at(z_med), player, starter,
+                                     n_boot=n_boot, seed=SEED)
+
+    # (n+K)/(n+K*) = beta  =>  K* = (n+K)/beta - n, at the median sample.
+    # Monotone in beta, so beta's +/-2se bounds map straight onto K*'s; a
+    # lower beta bound at or below 0.1 leaves K* unbounded above.
+    def kstar(beta):
+        return (med + k) / beta - med if beta > 0.1 else float("inf")
+    k_star = kstar(beta_med) if beta_med > 0.1 else float("nan")
+    k_lo = max(kstar(beta_med + 2 * se_med), 0.0) if np.isfinite(se_med) else float("nan")
+    k_hi = kstar(beta_med - 2 * se_med) if np.isfinite(se_med) else float("nan")
+    return {
+        "n": len(d), "n_prior_only": int(prior_only.sum()),
+        "n_starters": int(d["faced_pitcher"].nunique()),
+        "bf_p10": lo, "bf_med": med, "bf_p90": hi, "sd_bf": sd_bf,
+        "b3": est["b3"], "se_b3": se_b3, "how": how,
+        "beta_lo": est["beta_p"] + est["b3"] * z_lo, "se_lo": se_lo,
+        "beta_hi": est["beta_p"] + est["b3"] * z_hi, "se_hi": se_hi,
+        "beta_med": beta_med, "se_med": se_med,
+        "k": k, "k_star": k_star, "k_lo": k_lo, "k_hi": k_hi,
+    }
+
+
+def moderation_lines(r):
+    out = []
+    say = out.append
+    say("")
+    say("STARTER SAMPLE -- does beta_p depend on the starter's batters faced?")
+    if r is None:
+        say("  not enough measured-starter rows to fit; nothing to read")
+        return out
+    z = r["b3"] / r["se_b3"] if r["se_b3"] > 0 else float("nan")
+    say(f"  {r['n']} PAs vs {r['n_starters']} measured starters "
+        f"({r['n_prior_only']} prior-only PAs excluded); "
+        f"BF p10 {r['bf_p10']:.0f} / median {r['bf_med']:.0f} / p90 {r['bf_p90']:.0f}")
+    say(f"  change in beta_p per 1 sd of BF ({r['sd_bf']:.0f}): "
+        f"{r['b3']:+.3f} +/- {r['se_b3']:.3f}  z {z:+.2f}  [{r['how']}]")
+    say(f"  beta_p at BF {r['bf_p10']:>4.0f}: {r['beta_lo']:+.3f} +/- {r['se_lo']:.3f}")
+    say(f"  beta_p at BF {r['bf_p90']:>4.0f}: {r['beta_hi']:+.3f} +/- {r['se_hi']:.3f}")
+    say(f"  beta_p at BF {r['bf_med']:>4.0f}: {r['beta_med']:+.3f} +/- {r['se_med']:.3f}  (median sample)")
+    if np.isfinite(r["k_star"]):
+        hi = "unbounded" if not np.isfinite(r["k_hi"]) else f"{r['k_hi']:.0f}"
+        say(f"  implied starter K* ~{r['k_star']:.0f}, +/-2se range "
+            f"{r['k_lo']:.0f} to {hi}  (shipped K {r['k']:.0f})")
+    else:
+        say("  implied starter K*: undefined (beta_p at the median sample <= 0.1)")
+    say("  How to read it. The LEVEL of beta_p is the strong signal: under")
+    say("  shrinkage beta_p = (n+K)/(n+K*), so a K* range that excludes the")
+    say("  shipped K says starter rates are mis-shrunk -- above it, UNDER-")
+    say("  shrunk; raise the starter K, in a shadow first. The SLOPE b3 is the")
+    say("  shape check (it should be > 0 when under-shrunk) and it is weak:")
+    say("  on synthetic starters shrunk at 1/4 their true K it reached only")
+    say("  z ~2 at 16,000 PAs, so a flat b3 here is NOT evidence against")
+    say("  under-shrinkage. One moderator, named in advance: the bar is")
+    say("  |z| = 2, not a multiple-comparison maximum. K* is approximate: it")
+    say("  centres on the league rather than the per-pitcher prior the build")
+    say("  shrinks toward, and v12 rows carry an unblended rate.")
+    return out
+
+
 def paired_loss(m):
     """Mean squared-error difference, log5 minus additive, per PA.
 
@@ -308,6 +456,7 @@ def report(hitters, pa, ledger=LEDGER, tags=None, n_boot=BOOT):
     say("")
     say(f"  paired MSE, log5 - additive: {np.mean(dl):+.6f} "
         f"(se {se_dl:.6f}, {how}); negative favours log5")
+    out.extend(moderation_lines(starter_sample_moderation(m, n_boot=n_boot)))
     say("")
     say("  Read beta_p and beta_b first; they resolve long before the")
     say("  interaction does. A beta_bp interval covering both 0 and 1/L is the")
