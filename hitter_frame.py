@@ -17,7 +17,13 @@ information, or an aggregation that destroys one that does. Those are the two
 hypotheses, they imply opposite fixes, and no team-level statistic separates
 them.
 
-This module stores the vector so they can be separated. Joined to per-plate-
+This module stores the vector so they can be separated -- and so the
+pitcher x lineup interaction can be measured at all. The ledger keeps only the
+product the log5 term formed from the composite and the starter, so whether a
+hitter's rate and the starter's combine multiplicatively (`B*P/L`, what ships)
+or additively cannot be read from it. With `faced_pitcher` and `pitcher_side`
+on every row, `pitcher_lineup_probe` scores each hitter against the starter
+the build expected, on that starter's own plate appearances. Joined to per-plate-
 appearance outcomes (`lineup_window_collect.py` already emits `batter_id` per
 PA), each hitter's predicted rate is scored against his OWN realised results:
 ~1,100 PA rows a slate instead of ~30 side-games, and a correlation SE of
