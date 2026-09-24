@@ -1,5 +1,5 @@
-# generated 2026-09-24T16:23Z by lineup-window-collect
-# run: https://github.com/Dave356w/Dave356w/actions/runs/36026326154
+# generated 2026-09-24T17:03Z by lineup-window-collect
+# run: https://github.com/Dave356w/Dave356w/actions/runs/36030263423
 # diagnostic only -- nothing here reaches a lean, delta or grade
 
 PITCHER x LINEUP INTERACTION -- per hitter, PAs against the starter
@@ -17,6 +17,25 @@ PITCHER x LINEUP INTERACTION -- per hitter, PAs against the starter
   interaction readable (|z|=2 at log5's 1/L) near 404,096 PAs; have 5,685 -- NOT YET RESOLVED
 
   paired MSE, log5 - additive: -0.000050 (se 0.000027, two-way); negative favours log5
+
+STARTER SAMPLE -- does beta_p depend on the starter's batters faced?
+  5685 PAs vs 172 measured starters (0 prior-only PAs excluded); BF p10 148 / median 563 / p90 709
+  change in beta_p per 1 sd of BF (203): +0.312 +/- 0.363  z +0.86  [two-way]
+  beta_p at BF  148: +0.092 +/- 0.717
+  beta_p at BF  709: +0.952 +/- 0.483
+  beta_p at BF  563: +0.728 +/- 0.336  (median sample)
+  implied starter K* ~347, +/-2se range 0 to unbounded  (shipped K 100)
+  How to read it. The LEVEL of beta_p is the strong signal: under
+  shrinkage beta_p = (n+K)/(n+K*), so a K* range that excludes the
+  shipped K says starter rates are mis-shrunk -- above it, UNDER-
+  shrunk; raise the starter K, in a shadow first. The SLOPE b3 is the
+  shape check (it should be > 0 when under-shrunk) and it is weak:
+  on synthetic starters shrunk at 1/4 their true K it reached only
+  z ~2 at 16,000 PAs, so a flat b3 here is NOT evidence against
+  under-shrinkage. One moderator, named in advance: the bar is
+  |z| = 2, not a multiple-comparison maximum. K* is approximate: it
+  centres on the league rather than the per-pitcher prior the build
+  shrinks toward, and v12 rows carry an unblended rate.
 
   Read beta_p and beta_b first; they resolve long before the
   interaction does. A beta_bp interval covering both 0 and 1/L is the
