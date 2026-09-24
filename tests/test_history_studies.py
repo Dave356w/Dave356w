@@ -219,3 +219,43 @@ def test_velocity_dv_uses_only_earlier_starts():
     base = hist.iloc[:-1]
     want = prev.velo - np.average(base.velo, weights=base.n_fb)
     assert one.dv == pytest.approx(want)
+
+
+# -------------------------------------------------- retrospective ledger arm
+
+def _ledger():
+    import build_site
+    led = pd.read_csv("data/mlb_lean_ledger.csv", low_memory=False)
+    return led[led["model_tag"].isin(build_site.RECORD_TAGS)
+               & led["model_metric"].eq("xwOBA")].reset_index(drop=True)
+
+
+def test_ledger_rebuild_reproduces_xw_net():
+    led = _ledger()
+    ship = pd.to_numeric(led["xw_net"], errors="coerce")
+    base = vt.ledger_net(led)
+    ok = ship.notna() & base.notna()
+    assert ok.sum() > 100
+    assert float((base - ship)[ok].abs().max()) < 1e-9
+
+
+def test_worse_away_starter_raises_the_home_side():
+    led = _ledger()
+    base = vt.ledger_net(led)
+    worse = vt.ledger_net(led, d_away=+0.010)      # away starter allows more
+    ok = base.notna()
+    assert (worse[ok] > base[ok]).all()
+
+
+def test_velocity_arm_is_inert_without_matching_velocity():
+    w = world(seed=9, days=30)                      # game_pks match no ledger row
+    lines = "\n".join(vt.ledger_shadow(-0.006, w["pa"], w["velo"], season=2026))
+    assert "reconstruction matches xw_net" in lines
+    vel = next(l for l in lines.splitlines() if l.strip().startswith("velocity"))
+    assert vel.split()[1] == "0"                   # no dv -> no flips
+
+
+def test_ledger_arm_is_scoped_to_its_season():
+    w = world(seed=10, days=10)
+    lines = "\n".join(vt.ledger_shadow(-0.006, w["pa"], w["velo"], season=1999))
+    assert "no current-family ledger rows in 1999" in lines

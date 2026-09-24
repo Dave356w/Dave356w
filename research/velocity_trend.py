@@ -101,6 +101,17 @@ def results_fit(rows: pd.DataFrame, y="y_w", n_boot=BOOT):
             "starts": rows[["game_pk", "pitcher"]].drop_duplicates().shape[0]}
 
 
+def beta_only(rows, y="y_w"):
+    """Point estimate of beta_v, for carrying a coefficient forward."""
+    if rows.empty:
+        return None
+    b = rows["b"].to_numpy(float)
+    p = ssh.p_at(rows, sh.SHIPPED_K)
+    X = np.column_stack([np.ones(len(rows)), b, p, b * p, rows["dv"]])
+    c = sh.ols(X, rows[y].to_numpy(float))
+    return None if c is None else float(c[4])
+
+
 def season_rows(d):
     if d["pa"].empty or d["velo"].empty:
         return pd.DataFrame(), pd.DataFrame()
@@ -114,7 +125,7 @@ def report(data_dir=sh.DEFAULT_DIR, seasons=None, n_boot=BOOT):
     seasons = seasons or sh.seasons_available(data_dir)
     out = ["STARTER VELOCITY TREND -- last start's fastball velo vs his season baseline",
            "  reconstructed history: screens an input, is not a forward record", ""]
-    svs, rws = [], []
+    svs, rws, seasons_used = [], [], []
     for s in seasons:
         sv, rows = season_rows(sh.load(s, data_dir))
         if sv.empty:
@@ -122,10 +133,21 @@ def report(data_dir=sh.DEFAULT_DIR, seasons=None, n_boot=BOOT):
             continue
         svs.append(sv)
         rws.append(rows)
+        seasons_used.append(s)
         out += _block(str(s), sv, rows, n_boot)
     if len(svs) > 1:
         out += _block("POOLED", pd.concat(svs, ignore_index=True),
                       pd.concat(rws, ignore_index=True), n_boot)
+    cur = max(seasons) if seasons else None
+    prior = [r for s, r in zip(seasons_used, rws) if s < cur]
+    if cur is not None and prior:
+        b = beta_only(pd.concat(prior, ignore_index=True))
+        out.append(f"RETROSPECTIVE ON THE {cur} LEDGER (v12/v13), beta_v from "
+                   f"{', '.join(str(s) for s in seasons_used if s < cur)}")
+        d = sh.load(cur, data_dir)
+        out += (ledger_shadow(b, d["pa"], d["velo"], season=cur) if b is not None
+                else ["  no earlier-season fit"])
+        out.append("")
     out += [
         "  How to read it. Persistence first: a slope near 0 means the change",
         "  did not carry into the next start, and beta_v should then be ~0",
@@ -156,6 +178,118 @@ def _block(label, sv, rows, n_boot):
                        f"{r['how']}); 1 sd of dv ~ {shift * 1000:.1f} points; "
                        f"{r['n']:,} PAs in {r['starts']:,} starts")
     out.append("")
+    return out
+
+
+# ------------------------------------------------- retrospective ledger arm
+
+def ledger_net(led: pd.DataFrame, d_home=0.0, d_away=0.0, k=None):
+    """Rebuild `xw_net` from the ledger's own inputs, optionally moving each
+    starter's rate by `d_<side>` (per-PA wOBA units) and re-shrinking it at
+    `k` instead of the shipped K.
+
+    Same reconstruction the pitcher x lineup analysis verified against the
+    stored `xw_net` (max difference 3e-16 over 540 rows) -- checked again
+    by the caller on every run, never assumed. Home offence faces the AWAY
+    staff, so `_away` columns build home's edge.
+
+    The re-shrink un-does K=100 toward the league value rather than v13's
+    population/role target, which the ledger does not store: approximate,
+    and labelled so wherever it is printed.
+    """
+    def n(c):
+        return pd.to_numeric(led[c], errors="coerce")
+    L = n("mx_xwoba_sp_away") - n("edge_xwoba_sp_away")
+    edge = {}
+    for s, d in (("away", d_away), ("home", d_home)):
+        B, Bn = n(f"opp_xwoba_vs_sp_{s}"), n(f"opp_xwoba_neutral_{s}")
+        P, Pb, q = n(f"starter_xwoba_{s}"), n(f"bullpen_xwoba_{s}"), n(f"sp_share_{s}")
+        if k is not None:
+            bf = n(f"sp_rate_bf_{s}").fillna(0.0)
+            P = L + (P - L) * (bf + sh.SHIPPED_K) / (bf + k)
+        P = P + d
+        edge[s] = q * B * P / L + (1 - q) * Bn * Pb / L - L
+    return edge["away"] - edge["home"]
+
+
+def ledger_shadow(beta_v, pa: pd.DataFrame, velo: pd.DataFrame,
+                  ledger="data/mlb_lean_ledger.csv", season=None):
+    """Apply a velocity term fitted on EARLIER seasons to the current ledger.
+
+    Each starter's rate moves by beta_v * dv, dv being his pregame velocity
+    change from this season's Statcast (0 when he has fewer than three prior
+    starts). The coefficient never sees these games. Reported beside the same
+    arms with K = 300, because the shrinkage study says that is the larger
+    and better-established correction.
+    """
+    out = []
+    try:
+        import build_site
+        led = pd.read_csv(Path(sh.ROOT) / ledger, low_memory=False)
+    except Exception as e:  # noqa: BLE001
+        return [f"  ledger arm unavailable ({type(e).__name__})"]
+    led = led[led["model_tag"].isin(build_site.RECORD_TAGS)
+              & led["model_metric"].eq("xwOBA")]
+    if season is not None:
+        led = led[led["game_date"].astype(str).str.startswith(str(season))]
+    led = led.reset_index(drop=True)
+    if led.empty:
+        return [f"  no current-family ledger rows in {season}"]
+    ship = pd.to_numeric(led["xw_net"], errors="coerce")
+    base = ledger_net(led)
+    ok = ship.notna() & base.notna()
+    drift = float((base - ship)[ok].abs().max()) if ok.any() else float("nan")
+    if not np.isfinite(drift) or drift > 1e-9:
+        return [f"  ledger arm refused: reconstruction differs from xw_net "
+                f"by {drift:.2e}; nothing below would be v12/v13"]
+
+    sv = start_velocity(pa, velo)[["game_pk", "pitcher", "dv"]]
+    side = sh.starters(pa).merge(pa[["game_pk", "home_team"]].drop_duplicates(),
+                                 on="game_pk")
+    side["side"] = np.where(side["fld_team"] == side["home_team"], "home", "away")
+    side = side.merge(sv.rename(columns={"pitcher": "starter"}),
+                      on=["game_pk", "starter"], how="left")
+    dv = side.pivot_table(index="game_pk", columns="side", values="dv")
+    gp = pd.to_numeric(led["game_pk"], errors="coerce")
+    dv_h = gp.map(dv.get("home", pd.Series(dtype=float))).fillna(0.0)
+    dv_a = gp.map(dv.get("away", pd.Series(dtype=float))).fillna(0.0)
+    has = gp.map(dv.get("home", pd.Series(dtype=float))).notna() | \
+        gp.map(dv.get("away", pd.Series(dtype=float))).notna()
+
+    fh = pd.to_numeric(led["full_home"], errors="coerce")
+    fa = pd.to_numeric(led["full_away"], errors="coerce")
+    graded = led["status"].eq("graded") & fh.notna() & fa.notna() & fh.ne(fa)
+    home_won = fh > fa
+    rows = ok & graded
+
+    def rec(net):
+        right = ((net > 0) == home_won)[rows]
+        return int(right.sum()), int(len(right))
+
+    ship_w, n_g = rec(base)
+    out.append(f"  v12/v13 ledger: {int(ok.sum())} leans, {n_g} graded; "
+               f"reconstruction matches xw_net (max diff {drift:.1e}); "
+               f"{int((has & ok).sum())} carry a pregame dv for at least one starter")
+    out.append(f"  beta_v {beta_v * 1000:+.2f} points/mph, fitted on earlier seasons only")
+    out.append(f"  {'arm':<24} {'flips':>6} {'graded flips W-L (arm)':>24} {'record':>10}")
+    out.append(f"  {'shipped v12/v13':<24} {'-':>6} {'-':>24} "
+               f"{ship_w:>4}-{n_g - ship_w:<5}")
+    arms = (("velocity", None, True), ("K=300", 300.0, False),
+            ("K=300 + velocity", 300.0, True))
+    for name, k, vel in arms:
+        net = ledger_net(led, d_home=beta_v * dv_h if vel else 0.0,
+                         d_away=beta_v * dv_a if vel else 0.0, k=k)
+        flip = (np.sign(net) != np.sign(base)) & ok
+        f = flip & rows
+        arm_w = int(((net > 0) == home_won)[f].sum())
+        w, _ = rec(net)
+        out.append(f"  {name:<24} {int(flip.sum()):>6} "
+                   f"{arm_w:>12}-{int(f.sum()) - arm_w:<11} {w:>4}-{n_g - w:<5}")
+    out.append("  Only flipped games can change a record, and they are few: read the")
+    out.append("  W-L of the flips against a coin (sd ~ sqrt(n)/2 wins), not the")
+    out.append("  headline record. RECONSTRUCTED and post hoc -- the velocity data")
+    out.append("  is pregame but was not saved pregame, and the K=300 re-shrink")
+    out.append("  approximates v13's target. Evidence for a shadow, not a result.")
     return out
 
 
