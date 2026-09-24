@@ -60,6 +60,7 @@ import hitter_frame
 import hybrid_v2
 import pitch_arsenal
 import player_priors
+import season_phase
 
 # ------------------------------------------------------------
 # CONFIG
@@ -169,6 +170,9 @@ USE_TEAM_LOGOS = os.environ.get("USE_TEAM_LOGOS", "1") != "0"
 LOGO_CDN = "https://www.mlbstatic.com/team-logos"
 DATA_DIR = os.environ.get("DATA_DIR", "data")            # grading ledger home
 LEDGER_PATH = os.path.join(DATA_DIR, "mlb_lean_ledger.csv")
+# Postseason and type-unconfirmed rows. Read ONLY by the pregame lock lookup;
+# every record, calibration and page is regular season. See season_phase.py.
+POSTSEASON_LEDGER_PATH = os.path.join(DATA_DIR, season_phase.POSTSEASON_LEDGER_NAME)
 MODEL_TAG = os.environ.get("MODEL_TAG", "xw+starter_blend_v13")  # keep in sync with grade_leans.py
 if not MODEL_TAG.startswith("xw+"):
     raise RuntimeError(
@@ -878,6 +882,10 @@ def get_slate(slate_date, sport_id=1):
             linescore = g.get("linescore") or {}
             rows.append({
                 "game_pk": g.get("gamePk"),
+                # R / F / D / L / W. The date query returns postseason games
+                # as readily as regular-season ones; this is what lets the
+                # grader keep them out of the regular-season ledger.
+                "game_type": g.get("gameType"),
                 "game_date": od,
                 "game_datetime_utc": g.get("gameDate"),
                 "game_number": g.get("gameNumber"),
@@ -5309,7 +5317,7 @@ def locked_pregame_rows(led=None, slate_date=None):
     Filtered on `lock_status`, never on status: a row is useful here the
     moment it is ingested, long before it grades.
     """
-    led = load_ledger_df() if led is None else led
+    led = load_ledger_df(include_held=True) if led is None else led
     if led is None or "lock_status" not in getattr(led, "columns", ()):
         return {}
     day = led[
@@ -6484,15 +6492,29 @@ def html_document(body, built_txt, title=None, extra_js=None):
 # maintains and CI commits back to the repo; the grading pass runs
 # before this build so records are current as of the run.
 # ============================================================
-def load_ledger_df():
-    if not os.path.exists(LEDGER_PATH):
+def load_ledger_df(include_held=False):
+    """The regular-season ledger; with include_held, the held rows too.
+
+    include_held exists for one caller: the pregame lock lookup, which must
+    freeze a postseason card (or a regular-season row still waiting on its
+    type) exactly as it freezes any other. Everything that publishes a record
+    or fits a number reads the default.
+    """
+    frames = []
+    paths = [LEDGER_PATH] + ([POSTSEASON_LEDGER_PATH] if include_held else [])
+    for path in paths:
+        if not os.path.exists(path):
+            continue
+        try:
+            frames.append(pd.read_csv(path))
+        except Exception as e:  # noqa: BLE001
+            log(f"Ledger unreadable, grades render degraded: {e!r}")
+            if path == LEDGER_PATH:
+                return None
+    frames = [f for f in frames if not f.empty]
+    if not frames:
         return None
-    try:
-        led = pd.read_csv(LEDGER_PATH)
-    except Exception as e:  # noqa: BLE001
-        log(f"Ledger unreadable, grades render degraded: {e!r}")
-        return None
-    return None if led.empty else led
+    return frames[0] if len(frames) == 1 else pd.concat(frames, ignore_index=True)
 
 
 def _esc(x):
@@ -8773,6 +8795,28 @@ def write_leaderboard_page(built_txt, boards):
         return None
 
 
+def stamp_game_type(frame, slate_df):
+    """Write each row's StatsAPI gameType onto a dump frame, in place.
+
+    Mapped on game_pk from the slate this build fetched. A pk the slate does
+    not carry is left blank, never guessed: grade_leans resolves blanks from
+    the schedule and holds the row out of the regular-season ledger until it
+    can.
+    """
+    if frame is None or frame.empty or "game_pk" not in frame.columns:
+        return frame
+    types = {}
+    if slate_df is not None and not slate_df.empty and "game_type" in slate_df.columns:
+        for pk, gt in zip(slate_df["game_pk"], slate_df["game_type"]):
+            pk = pd.to_numeric(pk, errors="coerce")
+            if pd.notna(pk):
+                types[int(pk)] = season_phase.clean_game_type(gt)
+    pks = pd.to_numeric(frame["game_pk"], errors="coerce")
+    frame[season_phase.GAME_TYPE_COL] = [
+        types.get(int(pk), np.nan) if pd.notna(pk) else np.nan for pk in pks]
+    return frame
+
+
 def main():
     built_txt = _built_text_now()
     if "--grades-only" in sys.argv:
@@ -8884,6 +8928,8 @@ def main():
                 frame[col] = frame["game_pk"].map(series)
     attach_hybrid_snapshot(matchup_df, odds, snapshot_utc)
     attach_hybrid_snapshot(matchup_platoon_df, odds, snapshot_utc)
+    for frame in (matchup_df, matchup_platoon_df):
+        stamp_game_type(frame, data["slate_df"])
     os.makedirs(DATA_DIR, exist_ok=True)
     # One decision for both dumps, taken from the primary frame: they describe
     # the same games at the same instant, and naming them from separate reads
