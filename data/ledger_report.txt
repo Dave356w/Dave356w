@@ -1,6 +1,6 @@
 LEAN LEDGER — 533 graded games (524 with a lean, 9 abstained)  [xw+plat_consol_v12 + xw+starter_blend_v13 + xw+starter_velo_v14]
 xwOBA lean   full: 324-200  (0.618)   F5: 250-198-76  (0.558)
-  PUBLISHED (xw+starter_velo_v14, every retained row re-decided with the starter velocity term): 329-195
+  PUBLISHED (xw+starter_velo_v14, every retained row re-decided with the starter velocity term): 335-189
   BASIS: 533 of these 533 rows were published under an earlier tag and are scored ABOVE on their own pregame lean.
   The public pages re-decide those rows under the current model and blend them in unmarked, so their record is NOT this one and is hindsight on the re-decided rows.
 hybrid v2 rule  full: 331-193  (0.632)   vs price z=+3.17  +46.55u   (n=524, 23 faded)
@@ -125,54 +125,54 @@ xwOBA |delta| x LEANED-side closing price (analyst-only; the game card publishes
   n and W-L
     |delta|               ≤-250   -249/-175   -174/-130   -129/-100   +100/+129   +130/+174   +175/+249       ≥+250         ROW
     ---------------------------------------------------------------------------------------------------------------------------
-    [0.000, 0.010)            ·       7:5-2    42:24-18    53:26-27    34:21-13      11:6-5           ·           ·   147:82-65
-    [0.010, 0.020)        1:1-0     20:13-7     45:36-9    46:29-17     19:11-8       7:5-2           ·           ·   138:95-43
-    [0.020, 0.030)        2:2-0     22:16-6    41:21-20    30:16-14       7:2-5       3:0-3           ·           ·   105:57-48
-    [0.030, 0.050)        6:5-1     33:25-8    41:30-11      15:7-8       4:2-2           ·           ·           ·    99:69-30
-    [0.050, inf)        11:10-1     15:10-5       8:5-3       1:1-0           ·           ·           ·           ·     35:26-9
-    COLUMN              20:18-2    97:69-28  177:116-61   145:79-66    64:36-28    21:11-10           ·           · 524:329-195
+    [0.000, 0.010)            ·       8:6-2    36:24-12    48:23-25    36:21-15      14:8-6           ·           ·   142:82-60
+    [0.010, 0.020)        1:1-0     20:13-7    45:34-11    50:31-19     23:14-9       8:5-3           ·           ·   147:98-49
+    [0.020, 0.030)        2:2-0     20:15-5    42:25-17    30:18-12       6:3-3       2:0-2           ·           ·   102:63-39
+    [0.030, 0.050)        6:5-1     33:25-8    38:25-13      16:8-8       4:2-2           ·           ·           ·    97:65-32
+    [0.050, inf)        11:10-1     15:10-5      10:7-3           ·           ·           ·           ·           ·     36:27-9
+    COLUMN              20:18-2    96:69-27  171:115-56   144:80-64    69:40-29    24:13-11           ·           · 524:335-189
   flat-stake units (1u a game, at each row's own close)
     |delta|               ≤-250   -249/-175   -174/-130   -129/-100   +100/+129   +130/+174   +175/+249       ≥+250         ROW
     ---------------------------------------------------------------------------------------------------------------------------
-    [0.000, 0.010)            ·       +0.71       -1.85       -4.08      +10.06       +3.93           ·           ·       +8.77
-    [0.010, 0.020)        +0.36       -0.40      +15.29       +8.57       +4.16       +5.31           ·           ·      +33.29
-    [0.020, 0.030)        +0.79       +2.15       -5.80       +0.27       -2.68       -3.00           ·           ·       -8.27
-    [0.030, 0.050)        +0.78       +4.23       +9.21       -2.01       +0.37           ·           ·           ·      +12.57
-    [0.050, inf)          +2.31       -0.03       +0.17       +0.82           ·           ·           ·           ·       +3.28
-    COLUMN                +4.24       +6.65      +17.03       +3.57      +11.91       +6.24           ·           ·      +49.64
+    [0.000, 0.010)            ·       +1.20       +4.36       -4.94       +8.23       +5.66           ·           ·      +14.51
+    [0.010, 0.020)        +0.36       -0.32      +12.01       +8.44       +6.40       +4.31           ·           ·      +31.20
+    [0.020, 0.030)        +0.79       +2.52       -0.16       +4.04       +0.27       -2.00           ·           ·       +5.46
+    [0.030, 0.050)        +0.78       +4.28       +3.92       -1.19       +0.46           ·           ·           ·       +8.25
+    [0.050, inf)          +2.31       -0.03       +1.42           ·           ·           ·           ·           ·       +3.70
+    COLUMN                +4.24       +7.65      +21.55       +6.34      +15.36       +7.97           ·           ·      +63.11
   beat its own price (pp +- se)
     |delta|               ≤-250   -249/-175   -174/-130   -129/-100   +100/+129   +130/+174   +175/+249       ≥+250         ROW
     ---------------------------------------------------------------------------------------------------------------------------
-    [0.000, 0.010)            ·       +8±18        -0±8        -3±7       +16±9      +15±15           ·           ·        +4±4
-    [0.010, 0.020)       +28±45       +1±11       +22±7       +11±7      +12±11      +31±19           ·           ·       +15±4
-    [0.020, 0.030)       +30±32       +9±10        -6±8        +2±9      -17±19      -39±28           ·           ·        -2±5
-    [0.030, 0.050)       +13±19       +11±8       +15±8       -6±13       +4±25           ·           ·           ·       +10±5
-    [0.050, inf)         +19±13       +2±12       +3±17      +46±50           ·           ·           ·           ·        +9±8
-    COLUMN               +19±10        +7±5        +8±4        +3±4       +10±6      +13±11           ·           ·        +7±2
-  best-cell reference: the best of these 26 non-empty cells averages +40.5 pp of excess under 'every game settles at its own price'; the observed best is +46.0 pp, |delta| [0.050, inf) -129 to -100 (n=1) -- ABOVE it, which a search returns about half the time under no effect, so it is not a finding either. A grid is a search, so a cell is read against that reference, never against zero.
-  pooled over all 524 rows: 329-195 (0.628)   excess +7.1 +- 2.1 pp   +49.64u. The margins are better estimated than any cell; read them first.
+    [0.000, 0.010)            ·      +11±17        +9±8        -4±7       +13±8      +17±13           ·           ·        +6±4
+    [0.010, 0.020)       +28±45       +1±11       +18±7       +10±7      +15±10      +22±17           ·           ·       +13±4
+    [0.020, 0.030)       +30±32      +10±11        +2±8        +9±9       +3±20      -39±35           ·           ·        +5±5
+    [0.030, 0.050)       +13±19       +11±8        +8±8       -2±12       +5±25           ·           ·           ·        +7±5
+    [0.050, inf)         +19±13       +2±12      +10±15           ·           ·           ·           ·           ·        +9±8
+    COLUMN               +19±10        +7±5        +9±4        +4±4       +12±6      +14±10           ·           ·        +8±2
+  best-cell reference: the best of these 25 non-empty cells averages +35.6 pp of excess under 'every game settles at its own price'; the observed best is +29.5 pp, |delta| [0.020, 0.030) ≤ -250 (n=2) -- at or below it. A grid is a search, so a cell is read against that reference, never against zero.
+  pooled over all 524 rows: 335-189 (0.639)   excess +8.4 +- 2.1 pp   +63.11u. The margins are better estimated than any cell; read them first.
 v13 dynamic-price calibration SHADOW — retrospective (M0=10, hurdle +1.5pp)
   rule — fixed 5x4 |delta| x market-q cells; p_hat=(W+10*qbar)/(n+10); QUALIFY when p_hat - posted breakeven >= 1.5pp.
   state — one expanding stream from the earliest usable v13-represented slate; same-date games share a frozen prior state and are appended only after the slate.
   basis — 524 usable rows over 41 slates (2026-08-15..2026-09-24): 524 reconstructed + 0 native v13; the native boundary does NOT reset n.
   price basis — leaned-side CLOSING devigged q for cell/prior; leaned-side posted closing ML for executable breakeven and flat-stake return. No saved-pregame fallback.
   INTERPRETATION — descriptive shadow only. Reconstructed v13 is mixed-basis hindsight and close is not the execution snapshot; nothing here changes the model or a ledger decision.
-  all v13 leans     n=524  329-195 (0.628)  +49.64u  ROI +9.5%  mean p_hat 0.612  mean BE 0.576  mean edge +3.6pp
-  QUALIFY           n=305  187-118 (0.613)  +26.22u  ROI +8.6%  mean p_hat 0.655  mean BE 0.569  mean edge +8.6pp
-  ABSTAIN           n=219  142-77 (0.648)  counterfactual +23.43u  ROI +10.7%  mean p_hat 0.551  mean BE 0.586  mean edge -3.4pp
-  probability diagnostics (all rows): Brier 0.2374  log loss 0.6681
+  all v13 leans     n=524  335-189 (0.639)  +63.11u  ROI +12.0%  mean p_hat 0.603  mean BE 0.574  mean edge +2.9pp
+  QUALIFY           n=314  187-127 (0.596)  +20.39u  ROI +6.5%  mean p_hat 0.629  mean BE 0.562  mean edge +6.7pp
+  ABSTAIN           n=210  148-62 (0.705)  counterfactual +42.72u  ROI +20.3%  mean p_hat 0.565  mean BE 0.592  mean edge -2.6pp
+  probability diagnostics (all rows): Brier 0.2371  log loss 0.6675
   closing-market baseline (same 524 rows): Brier 0.2332  log loss 0.6587
-  shadow minus market loss: Brier +0.0042  log loss +0.0095; negative is better. Descriptive probability scores, not a significance test.
+  shadow minus market loss: Brier +0.0039  log loss +0.0089; negative is better. Descriptive probability scores, not a significance test.
   basis split (QUALIFY performance; both use the same continuously accumulated cell state):
-    reconstructed: n=524, QUALIFY 305  187-118  +26.22u (+8.6% ROI)
+    reconstructed: n=524, QUALIFY 314  187-127  +20.39u (+6.5% ROI)
     native: n=0
   QUALIFY / total by fixed cell:
                      q<.450   .450-.500   .500-.550      .550+
-    [0.000,0.010)      10/18      35/39      27/46      14/44 
-    [0.010,0.020)       4/16      14/17      29/39      61/66 
-    [0.020,0.030)       1/5        1/13      19/26       7/61 
-    [0.030,0.050)       0/1        0/4        2/15      61/79 
-    [0.050,+)           0/0        0/0        0/1       20/34 
+    [0.000,0.010)       9/25      28/35      13/40      27/42 
+    [0.010,0.020)       5/17      21/23      25/42      52/65 
+    [0.020,0.030)       0/2       10/13      27/28      28/59 
+    [0.030,0.050)       1/2        0/3        7/16      37/76 
+    [0.050,+)           0/0        0/0        0/0       24/36 
 xwOBA F5 by |Δ| tercile:
   low  83-75-17  (0.525)   (Δ 0.000–0.012, n=175)
   mid  69-74-31  (0.483)   (Δ 0.012–0.026, n=174)
