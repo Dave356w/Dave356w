@@ -46,6 +46,7 @@ on:
       - 'lineup_window_collect.py'
       - 'hitter_level_probe.py'
       - 'lineup_agg_probe.py'
+      - 'pitcher_lineup_probe.py'
       - '.github/workflows/lineup-window-collect.yml'
   workflow_dispatch:
     inputs:
@@ -82,7 +83,8 @@ jobs:
         run: |
           python -m pytest tests/test_lineup_window_collect.py \
                            tests/test_hitter_level_probe.py \
-                           tests/test_lineup_agg_probe.py -q
+                           tests/test_lineup_agg_probe.py \
+                           tests/test_pitcher_lineup_probe.py -q
 
       - name: Collect
         run: |
@@ -125,6 +127,20 @@ jobs:
           set -o pipefail
           python lineup_agg_probe.py | tee lineup_agg_probe_report.txt
 
+      # The pitcher x lineup interaction: each hitter's stored rate against
+      # the starter the frame named, scored on that starter's PAs only. This
+      # is the question the per-hitter frames were stored to measure -- the
+      # ledger keeps only the log5 product, so whether hitter and starter
+      # combine multiplicatively (B*P/L) or additively is invisible there.
+      # Needs the collector's rows, so it is not `if: always()`.
+      - name: Score the pitcher x lineup interaction
+        run: |
+          set -o pipefail
+          python pitcher_lineup_probe.py \
+            --pa lineup_window_pa.csv \
+            --hitters data \
+            | tee pitcher_lineup_probe_report.txt
+
       - name: Confirm nothing was written to data/
         run: |
           if ! git diff --quiet -- data/; then
@@ -144,4 +160,5 @@ jobs:
             lineup_window_pa.csv
             hitter_level_probe_report.txt
             lineup_agg_probe_report.txt
+            pitcher_lineup_probe_report.txt
           if-no-files-found: warn
