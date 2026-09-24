@@ -48,6 +48,15 @@ on:
       - 'lineup_agg_probe.py'
       - 'pitcher_lineup_probe.py'
       - '.github/workflows/lineup-window-collect.yml'
+  # Daily, so each morning's run under Actions carries a fresh report without
+  # a manual dispatch. 11:23 UTC (7:23am ET) is after build.yml's 04:17 and
+  # 10:07 grading passes, which backfill the act_woba the collector's scope
+  # requires, and off the hour to dodge GitHub's top-of-hour cron congestion.
+  # A scheduled run has no `inputs`, so the date expression below is empty and
+  # the whole current family is collected. Still read-only: `contents: read`
+  # and the data/ check below apply to every trigger alike.
+  schedule:
+    - cron: '23 11 * * *'
   workflow_dispatch:
     inputs:
       date:
