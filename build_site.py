@@ -4942,7 +4942,7 @@ def _side_html(sp_abbr, d, league_baseline):
     xera_sub = (f"season {f2(d['era_season'])}"
                 if d.get("era_season") is not None else None)
     stats = (
-        _sp_stat_cell(f"{MODEL_RATE_LABEL} agn", d["pit_xw"], f3,
+        _sp_stat_cell(MODEL_RATE_LABEL, d["pit_xw"], f3,
                       f"lg {f3(lg['xwOBA'])}" if lg["xwOBA"] is not None else None,
                       heat=heat_style(d["pit_xw"], lg["xwOBA"], HEAT_DOMAINS["xwOBA_sp"]))
         + _sp_stat_cell("K-BB%", kbb, f1,

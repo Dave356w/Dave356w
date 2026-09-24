@@ -28,7 +28,13 @@ jobs:
     env:
       HISTORY_DIR: history_cache
     steps:
+      # The LATEST main, not the commit the dispatch was queued on. This job
+      # queues behind site-build; a checkout of the dispatch-time commit then
+      # rewrites the ledger from before the build it waited for. That is what
+      # the first run did on 2026-09-24, undoing the 19:44 build's rows.
       - uses: actions/checkout@v4
+        with:
+          ref: main
 
       - uses: actions/setup-python@v5
         with:
@@ -55,12 +61,20 @@ jobs:
 
       - name: Re-decide earlier rows under v14
         run: |
+          git fetch -q origin main
+          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" || {
+            echo "::error::main moved since checkout; refusing to write a stale ledger"
+            exit 1; }
           python reconstruct_v14_velocity.py --history "$HISTORY_DIR"
 
       - name: Commit ledger
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
+          git fetch -q origin main
+          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" || {
+            echo "::error::main moved during the migration; refusing to commit"
+            exit 1; }
           python validate_data_files.py
           python commit_data.py --branch main \
             --path data/mlb_lean_ledger.csv \

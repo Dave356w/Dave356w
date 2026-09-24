@@ -293,7 +293,7 @@ class TheBuildSaysWhetherItBlendedTests(unittest.TestCase):
 class TheCardPublishesTheBlendTests(unittest.TestCase):
     """The operator's call, 2026-09-18: the card shows the blended rate under
     the label it already had. So the claim under test is that the number in
-    the `<LABEL> agn` cell is the blend -- the label naming one metric over a
+    the `<LABEL>` cell is the blend -- the label naming one metric over a
     value that is a mixture of two is recorded in CLAUDE.md, not corrected
     here."""
 
@@ -323,7 +323,7 @@ class TheCardPublishesTheBlendTests(unittest.TestCase):
     def test_the_blended_rate_renders_in_the_cell_labelled_for_the_primary(self):
         _, games = self._cards()
         html = build_site._side_html("AAA", games[0]["away"], dict(LG))
-        label = f"{build_site.MODEL_RATE_LABEL} agn"
+        label = build_site.MODEL_RATE_LABEL
         self.assertIn(label, html)
         shown = build_site.f3(_expected(10))
         primary = build_site.f3((500 * SP[10][PRIMARY] + K * LG[PRIMARY]) / 600)
