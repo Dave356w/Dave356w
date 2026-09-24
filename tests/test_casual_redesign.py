@@ -743,7 +743,7 @@ class RenderTests(unittest.TestCase):
         self.assertIsNotNone(dist, "V13 price distribution missing")
         self.assertEqual(sum(r["n"] for r in dist["bands"]), ctx["n"])
         self.assertEqual(sum(r["native_n"] for r in dist["bands"]),
-                         ctx["native"]["n"])
+                         ctx["native"]["n"] if "native" in ctx else 0)
         h = b._verdict_html(
             "LAD", dict(p_home=.70, away_ml=200, home_ml=-260),
             "LAD", "ARI", ctx, .005)

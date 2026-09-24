@@ -452,6 +452,15 @@ def report_lines(led=None):
         f"  REGISTERED FORWARD ACCUMULATION — actual {BASE_MODEL_TAG}; "
         f"slates strictly after {REGISTERED_ON}"
     )
+    try:
+        from market_backfill import window_closed_line, window_is_closed
+        closed, now = window_is_closed(led, "model_tag", (BASE_MODEL_TAG,))
+        if closed:
+            out.append(window_closed_line(
+                f"the build now stamps {', '.join(map(str, now))}, not "
+                f"{BASE_MODEL_TAG}; the counts below are final."))
+    except Exception:  # noqa: BLE001 -- a closure note must not cost the report
+        pass
     g = forward_rows(led)
     if g is None:
         out.append("    ledger unavailable or missing columns -- forward not scored")
