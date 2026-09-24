@@ -189,6 +189,7 @@ class TestWorkflowsUseIt:
     @pytest.mark.parametrize("name,branch", [
         ("build.yml", "--branch main"),
         ("priors-snapshot.yml", "--branch \"${{ github.ref_name }}\""),
+        ("lineup-window-collect.yml", "--branch main"),
     ])
     def test_data_is_committed_through_the_signed_path(self, name, branch):
         text = self._workflow(name)
@@ -196,7 +197,8 @@ class TestWorkflowsUseIt:
         assert branch in text
         assert "GITHUB_TOKEN: ${{ github.token }}" in text
 
-    @pytest.mark.parametrize("name", ["build.yml", "priors-snapshot.yml"])
+    @pytest.mark.parametrize("name", ["build.yml", "priors-snapshot.yml",
+                                      "lineup-window-collect.yml"])
     def test_no_workflow_pushes_data_directly(self, name):
         """A second, unsigned commit path would quietly undo this."""
         lines = [ln.strip() for ln in self._workflow(name).splitlines()
@@ -207,9 +209,57 @@ class TestWorkflowsUseIt:
                 "unverified and bypasses commit_data.py"
             )
 
-    @pytest.mark.parametrize("name", ["build.yml", "priors-snapshot.yml"])
+    @pytest.mark.parametrize("name", ["build.yml", "priors-snapshot.yml",
+                                      "lineup-window-collect.yml"])
     def test_validation_still_precedes_the_commit(self, name):
         text = self._workflow(name)
         assert text.index("python validate_data_files.py") < text.index(
             "python commit_data.py"
         )
+
+
+class TestLineupReportPublish:
+    """The collect workflow may write exactly one file, from one job, on
+    main-branch family runs -- and must not queue in `site-build`, where a
+    pending run of its own could replace a pending build.
+
+    Text checks rather than a YAML parse: PyYAML is not in requirements.txt,
+    and the test job installs only that plus pytest.
+    """
+    ROOT = TestWorkflowsUseIt.ROOT
+
+    def _parts(self):
+        with open(os.path.join(self.ROOT, ".github", "workflows",
+                               "lineup-window-collect.yml"),
+                  encoding="utf-8") as fh:
+            text = fh.read()
+        code = "\n".join(ln for ln in text.splitlines()
+                         if not ln.strip().startswith("#"))
+        head, jobs = code.split("\njobs:\n", 1)
+        collect, publish = jobs.split("\n  publish:\n", 1)
+        return head, collect, publish
+
+    def test_collect_job_stays_read_only(self):
+        head, collect, _ = self._parts()
+        assert "permissions:\n  contents: read" in head
+        assert "permissions:" not in collect
+        assert "commit_data.py" not in collect
+
+    def test_publish_commits_only_the_report(self):
+        _, _, publish = self._parts()
+        assert "contents: write" in publish
+        assert "--path data/pitcher_lineup_report.txt" in publish
+        assert publish.count("commit_data.py") == 1
+
+    def test_publish_skips_pr_and_single_slate_runs(self):
+        _, _, publish = self._parts()
+        assert "needs: collect" in publish
+        assert "github.event_name != 'pull_request'" in publish
+        assert "refs/heads/main" in publish
+        assert "!inputs.date" in publish
+
+    def test_not_in_the_build_concurrency_group(self):
+        head, collect, publish = self._parts()
+        for part in (head, collect, publish):
+            assert "concurrency:" not in part
+            assert "site-build" not in part

@@ -35,10 +35,13 @@ name: Lineup window collect
 # score before reporting any rate: a mis-mapped eventType is the failure that
 # would otherwise be silent.
 #
-# READ-ONLY, and `contents: read` makes that structural: data/ belongs to the
-# Actions bot's build job. The output leaves as an artifact, never a commit.
+# The COLLECT job is read-only, and `contents: read` makes that structural:
+# data/ belongs to the Actions bot's build job, and the collector's outputs
+# leave as an artifact. The one exception is the separate `publish` job below,
+# which commits exactly one file -- data/pitcher_lineup_report.txt -- on
+# main-branch family runs, so the latest report is kept in the repo.
 #
-# Deliberately outside the `site-build` concurrency group -- it never writes to
+# Deliberately outside the `site-build` concurrency group -- the collector never writes to
 # data/, so it has no reason to queue behind a build.
 on:
   pull_request:
@@ -53,8 +56,8 @@ on:
   # 10:07 grading passes, which backfill the act_woba the collector's scope
   # requires, and off the hour to dodge GitHub's top-of-hour cron congestion.
   # A scheduled run has no `inputs`, so the date expression below is empty and
-  # the whole current family is collected. Still read-only: `contents: read`
-  # and the data/ check below apply to every trigger alike.
+  # the whole current family is collected, and `publish`
+  # stores the report under data/.
   schedule:
     - cron: '23 11 * * *'
   workflow_dispatch:
@@ -171,3 +174,68 @@ jobs:
             lineup_agg_probe_report.txt
             pitcher_lineup_probe_report.txt
           if-no-files-found: warn
+
+  # Stores the pitcher x lineup report at data/pitcher_lineup_report.txt so the
+  # latest coefficients live beside ledger_report.txt instead of only in a
+  # 90-day artifact. A separate job so `collect` keeps `contents: read` and its
+  # data/-untouched check: only this short job can write, and only one file.
+  #
+  # Main-branch family runs only. A PR run is from a branch whose code is not
+  # yet merged, and a one-slate dispatch would overwrite the whole-family
+  # report with a single slate's.
+  #
+  # NOT in the `site-build` concurrency group, deliberately. GitHub keeps one
+  # pending run per group and replaces it, so queuing here could evict a
+  # pending build. It is also unnecessary: commit_data's API path pins
+  # expectedHeadOid and retries when main moves, refusing only if the new
+  # commit wrote this same file -- and nothing else writes it.
+  publish:
+    needs: collect
+    if: >-
+      github.event_name != 'pull_request' &&
+      github.ref == 'refs/heads/main' &&
+      !inputs.date
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # commit_data needs only requests; validate_data_files is stdlib. The
+      # full requirements are not installed because nothing here computes.
+      - name: Install commit dependency
+        run: python -m pip install requests
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: lineup-window-collect
+          path: collect-out
+
+      # The header names the run that produced the numbers, so a stale file
+      # (a skipped or failed day) is recognisable from its own contents.
+      - name: Store the report under data/
+        run: |
+          set -euo pipefail
+          src=collect-out/pitcher_lineup_probe_report.txt
+          test -s "$src"
+          {
+            echo "# generated $(date -u +%FT%H:%MZ) by lineup-window-collect"
+            echo "# run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            echo "# diagnostic only -- nothing here reaches a lean, delta or grade"
+            echo
+            cat "$src"
+          } > data/pitcher_lineup_report.txt
+
+      - name: Commit the report
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python validate_data_files.py
+          python commit_data.py --branch main \
+            --path data/pitcher_lineup_report.txt \
+            --message "pitcher x lineup report $(date -u +%FT%H:%MZ)"
