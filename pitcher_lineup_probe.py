@@ -32,18 +32,22 @@ from the data.
 
 WHAT THE SAMPLE CAN AND CANNOT RESOLVE, stated before any run so a reader does
 not wait on the wrong column. The interaction's regressor is small: with `b`
-and `p` each spread about 0.03, `b*p` is spread about 0.001, against a single
-PA's wOBA spread of about 0.5. Its standard error is therefore roughly
+and `p` each spread 0.02-0.03, `b*p` is spread well under 0.001, against a
+single PA's wOBA spread of about 0.5. Its unclustered standard error is roughly
 
-    se(beta_bp) ~ 0.5 / (0.001 * sqrt(N_PA))
+    se(beta_bp) ~ 0.5 / (sd(b*p) * sqrt(N_PA))
 
-which is ~3.5 at 20,000 PAs -- the size of the effect being tested. The main
-effects are about thirty times better determined at the same N. So the
-readable results arrive in order: `beta_p` and `beta_b` within weeks, the
-interaction only after several seasons of PAs. The report prints the PA count
-at which the interaction's |z| would reach 2 if log5 were exactly right,
-scaled from the run's OWN standard error rather than from this paragraph. A
-null interaction before that count is "not yet resolved", never "additive".
+and clustering by hitter and starter inflates it further. Dated scale check,
+not a result: the first live run (2026-09-24, 5,685 starter PAs) measured
+sd(b*p) 0.0006 and se(beta_bp) 13.4 -- about four times the 1/L being tested
+-- which puts a readable interaction near 400,000 PAs, several seasons. The
+main effects' SEs were about 0.3 on the same rows. So the readable results
+arrive in order: `beta_p` and `beta_b` first, the interaction much later. The
+report prints the PA count at which the interaction's |z| would reach 2 if
+log5 were exactly right, scaled from the run's OWN standard error rather than
+from this paragraph. A null interaction before that count is "not yet
+resolved", never "additive"; a large point estimate before it is noise-sized
+too.
 
 WHY THE STARTER'S PAs ONLY. `vs_starter` from `lineup_window_collect.py` marks
 the PAs thrown by the pitcher who actually started. The frame names the pitcher
