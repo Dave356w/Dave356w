@@ -235,6 +235,20 @@ Each note below is the delta that version introduced, kept for provenance —
 ledger rows are immutable and a row's `model_tag` is only interpretable against
 the version note that produced it.
 
+### v14 — starter fastball velocity trend (`xw+starter_velo_v14`)
+
+v13 plus one term on the starter rate (`starter_velocity.py`):
+`rate += BETA_V × dv`, where `dv` is the starter's fastball (FF/SI) velocity
+in his last start minus the fastball-weighted mean of his earlier starts this
+season, known before first pitch. `BETA_V = −0.00467` per mph, fitted on
+2023–2025 Statcast only (`research/velocity_trend.py`). No trend (fewer than
+three prior starts, a thin last start, or a failed Savant fetch) means no
+adjustment. The card shows each starter's last-start velocity and its change.
+
+Shares the v12/v13 record line. Every earlier row is re-decided under v14 into
+`velo_*_recon` (`reconstruct_v14_velocity.py`, run by the
+`velocity-migration.yml` workflow); original pregame columns are untouched.
+
 ### v12 — expected starter IP calibrated against its own actuals
 
 `expected_pitcher_ip` is **over-dispersed**. Regressing actual starter IP on the

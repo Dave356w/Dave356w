@@ -1,0 +1,67 @@
+name: v14 velocity re-decision
+
+# Writes the v14 (starter velocity) re-decision of every earlier record-family
+# row into the ledger's velo_*_recon columns -- reconstruct_v14_velocity.py.
+# The originals (xw_*, grades, markets) are asserted unchanged; only those
+# cells are written, so a re-run is safe and simply refreshes them.
+#
+# Needs Savant for each season's starter velocities, which the dev sandbox
+# cannot reach. Reuses the history-studies cache so completed seasons are not
+# re-fetched.
+#
+# WRITES data/, so it joins `site-build` exactly as priors-snapshot does:
+# one ledger writer at a time, queued, never cancelled.
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: site-build
+  cancel-in-progress: false
+
+permissions:
+  contents: write          # commit the ledger's velo_*_recon columns
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      HISTORY_DIR: history_cache
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pybaseball
+
+      - name: Restore reduced Statcast tables
+        uses: actions/cache@v4
+        with:
+          path: history_cache
+          key: history-${{ hashFiles('research/statcast_history.py') }}-${{ github.run_id }}
+          restore-keys: |
+            history-${{ hashFiles('research/statcast_history.py') }}-
+
+      - name: Fetch the current season through yesterday
+        run: |
+          python research/statcast_history.py --seasons "$(date -u +%Y)" \
+            --out "$HISTORY_DIR" --end "$(date -u -d yesterday +%F)"
+
+      - name: Re-decide earlier rows under v14
+        run: |
+          python reconstruct_v14_velocity.py --history "$HISTORY_DIR"
+
+      - name: Commit ledger
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python validate_data_files.py
+          python commit_data.py --branch main \
+            --path data/mlb_lean_ledger.csv \
+            --message "v14 velocity re-decision $(date -u +%FT%H:%MZ)"

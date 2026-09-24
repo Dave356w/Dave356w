@@ -51,7 +51,7 @@ def _num(d, col):
 # is read off the module that stamps it, so the next lineage rename carries
 # the gate forward; retired stems are listed because no module still names
 # them, and an unlisted stem is still a typo or an injected tag.
-_RETIRED_TAG_STEMS = ("plat_consol",)
+_RETIRED_TAG_STEMS = ("plat_consol", "starter_blend")
 
 
 def _known_tag_stems():

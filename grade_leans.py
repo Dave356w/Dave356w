@@ -63,7 +63,8 @@ import pandas as pd
 import requests
 
 from market_backfill import (MARKET_COLS, ODDS_LADDER, V13_RECON_COLS,
-                             V13_RECON_TEXT_COLS, attach_market,
+                             V13_RECON_TEXT_COLS, VELO_RECON_COLS,
+                             VELO_RECON_TEXT_COLS, attach_market,
                              breakeven_prob, chalk_is_home, ev_null, excess_se,
                              is_pickem, ladder_rung, metric_label,
                              publish_reconstruction,
@@ -82,7 +83,7 @@ LEDGER_PATH = os.path.join(DATA_DIR, "mlb_lean_ledger.csv")
 # happens here, at the single writer, rather than in every reader.
 POSTSEASON_LEDGER_PATH = os.path.join(DATA_DIR, season_phase.POSTSEASON_LEDGER_NAME)
 REPORT_PATH = os.path.join(DATA_DIR, "ledger_report.txt")
-MODEL_TAG   = os.environ.get("MODEL_TAG", "xw+starter_blend_v13")
+MODEL_TAG   = os.environ.get("MODEL_TAG", "xw+starter_velo_v14")
 MODEL_METRIC_LABEL = os.environ.get(
     "MODEL_METRIC_LABEL",
     "wOBA" if MODEL_TAG.startswith("woba+") else "xwOBA",
@@ -143,6 +144,11 @@ _RECORD_FAMILIES = {
     # share here, and what the retained rows cost in provenance -- lives
     # there, beside the model that produces the rows.
     "xw+starter_blend_v13": ("xw+plat_consol_v12", "xw+starter_blend_v13"),
+    # v14 adds the starter velocity term (starter_velocity.py) and SHARES
+    # the v12/v13 record line on the operator's call: every earlier row is
+    # re-decided under v14 (velo_*_recon), so the line stays one model's.
+    "xw+starter_velo_v14": ("xw+plat_consol_v12", "xw+starter_blend_v13",
+                             "xw+starter_velo_v14"),
 }
 RECORD_TAGS = tuple(
     t.strip() for t in os.environ.get(
@@ -166,6 +172,7 @@ MODEL_FAMILY_TAGS = (
     ("v11", ("xw+plat_consol_v11",)),
     ("v12", ("xw+plat_consol_v12",)),
     ("v13 starter blend", ("xw+starter_blend_v13",)),
+    ("v14 starter velocity", ("xw+starter_velo_v14",)),
 )
 # Numerical floor on the weight fit, NOT an evidence threshold. It was 120,
 # chosen to suppress a ratio that is unreadable at small n; the ratio is gone
@@ -313,6 +320,14 @@ AUDIT_COLS = [
     # v13 recon columns: those shift one place right, every relative order is
     # unchanged, and all ledger readers select by name. See season_phase.py.
     "game_type",
+    # v14 starter velocity term (starter_velocity.py): the pregame fastball
+    # velocity change applied to each starter's rate, the two velocities it
+    # came from, and the rate before the term. NaN on pre-v14 rows (their
+    # re-decision lives in the velo_*_recon columns instead).
+    "sp_velo_dv_away", "sp_velo_dv_home",
+    "sp_velo_last_away", "sp_velo_last_home",
+    "sp_velo_base_away", "sp_velo_base_home",
+    "starter_xwoba_prevelo_away", "starter_xwoba_prevelo_home",
 ]
 MODEL_FIELDS = [
     "game_date","away","home","away_sp","home_sp","model_tag","model_metric",
@@ -334,6 +349,10 @@ MODEL_FIELDS = [
     "sp_rate_basis_away","sp_rate_basis_home",
     "sp_rate_bf_away","sp_rate_bf_home",
     "starter_xwoba_away","starter_xwoba_home",
+    "sp_velo_dv_away","sp_velo_dv_home",
+    "sp_velo_last_away","sp_velo_last_home",
+    "sp_velo_base_away","sp_velo_base_home",
+    "starter_xwoba_prevelo_away","starter_xwoba_prevelo_home",
     "bullpen_xwoba_away","bullpen_xwoba_home",
     "expected_sp_ip_away","expected_sp_ip_home",
     "expected_sp_ip_raw_away","expected_sp_ip_raw_home",
@@ -384,7 +403,8 @@ def load_ledger(include_held=False):
         # so a column this module has never heard of does not survive one
         # bot ledger commit. That is the whole failure, and it is the writer's
         # to fix rather than the migration's to repeat.
-        carried = [c for c in V13_RECON_COLS if c in led.columns]
+        carried = [c for c in V13_RECON_COLS + VELO_RECON_COLS
+                   if c in led.columns]
         persisted_cols = list(dict.fromkeys(
             LEDGER_COLS + MARKET_COLS + AUDIT_COLS + ACTUAL_COLS + carried
         ))
@@ -417,7 +437,7 @@ def load_ledger(include_held=False):
                   "sp_rate_basis_away", "sp_rate_basis_home",
                   "game_type"):
             led[c] = led[c].astype(object)
-        for c in V13_RECON_TEXT_COLS:
+        for c in V13_RECON_TEXT_COLS + VELO_RECON_TEXT_COLS:
             if c in led.columns:
                 led[c] = led[c].astype(object)
         return led
@@ -577,6 +597,14 @@ def rows_from_dump(xw_df, pl_df):
             sp_rate_bf_home=h.get("starter_rate_bf", np.nan),
             starter_xwoba_away=a.get("starter_xwOBA", np.nan),
             starter_xwoba_home=h.get("starter_xwOBA", np.nan),
+            sp_velo_dv_away=a.get("starter_velo_dv", np.nan),
+            sp_velo_dv_home=h.get("starter_velo_dv", np.nan),
+            sp_velo_last_away=a.get("starter_velo_last", np.nan),
+            sp_velo_last_home=h.get("starter_velo_last", np.nan),
+            sp_velo_base_away=a.get("starter_velo_base", np.nan),
+            sp_velo_base_home=h.get("starter_velo_base", np.nan),
+            starter_xwoba_prevelo_away=a.get("starter_rate_prevelo", np.nan),
+            starter_xwoba_prevelo_home=h.get("starter_rate_prevelo", np.nan),
             bullpen_xwoba_away=a.get("bullpen_xwOBA", np.nan),
             bullpen_xwoba_home=h.get("bullpen_xwOBA", np.nan),
             expected_sp_ip_away=a.get("expected_sp_ip", np.nan),
@@ -1974,12 +2002,15 @@ def _published_basis_lines(g):
     if g is None or not len(g) or "model_tag" not in getattr(g, "columns", ()):
         return []
     retained = g[~g["model_tag"].astype(str).eq(MODEL_TAG)]
-    if retained.empty or "v13_lean_recon" not in g.columns:
+    if retained.empty:
         return []
-    n_rebuilt = int(retained["v13_lean_recon"].notna().sum())
-    if not n_rebuilt:
-        return []
+    n_rebuilt = len(retained)
+    pub = publish_reconstruction(g, MODEL_TAG)
+    pw = int(pub["xw_full"].eq("W").sum()) if pub is not None and len(pub) else 0
+    pl = int(pub["xw_full"].eq("L").sum()) if pub is not None and len(pub) else 0
     return [
+        f"  PUBLISHED ({MODEL_TAG}, every retained row re-decided with the "
+        f"starter velocity term): {pw}-{pl}",
         f"  BASIS: {n_rebuilt} of these {len(g)} rows were published under an "
         f"earlier tag and are scored ABOVE on their own pregame lean.",
         "  The public pages re-decide those rows under the current model and "

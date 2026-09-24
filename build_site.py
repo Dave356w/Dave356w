@@ -51,6 +51,7 @@ from market_backfill import (ODDS_LADDER as _mb_odds_ladder,
                              is_pickem as _mb_is_pickem,
                              ladder_rung as _mb_ladder_rung,
                              publish_reconstruction as _mb_publish_reconstruction,
+                             V14_NATIVE_EQUIVALENT as _mb_v14_native_equivalent,
                              recon_grade as _mb_recon_grade,
                              recon_grades as _mb_recon_grades,
                              breakeven_prob as _mb_breakeven_prob)
@@ -58,6 +59,7 @@ import requests
 
 import hitter_frame
 import hybrid_v2
+import starter_velocity as _sv
 import pitch_arsenal
 import player_priors
 import season_phase
@@ -173,7 +175,7 @@ LEDGER_PATH = os.path.join(DATA_DIR, "mlb_lean_ledger.csv")
 # Postseason and type-unconfirmed rows. Read ONLY by the pregame lock lookup;
 # every record, calibration and page is regular season. See season_phase.py.
 POSTSEASON_LEDGER_PATH = os.path.join(DATA_DIR, season_phase.POSTSEASON_LEDGER_NAME)
-MODEL_TAG = os.environ.get("MODEL_TAG", "xw+starter_blend_v13")  # keep in sync with grade_leans.py
+MODEL_TAG = os.environ.get("MODEL_TAG", "xw+starter_velo_v14")  # keep in sync with grade_leans.py
 if not MODEL_TAG.startswith("xw+"):
     raise RuntimeError(
         "This build fetches Savant xwOBA; refusing to stamp it with a non-xwOBA MODEL_TAG"
@@ -388,6 +390,11 @@ _RECORD_FAMILIES = {
     # the mixed-basis defect this file records on the ML column, with the
     # mixture in the outcome rather than in the price.
     "xw+starter_blend_v13": ("xw+plat_consol_v12", "xw+starter_blend_v13"),
+    # v14 adds the starter velocity term (starter_velocity.py) and SHARES
+    # the v12/v13 record line on the operator's call: every earlier row is
+    # re-decided under v14 (velo_*_recon), so the line stays one model's.
+    "xw+starter_velo_v14": ("xw+plat_consol_v12", "xw+starter_blend_v13",
+                             "xw+starter_velo_v14"),
 }
 RECORD_TAGS = tuple(
     t.strip() for t in os.environ.get(
@@ -523,7 +530,10 @@ _SCALE_FAMILIES = {
     # a v13 row scored under them is a different statistic under the same
     # constant. Those registrations are bounded to their own families at their
     # own call sites rather than being left to accrue v13 rows silently.
-    "xw+starter_blend_v13": ("xw+starter_blend_v13",),
+    "xw+starter_blend_v13": ("xw+starter_blend_v13", "xw+starter_velo_v14"),
+    # v14 moves each starter rate by at most a few thousandths of wOBA
+    # (BETA_V * dv, sd(dv) ~0.7 mph); same units and spread as v13.
+    "xw+starter_velo_v14": ("xw+starter_blend_v13", "xw+starter_velo_v14"),
     # wOBA has a different sampling distribution from xwOBA, so it cannot
     # share magnitude cutoffs with any xwOBA lineage.
     # v2 changes the centre of the starter platoon prior but retains observed
@@ -1009,6 +1019,64 @@ def load_pitcher_xera():
         if v is not None:
             out[pid] = v
     log(f"  xERA leaderboard: {len(out)} pitchers (col '{col}')")
+    return out
+
+
+# v14 velocity term. Per-pitcher Statcast search, the URL pattern pybaseball's
+# `statcast_pitcher` uses; reduced to one row per start and cached per slate
+# day so the hourly builds fetch each probable once.
+_SAVANT_PITCHER_URL = (
+    "https://baseballsavant.mlb.com/statcast_search/csv?all=true&hfPT=&hfAB="
+    "&hfBBT=&hfPR=&hfZ=&stadium=&hfBBL=&hfNewZones=&hfGT=R%7C&hfSea=&hfSit="
+    "&player_type=pitcher&hfOuts=&opponent=&pitcher_throws=&batter_stands="
+    "&hfSA=&game_date_gt={start}&game_date_lt={end}&pitchers_lookup%5B%5D={pid}"
+    "&team=&position=&hfRO=&home_road=&hfFlag=&metric_1=&hfInn=&min_pitches=0"
+    "&min_results=0&group_by=name&sort_col=pitches&player_event_sort=h_launch_speed"
+    "&sort_order=desc&min_abs=0&type=details&")
+USE_VELOCITY = os.environ.get("USE_VELOCITY", "1") != "0"
+VELOCITY_BUDGET_S = 240.0
+
+
+def load_starter_velocity(ids, before_date=None):
+    """{player_id: starter_velocity.pregame_trend(...)} for tonight's probables.
+
+    Fail-soft by design: a pitcher whose fetch fails, or the whole loader
+    once the time budget runs out, simply gets no dv -- and no dv means the
+    v13 rate, unadjusted. A velocity outage must never cost a slate.
+    """
+    before = str(before_date or SLATE_DATE)[:10]
+    out = {}
+    if not USE_VELOCITY:
+        return out
+    start = f"{before[:4]}-03-01"
+    end = (pd.Timestamp(before) - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+    t0 = time.monotonic()
+    failed = 0
+    for pid in sorted({int(i) for i in ids if pd.notna(i)}):
+        if time.monotonic() - t0 > VELOCITY_BUDGET_S:
+            log(f"  velocity: time budget reached; {len(out)} pitchers loaded")
+            break
+        path = os.path.join(CACHE_DIR, f"savant_cache_velo_{pid}_{SLATE_DATE}.csv")
+        try:
+            if os.path.exists(path):
+                starts = pd.read_csv(path)
+            else:
+                r = session.get(_SAVANT_PITCHER_URL.format(start=start, end=end, pid=pid),
+                                timeout=30)
+                r.raise_for_status()
+                raw = pd.read_csv(io.StringIO(r.text)) if r.text.strip() else pd.DataFrame()
+                starts = _sv.per_start(raw)
+                try:
+                    os.makedirs(CACHE_DIR, exist_ok=True)
+                    starts.to_csv(path, index=False)
+                except Exception:  # noqa: BLE001
+                    pass
+            out[pid] = _sv.pregame_trend(starts, before)
+        except Exception:  # noqa: BLE001
+            failed += 1
+    n_dv = sum(1 for v in out.values() if v.get("dv") is not None)
+    log(f"  velocity: {len(out)} pitchers, {n_dv} with a pregame trend"
+        + (f", {failed} fetches failed" if failed else ""))
     return out
 
 
@@ -2238,6 +2306,9 @@ class LiveDataProvider:
     def load_pitcher_xera(self):
         return load_pitcher_xera()
 
+    def load_starter_velocity(self, ids):
+        return load_starter_velocity(ids, before_date=self.slate_date)
+
 
 def fetch_all(slate_date, provider=None, calibration_history=None,
               include_platoon=True, write_audit=True):
@@ -2487,6 +2558,22 @@ def fetch_all(slate_date, provider=None, calibration_history=None,
             lambda r: xera_map.get(int(r["player_id"]), np.nan)
             if r.get("Pos.") == "P" and pd.notna(r.get("player_id")) else np.nan,
             axis=1)
+        # v14: each probable's fastball velocity trend. A provider without the
+        # method (a replay seam, a test double) yields no trend, which is the
+        # v13 rate -- never an error.
+        _velo_fn = getattr(provider, "load_starter_velocity", None)
+        try:
+            velo_map = _velo_fn(prob_ids) if _velo_fn else {}
+        except Exception as e:  # noqa: BLE001
+            log(f"  velocity unavailable ({e!r}); starters unadjusted")
+            velo_map = {}
+        for _k, _col in (("dv", "velo_dv"), ("velo_last", "velo_last"),
+                         ("velo_base", "velo_base"), ("n_starts", "velo_starts")):
+            pitchers_df[_col] = pitchers_df.apply(
+                lambda r, _k=_k: (velo_map.get(int(r["player_id"]), {}).get(_k)
+                                  if r.get("Pos.") == "P" and pd.notna(r.get("player_id"))
+                                  else None),
+                axis=1)
 
     side_status = pd.concat([lineup_projection_df["away_lineup_status"].rename("status"),
                              lineup_projection_df["home_lineup_status"].rename("status")],
@@ -3601,6 +3688,17 @@ def build_matchup(P, agg, rate_cols, league_baseline, shrink_prior=None, shrink_
                     _bv is not None and pd.notna(_bv)
                     and pd.notna(_pv_primary)
                     and pd.notna(league_baseline.get(BLEND_RATE_INTERNAL_COL)))
+                # v14: the starter's fastball velocity trend. No trend -> the
+                # v13 rate unchanged (see starter_velocity). The pre-velocity
+                # rate is kept so the adjustment is auditable from the dump.
+                _dv = _f(pr.get("velo_dv"))
+                rec["starter_rate_prevelo"] = float(pv) if pd.notna(pv) else np.nan
+                rec["starter_velo_dv"] = _dv if _dv is not None else np.nan
+                rec["starter_velo_last"] = _f(pr.get("velo_last"))
+                rec["starter_velo_base"] = _f(pr.get("velo_base"))
+                rec["starter_velo_starts"] = _f(pr.get("velo_starts"))
+                if pd.notna(pv):
+                    pv = _sv.adjust(pv, _dv)
             ov = a.get(f"opp_{c}")
             if c == XWOBA_SHRINK_COL:
                 neutral = a.get("opp_xwOBA_neutral")
@@ -4322,7 +4420,8 @@ HEAT_ALPHA_MAX = 0.30
 # roughly still in calibration. Display-only, no MODEL_TAG implication. Widen
 # xwOBA_sp only off a real wOBA sample, not off this one.
 HEAT_DOMAINS = {"xwOBA_sp": 0.035, "K-BB%": 7.0,
-                "OPS": 0.080, "ERA": 1.50, "xwOBA_bat": 0.045}
+                "OPS": 0.080, "ERA": 1.50, "xwOBA_bat": 0.045,
+                "velo_dv": 1.5}
 
 
 def heat_style(val, lg, domain, hi="warm"):
@@ -4791,6 +4890,26 @@ def _sp_stat_cell(lab, val, fmt, sub=None, heat=""):
             f"<div class='v'>{fmt(val)}</div>{s}</div>")
 
 
+def _velo_cell(d):
+    """Last start's fastball velocity and its change against the season's
+    earlier starts -- the v14 input, shown on the card that it moves.
+
+    Up is good for the pitcher (cool), down is good for the hitters (warm),
+    matching the card's other tints. With too few starts for a trend the
+    cell still shows the velocity and says so, rather than a zero.
+    """
+    last, dv = _f(d.get("velo_last")), _f(d.get("velo_dv"))
+    if dv is None:
+        sub = "no trend yet" if last is not None else None
+        heat = ""
+    else:
+        arrow = "▲" if dv > 0.05 else "▼" if dv < -0.05 else "•"
+        sub = f"{arrow} {dv:+.1f} vs season"
+        heat = heat_style(-dv, 0.0, HEAT_DOMAINS["velo_dv"])
+    return _sp_stat_cell("FB mph", last,
+                         lambda v: "—" if v is None else f"{v:.1f}", sub, heat=heat)
+
+
 def _side_html(sp_abbr, d, league_baseline):
     badge = f"<span class='hand'>{d['t']}HP</span>" if d["t"] in ("L", "R") else ""
     has_fullgame = "bullpen_sequential" in str(d.get("pitching_basis") or "")
@@ -4830,7 +4949,8 @@ def _side_html(sp_abbr, d, league_baseline):
                         f"lg {f1(lg_kbb)}" if lg_kbb is not None else None,
                         heat=heat_style(kbb, lg_kbb, HEAT_DOMAINS["K-BB%"], hi="cool"))
         + _sp_stat_cell("xERA", d.get("xera"), f2, xera_sub,
-                        heat=heat_style(d.get("xera"), lg["ERA"], HEAT_DOMAINS["ERA"])))
+                        heat=heat_style(d.get("xera"), lg["ERA"], HEAT_DOMAINS["ERA"]))
+        + _velo_cell(d))
     tier_lab, tier_cls = _tier_word(d.get("pit_xw_pctile"))
     tier = f"<span class='tier {tier_cls}'>{tier_lab}</span>" if tier_lab else ""
     bars = (f"<div class='spct'><span class='lab'>{MODEL_RATE_LABEL}</span>{_pct_bar(d.get('pit_xw_pctile'), 'p')}</div>"
@@ -5289,6 +5409,9 @@ _FROZEN_SIDE_COLS = (
     ("platoon_delta_sp", "platoon_delta_sp"),
     ("starter_rate_basis", "sp_rate_basis"),
     ("starter_rate_bf", "sp_rate_bf"),
+    ("starter_velo_dv", "sp_velo_dv"),
+    ("starter_velo_last", "sp_velo_last"),
+    ("starter_velo_base", "sp_velo_base"),
     ("pitching_basis", "pitching_basis"),
     ("opener", "opener"),
 )
@@ -5534,6 +5657,9 @@ def _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
                      pitching_basis=r.get("pitching_basis"),
                      sp_rate_basis=r.get("starter_rate_basis"),
                      sp_rate_bf=_f(r.get("starter_rate_bf")),
+                     velo_last=_f(r.get("starter_velo_last")),
+                     velo_base=_f(r.get("starter_velo_base")),
+                     velo_dv=_f(r.get("starter_velo_dv")),
                      has_pl=False, R=0, L=0, S=0, padv=0,
                      pl_sp=None, pl_sp_raw=None, pl_mx=None, pl_edge=None,
                      pl_reliable=False,
@@ -7988,6 +8114,15 @@ def _row_selection(r):
     # identically` went red on.
     if not isinstance(lean, str) or not lean:
         return None, None, None
+    # Same order as `publish_reconstruction`: the v14 velocity re-decision,
+    # then a v13-built row's own pregame lean (v14 with no velocity trend),
+    # then the v13 re-decision of an older row.
+    velo = r.get("velo_lean_recon")
+    if isinstance(velo, str) and velo and pd.notna(r.get("velo_recon_basis")):
+        return "recon", velo, recon_grade(velo, r.get("home"),
+                                          r.get("full_home"), r.get("full_away"))
+    if str(r.get("model_tag")) in _mb_v14_native_equivalent:
+        return "recon", lean, r.get("xw_full")
     recon = r.get(V13_RECON_LEAN_COL)
     if isinstance(recon, str) and recon:
         return "recon", recon, recon_grade(recon, r.get("home"),

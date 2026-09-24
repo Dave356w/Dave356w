@@ -49,7 +49,10 @@ def test_each_band_provenance_and_scores_match_original_ledger_tags():
     assert dist["games"] == len(obs) == ctx["n"]
     native_mask = ledger.loc[obs.index, "model_tag"].astype(str).eq(b.MODEL_TAG)
     native_obs = obs.loc[native_mask]
-    assert ctx["native"]["n"] == len(native_obs)
+    # The native sample is the ACTIVE model's own rows; right after a tag bump
+    # there are none, and the card then carries no native block at all.
+    native_n = ctx["native"]["n"] if "native" in ctx else 0
+    assert native_n == len(native_obs)
     assert ctx["reconstructed_n"] == len(obs) - len(native_obs)
     bucket = percentile_band_index(obs["close_ml"], dist["edges"])
     for rec in dist["bands"]:
@@ -62,7 +65,7 @@ def test_each_band_provenance_and_scores_match_original_ledger_tags():
         assert np.isclose(rec["implied"], subset["market_p"].mean())
         be = np.asarray(b._mb_breakeven_prob(subset["close_ml"]), dtype=float)
         assert np.isclose(rec["excess_be"], subset["won"].mean()-be.mean())
-    assert sum(x["native_n"] for x in dist["bands"]) == ctx["native"]["n"]
+    assert sum(x["native_n"] for x in dist["bands"]) == native_n
     assert sum(x["reconstructed_n"] for x in dist["bands"]) == ctx["reconstructed_n"]
 
 

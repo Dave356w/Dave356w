@@ -118,16 +118,34 @@ def recon_grade(lean, home, full_home, full_away):
     return "W" if (lean == home) == (fh > fa) else "L"
 
 
-def recon_grades(g):
+def recon_grades(g, lean_col="v13_lean_recon"):
     """`recon_grade` over a frame, as a Series aligned to it."""
+    if lean_col not in g.columns:
+        return pd.Series(None, index=g.index, dtype=object)
     return pd.Series(
         [recon_grade(l, h, fh, fa) for l, h, fh, fa in zip(
-            g["v13_lean_recon"], g["home"], g["full_home"], g["full_away"])],
+            g[lean_col], g["home"], g["full_home"], g["full_away"])],
         index=g.index, dtype=object)
 
 
-def publish_reconstruction(g, model_tag):
-    """Substitute the v13 re-decision into every retained row of `g`.
+# v14 = v13 + the starter velocity term (starter_velocity.py). Every earlier
+# record-family row is re-decided under v14 into these columns by
+# `reconstruct_v14_velocity.py`; the originals are never touched.
+VELO_RECON_COLS = ("velo_dv_away_recon", "velo_dv_home_recon",
+                   "velo_net_recon", "velo_lean_recon", "velo_delta_recon",
+                   "velo_recon_basis")
+VELO_RECON_TEXT_COLS = ("velo_lean_recon", "velo_recon_basis")
+# Tags whose own pregame lean IS v14's decision when no velocity trend is
+# known for either starter (the term then adds exactly zero).
+V14_NATIVE_EQUIVALENT = ("xw+starter_blend_v13",)
+
+
+def publish_reconstruction(g, model_tag, native_equivalent=V14_NATIVE_EQUIVALENT):
+    """Substitute the current model's re-decision into every retained row.
+
+    Under v14: a retained row takes its `velo_*_recon` re-decision; a
+    v13-built row without one keeps its own lean (v14 with no velocity
+    trend); an older row falls back to its v13 re-decision.
 
     THE one derivation of "what this model publishes for these rows", and it
     lives here for the reason `chalk_is_home` and `excess_se` do: build_site
@@ -179,32 +197,46 @@ def publish_reconstruction(g, model_tag):
     """
     if g is None or not len(g):
         return g
-    cur = g["model_tag"].astype(str).eq(str(model_tag))
-    need = ("v13_recon_basis", "v13_lean_recon", "v13_net_recon",
-            "home", "full_home", "full_away")
-    if any(c not in g.columns for c in need):
+    tag = g["model_tag"].astype(str)
+    cur = tag.eq(str(model_tag))
+    if any(c not in g.columns for c in ("home", "full_home", "full_away")):
         return g[cur].copy()
+
+    def col(c):
+        return g[c] if c in g.columns else pd.Series(np.nan, index=g.index)
+
     # `xw_lean.isna()` is the abstention signal every other surface in this
     # repo uses, so it is the one used here rather than `pitching_basis_*`:
     # a second spelling would miss v7's zero-delta rule, which has never
     # fired and would produce the same NaN if it ever did.
     abstained = g["xw_lean"].isna()
-    has = (g["v13_recon_basis"].notna()
-           & g["v13_lean_recon"].notna()
-           & ~abstained
-           & recon_grades(g).isin(["W", "L", "T"]))
-    keep = cur | (~cur & (has | abstained))
+    wlt = ["W", "L", "T"]
+    vg = recon_grades(g, "velo_lean_recon")
+    # 1. The v14 re-decision, when the migration has written one.
+    has_velo = (~cur & ~abstained & col("velo_recon_basis").notna()
+                & col("velo_lean_recon").notna() & vg.isin(wlt))
+    # 2. A v13-built row with no re-decision yet: its own lean is v14's
+    #    decision with no velocity trend, so it passes through as it is.
+    native = ~cur & ~has_velo & tag.isin(native_equivalent)
+    # 3. An older retained row: the v13 re-decision, as before v14.
+    v13g = recon_grades(g, "v13_lean_recon")
+    has_v13 = (~cur & ~has_velo & ~native & ~abstained
+               & col("v13_recon_basis").notna() & col("v13_lean_recon").notna()
+               & v13g.isin(wlt))
+    keep = cur | has_velo | native | has_v13 | (~cur & abstained)
     out = g[keep].copy()
     if out.empty:
         return out
-    rebuilt = (~cur & has)[keep].to_numpy()
-    if rebuilt.any():
-        sub = out.loc[rebuilt]
-        out.loc[rebuilt, "xw_full"] = recon_grades(sub)
-        out.loc[rebuilt, "xw_lean"] = sub["v13_lean_recon"]
-        net = pd.to_numeric(sub["v13_net_recon"], errors="coerce")
-        out.loc[rebuilt, "xw_net"] = net
-        out.loc[rebuilt, "xw_delta"] = net.abs()
+    for mask, lean_c, net_c, grades in ((has_velo, "velo_lean_recon", "velo_net_recon", vg),
+                                        (has_v13, "v13_lean_recon", "v13_net_recon", v13g)):
+        m = mask[keep]
+        if m.any():
+            sub = g.loc[m[m].index]
+            out.loc[m, "xw_full"] = grades.loc[m[m].index]
+            out.loc[m, "xw_lean"] = sub[lean_c]
+            net = pd.to_numeric(sub[net_c], errors="coerce")
+            out.loc[m, "xw_net"] = net
+            out.loc[m, "xw_delta"] = net.abs()
     return out
 
 
