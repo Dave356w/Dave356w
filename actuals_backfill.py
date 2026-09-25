@@ -617,6 +617,28 @@ def f_upper_tail(f, d1, d2):
     return _betai(d2 / 2.0, d1 / 2.0, d2 / (d2 + d1 * f))
 
 
+def f_quantile(upper_tail, d1, d2):
+    """The f with P(F_{d1,d2} >= f) == upper_tail, by bisection on the tail.
+
+    Only the interval below needs it, and bisection on a monotone tail is
+    exact to float precision without importing scipy.
+    """
+    if not (0.0 < upper_tail < 1.0) or d1 <= 0 or d2 <= 0:
+        return float("nan")
+    lo, hi = 0.0, 1.0
+    while f_upper_tail(hi, d1, d2) > upper_tail:
+        hi *= 2.0
+        if hi > 1e6:
+            return float("nan")
+    for _ in range(200):
+        mid = 0.5 * (lo + hi)
+        if f_upper_tail(mid, d1, d2) > upper_tail:
+            lo = mid
+        else:
+            hi = mid
+    return 0.5 * (lo + hi)
+
+
 # The entity each component's PREDICTOR claims to tell apart. `target_reliability`
 # groups the ACTUAL by this to ask whether the outcome data can tell those same
 # entities apart at all -- a question no diagnostic in this repo asked until a
@@ -636,6 +658,23 @@ RELIABILITY_MIN_PER_UNIT = 8
 # number is readable, so the cost of a false positive (a slope read as real)
 # exceeds the cost of a false negative (a caveat printed one build early).
 RELIABILITY_ALPHA = 0.05
+
+# Smallest true between-unit sd (wOBA) that counts as a spread worth measuring.
+# A non-separating F alone does not make a slope undefined: at 30 clubs and
+# ~53 games each the omnibus test has ~64% power against a true club sd of
+# 0.010, so "not separated" is also what a real spread returns a third of the
+# time. The target is called UNMEASURABLE only when the upper confidence bound
+# on its between-unit sd falls BELOW this size; otherwise it is INCONCLUSIVE.
+# 0.005 is set a little under the club-level spread the shipped lineup
+# composite itself predicts (sd of club means of the prediction ~0.006 on the
+# ledger when this was written): a target bounded below that cannot carry the
+# predictor's slope, while one that cannot exclude it can. Not fitted to the
+# verdict it produces -- the lineup row reads INCONCLUSIVE under any value up
+# to its own bound, and the bound is printed so a reader can apply another.
+RELIABILITY_MATERIAL_SD = 0.005
+
+# Two-sided confidence level for the between-unit sd bound.
+RELIABILITY_CI = 0.95
 
 
 def one_way_icc(labels, values, min_per_group=RELIABILITY_MIN_PER_UNIT):
@@ -678,12 +717,24 @@ def one_way_icc(labels, values, min_per_group=RELIABILITY_MIN_PER_UNIT):
     var_between = (msb - msw) / n0 if n0 > 0 else float("nan")
     denom = var_between + msw
     f_stat = msb / msw
+    # Upper confidence bound on the between-unit sd, from the F pivot
+    # MSB/MSW ~ (1 + n0*var_b/var_w) F_{d1,d2}. A point estimate clipped to
+    # zero says nothing about how large a spread the sample could hide; this
+    # does, and it is what separates "no spread" from "no power".
+    f_lo = f_quantile(1.0 - (1.0 - RELIABILITY_CI) / 2.0,
+                      n_groups - 1, n_obs - n_groups)
+    if n0 > 0 and f_lo > 0:
+        vb_hi = (f_stat / f_lo - 1.0) * msw / n0
+        between_sd_upper = math.sqrt(vb_hi) if vb_hi > 0 else 0.0
+    else:
+        between_sd_upper = float("nan")
     return {
         "n_groups": n_groups, "n_obs": n_obs, "f": f_stat,
         "p": f_upper_tail(f_stat, n_groups - 1, n_obs - n_groups),
         "icc": (var_between / denom) if denom > 0 else 0.0,
         "between_sd": math.sqrt(var_between) if var_between > 0 else 0.0,
         "within_sd": math.sqrt(msw),
+        "between_sd_upper": between_sd_upper,
         "negative_variance": var_between <= 0,
     }
 
@@ -691,22 +742,82 @@ def one_way_icc(labels, values, min_per_group=RELIABILITY_MIN_PER_UNIT):
 def _reliability_verdict(r):
     """One `one_way_icc` result -> its verdict string, or None if unfitted.
 
-    Two ways to fail and they are NOT the same statement, which is the whole
-    reason this is a function rather than an `f > 1` test at each call site:
-    F <= 1 says the units differ less than chance, while F > 1 with p above
-    alpha says they differ by no more than a search this size returns from
-    noise. A component can clear the first and fail the second -- BP did, at
-    F = 1.131 (p = 0.288) on 2026-09-17 -- so a reader handed only "clears
-    F=1" as the test reads that row as measurable while this block calls it
-    unmeasurable.
+    Two ways to fail the omnibus F and they are NOT the same statement, which
+    is the whole reason this is a function rather than an `f > 1` test at each
+    call site: F <= 1 says the units differ less than chance, while F > 1 with
+    p above alpha says they differ by no more than a search this size returns
+    from noise. A component can clear the first and fail the second -- BP did,
+    at F = 1.131 (p = 0.288) on 2026-09-17.
+
+    Failing either is still not the same as an unmeasurable target. The F test
+    has 29 degrees of freedom at 30 clubs and little power against a modest
+    real spread, so a non-separating F is UNMEASURABLE only when the upper
+    confidence bound on the between-unit sd also sits below
+    RELIABILITY_MATERIAL_SD. When the bound cannot exclude a material spread
+    the verdict is INCONCLUSIVE: the sample neither shows nor rules out unit
+    differences, and a directed 1-df test (`unit_level_slope`) can still
+    detect them. The lineup row on 2026-09-25 is that case: F = 0.945 with a
+    95% upper bound of 0.0104 while unit means of prediction and actual
+    correlate at +0.42.
+
+    A result without `between_sd_upper` (a caller that built the dict by hand)
+    keeps the omnibus-only verdict rather than inventing a bound.
     """
     if r is None:
         return None
-    if r["f"] <= 1.0:
+    if r["f"] > 1.0 and r["p"] < RELIABILITY_ALPHA:
+        return "measurable"
+    below = r["f"] <= 1.0
+    upper = r.get("between_sd_upper")
+    if upper is not None and not (upper < RELIABILITY_MATERIAL_SD):
+        up = f"{upper:.4f}" if upper == upper else "n/a"
+        return ("INCONCLUSIVE -- "
+                + ("units differ less than chance in this sample"
+                   if below else "not separated from chance")
+                + f", but a between-unit sd up to {up} "
+                  f"({RELIABILITY_CI:.0%}) is not excluded")
+    if below:
         return "UNMEASURABLE -- units differ less than chance"
-    if r["p"] >= RELIABILITY_ALPHA:
-        return "UNMEASURABLE -- not separated from chance"
-    return "measurable"
+    return "UNMEASURABLE -- not separated from chance"
+
+
+def unit_level_slope(s, min_per_group=RELIABILITY_MIN_PER_UNIT):
+    """Directed 1-df test: regress unit-mean actual on unit-mean prediction.
+
+    The omnibus F asks whether units differ in ANY direction and spends 29
+    degrees of freedom at 30 clubs doing it. The predictor already names a
+    direction, so this asks the narrower question it is actually making --
+    do units predicted higher realise higher? -- on the same units the F
+    groups. It can detect a unit-level spread the omnibus test misses, which
+    is why an INCONCLUSIVE verdict points here.
+
+    `s` is one component's rows of `paired_components`. Returns
+    (slope, se, t, n_units) or None. The se charges two degrees of freedom and
+    treats unit means as independent, which they are across clubs; it does
+    not model unequal unit sizes, so read it as approximate.
+    """
+    if s is None or getattr(s, "empty", True) or "unit" not in s.columns:
+        return None
+    d = s.dropna(subset=["unit", "pred", "act"])
+    d = d[~d["unit"].astype(str).isin(("", "nan"))]
+    if d.empty:
+        return None
+    g = d.groupby(d["unit"].astype(str)).agg(
+        pred=("pred", "mean"), act=("act", "mean"), n=("act", "size"))
+    g = g[g["n"] >= min_per_group]
+    k = len(g)
+    if k < 3:
+        return None
+    x = g["pred"].to_numpy(float) - g["pred"].mean()
+    y = g["act"].to_numpy(float) - g["act"].mean()
+    sxx = float(np.dot(x, x))
+    if sxx <= 0:
+        return None
+    slope = float(np.dot(x, y)) / sxx
+    resid = y - slope * x
+    se = math.sqrt(float(np.dot(resid, resid)) / (k - 2) / sxx)
+    t = slope / se if se > 0 else float("nan")
+    return slope, se, t, k
 
 
 def reliability_verdicts(df, min_per_group=RELIABILITY_MIN_PER_UNIT):
@@ -747,8 +858,14 @@ def target_reliability(df, min_per_group=RELIABILITY_MIN_PER_UNIT):
     measurement with a measured null. Measured on the committed ledger at the
     time this shipped, realised team offence grouped by batting club gives
     F = 0.941 over 1,882 team-games -- below chance -- while the same plate
-    appearances grouped by the starter who threw them give F = 1.503. The
-    lineup term's target carries no club-level signal; the starter's does.
+    appearances grouped by the starter who threw them give F = 1.503.
+
+    That first figure was read as "the lineup target carries no club-level
+    signal", which the F alone cannot establish. On 2026-09-25 the same row
+    (F = 0.945, 1,596 team-games) had a 95% upper bound of 0.0104 on the true
+    club sd -- a real-sized spread -- so a low F at 30 clubs is as consistent
+    with low power as with no spread. Each row therefore prints that bound,
+    and only a bound below RELIABILITY_MATERIAL_SD earns UNMEASURABLE.
     """
     p = paired_components(df)
     if p.empty or "unit" not in p.columns:
@@ -761,8 +878,14 @@ def target_reliability(df, min_per_group=RELIABILITY_MIN_PER_UNIT):
         f"min {min_per_group} observations per unit.",
         "  F is judged against its own null, not against 1.0: with 30 "
         "units the null sd of F is ~0.26, so a bare threshold calls noise a "
-        "finding. Not separated => no attainable slope, and the component's "
-        "fitted slope is undefined rather than null.",
+        "finding. Not separated AND bounded below a material spread => no "
+        "attainable slope, and the component's fitted slope is undefined "
+        "rather than null.",
+        f"  UNMEASURABLE also requires the {RELIABILITY_CI:.0%} upper bound on "
+        f"the true between-unit sd to fall below {RELIABILITY_MATERIAL_SD}; "
+        "a non-separating F whose bound cannot exclude a material spread is "
+        "INCONCLUSIVE (low power, not no spread) -- see each component's "
+        "unit-level slope.",
     ]
     any_row = False
     for comp, (r, verdict) in reliability_verdicts(df, min_per_group).items():
@@ -774,6 +897,9 @@ def target_reliability(df, min_per_group=RELIABILITY_MIN_PER_UNIT):
             continue
         sd = ("0 (negative variance component)" if r["negative_variance"]
               else f"{r['between_sd']:.5f}")
+        up = r.get("between_sd_upper")
+        if up is not None and up == up:
+            sd += f", {RELIABILITY_CI:.0%} upper {up:.4f}"
         lines.append(
             f"  {comp:<7s} by {label:<14s} units={r['n_groups']:<4d} "
             f"n={r['n_obs']:<5d} F={r['f']:.3f} (p={r['p']:.3f})  "
@@ -874,7 +1000,20 @@ def components_summary(df, tags=None):
         _r, _verdict = verdicts.get(comp, (None, None))
         if _verdict and _verdict.startswith("UNMEASURABLE"):
             bit += "   [target UNMEASURABLE: this slope is undefined, not null]"
+        elif _verdict and _verdict.startswith("INCONCLUSIVE"):
+            bit += ("   [target INCONCLUSIVE: omnibus F not separated, "
+                    "material spread not excluded]")
         lines.append(bit)
+        ul = unit_level_slope(s)
+        if ul:
+            u_slope, u_se, u_t, u_k = ul
+            label = COMPONENT_UNIT_LABEL.get(comp, "unit")
+            lines.append(
+                f"           unit-level slope {u_slope:+.2f}±{u_se:.2f}  "
+                f"(t={u_t:+.2f}, {u_k} units by {label}, "
+                f"{RELIABILITY_MIN_PER_UNIT}+ rows each; unit-mean actual on "
+                f"unit-mean prediction -- the directed 1-df test the omnibus "
+                f"F is not)")
         if comp == "lineup":
             fe = lineup_within_pitcher_slope(p)
             if fe:

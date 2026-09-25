@@ -7,6 +7,11 @@ can (F = 1.503). Every component diagnostic in this repo scored a predictor
 against a target whose own reliability nothing had ever checked, so a lineup
 slope that is UNDEFINED was read for weeks as a measured null.
 
+The opposite misreading followed: a non-separating F at 30 clubs was printed
+as "undefined" even when its confidence bound could not exclude a real-sized
+club spread (lineup, 2026-09-25: F = 0.945, 95% upper sd 0.0104). A low-power
+test is INCONCLUSIVE, and only a bound below a material size is UNMEASURABLE.
+
 These tests pin the RULES, never the current figures. The numbers above move
 with every grading pass; the properties below do not, and freezing a figure
 here would reproduce the constants-frozen-from-data anti-pattern inside the one
@@ -186,18 +191,39 @@ class TargetReliabilityReportTests(unittest.TestCase):
         must be labelled, because its fitted slope is undefined rather than
         null and a reader cannot tell those apart from a number.
 
+        UNMEASURABLE requires the sample to BOUND the spread below a material
+        size, so this noise is tight enough for 30 rows per club to do that.
         Asserted over replications: one noise draw in twenty clears alpha by
-        construction, so a single-seed version of this test would be pinning a
-        coin flip."""
+        construction, so a single-seed version would pin a coin flip."""
         labelled = 0
         for seed in range(40):
             rng = np.random.default_rng(seed)
             lines = ab.target_reliability(
-                self._led(rng.normal(0.31, 0.09, 900)), min_per_group=8)
+                self._led(rng.normal(0.31, 0.005, 900)), min_per_group=8)
             lu = [l for l in lines if l.strip().startswith("lineup")]
             self.assertTrue(lu)
             labelled += "UNMEASURABLE" in lu[0]
         self.assertGreater(labelled, 34)
+
+    def test_noise_too_wide_to_bound_reads_inconclusive_not_unmeasurable(self):
+        """The ledger-shaped case: per-game sd 0.09 at 30 per club cannot
+        exclude a real club spread, so a non-separating F there is low power
+        and must not be printed as an undefined slope.
+
+        A rate, not an every-draw assertion: the fixture IS pure noise, and a
+        draw far enough below its own null (F near 0.5, p near 0.98) does bound
+        the spread at zero -- about 2.5% of the time at a 95% interval."""
+        unmeasurable = inconclusive = 0
+        for seed in range(60):
+            rng = np.random.default_rng(seed)
+            lines = ab.target_reliability(
+                self._led(rng.normal(0.31, 0.09, 900)), min_per_group=8)
+            lu = [l for l in lines if l.strip().startswith("lineup")][0]
+            self.assertIn("95% upper", lu)
+            unmeasurable += "UNMEASURABLE" in lu
+            inconclusive += "INCONCLUSIVE" in lu
+        self.assertLessEqual(unmeasurable, 5)
+        self.assertGreater(inconclusive, 45)
 
     def test_below_chance_is_distinguished_from_merely_unproven(self):
         """F < 1 and F = 1.2-at-p-0.3 are both unmeasurable and they are not
@@ -248,6 +274,10 @@ class TargetReliabilityReportTests(unittest.TestCase):
                 self.assertEqual(
                     marked, bool(verdict and verdict.startswith("UNMEASURABLE")),
                     f"{name}: slope marker disagrees with its own verdict")
+                self.assertEqual(
+                    "target INCONCLUSIVE" in row[0],
+                    bool(verdict and verdict.startswith("INCONCLUSIVE")),
+                    f"{name}: inconclusive marker disagrees with its verdict")
 
     def test_the_caveat_no_longer_names_F_equals_1_as_the_test(self):
         """"Clears F=1" is the wrong bar and it passed the component that
@@ -268,6 +298,42 @@ class TargetReliabilityReportTests(unittest.TestCase):
         self.assertEqual(ab._reliability_verdict(dict(f=1.36, p=0.011)),
                          "measurable")
         self.assertIsNone(ab._reliability_verdict(None))
+
+    def test_a_bound_that_cannot_exclude_a_material_spread_is_inconclusive(self):
+        """Both failure modes, each on both sides of the materiality line. A
+        non-separating F with a wide bound is low power, not an undefined
+        slope; with a tight bound it is the UNMEASURABLE of before."""
+        m = ab.RELIABILITY_MATERIAL_SD
+        for f, p in ((0.945, 0.55), (1.393, 0.08)):
+            with self.subTest(f=f):
+                self.assertTrue(ab._reliability_verdict(dict(
+                    f=f, p=p, between_sd_upper=2 * m)).startswith("INCONCLUSIVE"))
+                self.assertTrue(ab._reliability_verdict(dict(
+                    f=f, p=p, between_sd_upper=m / 2)).startswith("UNMEASURABLE"))
+        # An unbounded (NaN) interval cannot support "no spread" either.
+        self.assertTrue(ab._reliability_verdict(dict(
+            f=0.9, p=0.6, between_sd_upper=float("nan"))).startswith("INCONCLUSIVE"))
+        # ...and a separated F is measurable whatever its bound.
+        self.assertEqual(ab._reliability_verdict(dict(
+            f=1.8, p=0.001, between_sd_upper=2 * m)), "measurable")
+
+    def test_a_real_ledger_sized_club_spread_is_never_called_unmeasurable(self):
+        """The disagreement this rule exists for. True club sd 0.010 with 30
+        clubs x 53 games at per-game sd 0.09 returns a non-separating F about a
+        third of the time; none of those may be labelled an undefined slope."""
+        called_unmeasurable = 0
+        not_separated = 0
+        for seed in range(150):
+            rng = np.random.default_rng(seed)
+            eff = rng.normal(0, 0.010, 30)
+            labels = [i % 30 for i in range(1590)]
+            vals = [0.31 + eff[k] + rng.normal(0, 0.09) for k in labels]
+            v = ab._reliability_verdict(ab.one_way_icc(labels, vals))
+            called_unmeasurable += v.startswith("UNMEASURABLE")
+            not_separated += v != "measurable"
+        self.assertGreater(not_separated, 20)      # the branch really runs
+        self.assertEqual(called_unmeasurable, 0)
+
 
     def test_the_marker_is_scoped_to_every_family_while_the_row_is_not(self):
         """The component row is family-scoped and its marker deliberately is
@@ -301,6 +367,78 @@ class TargetReliabilityReportTests(unittest.TestCase):
 
     def test_empty_input_yields_no_lines_rather_than_a_header(self):
         self.assertEqual(ab.target_reliability(pd.DataFrame()), [])
+
+
+class BetweenSdBoundTests(unittest.TestCase):
+    def test_f_quantile_inverts_the_tail(self):
+        self.assertAlmostEqual(ab.f_quantile(0.05, 10, 10), 2.978, places=3)
+        self.assertAlmostEqual(ab.f_quantile(0.5, 10, 10), 1.0, places=6)
+        for q in (0.025, 0.5, 0.975):
+            self.assertAlmostEqual(
+                ab.f_upper_tail(ab.f_quantile(q, 29, 1566), 29, 1566), q, places=6)
+        self.assertTrue(np.isnan(ab.f_quantile(0.0, 29, 1566)))
+
+    def test_the_upper_bound_covers_the_true_spread_at_its_level(self):
+        """A bound that undercovers would hand out UNMEASURABLE to real
+        spreads, which is the failure this change removes."""
+        covered = 0
+        for seed in range(200):
+            rng = np.random.default_rng(seed)
+            eff = rng.normal(0, 0.010, 30)
+            labels = [i % 30 for i in range(1590)]
+            vals = [0.31 + eff[k] + rng.normal(0, 0.09) for k in labels]
+            covered += ab.one_way_icc(labels, vals)["between_sd_upper"] >= 0.010
+        # Nominal one-sided coverage is 97.5%; the realised club sd varies
+        # around 0.010, so allow slack but not undercoverage.
+        self.assertGreater(covered / 200.0, 0.93)
+
+    def test_identical_clubs_bound_the_spread_at_zero(self):
+        r = ab.one_way_icc([f"g{i % 30}" for i in range(900)],
+                           [0.20 + 0.01 * (i // 30) for i in range(900)])
+        self.assertEqual(r["between_sd_upper"], 0.0)
+
+
+class UnitLevelSlopeTests(unittest.TestCase):
+    def _rows(self, slope, noise, n_units=30, per=40, seed=0):
+        rng = np.random.default_rng(seed)
+        rows = []
+        for u in range(n_units):
+            pred = 0.31 + 0.01 * (u - n_units / 2) / n_units
+            for _ in range(per):
+                rows.append({"unit": f"club{u}", "pred": pred,
+                             "act": 0.31 + slope * (pred - 0.31)
+                             + rng.normal(0, noise)})
+        return pd.DataFrame(rows)
+
+    def test_recovers_a_known_slope(self):
+        slope, se, t, k = ab.unit_level_slope(self._rows(1.0, 0.0))
+        self.assertAlmostEqual(slope, 1.0, places=6)
+        self.assertEqual(k, 30)
+
+    def test_zero_signal_centres_on_zero(self):
+        ts = [ab.unit_level_slope(self._rows(0.0, 0.09, seed=s))[2]
+              for s in range(60)]
+        self.assertLess(abs(float(np.mean(ts))), 0.4)
+        self.assertLess(np.mean(np.abs(ts) > 1.96), 0.12)
+
+    def test_a_constant_prediction_has_no_slope(self):
+        d = self._rows(1.0, 0.01)
+        d["pred"] = 0.31
+        self.assertIsNone(ab.unit_level_slope(d))
+
+    def test_units_below_the_minimum_are_dropped(self):
+        d = self._rows(1.0, 0.0, per=4)
+        self.assertIsNone(ab.unit_level_slope(d))
+
+    def test_the_component_block_prints_it_beside_the_row(self):
+        led = TargetReliabilityReportTests()._led(
+            [0.20 + 0.01 * (i // 30) for i in range(900)])
+        # A varying lineup prediction per club so the slope is defined.
+        led["opp_xwoba_neutral_away"] = [0.30 + 0.001 * (i % 30)
+                                         for i in range(900)]
+        body = "\n".join(ab.components_summary(led))
+        self.assertIn("unit-level slope", body)
+        self.assertIn("30 units by batting club", body)
 
 
 class PairedComponentIdentityTests(unittest.TestCase):
