@@ -219,17 +219,21 @@ component error (each scored against its own realised phase)
   pitching-side suffixes: Home offense vs away pitching; Away offense vs home pitching.
   Starter and bullpen actuals, and starter IP, retain same-team pairing.
   SP      n=1088 pred 0.3120 act 0.3245 (+0.0125)  MAE 0.0986  slope +0.74±0.17  corr +0.130
-  BP      n=1084 pred 0.2968 act 0.2923 (-0.0045)  MAE 0.1064  slope +0.99±0.32  corr +0.093   [target UNMEASURABLE: this slope is undefined, not null]
-  lineup  n=1088 pred 0.3180 act 0.3095 (-0.0084)  MAE 0.0720  slope +0.16±0.37  corr +0.013   [target UNMEASURABLE: this slope is undefined, not null]
+           unit-level slope +2.16±0.70  (t=+3.07, 10 units by starter, 8+ rows each; unit-mean actual on unit-mean prediction -- the directed 1-df test the omnibus F is not)
+  BP      n=1084 pred 0.2968 act 0.2923 (-0.0045)  MAE 0.1064  slope +0.99±0.32  corr +0.093   [target INCONCLUSIVE: omnibus F not separated, material spread not excluded]
+           unit-level slope +1.11±0.30  (t=+3.72, 30 units by pitching club, 8+ rows each; unit-mean actual on unit-mean prediction -- the directed 1-df test the omnibus F is not)
+  lineup  n=1088 pred 0.3180 act 0.3095 (-0.0084)  MAE 0.0720  slope +0.16±0.37  corr +0.013   [target INCONCLUSIVE: omnibus F not separated, material spread not excluded]
+           unit-level slope +0.48±0.37  (t=+1.28, 30 units by batting club, 8+ rows each; unit-mean actual on unit-mean prediction -- the directed 1-df test the omnibus F is not)
            within-starter slope +0.071±0.408  (n=1040, 186 starters absorbed; a correctly scaled composite implies +1.000)
            the line above ignores who was faced; this one holds the starter fixed. Read the difference, not either alone -- and see the lineup row's own verdict in the target-reliability block for whether either is interpretable at all.
 target reliability (can the ACTUAL tell this component's units apart?)
   Pools every family: the realised rate is metric-free, so the component block's tag scope cannot apply here.
   One-way ANOVA on the actual, grouped by unit, min 8 observations per unit.
-  F is judged against its own null, not against 1.0: with 30 units the null sd of F is ~0.26, so a bare threshold calls noise a finding. Not separated => no attainable slope, and the component's fitted slope is undefined rather than null.
-  SP      by starter        units=126  n=1285  F=1.462 (p=0.001)  ICC=+0.0434  true between-unit sd 0.02442  -> measurable
-  BP      by pitching club  units=30   n=1683  F=1.393 (p=0.080)  ICC=+0.0070  true between-unit sd 0.01150  -> UNMEASURABLE -- not separated from chance
-  lineup  by batting club   units=30   n=1596  F=0.945 (p=0.550)  ICC=-0.0010  true between-unit sd 0 (negative variance component)  -> UNMEASURABLE -- units differ less than chance
+  F is judged against its own null, not against 1.0: with 30 units the null sd of F is ~0.26, so a bare threshold calls noise a finding. Not separated AND bounded below a material spread => no attainable slope, and the component's fitted slope is undefined rather than null.
+  UNMEASURABLE also requires the 95% upper bound on the true between-unit sd to fall below 0.005; a non-separating F whose bound cannot exclude a material spread is INCONCLUSIVE (low power, not no spread) -- see each component's unit-level slope.
+  SP      by starter        units=126  n=1285  F=1.462 (p=0.001)  ICC=+0.0434  true between-unit sd 0.02442, 95% upper 0.0346  -> measurable
+  BP      by pitching club  units=30   n=1683  F=1.393 (p=0.080)  ICC=+0.0070  true between-unit sd 0.01150, 95% upper 0.0227  -> INCONCLUSIVE -- not separated from chance, but a between-unit sd up to 0.0227 (95%) is not excluded
+  lineup  by batting club   units=30   n=1596  F=0.945 (p=0.550)  ICC=-0.0010  true between-unit sd 0 (negative variance component), 95% upper 0.0104  -> INCONCLUSIVE -- units differ less than chance in this sample, but a between-unit sd up to 0.0104 (95%) is not excluded
 by slate (most recent 14 of 65; monitoring, not trend)
   scale: per-side rate error sd 0.0891 over 1584 paired side-games — read gross outliers, not drift
   2026-09-24  xwOBA       12g  rate n= 24 pred 0.3100 act 0.3061 (-0.0039) MAE 0.0780  SP IP n= 24 bias -0.60 MAE 1.20
@@ -343,7 +347,7 @@ pre-registered |delta| filter test  (registered 2026-09-03; abstain when |xw_net
                    returns: closing close_home_ml/close_away_ml. No pregame fallback.
     missing prices — no close_p_home, lean, or delta: excluded. Paired closing MLs are not a separate filter.
     eligible rows since registration: 184 over 14 slates (last scored 2026-09-17)
-    WINDOW CLOSED -- no further row can enter this test: the build now stamps xw+starter_blend_v13, xw+starter_velo_v14, outside the xw+plat_consol_v12 family this |xw_net| gate was registered against. A later scale family scored under the same frozen 0.012 is a different statistic wearing the registered constant's name.
+    WINDOW CLOSED -- no further row can enter this test: the build now stamps xw+starter_velo_v14, outside the xw+plat_consol_v12 family this |xw_net| gate was registered against. A later scale family scored under the same frozen 0.012 is a different statistic wearing the registered constant's name.
     DROPPED-GAME EXCESS (registered)  n=67   +1.78pp +/- 6.05   z=+0.29
       vs always-chalk on the same games: -6.15pp; model-minus-chalk +7.93pp (discovery +6.37)
     discovery was +5.53pp +/- 5.47 over 82. The rule is VINDICATED only if this goes NEGATIVE; positive means it is discarding winning bets.
@@ -411,6 +415,7 @@ pre-registered Candidate B2 individual-extreme TMR10 test  (registered 2026-09-1
     v13 recon     n=35  11-24  mean p 0.551  residual -23.7pp  -15.95u
       paired gain: residual +47.4pp; flat-unit profit +33.05u.
   REGISTERED FORWARD ACCUMULATION — actual xw+starter_blend_v13; slates strictly after 2026-09-18
+    WINDOW CLOSED -- no further row can enter this test: the build now stamps xw+starter_velo_v14, not xw+starter_blend_v13; the counts below are final.
     eligible forward v13 rows: 69; state-ready 69; B2 signals 4; scorable 4 (1 agree, 3 disagree).
     trigger mix — negative 1, positive 3, both 0.
     all B2        n=4   2-2  mean p 0.450  residual +5.0pp  -0.01u
