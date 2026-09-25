@@ -236,7 +236,7 @@ target reliability (can the ACTUAL tell this component's units apart?)
   lineup  by batting club   units=30   n=1598  F=0.939 (p=0.560)  ICC=-0.0012  true between-unit sd 0 (negative variance component), 95% upper 0.0104  -> INCONCLUSIVE -- units differ less than chance in this sample, but a between-unit sd up to 0.0104 (95%) is not excluded
 by slate (most recent 14 of 66; monitoring, not trend)
   scale: per-side rate error sd 0.0890 over 1586 paired side-games — read gross outliers, not drift
-  2026-09-25  xwOBA       16g  rate n=  2 pred 0.2965 act 0.3129 (+0.0163) MAE 0.0320  SP IP n=  2 bias -0.34 MAE 1.01
+  2026-09-25  xwOBA       17g  rate n=  2 pred 0.2965 act 0.3129 (+0.0163) MAE 0.0320  SP IP n=  2 bias -0.34 MAE 1.01
   2026-09-24  xwOBA       12g  rate n= 24 pred 0.3100 act 0.3061 (-0.0039) MAE 0.0780  SP IP n= 24 bias -0.60 MAE 1.20
   2026-09-23  xwOBA       16g  rate n= 32 pred 0.3123 act 0.2890 (-0.0234) MAE 0.0510  SP IP n= 32 bias -0.17 MAE 0.82
   2026-09-22  xwOBA       16g  rate n= 30 pred 0.3076 act 0.2894 (-0.0182) MAE 0.0912  SP IP n= 30 bias +0.06 MAE 1.02
