@@ -1,30 +1,30 @@
-# generated 2026-09-24T17:03Z by lineup-window-collect
-# run: https://github.com/Dave356w/Dave356w/actions/runs/36030263423
+# generated 2026-09-25T15:56Z by lineup-window-collect
+# run: https://github.com/Dave356w/Dave356w/actions/runs/36156906385
 # diagnostic only -- nothing here reaches a lean, delta or grade
 
 PITCHER x LINEUP INTERACTION -- per hitter, PAs against the starter
   diagnostic only; nothing here reaches a lean, delta or grade
-  frame rows 6624: pregame 2772, post-hoc dropped 3834, provenance unknown 18
+  frame rows 7101: pregame 2988, post-hoc dropped 4050, provenance unknown 63
   frame starter != ledger starter (dropped): 0
   lineups whose expected starter did not start (dropped): 0
-  scored: 5685 PAs, 415 hitters, 140 games, 172 starters
-  spread: sd(b) 0.0259  sd(p) 0.0234  sd(b*p) 0.00059  sd(y) 0.523
+  scored: 6145 PAs, 418 hitters, 152 games, 173 starters
+  spread: sd(b) 0.0260  sd(p) 0.0236  sd(b*p) 0.00061  sd(y) 0.523
 
   coef          est      se   z vs 0  z vs ref  reference
-  beta_b     +1.065   0.312    +3.41     +0.21  log5 & additive: 1 [two-way]
-  beta_p     +0.683   0.324    +2.11     -0.98  log5 & additive: 1 [two-way]
-  beta_bp   +26.089  13.401    +1.95     +1.71  log5: 1/L = 3.18; additive: 0 [two-way]
-  interaction readable (|z|=2 at log5's 1/L) near 404,096 PAs; have 5,685 -- NOT YET RESOLVED
+  beta_b     +1.052   0.279    +3.78     +0.19  log5 & additive: 1 [two-way]
+  beta_p     +0.836   0.342    +2.44     -0.48  log5 & additive: 1 [two-way]
+  beta_bp   +22.904   9.972    +2.30     +1.98  log5: 1/L = 3.18; additive: 0 [two-way]
+  interaction readable (|z|=2 at log5's 1/L) near 241,816 PAs; have 6,145 -- NOT YET RESOLVED
 
-  paired MSE, log5 - additive: -0.000050 (se 0.000027, two-way); negative favours log5
+  paired MSE, log5 - additive: -0.000048 (se 0.000021, two-way); negative favours log5
 
 STARTER SAMPLE -- does beta_p depend on the starter's batters faced?
-  5685 PAs vs 172 measured starters (0 prior-only PAs excluded); BF p10 148 / median 563 / p90 709
-  change in beta_p per 1 sd of BF (203): +0.312 +/- 0.363  z +0.86  [two-way]
-  beta_p at BF  148: +0.092 +/- 0.717
-  beta_p at BF  709: +0.952 +/- 0.483
-  beta_p at BF  563: +0.728 +/- 0.336  (median sample)
-  implied starter K* ~347, +/-2se range 0 to unbounded  (shipped K 100)
+  6145 PAs vs 173 measured starters (0 prior-only PAs excluded); BF p10 148 / median 548 / p90 709
+  change in beta_p per 1 sd of BF (203): +0.192 +/- 0.358  z +0.54  [two-way]
+  beta_p at BF  148: +0.474 +/- 0.711
+  beta_p at BF  709: +1.005 +/- 0.515
+  beta_p at BF  548: +0.853 +/- 0.364  (median sample)
+  implied starter K* ~212, +/-2se range 0 to 4658  (shipped K 100)
   How to read it. The LEVEL of beta_p is the strong signal: under
   shrinkage beta_p = (n+K)/(n+K*), so a K* range that excludes the
   shipped K says starter rates are mis-shrunk -- above it, UNDER-
