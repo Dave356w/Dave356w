@@ -1,0 +1,56 @@
+name: V13 Kalshi paper monitor (read-only)
+
+on:
+  workflow_dispatch:
+  # Reuses the latest committed V13 snapshot; scheduled Actions can be delayed.
+  schedule:
+    - cron: '19 10-23 * * *'
+      timezone: America/New_York
+    - cron: '31 5 * * *'
+      timezone: America/New_York
+
+# Shared with build.yml so paper and production never commit concurrently.
+concurrency:
+  group: site-build
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  paper:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install existing dependencies
+        run: pip install -r requirements.txt
+      - name: Validate committed CSVs
+        run: python validate_data_files.py
+      - name: Capture paper fills and reconcile prior Kalshi outcomes
+        run: python paper_kalshi.py --out-html paper_artifacts/paper.html
+      - name: Validate resulting paper ledgers
+        run: python validate_data_files.py
+      - name: Upload audit and report independently of repo commit
+        uses: actions/upload-artifact@v4
+        with:
+          name: kalshi-paper-${{ github.run_id }}
+          path: |
+            data/kalshi_paper_trades.csv
+            data/kalshi_paper_audit.csv
+            paper_artifacts/paper.html
+          retention-days: 30
+      - name: Commit only the paper files through the existing signed pipeline
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python commit_data.py --branch main --no-fallback \
+            --message "kalshi paper audit $(date -u +%FT%H:%MZ)" \
+            --path data/kalshi_paper_trades.csv \
+            --path data/kalshi_paper_audit.csv
