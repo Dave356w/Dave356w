@@ -1,10 +1,10 @@
 game_pk,away_lineup_projected,home_lineup_projected,away_lineup_status,home_lineup_status,away_posted_count,home_posted_count,away_filled_count,home_filled_count,away_resolved_count,home_resolved_count,away_savant_backfill_count,home_savant_backfill_count
-822678,True,True,projected,projected,0,0,9,9,9,9,0,0
-824219,True,True,projected,projected,0,0,9,9,9,9,0,0
-822759,True,True,projected,projected,0,0,9,9,9,9,0,0
-823165,True,True,projected,projected,0,0,9,9,9,9,0,0
-823653,True,True,projected,projected,0,0,9,9,9,9,0,0
-823813,True,True,projected,projected,0,0,9,9,9,9,0,0
+822678,False,False,posted,posted,9,9,0,0,9,9,0,0
+824219,False,False,posted,posted,9,9,0,0,9,9,0,0
+822759,False,False,posted,posted,9,9,0,0,9,9,0,0
+823165,False,False,posted,posted,9,9,0,0,9,9,0,0
+823653,False,False,posted,posted,9,9,0,0,9,9,0,0
+823813,False,False,posted,posted,9,9,0,0,9,9,0,0
 824057,True,True,projected,projected,0,0,9,9,9,9,0,0
 824543,True,True,projected,projected,0,0,9,9,9,9,0,0
 823733,True,True,projected,projected,0,0,9,9,9,9,0,0
