@@ -1,0 +1,86 @@
+name: Kalshi pregame paper quotes (no orders)
+
+on:
+  pull_request:
+    paths:
+      - paper_kalshi.py
+      - tests/test_paper_kalshi.py
+      - .github/workflows/kalshi-paper.yml
+  workflow_dispatch:
+    inputs:
+      slate_date:
+        description: "Eastern slate YYYY-MM-DD; blank for today"
+        required: false
+        type: string
+  # Additional best-effort observations between existing hourly site builds.
+  # GitHub cron is not a precise clock: stale/post-pitch cases are rejected.
+  schedule:
+    - cron: '37 10-23 * * *'
+      timezone: America/New_York
+
+permissions:
+  contents: write
+
+# Same group as build.yml: commits to data/ must not interleave.
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && 'kalshi-paper-review' || 'site-build' }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      should_run: ${{ steps.gate.outputs.should_run }}
+      slate_date: ${{ steps.gate.outputs.slate_date }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Gate scheduled observations against the live MLB slate
+        id: gate
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_SCHEDULE: ${{ github.event.schedule }}
+        run: python schedule_gate.py
+
+  observe:
+    needs: plan
+    if: needs.plan.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install public-data client
+        run: pip install 'requests>=2.31'
+      - name: Public quote + paper fill only
+        env:
+          INPUT_DATE: ${{ inputs.slate_date }}
+          PLAN_DATE: ${{ needs.plan.outputs.slate_date }}
+        run: |
+          DATE="${INPUT_DATE:-$PLAN_DATE}"
+          python paper_kalshi.py --slate-date "$DATE"
+      - name: Validate paper CSVs
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from validate_data_files import validate_csv
+          for path in Path('data/paper_kalshi').glob('*.csv'):
+              validate_csv(path)
+          PY
+      - name: Preserve diagnostic artifact (including PR live smoke)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kalshi-paper-${{ github.run_id }}
+          path: data/paper_kalshi/
+          if-no-files-found: warn
+
+      - name: Persist observations separately from model ledger
+        if: github.event_name != 'pull_request'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python commit_data.py --branch main --path data/paper_kalshi \
+            --no-fallback --message "kalshi paper observation $(date -u +%FT%H:%MZ)"

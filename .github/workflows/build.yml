@@ -191,6 +191,14 @@ jobs:
           python commit_data.py --branch main \
             --message "ledger $(date -u +%FT%H:%MZ)"
 
+      # The dedicated paper job runs AFTER this build has committed the model
+      # ledger. Pages displays the latest previously committed paper diagnostic.
+      - name: Publish latest committed paper diagnostic
+        run: |
+          if [ -s data/paper_kalshi/report.txt ]; then
+            cp data/paper_kalshi/report.txt public/kalshi-paper.txt
+          fi
+
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
@@ -206,3 +214,43 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+
+  # Isolated from the irreplaceable pregame capture AND Pages deployment.
+  # A Kalshi API outage, slow order book or paper-ledger conflict cannot cost
+  # the model's saved pregame rows. Separate job uses the freshly committed
+  # main-branch model dump instead of an old workflow-trigger checkout.
+  paper:
+    needs: [plan, build]
+    if: needs.build.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    continue-on-error: true
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install public-data client
+        run: pip install 'requests>=2.31'
+      - name: Kalshi public quotes and simulated fills (never real orders)
+        env:
+          SLATE_DATE: ${{ needs.plan.outputs.slate_date }}
+        run: python paper_kalshi.py --slate-date "$SLATE_DATE"
+      - name: Validate separate paper CSVs
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from validate_data_files import validate_csv
+          for path in Path('data/paper_kalshi').glob('*.csv'):
+              validate_csv(path)
+          PY
+      - name: Persist shadow data (no fallback push)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python commit_data.py --branch main --path data/paper_kalshi \
+            --no-fallback --message "kalshi paper $(date -u +%FT%H:%MZ)"
