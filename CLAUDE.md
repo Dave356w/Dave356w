@@ -148,5 +148,6 @@ Other references:
 - `docs/repository_cleanup_review.md` and `research/delta_market_audit.py` — dated code-organization and market/delta research.
 - `docs/win_probability.md` — probability mapping and its chronological evaluation.
 - `tests/` and `.github/workflows/tests.yml` — executable invariants and PR verification.
+- `.claude/settings.json` enables the `typesafe@typesafe-ai` plugin (TypeSafe skill). Use it when a feature needs a natural-language judgment turned into typed output (e.g. extraction, classification, verification). It does not replace the model, ledger, or evidence rules above. Any TypeSafe probability is an unvalidated shadow input until it is tested on same-row data, and it must not change v13 selection.
 
 **Operating principle:** verify generously, critique proportionately, acknowledge real progress, and convert uncertainty into the next useful measurement. The objective is a reliable, improving research system and a productive partnership—not winning an argument about a past design choice.
