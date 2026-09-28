@@ -300,3 +300,38 @@ def test_standalone_paper_workflow_stays_out_of_site_build_group():
     assert "site-build" not in group, group
     assert "'kalshi-paper'" in group
     assert "cancel-in-progress: false" in block
+
+
+def test_white_sox_matches_either_kalshi_code_but_never_both():
+    rows = model_rows()
+    rows[0]["opp_team"] = "Chicago White Sox"   # away pitcher faces CWS -> CWS home
+    games = paper.games_in_slate(rows)
+    assert games[0]["home"] == "CWS" and games[0]["lean"] == "CWS"
+    for code in ("CWS", "CHW"):
+        event = "KXMLBGAME-26SEP221805NYM" + code
+        m = {"ticker": event + "-" + code, "event_ticker": event}
+        assert paper.market_for(games[0], [m], games)[0] == m
+    both = [{"ticker": f"KXMLBGAME-26SEP221805NYM{c}-{c}",
+             "event_ticker": f"KXMLBGAME-26SEP221805NYM{c}"} for c in ("CWS", "CHW")]
+    assert paper.market_for(games[0], both, games) == (None, "market_ambiguous")
+
+
+def test_malformed_orderbook_is_a_skip_not_a_crash(tmp_path):
+    class ListBook(Session):
+        def get(self, url, params=None, timeout=15):
+            if url.endswith("/orderbook"):
+                return Response(["not", "a", "book"])
+            return super().get(url, params, timeout)
+
+    data = write_dump(tmp_path)
+    paper.run(args(tmp_path), session=ListBook(), now=NOW)
+    assert paper.read_csv(data / "paper_kalshi/observations.csv")[-1]["reason"] == "kalshi_orderbook_malformed"
+
+
+def test_review_positions_still_count_as_fills(tmp_path):
+    row = {k: "" for k in paper.FIELDS}
+    row.update(status="needs_review", game_pk="1", reason="kalshi_mlb_outcome_disagreement")
+    paper.summarize([], [row], tmp_path / "r.txt", NOW)
+    text = (tmp_path / "r.txt").read_text()
+    assert "Paper fills (all days): 1" in text
+    assert "Open/review: 1" in text

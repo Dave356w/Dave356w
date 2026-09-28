@@ -27,14 +27,18 @@ MLB = "https://statsapi.mlb.com/api/v1"
 ET = ZoneInfo("America/New_York")
 D = Decimal
 CENT = D("0.01")
-# MLB ledger abbreviation -> Kalshi event ticker abbreviation. Unknown codes
-# fail closed; never fuzzy-match teams or use only the selected team to join.
-TEAMS = {"ARI": "AZ", "ATH": "ATH", "ATL": "ATL", "BAL": "BAL", "BOS": "BOS",
-         "CHC": "CHC", "CWS": "CWS", "CIN": "CIN", "CLE": "CLE", "COL": "COL",
-         "DET": "DET", "HOU": "HOU", "KC": "KC", "LAA": "LAA", "LAD": "LAD",
-         "MIA": "MIA", "MIL": "MIL", "MIN": "MIN", "NYM": "NYM", "NYY": "NYY",
-         "PHI": "PHI", "PIT": "PIT", "SD": "SD", "SF": "SF", "SEA": "SEA",
-         "STL": "STL", "TB": "TB", "TEX": "TEX", "TOR": "TOR", "WSH": "WSH"}
+# MLB ledger abbreviation -> accepted Kalshi event-ticker abbreviations.
+# Kalshi's code is verified live only for AZ; where Kalshi may use a different
+# common code (White Sox CHW, etc.) both are accepted. That is still an exact
+# join -- ET date, start time, BOTH teams in order and the selected side must
+# all match, and more than one matching market is skipped as ambiguous.
+# Unknown codes fail closed; never fuzzy-match or join on the selected team alone.
+TEAMS = {code: (code,) for code in (
+    "ATL BAL BOS CHC CIN CLE COL DET HOU LAA LAD MIA MIL MIN NYM NYY "
+    "PHI PIT SEA STL TEX TOR").split()}
+TEAMS.update({"ARI": ("AZ", "ARI"), "ATH": ("ATH", "OAK"), "CWS": ("CWS", "CHW"),
+              "KC": ("KC", "KCR"), "SD": ("SD", "SDP"), "SF": ("SF", "SFG"),
+              "TB": ("TB", "TBR"), "WSH": ("WSH", "WAS")})
 ABBR = {"Arizona Diamondbacks": "ARI", "Athletics": "ATH", "Atlanta Braves": "ATL",
         "Baltimore Orioles": "BAL", "Boston Red Sox": "BOS", "Chicago Cubs": "CHC",
         "Chicago White Sox": "CWS", "Cincinnati Reds": "CIN", "Cleveland Guardians": "CLE",
@@ -174,17 +178,17 @@ def market_for(game, markets, all_games):
     if len(duplicates) != 1:
         return None, "doubleheader_ambiguous"
     date = start.astimezone(ET).strftime("%y%b%d").upper()
-    pair = TEAMS[game["away"]] + TEAMS[game["home"]]
+    pairs = {a + h for a in TEAMS[game["away"]] for h in TEAMS[game["home"]]}
     candidate = []
     for m in markets:
         ticker = m.get("ticker", "")
         event = m.get("event_ticker", "")
         match = EVENT.fullmatch(event)
-        if not match or match.group(1) != date or match.group(3) != pair:
+        if not match or match.group(1) != date or match.group(3) not in pairs:
             continue
         if match.group(4):  # cannot associate doubleheader ordinal without metadata
             continue
-        if ticker != event + "-" + TEAMS[game["lean"]]:
+        if ticker not in {event + "-" + code for code in TEAMS[game["lean"]]}:
             continue
         if match.group(2):
             hhmm = match.group(2)
@@ -300,8 +304,10 @@ def assess(game, markets, schedule, session, multiplier, now, existing, qty, min
         return skip("kalshi_market_not_open")
     try:
         book = api(session, API, "/markets/" + m["ticker"] + "/orderbook")
-    except requests.RequestException:
+    except requests.RequestException:  # includes HTTP errors and invalid JSON
         return skip("kalshi_orderbook_unavailable")
+    if not isinstance(book, dict):
+        return skip("kalshi_orderbook_malformed")
     # Fetch completion is the earliest defensible observation timestamp.
     observed = datetime.now(timezone.utc) if existing.get("live_clock") else now
     row["observed_utc"] = observed.isoformat()
@@ -411,7 +417,10 @@ def _comparison_line(label, quotes, ledger):
 
 def summarize(observations, positions, outfile, now, note="", ledger=(), model_tag=""):
     counts = Counter(r["reason"] for r in observations if r["status"] == "skipped")
-    filled = [r for r in positions if r["status"] in {"paper_filled", "paper_settled"}]
+    # A fill stays a fill when settlement sends it to review; its unresolved
+    # state is reported separately under Open/review.
+    filled = [r for r in positions
+              if r["status"] in {"paper_filled", "paper_settled", "needs_review"}]
     settled = [r for r in positions if r["status"] == "paper_settled"]
     total = sum((D(r["pnl_dollars"]) for r in settled), D(0))
     quotes = matched_quotes(observations)
