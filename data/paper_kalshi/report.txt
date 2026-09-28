@@ -1,5 +1,5 @@
 KALSHI PAPER EXECUTION — READ-ONLY / NOT LIVE ORDERS
-As of: 2026-09-28T14:17:07.154839+00:00
+As of: 2026-09-28T16:48:36.865509+00:00
 Source: saved pregame dump of the shipped model (xw+starter_velo_v14) + live public Kalshi orderbook
 Decision rule: simulated immediate YES taker fill on the model lean;
   only when fee-inclusive break-even improves on saved sportsbook price.
