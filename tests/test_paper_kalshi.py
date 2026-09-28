@@ -241,7 +241,8 @@ def test_positions_carry_both_savings_figures(tmp_path):
 def _obs(pk, status, lean, avg, fee, be, reason=""):
     row = {k: "" for k in paper.FIELDS}
     row.update(game_pk=pk, status=status, lean=lean, quantity="10", avg_price=avg,
-               estimated_fee=fee, kalshi_be=be, kalshi_be_1x=be, reason=reason)
+               estimated_fee=fee, kalshi_be=be, kalshi_be_1x=be, reason=reason,
+               model_tag="tag")
     return row
 
 
@@ -335,3 +336,67 @@ def test_review_positions_still_count_as_fills(tmp_path):
     text = (tmp_path / "r.txt").read_text()
     assert "Paper fills (all days): 1" in text
     assert "Open/review: 1" in text
+
+
+def test_freshness_is_rechecked_at_orderbook_receipt(tmp_path):
+    from datetime import timedelta
+    data = write_dump(tmp_path)
+    # Model snapshot 20:45Z; the run starts at 22:40Z (115 min, fresh) but the
+    # book arrives at 22:46Z (121 min) -> stale at receipt, never filled.
+    # First pitch moved to 23:30Z so the 2-minute cutoff is not what fires.
+    rows = model_rows()
+    for r in rows:
+        r["scheduled_start_utc"] = "2026-09-22T23:30:00Z"
+    data = write_dump(tmp_path, rows)
+
+    class LateStart(Session):
+        def get(self, url, params=None, timeout=15):
+            if url.endswith('/schedule'):
+                return Response({"dates": [{"games": [{"gamePk": 822840,
+                                 "gameDate": "2026-09-22T23:30:00Z",
+                                 "status": {"abstractGameState": "Preview"}}]}]})
+            if url.endswith('/markets'):
+                ev = "KXMLBGAME-26SEP221930NYMTEX"
+                return Response({"markets": [{"ticker": ev + "-TEX", "event_ticker": ev,
+                                              "status": "open"}], "cursor": ""})
+            return super().get(url, params, timeout)
+
+    start = datetime(2026, 9, 22, 22, 40, tzinfo=timezone.utc)
+    orig = paper.assess
+    def late_clock(*a, **k):
+        a[6]["clock"] = lambda: start + timedelta(minutes=6)
+        return orig(*a, **k)
+    paper.assess = late_clock
+    try:
+        paper.run(args(tmp_path), session=LateStart(), now=start)
+    finally:
+        paper.assess = orig
+    obs = paper.read_csv(data / "paper_kalshi/observations.csv")
+    assert obs[-1]["reason"] == "model_stale_at_quote_receipt"
+    assert paper.read_csv(data / "paper_kalshi/positions.csv") == []
+    # Same run without the delay fills: the receipt check is what refused it.
+    (data / "paper_kalshi/positions.csv").unlink()
+    (data / "paper_kalshi/observations.csv").unlink()
+    paper.run(args(tmp_path), session=LateStart(), now=start)
+    assert len(paper.read_csv(data / "paper_kalshi/positions.csv")) == 1
+
+
+def test_report_aggregates_only_the_current_model_tag(tmp_path):
+    old = _obs("1", "paper_filled", "TEX", "0.50", "0.09", "0.509")
+    old["model_tag"] = "xw+starter_blend_v13"
+    new = _obs("2", "paper_filled", "NYM", "0.60", "0.09", "0.609")
+    new["model_tag"] = "xw+starter_velo_v14"
+    paper.summarize([old, new], [dict(old), dict(new)], tmp_path / "r.txt", NOW, "", [],
+                    "xw+starter_velo_v14")
+    text = (tmp_path / "r.txt").read_text()
+    assert "Paper fills (all days): 1" in text
+    assert "Quote observations (all days): 1" in text
+    assert "xw+starter_blend_v13=2" in text   # one observation + one position, counted not pooled
+
+
+def test_writer_runs_check_out_current_main():
+    root = Path(__file__).resolve().parents[1]
+    text = (root / ".github/workflows/kalshi-paper.yml").read_text()
+    observe = text.split("\n  observe:\n", 1)[1]
+    checkout = observe.split("actions/checkout@v4", 1)[1].split("- uses:", 1)[0]
+    assert "github.event_name == 'pull_request' && github.sha || 'main'" in checkout

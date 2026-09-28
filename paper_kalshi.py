@@ -309,10 +309,18 @@ def assess(game, markets, schedule, session, multiplier, now, existing, qty, min
     if not isinstance(book, dict):
         return skip("kalshi_orderbook_malformed")
     # Fetch completion is the earliest defensible observation timestamp.
-    observed = datetime.now(timezone.utc) if existing.get("live_clock") else now
+    clock = existing.get("clock") or (
+        (lambda: datetime.now(timezone.utc)) if existing.get("live_clock") else (lambda: now))
+    observed = clock()
     row["observed_utc"] = observed.isoformat()
     if observed >= start-timedelta(minutes=2):
         return skip("orderbook_arrived_after_cutoff")
+    # Slow upstream requests can carry inputs past their limits between the
+    # run's start and quote receipt: re-apply the freshness windows at receipt.
+    if observed-snap > timedelta(minutes=120):
+        return skip("model_stale_at_quote_receipt")
+    if observed-game["book_utc"] > timedelta(minutes=180):
+        return skip("sportsbook_stale_at_quote_receipt")
     if multiplier is None or multiplier < 0:
         return skip("unverified_fee_multiplier")
     fill = taker_fill(book, qty, multiplier)
@@ -416,6 +424,13 @@ def _comparison_line(label, quotes, ledger):
 
 
 def summarize(observations, positions, outfile, now, note="", ledger=(), model_tag=""):
+    # Every aggregate below is for the current model only; rows from earlier
+    # model versions stay in the CSVs (and still settle) but are only counted.
+    other = Counter(r.get("model_tag") or "untagged" for r in observations + positions
+                    if model_tag and r.get("model_tag") != model_tag)
+    if model_tag:
+        observations = [r for r in observations if r.get("model_tag") == model_tag]
+        positions = [r for r in positions if r.get("model_tag") == model_tag]
     counts = Counter(r["reason"] for r in observations if r["status"] == "skipped")
     # A fill stays a fill when settlement sends it to review; its unresolved
     # state is reported separately under Open/review.
@@ -432,6 +447,9 @@ def summarize(observations, positions, outfile, now, note="", ledger=(), model_t
             "Decision rule: simulated immediate YES taker fill on the model lean;",
             "  only when fee-inclusive break-even improves on saved sportsbook price.",
             "This is NOT a claim of predictive edge or executable realized fills.",
+            "Aggregates below: " + (model_tag or "all model tags") + " rows only. Other-tag rows "
+            "(kept, not pooled): " + (", ".join(f"{k}={v}" for k, v in sorted(other.items()))
+                                      or "none"),
             "Quote observations (all days): " + str(len(observations)),
             "Paper fills (all days): " + str(len(filled)),
             "Settled fills: " + str(len(settled)),
