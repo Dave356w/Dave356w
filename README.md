@@ -25,6 +25,7 @@ that combined history with closing prices and does not change model decisions.
 | [`REGISTRATIONS.md`](REGISTRATIONS.md) | Registered tests and checkpoints. Logic only — live readings are in `data/ledger_report.txt`. |
 | [`docs/repository_cleanup_review.md`](docs/repository_cleanup_review.md) | Dated repository audit, staged cleanup plan, and delta/market separation benchmark. |
 | [`docs/win_probability.md`](docs/win_probability.md) | Regularized home-win probability mapping, chronological evaluation, and comparison with the saved pregame market. |
+| [`docs/kalshi_paper.md`](docs/kalshi_paper.md) | Public Kalshi MLB quote capture, fee-inclusive simulated taker fills, and independently settled paper-execution audit. No trading credentials. |
 | [`docs/build_logic_validation.md`](docs/build_logic_validation.md) | Historical xwOBA review; its structural checks still describe the inherited v10 construction. |
 | [`docs/f5_market_validation.md`](docs/f5_market_validation.md) | First-5-innings market capture and its data-quality audit. |
 | [`docs/pitch_mix_theory.md`](docs/pitch_mix_theory.md) | Design notes for the pitch-type-conditioned matchup (shadow-only, not shipped). |
@@ -35,6 +36,7 @@ python build_site.py          # writes public/index.html for today's ET slate
 
 python shadow_report.py       # paired wOBA-vs-xwOBA read on the shadow dumps
 python win_probability.py     # probability audit; writes win_probability_output/
+python paper_kalshi.py --slate-date YYYY-MM-DD  # read-only paper execution snapshot
 python research/delta_market_audit.py  # descriptive v13/closing-market comparison; JSON to stdout
 
 pip install pytest            # deliberately not in requirements.txt
