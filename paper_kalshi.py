@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Read-only Kalshi MLB paper fills; NEVER submits or authenticates an order.
 
-Consumes the existing immutable v13 pregame lean dump. Captures live executable
+Consumes the existing immutable pregame lean dump of the SHIPPED model (the
+MODEL_TAG in build_site.py, currently v14; rows under any other tag are skipped
+and logged, never filled). Captures live executable
 YES asks from Kalshi's public order book, simulates immediate taker fills at
 visible depth, and settles only when Kalshi AND the existing MLB ledger agree.
 No model calibration, lean selection, or original ledger field is changed.
@@ -10,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import os
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, ROUND_CEILING
@@ -49,7 +52,27 @@ FIELDS = ["observed_utc", "game_pk", "game_date", "start_utc", "model_snapshot_u
           "sportsbook_be", "kalshi_ticker", "event_ticker", "status", "reason",
           "market_status", "book_best_ask", "quantity", "avg_price", "estimated_fee",
           "fee_multiplier", "kalshi_be", "savings_pp", "pnl_dollars", "settled_utc"]
+FIELDS += ["estimated_fee_1x", "kalshi_be_1x", "savings_pp_1x"]
 EVENT = re.compile(r"^KXMLBGAME-(\d{2}[A-Z]{3}\d{2})(\d{4})?([A-Z]+?)(G\d+)?$")
+
+
+BUILD_SITE = Path(__file__).resolve().parent / "build_site.py"
+_TAG_LINE = re.compile(r'^MODEL_TAG\s*=\s*os\.environ\.get\(\s*"MODEL_TAG"\s*,\s*"([^"]+)"', re.M)
+
+
+def current_model_tag(source=BUILD_SITE):
+    """The tag the production build writes, read without importing build_site.
+
+    The paper job installs only `requests`, so build_site's heavy imports are
+    unavailable; its MODEL_TAG line is parsed instead (the same env override
+    applies). tests/test_paper_kalshi.py pins this to build_site.MODEL_TAG.
+    """
+    if os.environ.get("MODEL_TAG"):
+        return os.environ["MODEL_TAG"]
+    match = _TAG_LINE.search(Path(source).read_text(encoding="utf-8"))
+    if not match:
+        raise RuntimeError(f"MODEL_TAG not found in {source}; refusing to guess the shipped model")
+    return match.group(1)
 
 
 def utc(value):
@@ -203,19 +226,24 @@ def taker_fill(book, qty, multiplier):
     asks = levels(book)
     if sum(n for _, n in asks) < qty:
         return None
-    remain, cost, fee = qty, D(0), D(0)
+    remain, cost, fee, fee_1x = qty, D(0), D(0), D(0)
     for price, depth in asks:
         n = min(depth, remain)
         cost += n * price
         # Explicit cents ROUND_UP per price-level simulated execution.
         fee += (D("0.07") * multiplier * n * price * (1-price)).quantize(
             CENT, rounding=ROUND_CEILING)
+        # Unconfirmed how the series fee_multiplier scales the taker curve, so
+        # the standard (1x) 7% fee is carried alongside as a sensitivity check.
+        fee_1x += (D("0.07") * n * price * (1-price)).quantize(
+            CENT, rounding=ROUND_CEILING)
         remain -= n
         if not remain:
             break
     return {"book_best_ask": asks[0][0], "quantity": qty,
             "avg_price": cost / qty, "estimated_fee": fee,
-            "kalshi_be": (cost + fee) / qty}
+            "kalshi_be": (cost + fee) / qty,
+            "estimated_fee_1x": fee_1x, "kalshi_be_1x": (cost + fee_1x) / qty}
 
 
 def ml_break_even(ml):
@@ -224,7 +252,8 @@ def ml_break_even(ml):
     return -ml / (D(100)-ml) if ml < 0 else D(100)/(D(100)+ml)
 
 
-def assess(game, markets, schedule, session, multiplier, now, existing, qty, min_savings):
+def assess(game, markets, schedule, session, multiplier, now, existing, qty, min_savings,
+           model_tag):
     row = {k: "" for k in FIELDS}
     row.update(observed_utc=now.isoformat(), game_pk=game["game_pk"],
                game_date=game["game_date"],
@@ -238,9 +267,10 @@ def assess(game, markets, schedule, session, multiplier, now, existing, qty, min
         row.update(status="skipped", reason=reason)
         return row
     start, snap = game["start"], game["snapshot"]
-    if (not start or not snap or game["metric"] != "xwOBA"
-            or not game["tag"].endswith("_v13") or not game["lean"]):
-        return skip("invalid_v13_pregame_snapshot")
+    if game["tag"] != model_tag:
+        return skip("model_tag_not_current")
+    if not start or not snap or game["metric"] != "xwOBA" or not game["lean"]:
+        return skip("invalid_pregame_snapshot")
     if not (snap < start and snap <= now and now-snap <= timedelta(minutes=120)):
         return skip("stale_or_postgame_model")
     if not (start-timedelta(minutes=360) <= now < start-timedelta(minutes=2)):
@@ -287,6 +317,7 @@ def assess(game, markets, schedule, session, multiplier, now, existing, qty, min
         return skip("insufficient_visible_ask_depth")
     row.update({key: str(value) for key, value in fill.items()})
     row["savings_pp"] = str((book_be-fill["kalshi_be"])*100)
+    row["savings_pp_1x"] = str((book_be-fill["kalshi_be_1x"])*100)
     if (book_be-fill["kalshi_be"])*100 < min_savings:
         return skip("execution_savings_below_threshold")
     row.update(status="paper_filled", reason="depth_covered_fee_inclusive_quote")
@@ -324,15 +355,72 @@ def settle(positions, ledger, session, now):
                    settled_utc=now.isoformat(), reason="confirmed_kalshi_and_mlb")
 
 
-def summarize(observations, positions, outfile, now, note=""):
+def matched_quotes(observations):
+    """One depth-covered, fee-inclusive Kalshi quote per game: the filled one
+    where a fill happened, else the game's first priced quote. This is the
+    all-leans baseline -- the filter is judged against it on the SAME games."""
+    per_game = {}
+    for r in observations:
+        if not r.get("kalshi_be") or not r.get("avg_price") or not r.get("quantity"):
+            continue
+        prior = per_game.get(r["game_pk"])
+        if prior is None or (r["status"] == "paper_filled"
+                             and prior["status"] != "paper_filled"):
+            per_game[r["game_pk"]] = r
+    return per_game
+
+
+def ledger_graded(quotes, ledger):
+    """Grade quotes by the MLB ledger's final score (not Kalshi settlement):
+    returns (n, wins, losses, pending, pnl_dollars, mean_kalshi_be, mean_be_1x)."""
+    finals = {}
+    for g in ledger:
+        pk = g.get("game_pk", "").strip()
+        home, away = dec(g.get("full_home")), dec(g.get("full_away"))
+        if (pk.isdigit() and g.get("status") == "graded" and home is not None
+                and away is not None and home != away):
+            finals[str(int(pk))] = g["home"] if home > away else g["away"]
+    wins = losses = pending = 0
+    pnl, be, be_1x, n_1x = D(0), D(0), D(0), 0
+    for r in quotes:
+        be += D(r["kalshi_be"])
+        if r.get("kalshi_be_1x"):
+            be_1x += D(r["kalshi_be_1x"])
+            n_1x += 1
+        winner = finals.get(r["game_pk"])
+        if winner is None:
+            pending += 1
+            continue
+        qty = D(r["quantity"])
+        won = winner == r["lean"]
+        wins, losses = wins + won, losses + (not won)
+        pnl += (qty if won else D(0)) - qty * D(r["avg_price"]) - D(r["estimated_fee"] or 0)
+    n = len(quotes)
+    return (n, wins, losses, pending, pnl,
+            be / n if n else None, be_1x / n_1x if n_1x else None)
+
+
+def _comparison_line(label, quotes, ledger):
+    n, w, l, pending, pnl, be, be_1x = ledger_graded(quotes, ledger)
+    if not n:
+        return f"  {label}: none yet"
+    fmt = lambda x: "n/a" if x is None else f"{x * 100:.1f}%"
+    return (f"  {label}: n={n} graded {w}-{l} pending={pending} "
+            f"P&L=${pnl.quantize(CENT)} mean fee-incl BE={fmt(be)} (1x fee {fmt(be_1x)})")
+
+
+def summarize(observations, positions, outfile, now, note="", ledger=(), model_tag=""):
     counts = Counter(r["reason"] for r in observations if r["status"] == "skipped")
     filled = [r for r in positions if r["status"] in {"paper_filled", "paper_settled"}]
     settled = [r for r in positions if r["status"] == "paper_settled"]
     total = sum((D(r["pnl_dollars"]) for r in settled), D(0))
+    quotes = matched_quotes(observations)
+    fill_pks = {r["game_pk"] for r in positions}
     text = ["KALSHI PAPER EXECUTION — READ-ONLY / NOT LIVE ORDERS",
             "As of: " + now.isoformat(),
-            "Source: saved V13 pregame dump + live public Kalshi orderbook",
-            "Decision rule: simulated immediate YES taker fill on the V13 lean;",
+            "Source: saved pregame dump of the shipped model (" + (model_tag or "unknown")
+            + ") + live public Kalshi orderbook",
+            "Decision rule: simulated immediate YES taker fill on the model lean;",
             "  only when fee-inclusive break-even improves on saved sportsbook price.",
             "This is NOT a claim of predictive edge or executable realized fills.",
             "Quote observations (all days): " + str(len(observations)),
@@ -340,7 +428,17 @@ def summarize(observations, positions, outfile, now, note=""):
             "Settled fills: " + str(len(settled)),
             "Settled hypothetical P&L: $" + str(total.quantize(CENT)),
             "Open/review: " + str(sum(r["status"] in {"paper_filled", "needs_review"} for r in positions)),
-            "Skip reasons: " + (", ".join(f"{k}={v}" for k,v in sorted(counts.items())) or "none")]
+            "Skip reasons: " + (", ".join(f"{k}={v}" for k,v in sorted(counts.items())) or "none"),
+            "Same-game comparison (graded by MLB ledger final score, not Kalshi settlement;",
+            "  one quote per game; fills are a subset of all matched leans):",
+            _comparison_line("All matched leans at Kalshi price", list(quotes.values()), ledger),
+            _comparison_line("Paper fills only", [q for pk, q in quotes.items()
+                                                  if pk in fill_pks], ledger),
+            _comparison_line("Matched but not filled", [q for pk, q in quotes.items()
+                                                        if pk not in fill_pks], ledger),
+            "Fee sensitivity: fills whose saving stays >= 0 pp at the standard 1x fee: "
+            + str(sum(1 for r in positions if r.get("savings_pp_1x")
+                      and D(r["savings_pp_1x"]) >= 0)) + " of " + str(len(positions))]
     if note:
         text.append("NOTICE: " + note)
     outfile.parent.mkdir(parents=True, exist_ok=True)
@@ -350,7 +448,7 @@ def summarize(observations, positions, outfile, now, note=""):
 
 def run(args, session=None, now=None):
     session = session or requests.Session()
-    session.headers.update({"User-Agent": "xwoba-v13-kalshi-paper/1.0"})
+    session.headers.update({"User-Agent": "xwoba-kalshi-paper/1.1"})
     now = now or datetime.now(timezone.utc)
     date = args.slate_date or now.astimezone(ET).strftime("%Y-%m-%d")
     root = Path(args.out_dir)
@@ -359,16 +457,20 @@ def run(args, session=None, now=None):
     observations, positions = read_csv(quotes_file), read_csv(positions_file)
     data_path = Path(args.dumps_dir) / f"leans_{date}_xw.csv"
     ledger_path = Path(args.dumps_dir) / "mlb_lean_ledger.csv"
+    model_tag = getattr(args, "model_tag", None) or current_model_tag()
+    ledger = read_csv(ledger_path)
+    report = lambda note: summarize(observations, positions, root/"report.txt", now,
+                                    note, ledger, model_tag)
     # Settlement works even on dates without a new model dump.
-    settle(positions, read_csv(ledger_path), session, now)
+    settle(positions, ledger, session, now)
     if not data_path.exists():
         write_csv(positions_file, positions)
-        summarize(observations, positions, root/"report.txt", now,
-                  "no saved pregame dump for " + date)
+        report("no saved pregame dump for " + date)
         return
     games = games_in_slate(read_csv(data_path))
     if not games:
-        summarize(observations, positions, root/"report.txt", now, "empty model dump")
+        write_csv(positions_file, positions)
+        report("empty model dump")
         return
     try:
         markets = get_markets(session)
@@ -381,12 +483,12 @@ def run(args, session=None, now=None):
             row = {k: "" for k in FIELDS}
             row.update(observed_utc=now.isoformat(), game_pk=game["game_pk"],
                        game_date=game["game_date"], lean=game["lean"] or "",
+                       model_tag=game["tag"],
                        status="skipped", reason="upstream_market_or_schedule_unavailable")
             observations.append(row)
         write_csv(quotes_file, observations)
         write_csv(positions_file, positions)
-        summarize(observations, positions, root/"report.txt", now,
-                  "Public upstream request failed: " + type(exc).__name__)
+        report("Public upstream request failed: " + type(exc).__name__)
         return
     fee_type = series.get("fee_type", "")
     multiplier = (dec(series.get("fee_multiplier")) if fee_type in
@@ -398,16 +500,15 @@ def run(args, session=None, now=None):
     # Programmatic test clocks bypass wall-time; real CLI uses receipt time.
     for game in games:
         result = assess(game, markets, status, session, multiplier, now, existing,
-                        args.quantity, D(str(args.min_savings_pp)))
+                        args.quantity, D(str(args.min_savings_pp)), model_tag)
         observations.append(result)
         if result["status"] == "paper_filled":
             positions.append(result.copy())
             existing["positions"].add(game["game_pk"])
     write_csv(quotes_file, observations)
     write_csv(positions_file, positions)
-    summarize(observations, positions, root/"report.txt", now,
-              "Kalshi series fee_type=" + str(fee_type) +
-              ", fee_multiplier=" + str(series.get("fee_multiplier")))
+    report("Kalshi series fee_type=" + str(fee_type) +
+           ", fee_multiplier=" + str(series.get("fee_multiplier")))
 
 
 def main():
@@ -417,6 +518,8 @@ def main():
     parser.add_argument("--out-dir", default="data/paper_kalshi")
     parser.add_argument("--quantity", type=int, default=10)
     parser.add_argument("--min-savings-pp", type=float, default=0.5)
+    parser.add_argument("--model-tag", help="model tag to paper-trade "
+                        "(default: build_site.MODEL_TAG, the shipped model)")
     args = parser.parse_args()
     if not 1 <= args.quantity <= 100 or not 0 <= args.min_savings_pp <= 10:
         parser.error("quantity must be 1..100 and min-savings-pp 0..10")

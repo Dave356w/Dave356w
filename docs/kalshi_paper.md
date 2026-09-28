@@ -1,7 +1,12 @@
 # Kalshi MLB read-only paper-execution shadow
 
 This is a separate, **zero-authentication and zero-order-submission** shadow of
-`xw+starter_blend_v13`. It consumes the repo's **saved** `data/leans_<ET-date>_xw.csv`
+the **shipped model** — whatever `MODEL_TAG` `build_site.py` currently writes
+(`xw+starter_velo_v14` as of 2026-09-24; it was `xw+starter_blend_v13` when this
+shadow was first written). Rows under any other tag are skipped as
+`model_tag_not_current` and never filled; every row records its `model_tag`, so
+fills from different model versions are never pooled silently. `--model-tag`
+overrides the default. It consumes the repo's **saved** `data/leans_<ET-date>_xw.csv`
 rows. It never changes `build_site.py`, model decisions, `mlb_lean_ledger.csv`, or
 an existing registration. It never calls a Kalshi trading endpoint.
 
@@ -22,8 +27,13 @@ code triggers a public API smoke run, saves its diagnostics as a workflow
 artifact, and never writes to `main`. The separate `kalshi-paper.yml` provides a manual trigger and
 an additional best-effort hourly snapshot at :37 ET during MLB daytime/evening.
 Its schedule gate skips runs without a game in the 15–360-minute pregame window.
-Scheduled/manual writer runs use the existing `site-build` concurrency group,
-while read-only PR smoke tests use a separate group and never commit data.
+Scheduled/manual writer runs use their own `kalshi-paper` concurrency group,
+**not** `site-build`: GitHub keeps one pending run per group and a newly queued
+run replaces it, so an hourly paper run there could evict a pending production
+build. The signed commit path already pins the branch tip and refuses if another
+paper run wrote the same files, so the two paper writers fail closed rather
+than double-filling. Read-only PR smoke tests use a separate group and never
+commit data.
 Paper-only commits use the signed API with `--no-fallback`, so a conflict
 cannot force an unsigned push or jeopardize the model's pregame ledger. GitHub scheduled events can be skipped or late:
 missing a first-pitch cutoff is a **skip**, never a retroactive fill. This is
@@ -44,6 +54,13 @@ observational infrastructure, not a continuous low-latency trading engine.
   estimates quadratic **taker** fees separately at each swept price level,
   rounded upward to cents. Missing/unrecognized fee metadata means **no fill**.
   Market-specific fee overrides are not certified by this approximation.
+  **Unverified:** how `fee_multiplier` (0.5 on the live MLB series) scales the
+  7% taker curve. Fills use the multiplier; every priced row also stores the
+  standard 1x fee (`estimated_fee_1x`, `kalshi_be_1x`, `savings_pp_1x`) and the
+  report counts how many fills keep a non-negative saving at 1x. At a 55¢ ask
+  the two differ by ~0.9 pp, comparable to the savings being measured, so
+  confirm the rule against Kalshi's fee schedule or a real fill before reading
+  the savings as settled.
 * By default, records a paper fill only if its fee-inclusive break-even
   improves on the **saved** side-specific sportsbook moneyline by at least
   0.5 percentage points. This is an execution-cost screen only: a V13 lean
@@ -52,6 +69,15 @@ observational infrastructure, not a continuous low-latency trading engine.
   `positions.csv` holds at most one hypothetical position per game;
   `report.txt` summarizes diagnostic skips, open positions and hypothetical
   settlement results. No sensitive credentials are stored.
+* **Same-game baseline.** The fill filter (Kalshi cheaper than a saved
+  sportsbook price that can be up to 180 minutes old) may preferentially select
+  games whose line moved *against* the lean after the snapshot. The report
+  therefore grades, by the MLB ledger's final score, one quote per game for
+  *all matched leans*, for *fills only*, and for *matched but not filled*, with
+  P&L and mean fee-inclusive break-even for each. A filter worth keeping should
+  beat the all-leans line on the same games; one that trails it is selecting
+  adverse moves. These rows are prospective paper observations, separate from
+  reconstructed history.
 * At each run, pending positions settle only when the **Kalshi market itself
   reports `settled` with `yes` or `no`** AND an existing **graded MLB ledger**
   confirms the same winner. Disagreements go to `needs_review`. Postponements,

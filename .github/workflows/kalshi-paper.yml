@@ -21,9 +21,14 @@ on:
 permissions:
   contents: write
 
-# Same group as build.yml: commits to data/ must not interleave.
+# NOT `site-build`. GitHub keeps one pending run per concurrency group and a
+# newly queued run replaces it, so an hourly paper run queued there could evict
+# a pending production build (see lineup-window-collect.yml). Serialisation is
+# unnecessary: commit_data.py pins expectedHeadOid, retries when main moves,
+# and with --no-fallback refuses only if the new tip wrote data/paper_kalshi --
+# which is the fail-closed outcome for two paper writers racing.
 concurrency:
-  group: ${{ github.event_name == 'pull_request' && 'kalshi-paper-review' || 'site-build' }}
+  group: ${{ github.event_name == 'pull_request' && 'kalshi-paper-review' || 'kalshi-paper' }}
   cancel-in-progress: false
 
 jobs:
