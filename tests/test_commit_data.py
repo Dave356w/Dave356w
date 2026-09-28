@@ -189,6 +189,7 @@ class TestWorkflowsUseIt:
     @pytest.mark.parametrize("name,branch", [
         ("build.yml", "--branch main"),
         ("priors-snapshot.yml", "--branch \"${{ github.ref_name }}\""),
+        ("lineup-window-collect.yml", "--branch main"),
     ])
     def test_data_is_committed_through_the_signed_path(self, name, branch):
         text = self._workflow(name)
@@ -196,7 +197,8 @@ class TestWorkflowsUseIt:
         assert branch in text
         assert "GITHUB_TOKEN: ${{ github.token }}" in text
 
-    @pytest.mark.parametrize("name", ["build.yml", "priors-snapshot.yml"])
+    @pytest.mark.parametrize("name", ["build.yml", "priors-snapshot.yml",
+                                      "lineup-window-collect.yml"])
     def test_no_workflow_pushes_data_directly(self, name):
         """A second, unsigned commit path would quietly undo this."""
         lines = [ln.strip() for ln in self._workflow(name).splitlines()
@@ -207,9 +209,156 @@ class TestWorkflowsUseIt:
                 "unverified and bypasses commit_data.py"
             )
 
-    @pytest.mark.parametrize("name", ["build.yml", "priors-snapshot.yml"])
+    @pytest.mark.parametrize("name", ["build.yml", "priors-snapshot.yml",
+                                      "lineup-window-collect.yml"])
     def test_validation_still_precedes_the_commit(self, name):
         text = self._workflow(name)
         assert text.index("python validate_data_files.py") < text.index(
             "python commit_data.py"
         )
+
+
+class TestLineupReportPublish:
+    """The collect workflow may write exactly one file, from one job, on
+    main-branch family runs -- and must not queue in `site-build`, where a
+    pending run of its own could replace a pending build.
+
+    Text checks rather than a YAML parse: PyYAML is not in requirements.txt,
+    and the test job installs only that plus pytest.
+    """
+    ROOT = TestWorkflowsUseIt.ROOT
+
+    def _parts(self):
+        with open(os.path.join(self.ROOT, ".github", "workflows",
+                               "lineup-window-collect.yml"),
+                  encoding="utf-8") as fh:
+            text = fh.read()
+        code = "\n".join(ln for ln in text.splitlines()
+                         if not ln.strip().startswith("#"))
+        head, jobs = code.split("\njobs:\n", 1)
+        collect, publish = jobs.split("\n  publish:\n", 1)
+        return head, collect, publish
+
+    def test_collect_job_stays_read_only(self):
+        head, collect, _ = self._parts()
+        assert "permissions:\n  contents: read" in head
+        assert "permissions:" not in collect
+        assert "commit_data.py" not in collect
+
+    def test_publish_commits_only_the_report(self):
+        _, _, publish = self._parts()
+        assert "contents: write" in publish
+        assert "--path data/pitcher_lineup_report.txt" in publish
+        assert publish.count("commit_data.py") == 1
+
+    def test_publish_skips_pr_and_single_slate_runs(self):
+        _, _, publish = self._parts()
+        assert "needs: collect" in publish
+        assert "github.event_name != 'pull_request'" in publish
+        assert "refs/heads/main" in publish
+        assert "!inputs.date" in publish
+
+    def test_not_in_the_build_concurrency_group(self):
+        head, collect, publish = self._parts()
+        for part in (head, collect, publish):
+            assert "concurrency:" not in part
+            assert "site-build" not in part
+
+
+class TestVelocityMigrationIsNeverStale:
+    """The migration rewrites the whole ledger file, and it queues behind
+    site-build. It must work from the tip that build left, and refuse to
+    commit if main moved -- its first run did neither and undid a build."""
+
+    def _text(self):
+        with open(os.path.join(TestWorkflowsUseIt.ROOT, ".github", "workflows",
+                               "velocity-migration.yml"), encoding="utf-8") as fh:
+            return fh.read()
+
+    def test_checks_out_the_latest_main(self):
+        t = self._text()
+        assert "uses: actions/checkout@v4\n        with:\n          ref: main" in t
+
+    def test_refuses_when_main_moved_before_compute_and_commit(self):
+        t = self._text()
+        guard = 'test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"'
+        assert t.count(guard) == 2
+        assert t.index(guard) < t.index("python reconstruct_v14_velocity.py")
+        assert t.rindex(guard) < t.index("python commit_data.py")
+
+    def test_serialised_with_the_build(self):
+        t = self._text()
+        assert "group: site-build" in t and "cancel-in-progress: false" in t
+
+
+def test_first_attempt_is_pinned_to_the_checkout_not_the_tip(monkeypatch):
+    """A stale checkout whose newer commits wrote our file must be refused."""
+    monkeypatch.setattr(commit_data, "remote_head", _Moves("tip", "tip"))
+    checked = []
+
+    def touches(old, new, ours):
+        checked.append((old, new))
+        return ["data/led.csv"]
+
+    monkeypatch.setattr(commit_data, "touches_ours", touches)
+    monkeypatch.setattr(commit_data.time, "sleep", lambda s: None)
+    seen = []
+
+    def fake_graphql(token, query, variables, timeout=60):
+        seen.append(variables["input"]["expectedHeadOid"])
+        raise RuntimeError("expected head oid mismatch")
+
+    monkeypatch.setattr(commit_data, "graphql", fake_graphql)
+    with pytest.raises(RuntimeError, match="refusing to overwrite"):
+        commit_data.api_commit(
+            "tok", "o/r", "main", "ledger",
+            {"additions": [{"path": "data/led.csv", "contents": ""}],
+             "deletions": []}, base="checkout")
+    assert seen == ["checkout"]
+    assert checked == [("checkout", "tip")]
+
+
+def test_stale_checkout_that_touched_nothing_of_ours_still_commits(monkeypatch):
+    monkeypatch.setattr(commit_data, "remote_head", _Moves("tip", "tip"))
+    monkeypatch.setattr(commit_data, "touches_ours", lambda o, n, ours: [])
+    monkeypatch.setattr(commit_data.time, "sleep", lambda s: None)
+    seen = []
+
+    def fake_graphql(token, query, variables, timeout=60):
+        seen.append(variables["input"]["expectedHeadOid"])
+        if len(seen) == 1:
+            raise RuntimeError("expected head oid mismatch")
+        return {"createCommitOnBranch": {"commit": {"oid": "c" * 40, "url": "u"}}}
+
+    monkeypatch.setattr(commit_data, "graphql", fake_graphql)
+    out = commit_data.api_commit(
+        "tok", "o/r", "main", "ledger",
+        {"additions": [{"path": "data/x.csv", "contents": ""}], "deletions": []},
+        base="checkout")
+    assert out["oid"] == "c" * 40 and seen == ["checkout", "tip"]
+
+
+def test_main_passes_the_checkout_as_the_base(monkeypatch):
+    monkeypatch.setattr(commit_data, "changed_paths", lambda paths: (["data/x.csv"], []))
+    monkeypatch.setattr(commit_data, "file_changes",
+                        lambda a, d: {"additions": [], "deletions": []})
+    monkeypatch.setattr(commit_data, "local_head", lambda: "checkout")
+    got = {}
+
+    def fake_api(token, repo, branch, message, changes, attempts=3, base=None):
+        got["base"] = base
+        return {"oid": "c" * 40, "url": "u"}
+
+    monkeypatch.setattr(commit_data, "api_commit", fake_api)
+    monkeypatch.setenv("GITHUB_TOKEN", "t")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "o/r")
+    commit_data.main(["--branch", "main", "--message", "m", "--no-fallback"])
+    assert got["base"] == "checkout"
+
+
+def test_the_build_checks_out_the_latest_main():
+    with open(os.path.join(TestWorkflowsUseIt.ROOT, ".github", "workflows",
+                           "build.yml"), encoding="utf-8") as fh:
+        text = fh.read()
+    build = text.split("\n  build:\n", 1)[1]
+    assert "uses: actions/checkout@v4\n        with:\n          ref: main" in build

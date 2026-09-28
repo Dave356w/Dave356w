@@ -76,7 +76,14 @@ jobs:
     # check out its historical commit; never relabel the current wOBA source
     # with an xwOBA tag.
     steps:
+      # The latest main when this job STARTS, not the commit the run was
+      # queued on. Runs queue behind one another in site-build; a queued run
+      # checking out its trigger commit would rebuild the ledger from before
+      # the run it waited for. commit_data now refuses that (it pins the
+      # commit to the checkout), so this keeps queued builds from failing.
       - uses: actions/checkout@v4
+        with:
+          ref: main
 
       # Enables Pages on first run (using the pages:write permission above) and
       # exposes the publish settings, so no manual Settings -> Pages toggle is

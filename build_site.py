@@ -43,6 +43,7 @@ from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
+import market_backfill
 
 from market_backfill import (ODDS_LADDER as _mb_odds_ladder,
                              V13_RECON_COLS as _mb_v13_recon_cols,
@@ -50,6 +51,7 @@ from market_backfill import (ODDS_LADDER as _mb_odds_ladder,
                              is_pickem as _mb_is_pickem,
                              ladder_rung as _mb_ladder_rung,
                              publish_reconstruction as _mb_publish_reconstruction,
+                             V14_NATIVE_EQUIVALENT as _mb_v14_native_equivalent,
                              recon_grade as _mb_recon_grade,
                              recon_grades as _mb_recon_grades,
                              breakeven_prob as _mb_breakeven_prob)
@@ -57,8 +59,10 @@ import requests
 
 import hitter_frame
 import hybrid_v2
+import starter_velocity as _sv
 import pitch_arsenal
 import player_priors
+import season_phase
 
 # ------------------------------------------------------------
 # CONFIG
@@ -168,7 +172,10 @@ USE_TEAM_LOGOS = os.environ.get("USE_TEAM_LOGOS", "1") != "0"
 LOGO_CDN = "https://www.mlbstatic.com/team-logos"
 DATA_DIR = os.environ.get("DATA_DIR", "data")            # grading ledger home
 LEDGER_PATH = os.path.join(DATA_DIR, "mlb_lean_ledger.csv")
-MODEL_TAG = os.environ.get("MODEL_TAG", "xw+starter_blend_v13")  # keep in sync with grade_leans.py
+# Postseason and type-unconfirmed rows. Read ONLY by the pregame lock lookup;
+# every record, calibration and page is regular season. See season_phase.py.
+POSTSEASON_LEDGER_PATH = os.path.join(DATA_DIR, season_phase.POSTSEASON_LEDGER_NAME)
+MODEL_TAG = os.environ.get("MODEL_TAG", "xw+starter_velo_v14")  # keep in sync with grade_leans.py
 if not MODEL_TAG.startswith("xw+"):
     raise RuntimeError(
         "This build fetches Savant xwOBA; refusing to stamp it with a non-xwOBA MODEL_TAG"
@@ -383,6 +390,11 @@ _RECORD_FAMILIES = {
     # the mixed-basis defect this file records on the ML column, with the
     # mixture in the outcome rather than in the price.
     "xw+starter_blend_v13": ("xw+plat_consol_v12", "xw+starter_blend_v13"),
+    # v14 adds the starter velocity term (starter_velocity.py) and SHARES
+    # the v12/v13 record line on the operator's call: every earlier row is
+    # re-decided under v14 (velo_*_recon), so the line stays one model's.
+    "xw+starter_velo_v14": ("xw+plat_consol_v12", "xw+starter_blend_v13",
+                             "xw+starter_velo_v14"),
 }
 RECORD_TAGS = tuple(
     t.strip() for t in os.environ.get(
@@ -518,7 +530,10 @@ _SCALE_FAMILIES = {
     # a v13 row scored under them is a different statistic under the same
     # constant. Those registrations are bounded to their own families at their
     # own call sites rather than being left to accrue v13 rows silently.
-    "xw+starter_blend_v13": ("xw+starter_blend_v13",),
+    "xw+starter_blend_v13": ("xw+starter_blend_v13", "xw+starter_velo_v14"),
+    # v14 moves each starter rate by at most a few thousandths of wOBA
+    # (BETA_V * dv, sd(dv) ~0.7 mph); same units and spread as v13.
+    "xw+starter_velo_v14": ("xw+starter_blend_v13", "xw+starter_velo_v14"),
     # wOBA has a different sampling distribution from xwOBA, so it cannot
     # share magnitude cutoffs with any xwOBA lineage.
     # v2 changes the centre of the starter platoon prior but retains observed
@@ -877,6 +892,10 @@ def get_slate(slate_date, sport_id=1):
             linescore = g.get("linescore") or {}
             rows.append({
                 "game_pk": g.get("gamePk"),
+                # R / F / D / L / W. The date query returns postseason games
+                # as readily as regular-season ones; this is what lets the
+                # grader keep them out of the regular-season ledger.
+                "game_type": g.get("gameType"),
                 "game_date": od,
                 "game_datetime_utc": g.get("gameDate"),
                 "game_number": g.get("gameNumber"),
@@ -1000,6 +1019,64 @@ def load_pitcher_xera():
         if v is not None:
             out[pid] = v
     log(f"  xERA leaderboard: {len(out)} pitchers (col '{col}')")
+    return out
+
+
+# v14 velocity term. Per-pitcher Statcast search, the URL pattern pybaseball's
+# `statcast_pitcher` uses; reduced to one row per start and cached per slate
+# day so the hourly builds fetch each probable once.
+_SAVANT_PITCHER_URL = (
+    "https://baseballsavant.mlb.com/statcast_search/csv?all=true&hfPT=&hfAB="
+    "&hfBBT=&hfPR=&hfZ=&stadium=&hfBBL=&hfNewZones=&hfGT=R%7C&hfSea=&hfSit="
+    "&player_type=pitcher&hfOuts=&opponent=&pitcher_throws=&batter_stands="
+    "&hfSA=&game_date_gt={start}&game_date_lt={end}&pitchers_lookup%5B%5D={pid}"
+    "&team=&position=&hfRO=&home_road=&hfFlag=&metric_1=&hfInn=&min_pitches=0"
+    "&min_results=0&group_by=name&sort_col=pitches&player_event_sort=h_launch_speed"
+    "&sort_order=desc&min_abs=0&type=details&")
+USE_VELOCITY = os.environ.get("USE_VELOCITY", "1") != "0"
+VELOCITY_BUDGET_S = 240.0
+
+
+def load_starter_velocity(ids, before_date=None):
+    """{player_id: starter_velocity.pregame_trend(...)} for tonight's probables.
+
+    Fail-soft by design: a pitcher whose fetch fails, or the whole loader
+    once the time budget runs out, simply gets no dv -- and no dv means the
+    v13 rate, unadjusted. A velocity outage must never cost a slate.
+    """
+    before = str(before_date or SLATE_DATE)[:10]
+    out = {}
+    if not USE_VELOCITY:
+        return out
+    start = f"{before[:4]}-03-01"
+    end = (pd.Timestamp(before) - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+    t0 = time.monotonic()
+    failed = 0
+    for pid in sorted({int(i) for i in ids if pd.notna(i)}):
+        if time.monotonic() - t0 > VELOCITY_BUDGET_S:
+            log(f"  velocity: time budget reached; {len(out)} pitchers loaded")
+            break
+        path = os.path.join(CACHE_DIR, f"savant_cache_velo_{pid}_{SLATE_DATE}.csv")
+        try:
+            if os.path.exists(path):
+                starts = pd.read_csv(path)
+            else:
+                r = session.get(_SAVANT_PITCHER_URL.format(start=start, end=end, pid=pid),
+                                timeout=30)
+                r.raise_for_status()
+                raw = pd.read_csv(io.StringIO(r.text)) if r.text.strip() else pd.DataFrame()
+                starts = _sv.per_start(raw)
+                try:
+                    os.makedirs(CACHE_DIR, exist_ok=True)
+                    starts.to_csv(path, index=False)
+                except Exception:  # noqa: BLE001
+                    pass
+            out[pid] = _sv.pregame_trend(starts, before)
+        except Exception:  # noqa: BLE001
+            failed += 1
+    n_dv = sum(1 for v in out.values() if v.get("dv") is not None)
+    log(f"  velocity: {len(out)} pitchers, {n_dv} with a pregame trend"
+        + (f", {failed} fetches failed" if failed else ""))
     return out
 
 
@@ -2229,6 +2306,9 @@ class LiveDataProvider:
     def load_pitcher_xera(self):
         return load_pitcher_xera()
 
+    def load_starter_velocity(self, ids):
+        return load_starter_velocity(ids, before_date=self.slate_date)
+
 
 def fetch_all(slate_date, provider=None, calibration_history=None,
               include_platoon=True, write_audit=True):
@@ -2478,6 +2558,22 @@ def fetch_all(slate_date, provider=None, calibration_history=None,
             lambda r: xera_map.get(int(r["player_id"]), np.nan)
             if r.get("Pos.") == "P" and pd.notna(r.get("player_id")) else np.nan,
             axis=1)
+        # v14: each probable's fastball velocity trend. A provider without the
+        # method (a replay seam, a test double) yields no trend, which is the
+        # v13 rate -- never an error.
+        _velo_fn = getattr(provider, "load_starter_velocity", None)
+        try:
+            velo_map = _velo_fn(prob_ids) if _velo_fn else {}
+        except Exception as e:  # noqa: BLE001
+            log(f"  velocity unavailable ({e!r}); starters unadjusted")
+            velo_map = {}
+        for _k, _col in (("dv", "velo_dv"), ("velo_last", "velo_last"),
+                         ("velo_base", "velo_base"), ("n_starts", "velo_starts")):
+            pitchers_df[_col] = pitchers_df.apply(
+                lambda r, _k=_k: (velo_map.get(int(r["player_id"]), {}).get(_k)
+                                  if r.get("Pos.") == "P" and pd.notna(r.get("player_id"))
+                                  else None),
+                axis=1)
 
     side_status = pd.concat([lineup_projection_df["away_lineup_status"].rename("status"),
                              lineup_projection_df["home_lineup_status"].rename("status")],
@@ -3592,6 +3688,17 @@ def build_matchup(P, agg, rate_cols, league_baseline, shrink_prior=None, shrink_
                     _bv is not None and pd.notna(_bv)
                     and pd.notna(_pv_primary)
                     and pd.notna(league_baseline.get(BLEND_RATE_INTERNAL_COL)))
+                # v14: the starter's fastball velocity trend. No trend -> the
+                # v13 rate unchanged (see starter_velocity). The pre-velocity
+                # rate is kept so the adjustment is auditable from the dump.
+                _dv = _f(pr.get("velo_dv"))
+                rec["starter_rate_prevelo"] = float(pv) if pd.notna(pv) else np.nan
+                rec["starter_velo_dv"] = _dv if _dv is not None else np.nan
+                rec["starter_velo_last"] = _f(pr.get("velo_last"))
+                rec["starter_velo_base"] = _f(pr.get("velo_base"))
+                rec["starter_velo_starts"] = _f(pr.get("velo_starts"))
+                if pd.notna(pv):
+                    pv = _sv.adjust(pv, _dv)
             ov = a.get(f"opp_{c}")
             if c == XWOBA_SHRINK_COL:
                 neutral = a.get("opp_xwOBA_neutral")
@@ -4313,7 +4420,8 @@ HEAT_ALPHA_MAX = 0.30
 # roughly still in calibration. Display-only, no MODEL_TAG implication. Widen
 # xwOBA_sp only off a real wOBA sample, not off this one.
 HEAT_DOMAINS = {"xwOBA_sp": 0.035, "K-BB%": 7.0,
-                "OPS": 0.080, "ERA": 1.50, "xwOBA_bat": 0.045}
+                "OPS": 0.080, "ERA": 1.50, "xwOBA_bat": 0.045,
+                "velo_dv": 1.5}
 
 
 def heat_style(val, lg, domain, hi="warm"):
@@ -4634,69 +4742,23 @@ def _lean_implied_p(odds, fav, away_abbr, home_abbr):
 
 
 def _model_version_short():
-    """Compact active-model label for the per-game panel (for example, V12)."""
-    m = re.search(r"_v(\d+)$", MODEL_TAG, flags=re.IGNORECASE)
-    return f"V{m.group(1)}" if m else MODEL_TAG
+    """Reader-facing model label on the public pages.
 
-
-def _xwoba_side_history(ctx, selection_ml=None):
-    """The model's record against the POSTED price, pooled over the family.
-
-    ONE figure, and the delta x price cells that stood here are gone. They
-    were three of a 26-cell grid published with no error bar and no
-    reference, and no cell of that grid can be read: under "market correct,
-    no edge" its best cell clears breakeven by +39.6 pp on average. The
-    measured bands are not even ordered (+2.6, +14.5, -3.2, +8.3, +7.8 pp),
-    so a big delta is not conviction paying off, and the cell a reader lands
-    on says nothing about their game.
-
-    What IS a result is the margin, which the panel had computed all along
-    and rendered nowhere: over the family the lean clears the posted price by
-    about +5.9 +/- 2.2 pp. It is a MODEL-LEVEL average, not this game's
-    chance of winning, and the copy says so rather than leaving a percentage
-    beside two other percentages to be read as one -- the defect this panel
-    already shipped once.
-
-    Against the POSTED price, never the devigged one: a bet has to clear the
-    breakeven, and the two differ by the hold.
+    Plain "Model" rather than the version (V13): readers do not need the
+    lineage, and it lives in MODEL_TAG, MATCHUP_SITE.md and the ledger.
     """
-    pooled = (ctx or {}).get("pooled")
-    if not pooled or not pooled.get("n"):
-        return ""
-    n = int(pooled["n"])
-    if pooled.get("excess_be") is None or pooled.get("excess_se") is None:
-        return ""
-    gap = 100.0 * float(pooled["excess_be"])
-    se = 100.0 * float(pooled["excess_se"])
-    game_word = "game" if n == 1 else "games"
-    return (
-        "<div class='vprofile'>"
-        "<div class='vprofile-title'>Beating this price</div>"
-        "<div class='vline'><span class='vk'>Cleared the posted price by</span>"
-        f"<span>{gap:+.1f} ± {se:.1f} pts · {n} completed {game_word}</span></div>"
-        "<div class='vnote'>A model-level average over every completed game, "
-        "not this game's chance of winning.</div>"
-        "</div>"
-    )
-def _branch_history(ctx, action, p_lean=None, selection_ml=None):
-    """Return the model's record against the posted price, or nothing.
+    return "Model"
 
-    `delta` left this signature with the cells that read it: the panel is a
-    pooled margin now and takes no per-game bucket, so carrying the argument
-    would be a parameter nothing reads -- the same smell one level down from
-    a column carried to no surface.
-    """
-    if not action:
-        return ""
-    return _xwoba_side_history(ctx, selection_ml)
+
 
 
 def _verdict_html(fav, odds, away_abbr, home_abbr, ctx=None, delta=None):
-    """Per-game panel: model side, current market hurdle, descriptive history.
+    """Current selection and quote plus an exact-sample historical price band.
 
-    v13 chooses the side from model inputs alone. The market supplies the
-    current price and no-vig benchmark; historical delta/price buckets are
-    context, not a calibrated probability for tonight's game.
+    V13 chooses the side independently of market odds. Historical context
+    groups only V13-represented selections by their own closing prices; market
+    expectations and realised outcomes use identical selected games. This
+    descriptive band is not a game-specific win-probability estimate.
     """
     ctx = ctx or {}
     if fav is None:
@@ -4707,15 +4769,16 @@ def _verdict_html(fav, odds, away_abbr, home_abbr, ctx=None, delta=None):
     action = published_action(p_lean, delta)
     d = _f(delta)
     delta_txt = f"{abs(d):.4f}".lstrip("0") if d is not None else "—"
-    version = _model_version_short()
 
     odds = odds or {}
+    # The posted price and both sides' no-vig already sit in the odds strip
+    # above (`_market_html`), so the panel does not restate the moneyline;
+    # it carries the lean-side no-vig only inside the break-even comparison.
     price = odds.get("home_ml") if fav == home_abbr else odds.get("away_ml")
-    price_txt = _fmt_ml(price) if price is not None else "—"
-    p_txt = (f"{100 * p_lean:.1f}% no-vig" if p_lean is not None
-             else "no no-vig price yet")
 
-    break_even_line = ""
+    break_even_line = (
+        "<div class='vline'><span class='vk'>Posted break-even</span>"
+        "<span>no price yet</span></div>")
     price_num = _f(price)
     if price_num is not None and (price_num <= -100 or price_num >= 100):
         be = _imp_ml(price_num)
@@ -4742,8 +4805,8 @@ def _verdict_html(fav, odds, away_abbr, home_abbr, ctx=None, delta=None):
             # for the searched-constant one.
             break_even_line = (
                 "<div class='vline'><span class='vk'>Posted break-even</span>"
-                f"<span>{100 * be:.1f}% · requires {lift_pp:+.1f} pp over market"
-                "</span></div>"
+                f"<span>{100 * be:.1f}% · requires {lift_pp:+.1f} pp over "
+                f"{100 * p_lean:.1f}% no-vig</span></div>"
             )
         else:
             break_even_line = (
@@ -4751,25 +4814,16 @@ def _verdict_html(fav, odds, away_abbr, home_abbr, ctx=None, delta=None):
                 f"<span>{100 * be:.1f}%</span></div>"
             )
 
-    note = (
-        f"<div class='vnote'>{version} chooses the side independently of the "
-        "market. Δ magnitude is not a calibrated win probability.</div>"
-    )
-
-    selection_ml = price if action else None
-    history = _branch_history(ctx, action, p_lean, selection_ml)
+    market_context = _market_band_context_html(ctx, price) if action else ""
 
     return (
         "<div class='verdict'><div class='l'>Model vs market</div>"
         "<div class='vt'>"
         "<div class='vprofile-title vgroup'>This game</div>"
         f"<div class='vline'><span class='vk'>Model lean</span>"
-        f"<span>{_esc(fav)} · {version} Δ {delta_txt}</span></div>"
-        f"<div class='vline'><span class='vk'>Market price</span>"
-        f"<span>{_esc(fav)} {price_txt} · {p_txt}</span></div>"
+        f"<span>{_esc(fav)} · Δ {delta_txt}</span></div>"
         f"{break_even_line}"
-        f"{note}"
-        f"{history}</div></div>"
+        f"{market_context}</div></div>"
     )
 
 def _hitter_row_html(i, hr):
@@ -4836,6 +4890,26 @@ def _sp_stat_cell(lab, val, fmt, sub=None, heat=""):
             f"<div class='v'>{fmt(val)}</div>{s}</div>")
 
 
+def _velo_cell(d):
+    """Last start's fastball velocity and its change against the season's
+    earlier starts -- the v14 input, shown on the card that it moves.
+
+    Up is good for the pitcher (cool), down is good for the hitters (warm),
+    matching the card's other tints. With too few starts for a trend the
+    cell still shows the velocity and says so, rather than a zero.
+    """
+    last, dv = _f(d.get("velo_last")), _f(d.get("velo_dv"))
+    if dv is None:
+        sub = "no trend yet" if last is not None else None
+        heat = ""
+    else:
+        arrow = "▲" if dv > 0.05 else "▼" if dv < -0.05 else "•"
+        sub = f"{arrow} {dv:+.1f} vs season"
+        heat = heat_style(-dv, 0.0, HEAT_DOMAINS["velo_dv"])
+    return _sp_stat_cell("FB mph", last,
+                         lambda v: "—" if v is None else f"{v:.1f}", sub, heat=heat)
+
+
 def _side_html(sp_abbr, d, league_baseline):
     badge = f"<span class='hand'>{d['t']}HP</span>" if d["t"] in ("L", "R") else ""
     has_fullgame = "bullpen_sequential" in str(d.get("pitching_basis") or "")
@@ -4868,14 +4942,15 @@ def _side_html(sp_abbr, d, league_baseline):
     xera_sub = (f"season {f2(d['era_season'])}"
                 if d.get("era_season") is not None else None)
     stats = (
-        _sp_stat_cell(f"{MODEL_RATE_LABEL} agn", d["pit_xw"], f3,
+        _sp_stat_cell(MODEL_RATE_LABEL, d["pit_xw"], f3,
                       f"lg {f3(lg['xwOBA'])}" if lg["xwOBA"] is not None else None,
                       heat=heat_style(d["pit_xw"], lg["xwOBA"], HEAT_DOMAINS["xwOBA_sp"]))
         + _sp_stat_cell("K-BB%", kbb, f1,
                         f"lg {f1(lg_kbb)}" if lg_kbb is not None else None,
                         heat=heat_style(kbb, lg_kbb, HEAT_DOMAINS["K-BB%"], hi="cool"))
         + _sp_stat_cell("xERA", d.get("xera"), f2, xera_sub,
-                        heat=heat_style(d.get("xera"), lg["ERA"], HEAT_DOMAINS["ERA"])))
+                        heat=heat_style(d.get("xera"), lg["ERA"], HEAT_DOMAINS["ERA"]))
+        + _velo_cell(d))
     tier_lab, tier_cls = _tier_word(d.get("pit_xw_pctile"))
     tier = f"<span class='tier {tier_cls}'>{tier_lab}</span>" if tier_lab else ""
     bars = (f"<div class='spct'><span class='lab'>{MODEL_RATE_LABEL}</span>{_pct_bar(d.get('pit_xw_pctile'), 'p')}</div>"
@@ -4922,15 +4997,19 @@ def _market_html(o, away_abbr, home_abbr, fav=None, ctx=None, delta=None):
                 f"{_esc(lab)}</div>"
                 f"<div class='v'>{_fmt_ml(cur)}{sub}</div></div>")
     tot = f"o/u {o['total']:g}" if o.get("total") is not None else "—"
-    ph = f"{o['p_home'] * 100:.1f}%" if o.get("p_home") is not None else "—"
+    # The no-vig cell names the model's side, so it reads with the verdict
+    # beneath it; with no lean it falls back to the home side, as before.
+    nv_side = fav if fav in (away_abbr, home_abbr) else home_abbr
+    p_side = _lean_implied_p(o, nv_side, away_abbr, home_abbr)
+    ph = f"{p_side * 100:.1f}%" if p_side is not None else "—"
     return (
         "<div class='market'><div class='modds'>"
         + _mlcell("DK ML", away_abbr, o.get("away_ml"), o.get("open_away_ml"))
         + _mlcell("DK ML", home_abbr, o.get("home_ml"), o.get("open_home_ml"))
         + f"<div class='mcell'><div class='l'>Total</div><div class='v'>{tot}</div></div>"
-        + f"<div class='mcell'><div class='l'>Implied "
-        + _esc(home_abbr)
-        + f" (devig)</div><div class='v'>{ph}</div></div>"
+        + f"<div class='mcell'><div class='l'>No-vig · "
+        + _esc(nv_side)
+        + f"</div><div class='v'>{ph}</div></div>"
         + "</div>"
         + _verdict_html(fav, o, away_abbr, home_abbr, ctx, delta)
         + "</div>")
@@ -5204,7 +5283,12 @@ def _pregame_lock_note(g):
 
 
 def _detail_context_html(g):
-    when = " · ".join(x for x in (g.get("time_pt"), g.get("venue")) if x)
+    # The collapsed row prints the start time until first pitch and hides it
+    # once a game is live or final (`_scoreboard_summary`). Print it here only
+    # when that row does not, so it appears exactly once either way.
+    started = str(g.get("abstract_state") or "").lower() in ("live", "final")
+    when = " · ".join(x for x in ((g.get("time_pt") if started else None),
+                                  g.get("venue")) if x)
     ctx = f"<div class='detail-context'>{_esc(when)}</div>" if when else ""
     return ctx + _pregame_lock_note(g)
 
@@ -5325,6 +5409,9 @@ _FROZEN_SIDE_COLS = (
     ("platoon_delta_sp", "platoon_delta_sp"),
     ("starter_rate_basis", "sp_rate_basis"),
     ("starter_rate_bf", "sp_rate_bf"),
+    ("starter_velo_dv", "sp_velo_dv"),
+    ("starter_velo_last", "sp_velo_last"),
+    ("starter_velo_base", "sp_velo_base"),
     ("pitching_basis", "pitching_basis"),
     ("opener", "opener"),
 )
@@ -5353,7 +5440,7 @@ def locked_pregame_rows(led=None, slate_date=None):
     Filtered on `lock_status`, never on status: a row is useful here the
     moment it is ingested, long before it grades.
     """
-    led = load_ledger_df() if led is None else led
+    led = load_ledger_df(include_held=True) if led is None else led
     if led is None or "lock_status" not in getattr(led, "columns", ()):
         return {}
     day = led[
@@ -5570,6 +5657,9 @@ def _df_to_combined_games(xw_df, pl_df, pitcher_rows_df,
                      pitching_basis=r.get("pitching_basis"),
                      sp_rate_basis=r.get("starter_rate_basis"),
                      sp_rate_bf=_f(r.get("starter_rate_bf")),
+                     velo_last=_f(r.get("starter_velo_last")),
+                     velo_base=_f(r.get("starter_velo_base")),
+                     velo_dv=_f(r.get("starter_velo_dv")),
                      has_pl=False, R=0, L=0, S=0, padv=0,
                      pl_sp=None, pl_sp_raw=None, pl_mx=None, pl_edge=None,
                      pl_reliable=False,
@@ -6085,6 +6175,29 @@ td.bar{width:86px;padding:4px 8px 4px 2px}
 .verdict .vprofile .vline{display:block;font-weight:600}
 .verdict .vprofile .vline + .vline{margin-top:5px}
 .verdict .vprofile .vline>span:last-child{display:block;margin-top:1px;text-align:left;color:var(--ink)}
+/* The per-game comparison uses the V13-selected prices for BOTH market and
+   realised outcomes. Full-family performance lives on the grades page. */
+.verdict .vmarket{margin-top:10px}
+.verdict .vband-bar{display:flex;gap:3px;margin:8px 0}
+.verdict .vband-step{height:9px;flex:1;background:var(--surface-2);
+  border:1px solid var(--line-2);border-radius:var(--r-s)}
+.verdict .vband-step.selected{background:rgba(var(--cool),.8);
+  border-color:rgba(var(--cool),.9)}
+/* Four equal tiles on desktop, a 2x2 grid on phones -- never a 3+1 wrap. */
+.verdict .vband-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));
+  gap:8px;margin:8px 0 2px;font-variant-numeric:tabular-nums}
+.verdict .vband-stats>div{min-width:0;padding:7px 9px;background:var(--surface-2);
+  border:1px solid var(--line-2);border-radius:var(--r-s)}
+.verdict .vband-stats small{display:block;color:var(--muted);
+  font:500 11px/1.4 var(--sans);overflow-wrap:anywhere}
+.verdict .vband-stats strong{display:block;font:700 15px/1.5 var(--mono);
+  color:var(--ink)}
+.verdict .vband-stats small.vsub{color:var(--faint);font-size:10.5px}
+@media (max-width:560px){
+  .verdict .vband-stats{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .verdict .vline{flex-wrap:wrap;gap:0 6px}
+}
+
 
 /* hitter row: percentile column + name cell. The column is the 88px bar plus
    the cell's own gutters -- it carried a printed percentile until that was
@@ -6280,6 +6393,17 @@ tr.gr-day th{position:sticky;top:28px;z-index:1;background:var(--surface-2);
 tr.gr-day .d{color:var(--ink)}
 tr.gr-day .n{color:var(--faint);font-weight:500}
 tr.gr-day .rec{float:right;color:var(--muted)}
+/* Slate folding (grades_fold_js). The button takes over the header's whole
+   line so a tap anywhere on the date row toggles it. */
+table.gr tbody.gr-slate.folded tr.gr-row{display:none}
+.gr-day-btn{all:unset;box-sizing:border-box;display:block;width:100%;cursor:pointer}
+.gr-day-btn::before{content:'▾';display:inline-block;width:1.1em;color:var(--faint)}
+tbody.folded .gr-day-btn::before{content:'▸'}
+.gr-day-btn:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+.gr-fold{margin:0 0 8px;font:500 13px/1.4 var(--sans);color:var(--muted)}
+.gr-fold button{all:unset;cursor:pointer;color:var(--ink);font-weight:650;
+  text-decoration:underline;text-underline-offset:2px}
+.gr-fold button:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
 
 /* ---------- season leaderboard ---------- */
 /* Reuses the ledger table wholesale -- wrap, sticky head, and the phone
@@ -6494,15 +6618,29 @@ def html_document(body, built_txt, title=None, extra_js=None):
 # maintains and CI commits back to the repo; the grading pass runs
 # before this build so records are current as of the run.
 # ============================================================
-def load_ledger_df():
-    if not os.path.exists(LEDGER_PATH):
+def load_ledger_df(include_held=False):
+    """The regular-season ledger; with include_held, the held rows too.
+
+    include_held exists for one caller: the pregame lock lookup, which must
+    freeze a postseason card (or a regular-season row still waiting on its
+    type) exactly as it freezes any other. Everything that publishes a record
+    or fits a number reads the default.
+    """
+    frames = []
+    paths = [LEDGER_PATH] + ([POSTSEASON_LEDGER_PATH] if include_held else [])
+    for path in paths:
+        if not os.path.exists(path):
+            continue
+        try:
+            frames.append(pd.read_csv(path))
+        except Exception as e:  # noqa: BLE001
+            log(f"Ledger unreadable, grades render degraded: {e!r}")
+            if path == LEDGER_PATH:
+                return None
+    frames = [f for f in frames if not f.empty]
+    if not frames:
         return None
-    try:
-        led = pd.read_csv(LEDGER_PATH)
-    except Exception as e:  # noqa: BLE001
-        log(f"Ledger unreadable, grades render degraded: {e!r}")
-        return None
-    return None if led.empty else led
+    return frames[0] if len(frames) == 1 else pd.concat(frames, ignore_index=True)
 
 
 def _esc(x):
@@ -6545,6 +6683,174 @@ def _excess_se(probs):
     """
     from market_backfill import excess_se
     return excess_se(probs)
+
+
+def _market_price_distribution(led, obs=None, bands=8):
+    """Eight balanced price bands on V13-represented selected sides ONLY.
+
+    The market expectation and V13 results are measured on identical rows:
+    one model-selected team per graded game, priced at its own historical DK
+    closing line. V12 rows enter only via publish_reconstruction's V13 re-score;
+    unrelated model families and the unselected opposing sides never enter.
+    Band edges are recomputed from this same V13-selected price population.
+    The entire calculation is descriptive, not a calibrated live forecast.
+    """
+    if obs is None:
+        obs = _lean_market_observations(led)
+    if obs is None or obs.empty:
+        return None
+    need = {"won", "market_p", "close_ml"}
+    if not need.issubset(obs.columns):
+        return None
+    p = pd.to_numeric(obs["market_p"], errors="coerce")
+    ml = pd.to_numeric(obs["close_ml"], errors="coerce")
+    won = pd.to_numeric(obs["won"], errors="coerce")
+    valid = (p.between(0, 1, inclusive="neither") & p.notna()
+             & np.isfinite(ml) & ((ml <= -100) | (ml >= 100))
+             & won.isin((0, 1)))
+    h = obs.loc[valid]
+    if len(h) < bands * 4:
+        return None
+    price = ml.loc[valid].to_numpy(float)
+    q = p.loc[valid].to_numpy(float)
+    result = won.loc[valid].to_numpy(float)
+    be = np.asarray(_mb_breakeven_prob(price), dtype=float)
+    valid_be = np.isfinite(be)
+    if not valid_be.all():
+        h = h.iloc[np.flatnonzero(valid_be)]
+        price, q, result, be = (v[valid_be] for v in (price, q, result, be))
+    if len(price) < bands * 4:
+        return None
+    edges = market_backfill.percentile_price_edges(price, bands)
+    idx = market_backfill.percentile_band_index(price, edges)
+
+    # Market-only control on the SAME games: both sides of every game above,
+    # each at its own closing line and no-vig q, won/lost by that side. It
+    # asks how the market's own prices in this band fared, independent of
+    # which side V13 picked. Band membership reuses the V13 edges and is also
+    # clipped to the band's printed lo..hi, so the label covers every side.
+    side_price = side_q = side_won = side_idx = None
+    if "opp_ml" in h.columns:
+        opp = pd.to_numeric(h["opp_ml"], errors="coerce").to_numpy(float)
+        side_price = np.concatenate([price, opp])
+        side_q = np.concatenate([q, 1.0 - q])
+        side_won = np.concatenate([result, 1.0 - result])
+        keep = (np.isfinite(side_price)
+                & ((side_price <= -100) | (side_price >= 100)))
+        side_price, side_q, side_won = (v[keep] for v in
+                                        (side_price, side_q, side_won))
+        side_idx = market_backfill.percentile_band_index(side_price, edges)
+
+    # The original ledger tag, not the published/re-scored tag, is the source
+    # of native/reconstructed provenance. Synthetic observations with unknown
+    # source tags receive no manufactured basis split.
+    basis = None
+    if (led is not None and "model_tag" in led.columns
+            and h.index.isin(led.index).all()):
+        basis = led.loc[h.index, "model_tag"].astype(str).eq(MODEL_TAG).to_numpy()
+
+    rows = []
+    for j in range(len(edges) + 1):
+        take = idx == j
+        if not take.any():
+            continue
+        n = int(take.sum())
+        wins = int(result[take].sum())
+        implied = float(q[take].mean())
+        actual = wins / n
+        br = float(be[take].mean())
+        row = {
+            "index": j, "lo": int(price[take].min()),
+            "hi": int(price[take].max()),
+            "n": n, "w": wins, "l": n - wins,
+            "implied": implied, "actual": actual, "breakeven": br,
+            "gap": actual - implied, "excess_be": actual - br,
+            # The EV figure's own centre under a correct market (#227): the
+            # card prints it beside `excess_be`, never leaving it read vs 0.
+            "ev_null": market_backfill.ev_null(q[take], be[take]),
+            "se": _excess_se(q[take]),
+        }
+        if side_idx is not None:
+            lo, hi = row["lo"], row["hi"]
+            mk = ((side_idx == j) & (side_price >= lo) & (side_price <= hi))
+            mn = int(mk.sum())
+            row["market_n"] = mn
+            row["market_implied"] = (float(side_q[mk].mean()) if mn
+                                     else float("nan"))
+            row["market_actual"] = (float(side_won[mk].mean()) if mn
+                                    else float("nan"))
+        if basis is not None:
+            row["native_n"] = int(basis[take].sum())
+            row["reconstructed_n"] = n - row["native_n"]
+        rows.append(row)
+    return {
+        "games": len(price), "edges": edges, "bands": rows,
+        "price_min": float(price.min()), "price_max": float(price.max()),
+    }
+
+
+def _market_band_context_html(ctx, price):
+    """Compact model result and market expectation on the same historical rows.
+
+    Tiles only: the market-vs-model gap line and its break-even/EV-null
+    companion were removed from the card at the owner's request (2026-09-23).
+    The band still computes `gap`, `excess_be` and `ev_null`; any surface that
+    prints the break-even figure must print its null beside it (#227).
+    """
+    dist = (ctx or {}).get("model_distribution")
+    p = _f(price)
+    if not dist or p is None or not (p <= -100 or p >= 100):
+        return ""
+    if p < dist["price_min"] or p > dist["price_max"]:
+        return (
+            "<div class='vprofile vmarket'>"
+            "<div class='vprofile-title'>Model · historical price band</div>"
+            "<div class='vnote'>Current price is outside the model's "
+            "historical selection-price range; no comparison is shown.</div>"
+            "</div>"
+        )
+    ix = int(market_backfill.percentile_band_index([p], dist["edges"])[0])
+    rec = next((x for x in dist["bands"] if x["index"] == ix), None)
+    if not rec:
+        return ""
+    band_index = next(i for i, row in enumerate(dist["bands"])
+                      if row["index"] == ix)
+    total = len(dist["bands"])
+    label = (f"{rec['lo']:+d} to {rec['hi']:+d}"
+             if rec["lo"] != rec["hi"] else f"{rec['lo']:+d}")
+    bar = "".join(
+        f"<span class='vband-step{' selected' if i == band_index else ''}'"
+        f" aria-label='band {i+1} of {total}'></span>"
+        for i in range(total)
+    )
+
+    def tile(name, value, sub=""):
+        sub = f"<small class='vsub'>{sub}</small>" if sub else ""
+        return (f"<div><small>{name}</small><strong>{value}</strong>"
+                f"{sub}</div>")
+
+    # Market realised counts every side of the same games in this band, so
+    # its denominator differs from the model's; the caption says so.
+    mn = rec.get("market_n") or 0
+    market_tile = (
+        tile("Market realised", f"{100*rec['market_actual']:.1f}%",
+             f"{mn} sides · implied {100*rec['market_implied']:.1f}%")
+        if mn and np.isfinite(rec.get("market_actual", float("nan")))
+        else "")
+    return (
+        "<div class='vprofile vmarket'>"
+        "<div class='vprofile-title'>Model · historical price band</div>"
+        f"<div class='vprofile-band'>{label} · band {band_index+1} of {total}"
+        f" · {rec['n']} model picks</div>"
+        f"<div class='vband-bar' role='img' aria-label='Selected model "
+        f"price band {band_index+1} of {total}'>{bar}</div>"
+        "<div class='vband-stats'>"
+        + tile("Market implied", f"{100*rec['implied']:.1f}%")
+        + market_tile
+        + tile("Model realised", f"{100*rec['actual']:.1f}%")
+        + tile("Model record", f"{rec['w']}–{rec['l']}")
+        + "</div></div>"
+    )
 
 
 def _market_calibration_rows(led):
@@ -7309,7 +7615,10 @@ def _record_scope_note(led, g):
     n_fam = len(g)
     if n_fam == n_all:
         return "", n_fam, n_all
-    return (f"{n_fam} of {n_all} graded rows are {MODEL_TAG}", n_fam, n_all)
+    # `g` is the whole record family (RECORD_TAGS), not rows tagged
+    # MODEL_TAG, so the note names the family's scope, not the tag.
+    return (f"{n_fam} of {n_all} graded games count toward this record; "
+            "earlier model families are excluded", n_fam, n_all)
 
 
 def _baseline_controls(g):
@@ -7369,31 +7678,13 @@ def _baseline_controls(g):
 
 
 def hybrid_branch_records():
-    """Current-family records the per-game card reads, keyed by cell.
+    """Build V13-matched market bands once for all game cards.
 
-    Keys: ``"pooled"`` for the whole family and ``"n"``. Scored on
-    `_record_grades`, because pooling older prediction math would answer a
-    different question. The three delta x price cell keys went on
-    2026-09-22 with the panel that read them -- see the comment below for
-    the measurement, and `grade_leans._selection_price_matrix_lines` for the
-    full grid, which keeps its error bars and its null maximum.
-
-    **The retired rule's keys are gone**, on the operator's 2026-09-18
-    instruction to take it off every user-facing page: ``("branch", …)`` and
-    ``("chalk", …)`` fed `_branch_history`'s FADE body, which became
-    unreachable at v13, and ``"threshold"`` had no reader at all. The cell
-    key keeps its historical name -- renaming it would move the one thing
-    `grade_leans._selection_price_matrix_lines` is held equal to by a test,
-    for no gain.
-
-    The cells score the LEAN's own columns over every decided row. They were
-    the retired rule's selected side over its FOLLOW subset until the same
-    commit, which on a faded row meant the opposite club at the opposite
-    price -- and a row set defined by a rule nothing runs.
-
-    These remain DISCOVERY rows in the sense every retrospective is, and the
-    always-chalk / always-home controls that make them readable live on
-    `market-calibration.html`, scored on the identical rows.
+    The card reads only model_distribution: one V13-represented selected side
+    per graded game, with its own closing-price market benchmark. Previously
+    exposed pooled/native family metrics are preserved solely for existing
+    provenance audits and full-record consumers, not shown per matchup.
+    No hybrid branch, odds gate or delta cell selects a side.
     """
     led = load_ledger_df()
     if led is None:
@@ -7402,27 +7693,21 @@ def hybrid_branch_records():
     if obs.empty:
         return {}
     out = {"n": int(len(obs))}
-    # THE ONE RECORD THE CARD PUBLISHES, and the only one on this data that is
-    # a result rather than a cell of a search. `excess` is against the devigged
-    # price; a BET has to clear the posted one, which is harsher by exactly the
-    # hold, so the panel reads `excess_be` and the two differ by `hold`. One SE
-    # serves both -- the breakeven is fixed by the market exactly as the
-    # devigged price is, so neither is estimated from the outcomes under test.
-    #
-    # This key existed before, computed every build and read by nothing: its
-    # comment said "retained for other reporting surfaces" and there were
-    # none. That is the `column carried to no surface` entry, on the best
-    # estimated number the panel had available.
+    # Eight balanced bands from the same selected V13-represented rows. The
+    # model's realised rate and market expectation have identical denominators.
+    distribution = _market_price_distribution(led, obs)
+    if distribution:
+        out["model_distribution"] = distribution
+    # Retain the pooled provenance aggregate internally for grading/audit
+    # compatibility; the matchup card deliberately renders only its matching
+    # model-selection price band. Whole-family results live on grades.html.
     pooled = _lean_market_agg(obs, obs["won"].notna())
     if pooled:
         rows = obs.loc[obs["won"].notna()]
         breakeven = float(np.mean(_mb_breakeven_prob(rows["close_ml"])))
-        # PROJECTED to exactly what the card renders, the discipline the
-        # deleted `_card_record` kept: `_lean_market_agg` returns nine keys and
-        # the panel reads four, so handing the whole dict over would be a
-        # computed-and-unrendered set the moment anyone trusted it. `n` and
-        # `excess_be` +/- `excess_se` are the record line; `hold` is the
-        # family average the per-game break-even line is read against.
+        # Project only the pooled diagnostic's rendered fields; native has
+        # its own projection below. Both use closing prices and neither is
+        # attached to a current-game expected edge.
         out["pooled"] = {
             "n": pooled["n"],
             "excess_be": float(pooled["actual"]) - breakeven,
@@ -7432,24 +7717,34 @@ def hybrid_branch_records():
         # hold over this family blends two vig regimes, so no card line can be
         # read against it. A key kept for a renderer that no longer exists is
         # the defect this projection exists to prevent.
-    # Cross the fixed |delta| bands with the leaned side's closing-price rung.
-    # Counts are intentionally retained even when thin because the public card
-    # prints its own `n` beside every cell.
-    #
-    # THE CELLS ARE GONE, and that is a measurement rather than a taste call.
-    # Scored against the POSTED price the |delta| bands read +2.6, +14.5, -3.2,
-    # +8.3, +7.8 pp -- not ordered, so a band is not conviction paying off --
-    # and 11 of 13 band-and-rung cuts have an interval containing zero. The
-    # grid is a 26-cell SEARCH: simulated at the rows' own closes under
-    # "market correct, no edge" the best cell clears breakeven by +39.6 pp on
-    # average against an observed best of +45.0, P = 0.590. No cell here can be
-    # read at any n, and the card was publishing three of them with no error
-    # bar and no reference while dropping `pooled`, the one figure that IS a
-    # result (+5.9 +/- 2.2 pp over the posted price on 492 rows).
-    #
-    # The full 5x8 grid survives WITH its error bars and its null maximum in
-    # `grade_leans._selection_price_matrix_lines`, which is where a search
-    # belongs -- moved, not deleted, per `Deleting controls as clutter`.
+    # Provenance must stay at ledger-row resolution: _lean_market_observations
+    # preserves the original ledger index even after replacing earlier-family
+    # prediction columns on a copy. The native sample is only rows actually
+    # published pregame by the active model. Never promote a reconstruction
+    # into the card's prospective record.
+    # A fixture can supply a synthetic observation frame without a row-level
+    # ledger. In that case provenance is unknown; preserve only the pooled
+    # aggregate, never invent native/reconstructed membership from labels.
+    # Production observations carry original ledger indices and model_tag.
+    if ("model_tag" in led.columns and obs.index.isin(led.index).all()):
+        native_mask = led.loc[obs.index, "model_tag"].astype(str).eq(MODEL_TAG)
+        native_obs = obs.loc[native_mask]
+        out["reconstructed_n"] = int(len(obs) - len(native_obs))
+        if not native_obs.empty:
+            native_summary = _lean_market_agg(
+                native_obs, native_obs["won"].notna())
+            if native_summary:
+                native_be = float(np.mean(
+                    _mb_breakeven_prob(native_obs["close_ml"])))
+                out["native"] = {
+                    "n": native_summary["n"],
+                    "w": native_summary["w"],
+                    "l": native_summary["l"],
+                    "excess_be": float(native_summary["actual"]) - native_be,
+                    "excess_se": native_summary["excess_se"],
+                }
+    # The earlier Δ × price discovery grid remains on the analyst report,
+    # not on game cards. Only the same-sample V13 price band is rendered.
     return out
 
 
@@ -7731,7 +8026,8 @@ def records_strip_html():
         if scope:
             bits.append(f"<span class='muted'>{scope}</span>")
         inner = " <span class='muted'>·</span> ".join(bits)
-    return ("<div class='gradestrip'><span class='lab'>V12 record</span>"
+    return ("<div class='gradestrip'><span class='lab'>"
+            f"{_model_version_short()} record</span>"
             f"<span>{inner}</span><span class='grade-links'>"
             "<a href='leaderboard.html'>leaderboard →</a>"
             f"<a href='grades.html'>{_model_version_short()} ledger →</a></span></div>")
@@ -7818,6 +8114,15 @@ def _row_selection(r):
     # identically` went red on.
     if not isinstance(lean, str) or not lean:
         return None, None, None
+    # Same order as `publish_reconstruction`: the v14 velocity re-decision,
+    # then a v13-built row's own pregame lean (v14 with no velocity trend),
+    # then the v13 re-decision of an older row.
+    velo = r.get("velo_lean_recon")
+    if isinstance(velo, str) and velo and pd.notna(r.get("velo_recon_basis")):
+        return "recon", velo, recon_grade(velo, r.get("home"),
+                                          r.get("full_home"), r.get("full_away"))
+    if str(r.get("model_tag")) in _mb_v14_native_equivalent:
+        return "recon", lean, r.get("xw_full")
     recon = r.get(V13_RECON_LEAN_COL)
     if isinstance(recon, str) and recon:
         return "recon", recon, recon_grade(recon, r.get("home"),
@@ -8274,9 +8579,10 @@ def render_grades_html(built_txt):
             # locked price chose. Both are properties of the rule, so both
             # went with it. What the reader still needs is the ML column's
             # own basis, which is what remains.
-            notes.append("<b>ML</b> is the selection's price, locked pregame "
-                         "where the row has one. Records are scored at the "
-                         "close")
+            # `_lean_ml_cell` reads close_home_ml / close_away_ml, so the
+            # column and every record above share one basis: the close.
+            notes.append("<b>ML</b> is the selection's closing price, the "
+                         "same price every record and ROI here is scored at")
         lock = _lock_note(led)
         if lock:
             notes.append(lock)
@@ -8289,15 +8595,75 @@ def render_grades_html(built_txt):
              + (["ML"] if show_ml else [])
              + ["Final", "Result"])
     led = led.sort_values(["game_date", "game_pk"], ascending=[False, True])
+    # One tbody per slate, so a slate can fold under its own date header
+    # while every column still shares one table's widths. Nothing is folded
+    # in the markup: `grades_fold_js` collapses older slates in the browser,
+    # and without script the whole ledger renders as before.
     body = []
     for date, day in led.groupby("game_date", sort=False):
-        body.append(_grades_day_header(date, day, len(heads)))
-        body += [_grades_row(r, show_ml) for _, r in day.iterrows()]
+        body.append("<tbody class='gr-slate'>"
+                    + _grades_day_header(date, day, len(heads))
+                    + "".join(_grades_row(r, show_ml) for _, r in day.iterrows())
+                    + "</tbody>")
     table = ("<div class='gr-tablewrap'><table class='gr'><thead><tr>"
              + "".join(f"<th>{h}</th>" for h in heads)
-             + f"</tr></thead><tbody>{''.join(body)}</tbody></table></div>")
+             + f"</tr></thead>{''.join(body)}</table></div>")
     return html_document(back + head + summary + table, built_txt,
-                         title=f"{PUBLIC_MODEL_NAME} ledger")
+                         title=f"{PUBLIC_MODEL_NAME} ledger",
+                         extra_js=grades_fold_js())
+
+
+# Slates left open when the ledger page loads; older ones fold under their
+# date header and open on a click. Display-only: every row is in the page.
+GRADES_OPEN_SLATES = 3
+
+
+def grades_fold_js():
+    """Fold all but the newest slates, and add the controls that unfold them.
+
+    The controls are created here rather than written into the markup, so a
+    reader without script never sees a button that does nothing -- they get
+    the full table instead.
+    """
+    return ("""(function(){
+  var KEEP=%d;
+  var slates=[].slice.call(document.querySelectorAll('table.gr tbody.gr-slate'));
+  if(slates.length<=KEEP) return;
+  var btns=[];
+  function set(tb,btn,open){
+    tb.classList.toggle('folded',!open);
+    btn.setAttribute('aria-expanded',open?'true':'false');
+  }
+  slates.forEach(function(tb,i){
+    var th=tb.querySelector('tr.gr-day th'); if(!th) return;
+    var btn=document.createElement('button');
+    btn.type='button'; btn.className='gr-day-btn';
+    while(th.firstChild) btn.appendChild(th.firstChild);
+    th.appendChild(btn);
+    btn.addEventListener('click',function(){
+      set(tb,btn,tb.classList.contains('folded'));
+    });
+    btns.push([tb,btn]);
+    set(tb,btn,i<KEEP);
+  });
+  var wrap=document.querySelector('.gr-tablewrap');
+  var bar=document.createElement('div'); bar.className='gr-fold';
+  var all=document.createElement('button'); all.type='button';
+  function label(){
+    var open=btns.every(function(p){return !p[0].classList.contains('folded');});
+    all.textContent=open?'Fold older slates':'Show all '+slates.length+' slates';
+    return open;
+  }
+  all.addEventListener('click',function(){
+    var open=label();
+    btns.forEach(function(p,i){set(p[0],p[1],open?i<KEEP:true);});
+    label();
+  });
+  btns.forEach(function(p){p[1].addEventListener('click',label);});
+  bar.appendChild(document.createTextNode('Older slates are folded; select a date to open it. '));
+  bar.appendChild(all); label();
+  wrap.parentNode.insertBefore(bar,wrap);
+})();""" % GRADES_OPEN_SLATES)
 
 
 def _leaderboard_table(rows, rank_start=1, invert=False):
@@ -8483,11 +8849,8 @@ def render_combined_html(xw_df, pl_df, pitcher_rows_df, built_txt,
         return html_document(inner, built_txt, extra_js=score_refresh_js())
     strength_scale = lean_strength_scale(_slate_deltas(games))
     logo_assets, logo_css = _logo_assets(games)
-    # Per-game history is current-family and keyed on the published rule's own
-    # branch, with the always-chalk control on the identical rows. Do not
-    # reintroduce a fallback that pools the two branches: FOLLOW and FADE are
-    # different bets at different prices, and on FADE the control is an
-    # identity rather than a comparison.
+    # One historical distribution per build, using only V13-represented
+    # selected sides. The market benchmark and realised rate share every row.
     ctx = {**(hybrid_branch_records() or {}),
            "logo_ids": set(logo_assets)}
     body = logo_css + build_combined(games, strength_scale, ctx) + footer
@@ -8565,6 +8928,28 @@ def write_leaderboard_page(built_txt, boards):
     except Exception as e:  # noqa: BLE001
         log(f"Leaderboard page not written ({e!r}); last good copy stays live.")
         return None
+
+
+def stamp_game_type(frame, slate_df):
+    """Write each row's StatsAPI gameType onto a dump frame, in place.
+
+    Mapped on game_pk from the slate this build fetched. A pk the slate does
+    not carry is left blank, never guessed: grade_leans resolves blanks from
+    the schedule and holds the row out of the regular-season ledger until it
+    can.
+    """
+    if frame is None or frame.empty or "game_pk" not in frame.columns:
+        return frame
+    types = {}
+    if slate_df is not None and not slate_df.empty and "game_type" in slate_df.columns:
+        for pk, gt in zip(slate_df["game_pk"], slate_df["game_type"]):
+            pk = pd.to_numeric(pk, errors="coerce")
+            if pd.notna(pk):
+                types[int(pk)] = season_phase.clean_game_type(gt)
+    pks = pd.to_numeric(frame["game_pk"], errors="coerce")
+    frame[season_phase.GAME_TYPE_COL] = [
+        types.get(int(pk), np.nan) if pd.notna(pk) else np.nan for pk in pks]
+    return frame
 
 
 def main():
@@ -8678,6 +9063,8 @@ def main():
                 frame[col] = frame["game_pk"].map(series)
     attach_hybrid_snapshot(matchup_df, odds, snapshot_utc)
     attach_hybrid_snapshot(matchup_platoon_df, odds, snapshot_utc)
+    for frame in (matchup_df, matchup_platoon_df):
+        stamp_game_type(frame, data["slate_df"])
     os.makedirs(DATA_DIR, exist_ok=True)
     # One decision for both dumps, taken from the primary frame: they describe
     # the same games at the same instant, and naming them from separate reads

@@ -147,9 +147,22 @@ def touches_ours(old_oid, new_oid, ours):
     return sorted(set(names) & set(ours))
 
 
-def api_commit(token, repo, branch, message, changes, attempts=3):
+def local_head():
+    """The commit this job's files were computed from, or None."""
+    out = git("rev-parse", "HEAD", check=False).strip()
+    return out or None
+
+
+def api_commit(token, repo, branch, message, changes, attempts=3, base=None):
+    """`base` is the commit the job CHECKED OUT. The first attempt is pinned to
+    it, not to the tip at commit time: a queued job's checkout can be older
+    than the tip, and pinning to the tip would commit files computed from the
+    old checkout over whatever landed since -- which is how a queued
+    migration once undid a site build's ledger rows. If the tip moved, the
+    retry below checks everything between `base` and the tip for our files.
+    """
     for attempt in range(1, attempts + 1):
-        head = remote_head(branch)
+        head = base if (attempt == 1 and base) else remote_head(branch)
         variables = {"input": {
             "branch": {
                 "repositoryNameWithOwner": repo,
@@ -226,7 +239,8 @@ def main(argv=None):
     try:
         if not token or not repo:
             raise RuntimeError("GITHUB_TOKEN / GITHUB_REPOSITORY not set")
-        commit = api_commit(token, repo, args.branch, args.message, changes)
+        commit = api_commit(token, repo, args.branch, args.message, changes,
+                            base=local_head())
     except Exception as exc:  # noqa: BLE001
         if args.no_fallback:
             raise

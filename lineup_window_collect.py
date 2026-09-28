@@ -237,6 +237,10 @@ def plate_appearances(feed):
             "inning": about.get("inning"),
             "batter_id": (mu.get("batter") or {}).get("id"),
             "pitcher_id": pid,
+            # The name, because the build's per-hitter frame keys the starter
+            # it expected by name only; `pitcher_lineup_probe` uses this to
+            # drop a lineup whose expected starter was scratched.
+            "pitcher_name": (mu.get("pitcher") or {}).get("fullName"),
             "vs_starter": bool(pid is not None
                                and pid == starters.get(pit_side)),
             "event_type": et,

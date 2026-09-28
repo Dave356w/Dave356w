@@ -1,0 +1,205 @@
+"""The game card compares V13 outcomes with the market on IDENTICAL rows.
+
+One selected side per V13-represented graded game. The eight equal-count
+bands are computed from V13-selected closing prices, not all other model
+families or both sides of the broader market. No current odds enter history.
+"""
+import numpy as np
+import pandas as pd
+import build_site as b
+from market_backfill import percentile_band_index, percentile_price_edges
+
+
+BOOK = [
+    (-400, 280), (-260, 225), (-220, 180), (-175, 155),
+    (-160, 140), (-145, 125), (-130, 115), (-120, 105),
+    (-110, -110), (-105, -105), (+105, -125), (+115, -135),
+    (+130, -150), (+150, -180), (+175, -205), (+210, -245),
+]
+
+
+def _ledger(n=144):
+    rows = []
+    for i in range(n):
+        hm, am = BOOK[i % len(BOOK)]
+        h = b._imp_ml(hm)
+        a = b._imp_ml(am)
+        home_wins = i % 3 != 0
+        home = 5 if home_wins else 2
+        away = 2 if home_wins else 5
+        source = (b.MODEL_TAG if i < 96 else
+                  "xw+plat_consol_v12" if i < 120 else
+                  "woba+plat_consol_v5")
+        original_lean = "H" if i % 4 else "A"
+        rebuilt_lean = (("A" if original_lean == "H" else "H")
+                        if i % 7 == 0 else original_lean)
+        # Original V12 result remains immutable; model uses the reconstructed
+        # result for the comparable family, never the old side's record.
+        rows.append({
+            "status": "graded", "model_tag": source, "game_pk": 3000 + i,
+            "game_date": "2026-09-01", "home": "H", "away": "A",
+            "full_home": home, "full_away": away,
+            "xw_lean": original_lean, "xw_net": .02, "xw_delta": .02,
+            "xw_full": ("W" if (original_lean == "H") == home_wins else "L"),
+            "close_p_home": h / (h + a),
+            "close_home_ml": hm, "close_away_ml": am,
+            "v13_recon_basis": "paired" if source == "xw+plat_consol_v12" else None,
+            "v13_lean_recon": rebuilt_lean if source == "xw+plat_consol_v12" else None,
+            "v13_net_recon": .025 if source == "xw+plat_consol_v12" else np.nan,
+        })
+    return pd.DataFrame(rows)
+
+
+def test_bands_include_only_v13_represented_selected_sides():
+    led = _ledger()
+    obs = b._lean_market_observations(led)
+    dist = b._market_price_distribution(led)
+    assert len(obs) == 120  # 96 native + 24 V12 re-scored, no old wOBA
+    assert dist["games"] == len(obs)
+    assert sum(x["n"] for x in dist["bands"]) == len(obs)
+    assert sum(x["native_n"] for x in dist["bands"]) == 96
+    assert sum(x["reconstructed_n"] for x in dist["bands"]) == 24
+    assert dist["edges"] == percentile_price_edges(obs["close_ml"], 8)
+    ix = percentile_band_index(obs["close_ml"], dist["edges"])
+    assert sum(int((ix == rec["index"]).sum()) for rec in dist["bands"]) == len(obs)
+
+
+def test_market_and_v13_measurements_use_identical_game_rows():
+    led = _ledger()
+    obs = b._lean_market_observations(led)
+    dist = b._market_price_distribution(led, obs)
+    ix = percentile_band_index(obs["close_ml"], dist["edges"])
+    for rec in dist["bands"]:
+        same = obs.iloc[np.flatnonzero(ix == rec["index"])]
+        be = np.asarray(b._mb_breakeven_prob(same["close_ml"]), dtype=float)
+        assert rec["n"] == len(same)
+        assert rec["w"] == int(same["won"].sum())
+        assert rec["l"] == len(same) - rec["w"]
+        assert np.isclose(rec["implied"], same["market_p"].mean())
+        assert np.isclose(rec["actual"], same["won"].mean())
+        assert np.isclose(rec["breakeven"], be.mean())
+        assert np.isclose(rec["gap"], rec["actual"] - rec["implied"])
+        assert np.isclose(rec["excess_be"], rec["actual"] - be.mean())
+        assert np.isclose(rec["se"], b._excess_se(same["market_p"]))
+
+
+def test_unrelated_model_family_cannot_change_market_baseline():
+    led = _ledger()
+    one = b._market_price_distribution(led)
+    led.loc[led["model_tag"].eq("woba+plat_consol_v5"), "full_home"] = 50
+    two = b._market_price_distribution(led)
+    assert one == two
+
+
+def test_card_compares_market_and_model_within_exact_matching_band():
+    led = _ledger()
+    dist = b._market_price_distribution(led)
+    ctx = {
+        "model_distribution": dist,
+        "pooled": {"n": 493, "excess_be": .060, "excess_se": .022},
+    }
+    h = b._verdict_html(
+        "MIN", {"p_home": .521, "home_ml": -120},
+        "SEA", "MIN", ctx, .0016,
+    )
+    band = int(percentile_band_index([-120], dist["edges"])[0])
+    rec = next(x for x in dist["bands"] if x["index"] == band)
+    assert "Model · historical price band" in h
+    assert f"{rec['n']} model picks" in h
+    assert f"{100*rec['implied']:.1f}%" in h
+    assert f"{100*rec['actual']:.1f}%" in h
+    assert f"{rec['w']}–{rec['l']}" in h
+    assert "re-decided by V13" not in h
+    assert "native V13 picks" not in h
+    assert "not a game-specific probability" not in h
+    assert "Market implied" in h and "Model realised" in h
+    assert "Vs market" not in h and "vs closing break-even" not in h
+    assert "V13" not in h
+    assert h.count("vband-step selected") == 1
+    assert "Historical market context" not in h
+    assert "Combined V12/V13 historical performance" not in h
+    assert "+6.0 ± 2.2 pp" not in h
+
+
+def test_current_quote_changes_only_selected_comparison_not_historical_rows():
+    dist = b._market_price_distribution(_ledger())
+    ctx = {"model_distribution": dist}
+    a = b._market_band_context_html(ctx, -400)
+    z = b._market_band_context_html(ctx, +210)
+    assert a != z
+    assert dist["games"] == 120
+    assert b._market_band_context_html(ctx, None) == ""
+    assert b._market_band_context_html(ctx, -80) == ""
+    assert "outside the model" in b._market_band_context_html(ctx, -1000)
+
+
+def test_thin_v13_sample_does_not_invent_price_bands():
+    thin = b._market_price_distribution(_ledger(6))
+    assert thin is None
+    assert b._market_band_context_html({"model_distribution": thin}, -120) == ""
+
+
+def test_band_keeps_its_market_correct_null_off_the_card():
+    """#227: the card no longer prints the break-even/EV figure (removed at
+    the owner's request), so it cannot print one without its null. The band
+    still carries `ev_null` from the shared helper for any surface that does,
+    and EV - null still equals the no-vig excess."""
+    from market_backfill import ev_null
+    dist = b._market_price_distribution(_ledger())
+    for rec in dist["bands"]:
+        assert abs(rec["ev_null"]
+                   - ev_null([rec["implied"]], [rec["breakeven"]])) < 1e-12
+        assert rec["ev_null"] < 0                 # posted prices carry a hold
+        assert abs((rec["excess_be"] - rec["ev_null"]) - rec["gap"]) < 1e-9
+        for band in (rec, {**rec, "ev_null": float("nan")}):
+            h = b._market_band_context_html(
+                {"model_distribution": {**dist, "bands": [
+                    band if x is rec else x for x in dist["bands"]]}},
+                rec["lo"])
+            assert "break-even" not in h and "(null" not in h
+            assert "Vs market" not in h and "±" not in h
+
+
+def test_market_realised_uses_both_sides_of_the_same_games_in_band():
+    """Market realised: every side of the V13-represented games whose own
+    close sits in the band (picked or not), each at its own no-vig q."""
+    led = _ledger()
+    obs = b._lean_market_observations(led)
+    dist = b._market_price_distribution(led, obs)
+    price = np.concatenate([obs["close_ml"], obs["opp_ml"]])
+    q = np.concatenate([obs["market_p"], 1 - obs["market_p"]])
+    won = np.concatenate([obs["won"], 1 - obs["won"]])
+    ix = percentile_band_index(price, dist["edges"])
+    total = 0
+    for rec in dist["bands"]:
+        mk = (ix == rec["index"]) & (price >= rec["lo"]) & (price <= rec["hi"])
+        assert rec["market_n"] == int(mk.sum())
+        assert rec["market_n"] >= rec["n"]      # the picked sides are in it
+        assert np.isclose(rec["market_implied"], q[mk].mean())
+        assert np.isclose(rec["market_actual"], won[mk].mean())
+        total += rec["market_n"]
+    assert total <= 2 * len(obs)
+
+
+def test_market_realised_ignores_unrelated_families_and_prints_on_card():
+    led = _ledger()
+    dist = b._market_price_distribution(led)
+    led.loc[led["model_tag"].eq("woba+plat_consol_v5"), "close_home_ml"] = -120
+    assert b._market_price_distribution(led) == dist
+    rec = dist["bands"][2]
+    h = b._market_band_context_html({"model_distribution": dist}, rec["lo"])
+    assert "Market realised" in h
+    assert f"{100*rec['market_actual']:.1f}%" in h
+    assert f"{rec['market_n']} sides · implied" in h
+    assert h.index("Market implied") < h.index("Market realised") \
+        < h.index("Model realised")
+
+
+def test_card_omits_market_realised_when_distribution_lacks_it():
+    dist = b._market_price_distribution(_ledger())
+    bare = {**dist, "bands": [{k: v for k, v in r.items()
+                               if not k.startswith("market_")}
+                              for r in dist["bands"]]}
+    h = b._market_band_context_html({"model_distribution": bare},
+                                    dist["bands"][0]["lo"])
+    assert "Market realised" not in h and "Model realised" in h

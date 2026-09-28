@@ -56,6 +56,9 @@ def _ledger_row(**over):
         "platoon_delta_sp_away": 0.021, "platoon_delta_sp_home": 0.021,
         "sp_rate_basis_away": "season", "sp_rate_basis_home": "season",
         "sp_rate_bf_away": 700, "sp_rate_bf_home": 700,
+        "sp_velo_dv_away": -0.8, "sp_velo_dv_home": 0.3,
+        "sp_velo_last_away": 93.1, "sp_velo_last_home": 95.6,
+        "sp_velo_base_away": 93.9, "sp_velo_base_home": 95.3,
         "pitching_basis_away": "bullpen_sequential",
         "pitching_basis_home": "bullpen_sequential",
         "opener_away": False, "opener_home": False,
@@ -309,8 +312,13 @@ class CardIntegrationTests(unittest.TestCase):
         # rendering an empty panel -- an absence claim above needs a presence
         # claim beside it.
         self.assertIn("Model lean", html)
-        self.assertIn("Seattle Mariners · V13 Δ", html)
-        self.assertIn("Market price</span><span>Seattle Mariners -120", html)
+        self.assertIn("Seattle Mariners · Δ", html)
+        # The locked quote reaches both the odds strip and the panel's
+        # break-even line; the live feed's 44% home no-vig reaches neither.
+        self.assertIn("DK ML · Seattle Mariners</div><div class='v'>-120", html)
+        self.assertIn("No-vig · Seattle Mariners</div><div class='v'>52.2%", html)
+        self.assertIn("54.5% · requires +2.4 pp over 52.2% no-vig", html)
+        self.assertNotIn("56.0%", html)
 
     def test_a_game_that_has_not_started_is_untouched(self):
         # The frozen path must not change a normal pregame slate at all.

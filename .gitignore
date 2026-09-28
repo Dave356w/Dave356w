@@ -22,3 +22,6 @@ venv/
 # and the ledger commit's `git add data/` would stage a partial CSV -- past the
 # validate_data_files.py run that precedes it.
 *.tmp
+
+# Statcast history for research/ studies: fetched in CI, never committed.
+history_cache/

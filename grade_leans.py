@@ -63,10 +63,14 @@ import pandas as pd
 import requests
 
 from market_backfill import (MARKET_COLS, ODDS_LADDER, V13_RECON_COLS,
-                             V13_RECON_TEXT_COLS, attach_market,
+                             V13_RECON_TEXT_COLS, VELO_RECON_COLS,
+                             VELO_RECON_TEXT_COLS, attach_market,
                              breakeven_prob, chalk_is_home, ev_null, excess_se,
                              is_pickem, ladder_rung, metric_label,
-                             publish_reconstruction)
+                             publish_reconstruction,
+                             percentile_price_edges as _percentile_price_edges,
+                             percentile_band_index as _percentile_band_index)
+import season_phase
 from actuals_backfill import (ACTUAL_COLS, attach_actuals, actuals_summary,
                               actuals_family_line, components_summary,
                               target_reliability,
@@ -74,8 +78,12 @@ from actuals_backfill import (ACTUAL_COLS, attach_actuals, actuals_summary,
 
 DATA_DIR    = os.environ.get("DATA_DIR", "data")
 LEDGER_PATH = os.path.join(DATA_DIR, "mlb_lean_ledger.csv")
+# Postseason rows and rows whose game type is not yet confirmed. Written by
+# save_ledger, read back only by main(). See season_phase.py for why the split
+# happens here, at the single writer, rather than in every reader.
+POSTSEASON_LEDGER_PATH = os.path.join(DATA_DIR, season_phase.POSTSEASON_LEDGER_NAME)
 REPORT_PATH = os.path.join(DATA_DIR, "ledger_report.txt")
-MODEL_TAG   = os.environ.get("MODEL_TAG", "xw+starter_blend_v13")
+MODEL_TAG   = os.environ.get("MODEL_TAG", "xw+starter_velo_v14")
 MODEL_METRIC_LABEL = os.environ.get(
     "MODEL_METRIC_LABEL",
     "wOBA" if MODEL_TAG.startswith("woba+") else "xwOBA",
@@ -136,6 +144,11 @@ _RECORD_FAMILIES = {
     # share here, and what the retained rows cost in provenance -- lives
     # there, beside the model that produces the rows.
     "xw+starter_blend_v13": ("xw+plat_consol_v12", "xw+starter_blend_v13"),
+    # v14 adds the starter velocity term (starter_velocity.py) and SHARES
+    # the v12/v13 record line on the operator's call: every earlier row is
+    # re-decided under v14 (velo_*_recon), so the line stays one model's.
+    "xw+starter_velo_v14": ("xw+plat_consol_v12", "xw+starter_blend_v13",
+                             "xw+starter_velo_v14"),
 }
 RECORD_TAGS = tuple(
     t.strip() for t in os.environ.get(
@@ -159,6 +172,7 @@ MODEL_FAMILY_TAGS = (
     ("v11", ("xw+plat_consol_v11",)),
     ("v12", ("xw+plat_consol_v12",)),
     ("v13 starter blend", ("xw+starter_blend_v13",)),
+    ("v14 starter velocity", ("xw+starter_velo_v14",)),
 )
 # Numerical floor on the weight fit, NOT an evidence threshold. It was 120,
 # chosen to suppress a ratio that is unreadable at small n; the ratio is gone
@@ -300,6 +314,20 @@ AUDIT_COLS = [
     "opp_xwoba_mix_away", "opp_xwoba_mix_home",
     "mx_xwoba_sp_mix_away", "mx_xwoba_sp_mix_home",
     "edge_xwoba_sp_mix_away", "edge_xwoba_sp_mix_home",
+    # StatsAPI gameType (R/F/D/L/W). Decides which ledger FILE a row is saved
+    # to and nothing else; never read by grading. Last in AUDIT_COLS, so it
+    # persists after the audit block and before ACTUAL_COLS and the carried
+    # v13 recon columns: those shift one place right, every relative order is
+    # unchanged, and all ledger readers select by name. See season_phase.py.
+    "game_type",
+    # v14 starter velocity term (starter_velocity.py): the pregame fastball
+    # velocity change applied to each starter's rate, the two velocities it
+    # came from, and the rate before the term. NaN on pre-v14 rows (their
+    # re-decision lives in the velo_*_recon columns instead).
+    "sp_velo_dv_away", "sp_velo_dv_home",
+    "sp_velo_last_away", "sp_velo_last_home",
+    "sp_velo_base_away", "sp_velo_base_home",
+    "starter_xwoba_prevelo_away", "starter_xwoba_prevelo_home",
 ]
 MODEL_FIELDS = [
     "game_date","away","home","away_sp","home_sp","model_tag","model_metric",
@@ -321,6 +349,10 @@ MODEL_FIELDS = [
     "sp_rate_basis_away","sp_rate_basis_home",
     "sp_rate_bf_away","sp_rate_bf_home",
     "starter_xwoba_away","starter_xwoba_home",
+    "sp_velo_dv_away","sp_velo_dv_home",
+    "sp_velo_last_away","sp_velo_last_home",
+    "sp_velo_base_away","sp_velo_base_home",
+    "starter_xwoba_prevelo_away","starter_xwoba_prevelo_home",
     "bullpen_xwoba_away","bullpen_xwoba_home",
     "expected_sp_ip_away","expected_sp_ip_home",
     "expected_sp_ip_raw_away","expected_sp_ip_raw_home",
@@ -342,9 +374,26 @@ MODEL_FIELDS = [
     "edge_xwoba_away","edge_xwoba_home",
 ]
 
-def load_ledger():
+def load_ledger(include_held=False):
+    """The regular-season ledger; with include_held, the held rows too.
+
+    Only main() passes include_held: it grades, prices and backfills every row
+    alike and splits them again in save_ledger. Every other caller -- tests,
+    probes, report inspection -- gets regular season only, which is what all
+    of them were written against.
+    """
     if os.path.exists(LEDGER_PATH):
         led = pd.read_csv(LEDGER_PATH)
+        # Legacy stamp: a main ledger that predates the column is wholly
+        # regular season. The only place a missing type is read as `R`.
+        if season_phase.GAME_TYPE_COL not in led.columns:
+            led = pd.concat([led, pd.Series(season_phase.REGULAR, index=led.index,
+                                            name=season_phase.GAME_TYPE_COL)],
+                            axis=1)
+        if include_held and os.path.exists(POSTSEASON_LEDGER_PATH):
+            held = pd.read_csv(POSTSEASON_LEDGER_PATH)
+            if not held.empty:
+                led = pd.concat([led, held], ignore_index=True)
         # Preserved-if-present, never minted. reconstruct_v13 writes these
         # and nothing in a build does, so enumerating them in AUDIT_COLS
         # would mint them empty on every ledger and make the migration --
@@ -354,7 +403,8 @@ def load_ledger():
         # so a column this module has never heard of does not survive one
         # bot ledger commit. That is the whole failure, and it is the writer's
         # to fix rather than the migration's to repeat.
-        carried = [c for c in V13_RECON_COLS if c in led.columns]
+        carried = [c for c in V13_RECON_COLS + VELO_RECON_COLS
+                   if c in led.columns]
         persisted_cols = list(dict.fromkeys(
             LEDGER_COLS + MARKET_COLS + AUDIT_COLS + ACTUAL_COLS + carried
         ))
@@ -384,9 +434,10 @@ def load_ledger():
                   "opener_reason_away", "opener_reason_home",
                   "opener_confidence_away", "opener_confidence_home",
                   "pitching_basis_away", "pitching_basis_home",
-                  "sp_rate_basis_away", "sp_rate_basis_home"):
+                  "sp_rate_basis_away", "sp_rate_basis_home",
+                  "game_type"):
             led[c] = led[c].astype(object)
-        for c in V13_RECON_TEXT_COLS:
+        for c in V13_RECON_TEXT_COLS + VELO_RECON_TEXT_COLS:
             if c in led.columns:
                 led[c] = led[c].astype(object)
         return led
@@ -506,6 +557,7 @@ def rows_from_dump(xw_df, pl_df):
             ops_valid=ops_valid, consensus=consensus,
             snapshot_utc=snapshot_utc, scheduled_start_utc=scheduled_start_utc,
             lock_status=lock_status,
+            game_type=season_phase.clean_game_type(a.get("game_type")),
             selection_rule_tag=a.get("selection_rule_tag", np.nan),
             pregame_market_utc=a.get("pregame_market_utc", np.nan),
             pregame_away_ml=a.get("pregame_away_ml", np.nan),
@@ -545,6 +597,14 @@ def rows_from_dump(xw_df, pl_df):
             sp_rate_bf_home=h.get("starter_rate_bf", np.nan),
             starter_xwoba_away=a.get("starter_xwOBA", np.nan),
             starter_xwoba_home=h.get("starter_xwOBA", np.nan),
+            sp_velo_dv_away=a.get("starter_velo_dv", np.nan),
+            sp_velo_dv_home=h.get("starter_velo_dv", np.nan),
+            sp_velo_last_away=a.get("starter_velo_last", np.nan),
+            sp_velo_last_home=h.get("starter_velo_last", np.nan),
+            sp_velo_base_away=a.get("starter_velo_base", np.nan),
+            sp_velo_base_home=h.get("starter_velo_base", np.nan),
+            starter_xwoba_prevelo_away=a.get("starter_rate_prevelo", np.nan),
+            starter_xwoba_prevelo_home=h.get("starter_rate_prevelo", np.nan),
             bullpen_xwoba_away=a.get("bullpen_xwOBA", np.nan),
             bullpen_xwoba_home=h.get("bullpen_xwOBA", np.nan),
             expected_sp_ip_away=a.get("expected_sp_ip", np.nan),
@@ -649,6 +709,10 @@ def ingest(led):
                     continue
                 for k in MODEL_FIELDS:                    # refresh scratches pre-lock
                     led.at[hit[0], k] = row[k]
+                if ("game_type" in led.columns
+                        and pd.isna(season_phase.clean_game_type(led.at[hit[0], "game_type"]))
+                        and pd.notna(row["game_type"])):
+                    led.at[hit[0], "game_type"] = row["game_type"]
                 n_ref += 1
     n_v1 = _mint_v1_archive(led)
     print(f"ingest: +{n_new} new, {n_ref} pending refreshed, "
@@ -713,6 +777,81 @@ def _linescores_for(day):
             out[int(g["gamePk"])] = g
     return out
 
+def resolve_game_types(led):
+    """Fill missing game_type from the schedule, one call per affected date.
+
+    Dumps written before the build stamped the type, and rows whose stamp
+    failed, arrive blank. A blank row is saved to the held file, never the
+    main ledger, so a failed lookup here delays a regular-season row by one
+    run and nothing else. Idempotent; a confirmed type is never overwritten.
+    """
+    col = season_phase.GAME_TYPE_COL
+    blank = led[col].map(season_phase.clean_game_type).isna()
+    n_set = n_fail = 0
+    for day in sorted(led.loc[blank, "game_date"].dropna().astype(str).unique()):
+        on_day = blank & (led["game_date"].astype(str) == day)
+        try:
+            games = _linescores_for(day)
+        except Exception as e:                    # noqa: BLE001
+            print(f"game type: schedule lookup for {day} failed ({type(e).__name__}); "
+                  "rows stay held until a later run resolves them")
+            n_fail += int(on_day.sum())
+            continue
+        for idx in led.index[on_day]:
+            pk = pd.to_numeric(led.at[idx, "game_pk"], errors="coerce")
+            g = games.get(int(pk)) if pd.notna(pk) else None
+            gt = season_phase.clean_game_type((g or {}).get("gameType"))
+            if pd.isna(gt):
+                n_fail += 1
+                continue
+            led.at[idx, col] = gt
+            n_set += 1
+    if n_set or n_fail:
+        print(f"game type: {n_set} resolved, {n_fail} still unconfirmed (held)")
+    return led
+
+
+def save_ledger(led):
+    """Write regular-season rows to LEDGER_PATH and the rest to the held file.
+
+    The held file is rewritten whenever it exists, even empty, so a row that
+    resolves to `R` leaves it on the same run it joins the main ledger.
+    """
+    regular, held = season_phase.split_regular(led)
+    regular.to_csv(LEDGER_PATH, index=False)
+    if len(held) or os.path.exists(POSTSEASON_LEDGER_PATH):
+        held.to_csv(POSTSEASON_LEDGER_PATH, index=False)
+    return regular, held
+
+
+def _held_lines(held):
+    """Short, descriptive footer for rows the report above excludes."""
+    if held is None or held.empty:
+        return []
+    types = held["game_type"].map(season_phase.clean_game_type)
+    by_type = types.fillna("unconfirmed").value_counts().sort_index()
+    status = held["status"].astype(str).value_counts()
+    out = [
+        "",
+        f"HELD OUT of every number above: {len(held)} rows in "
+        f"{season_phase.POSTSEASON_LEDGER_NAME}",
+        "  by type: " + "  ".join(f"{k}={v}" for k, v in by_type.items())
+        + "   (F wild card, D division series, L LCS, W World Series)",
+        "  status: " + "  ".join(f"{k}={status.get(k, 0)}"
+                                 for k in ("graded", "pending", "void")),
+    ]
+    post = held[types.notna()]
+    wl = post["xw_full"].astype(str)
+    w, l = int((wl == "W").sum()), int((wl == "L").sum())
+    if w + l:
+        out.append(f"  postseason xwOBA lean full: {w}-{l}  (descriptive only; "
+                   "no registration covers these games)")
+    if types.isna().any():
+        out.append(f"  {int(types.isna().sum())} row(s) await a game-type lookup; "
+                   "they join the main ledger once confirmed regular season")
+    return out
+
+
 def _f5(innings, side):
     if innings is None or len(innings) < 5: return None
     tot = 0
@@ -761,6 +900,10 @@ def grade(led):
             if fa is None or fh is None: continue
             f5a, f5h = _f5(ls.get("innings"), "away"), _f5(ls.get("innings"), "home")
             aw, hm = led.at[idx, "away"], led.at[idx, "home"]
+            if ("game_type" in led.columns
+                    and pd.isna(season_phase.clean_game_type(led.at[idx, "game_type"]))):
+                led.at[idx, "game_type"] = season_phase.clean_game_type(
+                    g.get("gameType"))
             led.at[idx, "full_away"], led.at[idx, "full_home"] = fa, fh
             led.at[idx, "f5_away"],   led.at[idx, "f5_home"]   = f5a, f5h
             led.at[idx, "xw_full"] = _wlt(led.at[idx, "xw_lean"], aw, hm, fa, fh, False)
@@ -1220,33 +1363,6 @@ def _search_verdict(observed, reference, fmt="+.1f"):
         return ("ABOVE it, which a search returns about half the time under "
                 "no effect, so it is not a finding either")
     return "at or below it"
-
-
-def _percentile_price_edges(ml, bands=8):
-    """Nearest-rank equal-count upper bounds, ties kept whole.
-
-    Derived from the rows the block scores, never frozen: a literal copied off
-    one price distribution is the constants-frozen-from-data entry, and this
-    one would re-stale as the book moves. The cost is that the labels are a
-    property of the build -- see the caveat the block prints.
-    """
-    s = np.sort(np.asarray(ml, dtype=float))
-    if not s.size:
-        return []
-    out = []
-    for k in range(1, bands):
-        e = float(s[int(np.ceil(k * s.size / bands)) - 1])
-        if not out or e > out[-1]:
-            out.append(e)
-    return out
-
-
-def _percentile_band_index(ml, edges):
-    ml = np.asarray(ml, dtype=float)
-    idx = np.zeros(ml.size, dtype=int)
-    for i, e in enumerate(edges):
-        idx[ml > e] = i + 1
-    return idx
 
 
 def _market_percentile_band_lines(led, bands=8):
@@ -1886,12 +2002,15 @@ def _published_basis_lines(g):
     if g is None or not len(g) or "model_tag" not in getattr(g, "columns", ()):
         return []
     retained = g[~g["model_tag"].astype(str).eq(MODEL_TAG)]
-    if retained.empty or "v13_lean_recon" not in g.columns:
+    if retained.empty:
         return []
-    n_rebuilt = int(retained["v13_lean_recon"].notna().sum())
-    if not n_rebuilt:
-        return []
+    n_rebuilt = len(retained)
+    pub = publish_reconstruction(g, MODEL_TAG)
+    pw = int(pub["xw_full"].eq("W").sum()) if pub is not None and len(pub) else 0
+    pl = int(pub["xw_full"].eq("L").sum()) if pub is not None and len(pub) else 0
     return [
+        f"  PUBLISHED ({MODEL_TAG}, every retained row re-decided with the "
+        f"starter velocity term): {pw}-{pl}",
         f"  BASIS: {n_rebuilt} of these {len(g)} rows were published under an "
         f"earlier tag and are scored ABOVE on their own pregame lean.",
         "  The public pages re-decide those rows under the current model and "
@@ -1930,6 +2049,10 @@ def report_text(led):
     report from a partial row set. Tests and ad-hoc inspection use this; only
     `report()` touches the filesystem.
     """
+    # Regular season only. A frame carrying postseason or unconfirmed rows --
+    # main()'s combined frame, or a caller's -- is split here so no block
+    # below can count them; they get a footer of their own.
+    led, held = season_phase.split_regular(led)
     lines = []
     say = lines.append
     g = _record_grades(led)
@@ -2237,6 +2360,7 @@ def report_text(led):
     except Exception as _exc:                      # noqa: BLE001 - see above
         say(f"pre-registered B2 TMR10 test unavailable ({type(_exc).__name__})")
 
+    lines.extend(_held_lines(held))
     return "\n".join(lines)
 
 
@@ -2250,8 +2374,9 @@ def report(led):
 
 def main():
     os.makedirs(DATA_DIR, exist_ok=True)
-    led = load_ledger()
+    led = load_ledger(include_held=True)
     led = ingest(led)
+    led = resolve_game_types(led)
     led = grade(led)
     try:
         led = attach_market(led)      # idempotent; settled rows missing MLs only
@@ -2264,7 +2389,7 @@ def main():
         led = attach_actuals(led)
     except Exception as e:            # noqa: BLE001
         print(f"actuals backfill: FAILED ({type(e).__name__}: {e}); rows retry next run")
-    led.to_csv(LEDGER_PATH, index=False)
+    save_ledger(led)
     report(led)
 
 if __name__ == "__main__":
