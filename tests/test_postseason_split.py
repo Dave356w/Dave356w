@@ -175,6 +175,65 @@ class LedgerSplit(unittest.TestCase):
                 self.assertEqual(grade_leans.load_ledger()["game_type"].tolist(), ["R"])
 
 
+class PostseasonReadout(unittest.TestCase):
+    """The held footer scores postseason rows without touching the body."""
+
+    @staticmethod
+    def _row(pk, gt, lean, fa, fh, p_home, away_ml, home_ml, status="graded"):
+        full = None
+        if status == "graded" and lean:
+            full = "W" if lean == ("HHH" if fh > fa else "AAA") else "L"
+        return dict(game_pk=pk, game_date=DAY, away="AAA", home="HHH",
+                    model_tag="test_v3", game_type=gt, status=status,
+                    xw_lean=lean, xw_full=full, xw_f5=None,
+                    full_away=fa, full_home=fh, close_p_home=p_home,
+                    close_away_ml=away_ml, close_home_ml=home_ml)
+
+    def test_record_units_ev_null_and_rounds(self):
+        held = pd.DataFrame([
+            # home fav wins, lean home at -150: +0.667u
+            self._row(1, "F", "HHH", 2, 5, 0.58, 130, -150),
+            # lean away dog +130 loses: -1u; chalk (home) wins
+            self._row(2, "F", "AAA", 1, 4, 0.58, 130, -150),
+            # division series: lean away +120 wins: +1.2u; chalk (home) loses
+            self._row(3, "D", "AAA", 6, 3, 0.53, 120, -140),
+            # abstention and a pending game are counted, not scored
+            self._row(4, "D", None, 6, 3, 0.53, 120, -140),
+            self._row(5, "D", "HHH", None, None, None, None, None, status="pending"),
+        ])
+        text = "\n".join(grade_leans._held_lines(held))
+        self.assertIn("POSTSEASON (not registered; descriptive only)", text)
+        all_block = text.split("  ALL:")[1].split("  F wild card:")[0]
+        self.assertIn("graded=4  pending=1", all_block)
+        self.assertIn("abstained=1", all_block)
+        self.assertIn("lean full: 2-1", all_block)
+        self.assertIn("+0.87u", all_block)                  # 0.667 - 1 + 1.2
+        self.assertIn("same-row always-chalk: 2-1", all_block)
+        self.assertIn("F wild card: 2 rows", text)
+        self.assertIn("D division series: 3 rows", text)
+        self.assertNotIn("  L LCS:", text)
+
+        # EV - null == excess on the rendered line (the #227 invariant).
+        line = next(l for l in all_block.splitlines() if "vs close" in l)
+        num = lambda tag: float(re.search(tag + r"\s+([+-]?\d+\.\d)", line).group(1))
+        ev, exc = num(r"EV"), num(r"excess")
+        null = float(re.search(r"\(null\s+([+-]?\d+\.\d)\)", line).group(1))
+        self.assertAlmostEqual(ev - null, exc, delta=0.15)
+
+    def test_unpriced_rows_say_so_instead_of_scoring(self):
+        held = pd.DataFrame([self._row(1, "W", "HHH", 2, 5, None, None, None)])
+        text = "\n".join(grade_leans._held_lines(held))
+        self.assertIn("lean full: 1-0", text)
+        self.assertIn("closing price: none attached yet", text)
+        self.assertNotIn("vs close", text)
+
+    def test_unconfirmed_rows_get_no_postseason_block(self):
+        held = pd.DataFrame([self._row(1, None, "HHH", 2, 5, 0.58, 130, -150)])
+        text = "\n".join(grade_leans._held_lines(held))
+        self.assertNotIn("POSTSEASON (", text)
+        self.assertIn("await a game-type lookup", text)
+
+
 class Guards(unittest.TestCase):
     def test_validator_rejects_postseason_or_blank_row_in_main_ledger(self):
         for bad in ("D", ""):

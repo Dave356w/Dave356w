@@ -824,8 +824,67 @@ def save_ledger(led):
     return regular, held
 
 
+POSTSEASON_ROUNDS = (("F", "wild card"), ("D", "division series"),
+                     ("L", "LCS"), ("W", "World Series"))
+
+
+def _postseason_scope_lines(label, rows):
+    """Record, F5, closing-price excess/EV and units for one postseason scope.
+
+    Same arithmetic as the regular-season blocks, from the same homes:
+    `hybrid_test.apply_rule` for the leaned side's closing price, q and
+    profit (only its `lean_*` / `model_side_p` columns are read -- the
+    retired switch it also computes is ignored), and `_grid_cell_line` for
+    excess, SE, EV and the market-correct EV null. The always-chalk control
+    is scored on exactly the priced rows the lean is.
+    """
+    graded = rows[rows["status"].astype(str) == "graded"]
+    has_lean = graded["xw_lean"].notna() & graded["xw_lean"].astype(str).str.strip().ne("")
+    out = [f"  {label}: {len(rows)} rows  graded={len(graded)}  "
+           f"pending={int((rows['status'].astype(str) == 'pending').sum())}  "
+           f"void={int((rows['status'].astype(str) == 'void').sum())}  "
+           f"abstained={int((~has_lean).sum())}"]
+    if not has_lean.any():
+        return out
+    leaned = graded[has_lean]
+    out.append(f"    lean full: {_rec(leaned['xw_full'])}   "
+               f"F5: {_rec(leaned['xw_f5'])}")
+    import hybrid_test
+    d = hybrid_test.decidable(leaned)
+    if d is not None and not d.empty:
+        d = d[(d["xw_lean"] == d["home"]) | (d["xw_lean"] == d["away"])]
+        d = d[pd.to_numeric(d["close_home_ml"], errors="coerce").notna()
+              & pd.to_numeric(d["close_away_ml"], errors="coerce").notna()]
+    if d is None or d.empty:
+        out.append("    closing price: none attached yet; excess, EV and units "
+                   "print once the close is backfilled")
+        return out
+    h = hybrid_test.apply_rule(d.copy())
+    won = h["lean_won"].to_numpy(dtype=bool)
+    q = h["model_side_p"].to_numpy(dtype=float)
+    be = breakeven_prob(h["lean_ml"])
+    out.append(_grid_cell_line("vs close", won, q, width=10, breakeven=be)
+               + f"   {h['lean_profit'].sum():+.2f}u")
+    p_home = pd.to_numeric(h["close_p_home"], errors="coerce").to_numpy(dtype=float)
+    home_won = (h["full_home"] > h["full_away"]).to_numpy(dtype=bool)
+    chalk_won = np.where(chalk_is_home(p_home), home_won, ~home_won)
+    n = len(h)
+    unpriced = len(leaned) - n
+    out.append(f"    same-row always-chalk: {int(chalk_won.sum())}-{n - int(chalk_won.sum())}"
+               + (f"   ({int(is_pickem(p_home).sum())} pick'em row(s), tie to home)"
+                  if is_pickem(p_home).any() else "")
+               + (f"   ({unpriced} leaned row(s) without a close excluded)"
+                  if unpriced else ""))
+    return out
+
+
 def _held_lines(held):
-    """Short, descriptive footer for rows the report above excludes."""
+    """Footer for rows the report above excludes, with a postseason readout.
+
+    The readout is DESCRIPTIVE: no registration covers postseason games, the
+    sample is tens of games at most, and nothing here feeds a regular-season
+    number. Round lines partition the ALL line.
+    """
     if held is None or held.empty:
         return []
     types = held["game_type"].map(season_phase.clean_game_type)
@@ -841,11 +900,28 @@ def _held_lines(held):
                                  for k in ("graded", "pending", "void")),
     ]
     post = held[types.notna()]
-    wl = post["xw_full"].astype(str)
-    w, l = int((wl == "W").sum()), int((wl == "L").sum())
-    if w + l:
-        out.append(f"  postseason xwOBA lean full: {w}-{l}  (descriptive only; "
-                   "no registration covers these games)")
+    if not post.empty:
+        tags = ", ".join(sorted(post["model_tag"].dropna().astype(str).unique()))
+        out += [
+            "",
+            "POSTSEASON (not registered; descriptive only)",
+            f"  model tag(s): {tags or 'none'}. Each row is scored on its own "
+            "pregame lean -- native, not reconstructed.",
+            "  Price basis: the leaned side's CLOSING moneyline and closing "
+            "no-vig q, as in the regular-season blocks. excess is vs q (null 0);",
+            "  EV is vs the posted breakeven, whose market-correct null is printed "
+            "beside it. Flat 1u per leaned game at the close.",
+            "  A best-of series repeats the same clubs and often the same "
+            "starters, so games are not independent draws; read the SE as a floor.",
+        ]
+        out += _postseason_scope_lines("ALL", post)
+        for code, name in POSTSEASON_ROUNDS:
+            rows = post[types[types.notna()] == code]
+            if not rows.empty:
+                out += _postseason_scope_lines(f"{code} {name}", rows)
+        other = post[~types[types.notna()].isin([c for c, _ in POSTSEASON_ROUNDS])]
+        if not other.empty:
+            out += _postseason_scope_lines("other type", other)
     if types.isna().any():
         out.append(f"  {int(types.isna().sum())} row(s) await a game-type lookup; "
                    "they join the main ledger once confirmed regular season")
