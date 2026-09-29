@@ -172,8 +172,10 @@ USE_TEAM_LOGOS = os.environ.get("USE_TEAM_LOGOS", "1") != "0"
 LOGO_CDN = "https://www.mlbstatic.com/team-logos"
 DATA_DIR = os.environ.get("DATA_DIR", "data")            # grading ledger home
 LEDGER_PATH = os.path.join(DATA_DIR, "mlb_lean_ledger.csv")
-# Postseason and type-unconfirmed rows. Read ONLY by the pregame lock lookup;
-# every record, calibration and page is regular season. See season_phase.py.
+# Postseason and type-unconfirmed rows. Read by the pregame lock lookup and by
+# postseason.html, which shows confirmed postseason rows on a page of their
+# own. Every other record, calibration and page is regular season. See
+# season_phase.py.
 POSTSEASON_LEDGER_PATH = os.path.join(DATA_DIR, season_phase.POSTSEASON_LEDGER_NAME)
 MODEL_TAG = os.environ.get("MODEL_TAG", "xw+starter_velo_v14")  # keep in sync with grade_leans.py
 if not MODEL_TAG.startswith("xw+"):
@@ -8312,6 +8314,7 @@ def render_grades_html(built_txt):
     back = ("<div class='backlink ledger-nav'>"
             "<a href='index.html'>← today's leans</a>"
             "<a href='leaderboard.html'>leaderboard</a>"
+            "<a href='postseason.html'>postseason</a>"
             "<a href='market-calibration.html'>market calibration →</a></div>")
     led = load_ledger_df()
     if led is None:
@@ -8666,6 +8669,130 @@ def grades_fold_js():
 })();""" % GRADES_OPEN_SLATES)
 
 
+def load_postseason_df():
+    """Confirmed postseason rows from the held file, or None.
+
+    Rows whose game type is still unconfirmed are left out: they are most
+    likely regular-season games waiting on a schedule lookup, and they move to
+    the main ledger once it resolves. Only a confirmed non-`R` type is shown.
+    """
+    if not os.path.exists(POSTSEASON_LEDGER_PATH):
+        return None
+    try:
+        held = pd.read_csv(POSTSEASON_LEDGER_PATH)
+    except Exception as e:  # noqa: BLE001
+        log(f"Postseason ledger unreadable, page renders empty: {e!r}")
+        return None
+    if held.empty or season_phase.GAME_TYPE_COL not in held.columns:
+        return None
+    types = held[season_phase.GAME_TYPE_COL].map(season_phase.clean_game_type)
+    post = held[types.notna() & types.ne(season_phase.REGULAR)].copy()
+    return post if not post.empty else None
+
+
+POSTSEASON_ROUND_NAMES = {"F": "Wild Card", "D": "Division Series",
+                          "L": "LCS", "W": "World Series"}
+
+
+def render_postseason_html(built_txt):
+    """Postseason games on their own page, never in the regular-season record.
+
+    Same row renderer, the same observation frame and the same aggregate as
+    grades.html, so a postseason tile is scored exactly as a regular-season
+    one: decided, settled, two-sidedly priced rows at the close, with the
+    always-chalk and always-home controls on the identical rows.
+    """
+    back = ("<div class='backlink ledger-nav'>"
+            f"<a href='grades.html'>← {_model_version_short()} ledger</a>"
+            "<a href='index.html'>today's leans →</a></div>")
+    head = ("<div class='gr-head'><h1 class='gr-h1'>Postseason ledger</h1>"
+            "<div class='gr-lead'>Postseason selections and results, kept "
+            "separate from the regular-season record. Built "
+            f"<span class='stamp'>{built_txt}</span>.</div></div>")
+    post = load_postseason_df()
+    if post is None:
+        body = ("<div class='gr-note'>No postseason games yet. Postseason "
+                "leans appear here once the first one is recorded.</div>")
+        return html_document(back + head + body, built_txt,
+                             title="MLB postseason ledger")
+
+    types = post[season_phase.GAME_TYPE_COL].map(season_phase.clean_game_type)
+    stats = []
+
+    def stat(lab, val, sub=None, tone=""):
+        s_ = f"<div class='s'>{sub}</div>" if sub else ""
+        stats.append(f"<div class='gr-stat'><div class='l'>{lab}</div>"
+                     f"<div class='v{(' ' + tone) if tone else ''}'>{val}</div>{s_}</div>")
+
+    def pub(parts):
+        out = f"{100 * parts['actual']:.1f}%"
+        roi = parts.get("roi")
+        if roi is not None and np.isfinite(roi):
+            out += f" · ROI {100 * roi:+.1f}% · {parts['units']:+.2f}u"
+        return out
+
+    status = post["status"].astype(str)
+    n_graded = int(status.eq("graded").sum())
+    bits = [f"{int(status.eq('pending').sum())} pending"]
+    if status.eq("void").any():
+        bits.append(f"{int(status.eq('void').sum())} void")
+    obs = _lean_market_observations(post)
+    if n_graded:
+        bits.insert(0, f"{len(obs)} scored")
+    stat("Graded", str(n_graded), " · ".join(bits))
+    if not obs.empty:
+        everyone = pd.Series(True, index=obs.index)
+        rule = _lean_market_agg(obs, everyone)
+        stat(PUBLIC_MODEL_NAME, f"{rule['w']}-{rule['l']}", pub(rule),
+             tone="cool" if rule["units"] > 0 else "warm")
+        for code, name in POSTSEASON_ROUND_NAMES.items():
+            in_round = types.reindex(obs.index).eq(code)
+            if in_round.any():
+                r_ = _lean_market_agg(obs, in_round)
+                stat(name, f"{r_['w']}-{r_['l']}", pub(r_))
+        for lab, cols in (
+            ("Always chalk", dict(won="chalk_won", p="chalk_p",
+                                  resid="chalk_resid", profit="chalk_profit")),
+            ("Always home", dict(won="home_won", p="home_p",
+                                 resid="home_resid", profit="home_profit")),
+        ):
+            ctl = _lean_market_agg(obs, everyone, **cols)
+            if ctl:
+                stat(lab, f"{ctl['w']}-{ctl['l']}", pub(ctl), tone="dim")
+    note = ("<div class='gr-note'>Every game is the model's own pregame lean, "
+            "nothing re-decided. Records and ROI are scored at the selection's "
+            "closing price, with the controls on the same games. <b>Not part of "
+            "the regular-season record</b>: postseason games are few, and games "
+            "in a series share teams and often starters, so read these as a "
+            "record of what happened rather than evidence about the model."
+            "</div>")
+    summary = "<div class='gr-summary'>" + "".join(stats) + "</div>" + note
+
+    show_ml = "close_home_ml" in post.columns and post["close_home_ml"].notna().any()
+    heads = (["Game", "Selection"] + (["ML"] if show_ml else [])
+             + ["Final", "Result"])
+    post = post.assign(_round=types).sort_values(
+        ["game_date", "game_pk"], ascending=[False, True])
+    body = []
+    for date, day in post.groupby("game_date", sort=False):
+        rounds = [POSTSEASON_ROUND_NAMES.get(t, t) for t in
+                  dict.fromkeys(day["_round"].dropna())]
+        header = _grades_day_header(date, day, len(heads))
+        if rounds:
+            header = header.replace(
+                "</th></tr>",
+                f" <span class='n'>· {_esc(', '.join(rounds))}</span></th></tr>", 1)
+        body.append("<tbody class='gr-slate'>" + header
+                    + "".join(_grades_row(r, show_ml) for _, r in day.iterrows())
+                    + "</tbody>")
+    table = ("<div class='gr-tablewrap'><table class='gr'><thead><tr>"
+             + "".join(f"<th>{h}</th>" for h in heads)
+             + f"</tr></thead>{''.join(body)}</table></div>")
+    return html_document(back + head + summary + table, built_txt,
+                         title="MLB postseason ledger",
+                         extra_js=grades_fold_js())
+
+
 def _leaderboard_table(rows, rank_start=1, invert=False):
     """One board's rows as the site's standard responsive table body."""
     out = []
@@ -8907,7 +9034,10 @@ def write_grades_page(built_txt=None):
     calib_path = os.path.join(OUT_DIR, "market-calibration.html")
     with open(calib_path, "w") as f:
         f.write(render_market_calibration_html(built_txt))
-    log(f"Wrote {grades_path} and {calib_path}")
+    post_path = os.path.join(OUT_DIR, "postseason.html")
+    with open(post_path, "w") as f:
+        f.write(render_postseason_html(built_txt))
+    log(f"Wrote {grades_path}, {calib_path} and {post_path}")
     return grades_path
 
 

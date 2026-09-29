@@ -234,6 +234,66 @@ class PostseasonReadout(unittest.TestCase):
         self.assertIn("await a game-type lookup", text)
 
 
+class PostseasonPage(unittest.TestCase):
+    """postseason.html shows confirmed postseason rows; grades.html never does."""
+
+    @staticmethod
+    def _row(pk, gt, lean, fa, fh, p_home, away_ml, home_ml, status="graded"):
+        full = None
+        if status == "graded" and lean:
+            full = "W" if lean == ("HHH" if fh > fa else "AAA") else "L"
+        return dict(game_pk=pk, game_date=DAY, away="AAA", home="HHH",
+                    away_sp="A SP", home_sp="H SP",
+                    model_tag=build_site.MODEL_TAG, game_type=gt, status=status,
+                    xw_lean=lean, xw_full=full, xw_delta=0.02, xw_net=0.02,
+                    full_away=fa, full_home=fh, close_p_home=p_home,
+                    close_away_ml=away_ml, close_home_ml=home_ml)
+
+    def _render(self, held_rows, main_rows=()):
+        with tempfile.TemporaryDirectory() as td:
+            main = os.path.join(td, "mlb_lean_ledger.csv")
+            held = os.path.join(td, season_phase.POSTSEASON_LEDGER_NAME)
+            pd.DataFrame(list(main_rows) or [self._row(1, "R", "HHH", 2, 5, .58, 130, -150)]
+                         ).to_csv(main, index=False)
+            if held_rows is not None:
+                pd.DataFrame(held_rows).to_csv(held, index=False)
+            with mock.patch.object(build_site, "LEDGER_PATH", main), \
+                    mock.patch.object(build_site, "POSTSEASON_LEDGER_PATH", held):
+                return (build_site.render_postseason_html("t"),
+                        build_site.render_grades_html("t"))
+
+    def test_rounds_record_units_and_controls(self):
+        page, grades = self._render([
+            self._row(9101, "F", "HHH", 2, 5, .58, 130, -150),   # +0.667u
+            self._row(9102, "F", "AAA", 1, 4, .58, 130, -150),   # -1u
+            self._row(9103, "D", "AAA", 6, 3, .53, 120, -140),   # +1.2u
+            self._row(9104, "D", "HHH", None, None, None, None, None,
+                      status="pending"),
+            self._row(9105, None, "HHH", 2, 5, .58, 130, -150),  # unconfirmed
+        ])
+        self.assertIn("Postseason ledger", page)
+        self.assertIn(f"<div class='l'>{build_site.PUBLIC_MODEL_NAME}</div>"
+                      "<div class='v cool'>2-1</div>", page)
+        self.assertIn("+0.87u", page)
+        self.assertIn("<div class='l'>Wild Card</div><div class='v'>1-1</div>", page)
+        self.assertIn("<div class='l'>Division Series</div><div class='v'>1-0</div>", page)
+        self.assertIn("<div class='l'>Always chalk</div><div class='v dim'>2-1</div>", page)
+        self.assertIn("1 pending", page)
+        self.assertIn("· Wild Card, Division Series", page)
+        # The unconfirmed row is neither here nor on the regular-season page.
+        for html in (page, grades):
+            self.assertNotIn("9105", html)
+        # grades.html links the page and scores none of its games.
+        self.assertIn("href='postseason.html'", grades)
+        self.assertEqual(grades.count("<tr class='gr-row"), 1)  # the main row only
+
+    def test_empty_when_no_postseason_rows(self):
+        page, _ = self._render(None)
+        self.assertIn("No postseason games yet", page)
+        page, _ = self._render([self._row(9105, None, "HHH", 2, 5, .58, 130, -150)])
+        self.assertIn("No postseason games yet", page)
+
+
 class Guards(unittest.TestCase):
     def test_validator_rejects_postseason_or_blank_row_in_main_ledger(self):
         for bad in ("D", ""):
