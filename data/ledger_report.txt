@@ -425,3 +425,7 @@ pre-registered Candidate B2 individual-extreme TMR10 test  (registered 2026-09-1
       paired gain: residual -17.3pp; flat-unit profit -1.04u.
     CHECKPOINT: 3 of 20 disagreements for the early directional read; no promotion decision.
     FORWARD FIREWALL — reconstruction rows above never enter this accumulator or its checkpoints.
+
+HELD OUT of every number above: 4 rows in mlb_postseason_ledger.csv
+  by type: F=4   (F wild card, D division series, L LCS, W World Series)
+  status: graded=0  pending=4  void=0
