@@ -290,6 +290,63 @@ def test_empty_dump_still_persists_settlements(tmp_path):
     assert paper.read_csv(data / "paper_kalshi/positions.csv")[0]["status"] == "paper_settled"
 
 
+def write_ledger(data, name, rows):
+    with (data / name).open("w", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=["game_pk", "status", "home", "away",
+                                           "full_home", "full_away"])
+        w.writeheader()
+        w.writerows(rows)
+
+
+FINAL = {"game_pk": "822840", "status": "graded", "home": "TEX", "away": "NYM",
+         "full_home": "4", "full_away": "2"}
+
+
+def test_postseason_ledger_settles_and_grades_paper_fills(tmp_path):
+    # grade_leans routes postseason rows to mlb_postseason_ledger.csv; a fill
+    # on such a game must settle and grade from it, not wait forever.
+    data = write_dump(tmp_path)
+    paper.run(args(tmp_path), session=Session(), now=NOW)
+    write_ledger(data, "mlb_lean_ledger.csv", [])
+    write_ledger(data, "mlb_postseason_ledger.csv", [FINAL])
+    paper.run(args(tmp_path), session=Session(settlement={"status": "settled", "result": "yes"}),
+              now=NOW)
+    position = paper.read_csv(data / "paper_kalshi/positions.csv")[0]
+    assert position["status"] == "paper_settled"
+    assert Decimal(position["pnl_dollars"]) == Decimal("4.71")
+    text = (data / "paper_kalshi/report.txt").read_text()
+    assert "Settled fills: 1" in text
+    assert "Paper fills only: n=1 graded 1-0 pending=0" in text
+
+
+def test_game_in_neither_ledger_stays_pending(tmp_path):
+    data = write_dump(tmp_path)
+    paper.run(args(tmp_path), session=Session(), now=NOW)
+    other = dict(FINAL, game_pk="999999")
+    write_ledger(data, "mlb_lean_ledger.csv", [other])
+    write_ledger(data, "mlb_postseason_ledger.csv", [dict(other, game_pk="999998")])
+    paper.run(args(tmp_path), session=Session(settlement={"status": "settled", "result": "yes"}),
+              now=NOW)
+    assert paper.read_csv(data / "paper_kalshi/positions.csv")[0]["status"] == "paper_filled"
+    assert "Paper fills only: n=1 graded 0-0 pending=1" in (
+        data / "paper_kalshi/report.txt").read_text()
+
+
+def test_read_ledgers_unions_files_without_repeating_a_game(tmp_path):
+    write_ledger(tmp_path, "mlb_lean_ledger.csv", [FINAL])
+    write_ledger(tmp_path, "mlb_postseason_ledger.csv",
+                 [dict(FINAL, full_home="0"), dict(FINAL, game_pk="849843")])
+    rows = paper.read_ledgers(tmp_path)
+    assert [r["game_pk"] for r in rows] == ["822840", "849843"]
+    assert rows[0]["full_home"] == "4"   # main ledger row wins
+    assert paper.read_ledgers(tmp_path / "missing") == []
+
+
+def test_ledger_names_match_season_phase():
+    import season_phase
+    assert paper.LEDGER_NAMES == ("mlb_lean_ledger.csv", season_phase.POSTSEASON_LEDGER_NAME)
+
+
 def test_standalone_paper_workflow_stays_out_of_site_build_group():
     # Text-level (PyYAML is not a CI dependency): the concurrency block's group
     # must never name site-build, where a queued paper run could evict a

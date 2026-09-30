@@ -33,8 +33,11 @@ REGISTERED_ACCUMULATORS = (
 )
 
 # The only modules allowed to know the held file exists.
+# paper_kalshi.py is a read-only execution diagnostic, not a registered test:
+# it already holds postseason fills (they come from the slate dump) and reads
+# the held file only to settle/grade them by game_pk.
 HELD_FILE_READERS = {"season_phase.py", "grade_leans.py", "build_site.py",
-                     "validate_data_files.py"}
+                     "validate_data_files.py", "paper_kalshi.py"}
 
 DAY = "2026-10-06"
 REGULAR_PK, POSTSEASON_PK, BLANK_PK = 9001, 9002, 9003
