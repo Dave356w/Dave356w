@@ -1,10 +1,10 @@
-# generated 2026-09-29T16:59Z by lineup-window-collect
-# run: https://github.com/Dave356w/Dave356w/actions/runs/36601137344
+# generated 2026-09-30T16:55Z by lineup-window-collect
+# run: https://github.com/Dave356w/Dave356w/actions/runs/36747136053
 # diagnostic only -- nothing here reaches a lean, delta or grade
 
 PITCHER x LINEUP INTERACTION -- per hitter, PAs against the starter
   diagnostic only; nothing here reaches a lean, delta or grade
-  frame rows 8532: pregame 3582, post-hoc dropped 4860, provenance unknown 90
+  frame rows 8676: pregame 3582, post-hoc dropped 4860, provenance unknown 234
   frame starter != ledger starter (dropped): 0
   lineups whose expected starter did not start (dropped): 1
   scored: 7673 PAs, 434 hitters, 196 games, 190 starters
