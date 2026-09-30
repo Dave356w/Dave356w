@@ -123,6 +123,25 @@ def test_the_arm_turns_the_starter_blend_off():
     assert bs.STARTER_BLEND_WEIGHT == 0.0
 
 
+def test_patched_arm_keeps_the_primary_league_baseline():
+    """The arm's primary column is the blend's column, so a map keyed on both
+    once collapsed to the blend entry: the league baseline lost its primary
+    centre and the run died formatting None. Both sides are asserted -- the
+    unpatched primary still gets two distinct centres."""
+    import pandas as pd
+    df = pd.DataFrame({"pa": [100, 300], "woba": [0.30, 0.34],
+                       "xwoba": [0.31, 0.33]})
+    base = bs.compute_league_baseline(df)
+    assert base[bs.MODEL_RATE_INTERNAL_COL] == pytest.approx(0.325)
+    assert base[bs.BLEND_RATE_INTERNAL_COL] == pytest.approx(0.33)
+    sm.patch()
+    base = bs.compute_league_baseline(df)
+    # The arm's primary centre is the SHADOW column's, not the dropped one's.
+    assert base[bs.MODEL_RATE_INTERNAL_COL] == pytest.approx(0.33)
+    assert bs.BLEND_RATE_INTERNAL_COL not in base
+    assert bs.rate_source_map() == {sm.SHADOW_SOURCE_COL: bs.MODEL_RATE_INTERNAL_COL}
+
+
 def test_internal_schema_name_is_left_alone():
     """The dump/ledger key is a compatibility schema shared by both metrics."""
     cfg = sm.patch()
