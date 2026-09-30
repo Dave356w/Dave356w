@@ -5,6 +5,7 @@ from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 import sys
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import paper_kalshi as paper
@@ -79,7 +80,71 @@ def write_dump(tmp, rows=None):
 def args(tmp):
     return SimpleNamespace(slate_date="2026-09-22", dumps_dir=str(tmp / "data"),
                            out_dir=str(tmp / "data/paper_kalshi"),
-                           quantity=10, min_savings_pp=0.5, use_wall_clock=False)
+                           quantity=10, min_savings_pp=paper.DEFAULT_MIN_SAVINGS_PP,
+                           use_wall_clock=False)
+
+
+@pytest.mark.parametrize("ask, expected", [
+    ("0.5009", "paper_filled"),  # -0.99 pp after fees
+    ("0.5010", "paper_filled"),  # exactly -1.00 pp, inclusive
+    ("0.5011", "skipped"),       # -1.01 pp after fees
+])
+def test_execution_tolerance_includes_fees_and_boundary(tmp_path, ask, expected):
+    class BoundaryBook(Session):
+        def get(self, url, params=None, timeout=15):
+            if url.endswith('/orderbook'):
+                return Response({"orderbook_fp": {"no_dollars": [
+                    [str(1 - Decimal(ask)), "25"]]}})
+            return super().get(url, params, timeout)
+
+    rows = model_rows()
+    for row in rows:
+        row["pregame_home_ml"] = "-100"
+    data = write_dump(tmp_path, rows)
+    paper.run(args(tmp_path), session=BoundaryBook(), now=NOW)
+    obs = paper.read_csv(data / "paper_kalshi/observations.csv")[-1]
+    assert Decimal(obs["estimated_fee"]) == Decimal("0.09")
+    assert Decimal(obs["savings_pp"]) == (Decimal("0.5") - Decimal(ask) - Decimal("0.009")) * 100
+    assert Decimal(obs["min_savings_pp"]) == Decimal("-1")
+    assert obs["status"] == expected
+    assert len(paper.read_csv(data / "paper_kalshi/positions.csv")) == (expected == "paper_filled")
+    if expected == "skipped":
+        assert obs["reason"] == "execution_savings_below_threshold"
+    assert "Kalshi BE >= -1.0 pp" in (data / "paper_kalshi/report.txt").read_text()
+
+
+@pytest.mark.parametrize("cli, threshold", [([], -1.0), (["--min-savings-pp", "0.5"], 0.5)])
+def test_cli_execution_threshold_default_and_override(monkeypatch, cli, threshold):
+    captured = []
+    monkeypatch.setattr(sys, "argv", ["paper_kalshi.py", *cli])
+    monkeypatch.setattr(paper, "run", captured.append)
+    paper.main()
+    assert captured[0].min_savings_pp == threshold
+
+
+@pytest.mark.parametrize("threshold", ["-1.01", "10.01", "nan", "inf"])
+def test_cli_rejects_threshold_outside_supported_range(monkeypatch, threshold):
+    monkeypatch.setattr(sys, "argv", ["paper_kalshi.py", "--min-savings-pp", threshold])
+    monkeypatch.setattr(paper, "run", lambda _: pytest.fail("invalid threshold reached run"))
+    with pytest.raises(SystemExit) as exc:
+        paper.main()
+    assert exc.value.code == 2
+
+
+def test_old_observation_values_survive_appended_threshold_column(tmp_path):
+    path = tmp_path / "old.csv"
+    fields = paper.FIELDS[:-1]
+    old = {key: "" for key in fields}
+    old.update(game_pk="849843", status="skipped", reason="execution_savings_below_threshold",
+               savings_pp="-0.5428571428571428571428571400")
+    with path.open("w", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=fields)
+        writer.writeheader()
+        writer.writerow(old)
+    paper.write_csv(path, paper.read_csv(path))
+    restored = paper.read_csv(path)[0]
+    assert {key: restored[key] for key in fields} == old
+    assert restored["min_savings_pp"] == ""
 
 
 def test_depth_and_fee_rounding():
