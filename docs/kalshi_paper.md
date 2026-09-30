@@ -61,10 +61,18 @@ observational infrastructure, not a continuous low-latency trading engine.
   the two differ by ~0.9 pp, comparable to the savings being measured, so
   confirm the rule against Kalshi's fee schedule or a real fill before reading
   the savings as settled.
-* By default, records a paper fill only if its fee-inclusive break-even
-  improves on the **saved** side-specific sportsbook moneyline by at least
-  0.5 percentage points. This is an execution-cost screen only: a V13 lean
+* By default, records a paper fill when the **saved** side-specific sportsbook
+  break-even minus the fee-inclusive Kalshi break-even is **at least -1.0
+  percentage points**, inclusive. This allows up to 1 percentage point worse
+  execution after fees, rather than a relative 1% difference. The CLI
+  `--min-savings-pp` accepts -1 through 10; a value of 0 requires no worsening,
+  and 0.5 restores the earlier improvement requirement. Both automated paper
+  jobs use the CLI default. This is an execution-cost screen only: a model lean
   and sportsbook disagreement do **not** establish positive expected value.
+  The new rule applies prospectively; historical skips and positions are not
+  retroactively changed. New rows append `min_savings_pp` to record the applied
+  threshold; older rows retain a blank value. The report states the current
+  threshold and keeps the historical decisions in its all-days aggregates.
 * `data/paper_kalshi/observations.csv` records **all** observations and skips;
   `positions.csv` holds at most one hypothetical position per game;
   `report.txt` summarizes diagnostic skips, open positions and hypothetical

@@ -27,6 +27,8 @@ MLB = "https://statsapi.mlb.com/api/v1"
 ET = ZoneInfo("America/New_York")
 D = Decimal
 CENT = D("0.01")
+# Savings are percentage points: -1 permits up to 1 pp worse execution.
+DEFAULT_MIN_SAVINGS_PP = D("-1.0")
 # MLB ledger abbreviation -> accepted Kalshi event-ticker abbreviations.
 # Kalshi's code is verified live only for AZ; where Kalshi may use a different
 # common code (White Sox CHW, etc.) both are accepted. That is still an exact
@@ -61,6 +63,8 @@ FIELDS += ["estimated_fee_1x", "kalshi_be_1x", "savings_pp_1x"]
 # and how it was rounded. Blank on rows written before it existed (series-only
 # multiplier, per-price-level cent rounding).
 FIELDS += ["fee_type", "fee_basis"]
+# Blank on historical rows; new observations retain their execution rule.
+FIELDS += ["min_savings_pp"]
 # Kalshi REST market lifecycle ends in `finalized`; `settled` is a query filter
 # and WebSocket event name, kept only so an older payload still reads as final.
 SETTLED_STATUSES = {"finalized", "settled"}
@@ -323,7 +327,8 @@ def assess(game, markets, schedule, session, series_fee, now, existing, qty, min
                model_snapshot_utc=game["snapshot"].isoformat() if game["snapshot"] else "",
                model_tag=game["tag"], away=game["away"] or "", home=game["home"] or "",
                lean=game["lean"] or "", xw_net=str(game["xw_net"] or ""),
-               sportsbook_ml=str(game["book_ml"] or ""))
+               sportsbook_ml=str(game["book_ml"] or ""),
+               min_savings_pp=str(min_savings))
     def skip(reason):
         row.update(status="skipped", reason=reason)
         return row
@@ -495,7 +500,8 @@ def _comparison_line(label, quotes, ledger):
             f"P&L=${pnl.quantize(CENT)} mean fee-incl BE={fmt(be)} (1x fee {fmt(be_1x)})")
 
 
-def summarize(observations, positions, outfile, now, note="", ledger=(), model_tag=""):
+def summarize(observations, positions, outfile, now, note="", ledger=(), model_tag="",
+              min_savings=DEFAULT_MIN_SAVINGS_PP):
     # Every aggregate below is for the current model only; rows from earlier
     # model versions stay in the CSVs (and still settle) but are only counted.
     other = Counter(r.get("model_tag") or "untagged" for r in observations + positions
@@ -516,8 +522,10 @@ def summarize(observations, positions, outfile, now, note="", ledger=(), model_t
             "As of: " + now.isoformat(),
             "Source: saved pregame dump of the shipped model (" + (model_tag or "unknown")
             + ") + live public Kalshi orderbook",
-            "Decision rule: simulated immediate YES taker fill on the model lean;",
-            "  only when fee-inclusive break-even improves on saved sportsbook price.",
+            "Current quote rule: simulated immediate YES taker fill on the model lean;",
+            f"  saved sportsbook BE minus fee-inclusive Kalshi BE >= {min_savings} pp.",
+            "Historical observations retain their original decisions; min_savings_pp "
+            "records the rule on new rows (blank on older rows).",
             "This is NOT a claim of predictive edge or executable realized fills.",
             "Aggregates below: " + (model_tag or "all model tags") + " rows only. Other-tag rows "
             "(kept, not pooled): " + (", ".join(f"{k}={v}" for k, v in sorted(other.items()))
@@ -578,9 +586,10 @@ def run(args, session=None, now=None):
     observations, positions = read_csv(quotes_file), read_csv(positions_file)
     data_path = Path(args.dumps_dir) / f"leans_{date}_xw.csv"
     model_tag = getattr(args, "model_tag", None) or current_model_tag()
+    min_savings = D(str(args.min_savings_pp))
     ledger = read_ledgers(Path(args.dumps_dir))
     report = lambda note: summarize(observations, positions, root/"report.txt", now,
-                                    note, ledger, model_tag)
+                                    note, ledger, model_tag, min_savings)
     # Settlement works even on dates without a new model dump.
     settle(positions, ledger, session, now)
     if not data_path.exists():
@@ -604,7 +613,8 @@ def run(args, session=None, now=None):
             row.update(observed_utc=now.isoformat(), game_pk=game["game_pk"],
                        game_date=game["game_date"], lean=game["lean"] or "",
                        model_tag=game["tag"],
-                       status="skipped", reason="upstream_market_or_schedule_unavailable")
+                       status="skipped", reason="upstream_market_or_schedule_unavailable",
+                       min_savings_pp=str(min_savings))
             observations.append(row)
         write_csv(quotes_file, observations)
         write_csv(positions_file, positions)
@@ -619,7 +629,7 @@ def run(args, session=None, now=None):
     # Programmatic test clocks bypass wall-time; real CLI uses receipt time.
     for game in games:
         result = assess(game, markets, status, session, series_fee, now, existing,
-                        args.quantity, D(str(args.min_savings_pp)), model_tag)
+                        args.quantity, min_savings, model_tag)
         observations.append(result)
         if result["status"] == "paper_filled":
             positions.append(result.copy())
@@ -637,12 +647,14 @@ def main():
     parser.add_argument("--dumps-dir", default="data")
     parser.add_argument("--out-dir", default="data/paper_kalshi")
     parser.add_argument("--quantity", type=int, default=10)
-    parser.add_argument("--min-savings-pp", type=float, default=0.5)
+    parser.add_argument("--min-savings-pp", type=float, default=float(DEFAULT_MIN_SAVINGS_PP),
+                        help="minimum saved sportsbook BE minus fee-inclusive Kalshi BE, "
+                        "in percentage points (default: -1.0; allows up to 1 pp worse)")
     parser.add_argument("--model-tag", help="model tag to paper-trade "
                         "(default: build_site.MODEL_TAG, the shipped model)")
     args = parser.parse_args()
-    if not 1 <= args.quantity <= 100 or not 0 <= args.min_savings_pp <= 10:
-        parser.error("quantity must be 1..100 and min-savings-pp 0..10")
+    if not 1 <= args.quantity <= 100 or not -1 <= args.min_savings_pp <= 10:
+        parser.error("quantity must be 1..100 and min-savings-pp -1..10")
     args.use_wall_clock = True
     run(args)
 
