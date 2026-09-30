@@ -1,16 +1,16 @@
 KALSHI PAPER EXECUTION — READ-ONLY / NOT LIVE ORDERS
-As of: 2026-09-29T23:41:36.715369+00:00
+As of: 2026-09-30T01:21:25.574658+00:00
 Source: saved pregame dump of the shipped model (xw+starter_velo_v14) + live public Kalshi orderbook
 Decision rule: simulated immediate YES taker fill on the model lean;
   only when fee-inclusive break-even improves on saved sportsbook price.
 This is NOT a claim of predictive edge or executable realized fills.
 Aggregates below: xw+starter_velo_v14 rows only. Other-tag rows (kept, not pooled): none
-Quote observations (all days): 59
+Quote observations (all days): 63
 Paper fills (all days): 3
 Settled fills: 0
 Settled hypothetical P&L: $0.00
 Open/review: 3
-Skip reasons: already_paper_filled=11, execution_savings_below_threshold=6, invalid_pregame_snapshot=1, mlb_status_not_confirmed_pregame=1, outside_pregame_cutoff=8, stale_or_postgame_model=29
+Skip reasons: already_paper_filled=11, execution_savings_below_threshold=7, invalid_pregame_snapshot=1, mlb_status_not_confirmed_pregame=1, outside_pregame_cutoff=8, stale_or_postgame_model=32
 Same-game comparison (graded by MLB ledger final score, not Kalshi settlement;
   one quote per game; fills are a subset of all matched leans):
   All matched leans at Kalshi price: n=4 graded 0-0 pending=4 P&L=$0.00 mean fee-incl BE=56.4% (1x fee 57.3%)
