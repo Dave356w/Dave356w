@@ -1,20 +1,20 @@
 KALSHI PAPER EXECUTION — READ-ONLY / NOT LIVE ORDERS
-As of: 2026-09-30T05:21:59.732095+00:00
+As of: 2026-09-30T13:48:03.752696+00:00
 Source: saved pregame dump of the shipped model (xw+starter_velo_v14) + live public Kalshi orderbook
 Decision rule: simulated immediate YES taker fill on the model lean;
   only when fee-inclusive break-even improves on saved sportsbook price.
 This is NOT a claim of predictive edge or executable realized fills.
 Aggregates below: xw+starter_velo_v14 rows only. Other-tag rows (kept, not pooled): none
-Quote observations (all days): 71
-Paper fills (all days): 3
+Quote observations (all days): 75
+Paper fills (all days): 4
 Settled fills: 0
 Settled hypothetical P&L: $0.00
-Open/review: 3
-Skip reasons: already_paper_filled=11, execution_savings_below_threshold=7, invalid_pregame_snapshot=1, mlb_status_not_confirmed_pregame=1, outside_pregame_cutoff=8, stale_or_postgame_model=40
+Open/review: 4
+Skip reasons: already_paper_filled=11, execution_savings_below_threshold=7, invalid_pregame_snapshot=1, mlb_status_not_confirmed_pregame=1, outside_pregame_cutoff=11, stale_or_postgame_model=40
 Same-game comparison (graded by MLB ledger final score, not Kalshi settlement;
   one quote per game; fills are a subset of all matched leans):
-  All matched leans at Kalshi price: n=4 graded 4-0 pending=0 P&L=$17.44 mean fee-incl BE=56.4% (1x fee 57.3%)
-  Paper fills only: n=3 graded 3-0 pending=0 P&L=$13.03 mean fee-incl BE=56.6% (1x fee 57.4%)
+  All matched leans at Kalshi price: n=5 graded 4-0 pending=1 P&L=$17.44 mean fee-incl BE=55.7% (1x fee 56.6%)
+  Paper fills only: n=4 graded 3-0 pending=1 P&L=$13.03 mean fee-incl BE=55.6% (1x fee 56.5%)
   Matched but not filled: n=1 graded 1-0 pending=0 P&L=$4.41 mean fee-incl BE=55.9% (1x fee 56.8%)
-Fee sensitivity: fills whose saving stays >= 0 pp at the standard 1x fee: 3 of 3
+Fee sensitivity: fills whose saving stays >= 0 pp at the standard 1x fee: 4 of 4
 NOTICE: Kalshi series fee_type=quadratic_with_maker_fees, fee_multiplier=0.5
