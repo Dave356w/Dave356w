@@ -1,21 +1,21 @@
 KALSHI PAPER EXECUTION — READ-ONLY / NOT LIVE ORDERS
-As of: 2026-09-30T20:41:38.925835+00:00
+As of: 2026-09-30T22:59:57.427699+00:00
 Source: saved pregame dump of the shipped model (xw+starter_velo_v14) + live public Kalshi orderbook
 Current quote rule: simulated immediate YES taker fill on the model lean;
   saved sportsbook BE minus fee-inclusive Kalshi BE >= -1.0 pp.
 Historical observations retain their original decisions; min_savings_pp records the rule on new rows (blank on older rows).
 This is NOT a claim of predictive edge or executable realized fills.
 Aggregates below: xw+starter_velo_v14 rows only. Other-tag rows (kept, not pooled): none
-Quote observations (all days): 103
+Quote observations (all days): 107
 Paper fills (all days): 7
-Settled fills: 3
-Settled hypothetical P&L: $13.03
-Open/review: 4
-Skip reasons: already_paper_filled=21, execution_savings_below_threshold=7, invalid_pregame_snapshot=1, mlb_status_not_confirmed_pregame=1, outside_pregame_cutoff=22, stale_or_postgame_model=44
+Settled fills: 4
+Settled hypothetical P&L: $17.74
+Open/review: 3
+Skip reasons: already_paper_filled=23, execution_savings_below_threshold=7, invalid_pregame_snapshot=1, mlb_status_not_confirmed_pregame=1, outside_pregame_cutoff=22, stale_or_postgame_model=46
 Same-game comparison (graded by MLB ledger final score, not Kalshi settlement;
   one quote per game; fills are a subset of all matched leans):
-  All matched leans at Kalshi price: n=8 graded 4-0 pending=4 P&L=$17.44 mean fee-incl BE=54.5% (1x fee 55.4%)
-  Paper fills only: n=7 graded 3-0 pending=4 P&L=$13.03 mean fee-incl BE=54.3% (1x fee 55.2%)
+  All matched leans at Kalshi price: n=8 graded 5-0 pending=3 P&L=$22.15 mean fee-incl BE=54.5% (1x fee 55.4%)
+  Paper fills only: n=7 graded 4-0 pending=3 P&L=$17.74 mean fee-incl BE=54.3% (1x fee 55.2%)
   Matched but not filled: n=1 graded 1-0 pending=0 P&L=$4.41 mean fee-incl BE=55.9% (1x fee 56.8%)
 Fee sensitivity: fills whose saving stays >= 0 pp at the standard 1x fee: 5 of 7
 NOTICE: Kalshi series fee_type=quadratic_with_maker_fees, fee_multiplier=0.5 (per-event overrides resolved at quote receipt; see fee_basis)
