@@ -57,6 +57,14 @@ FIELDS = ["observed_utc", "game_pk", "game_date", "start_utc", "model_snapshot_u
           "market_status", "book_best_ask", "quantity", "avg_price", "estimated_fee",
           "fee_multiplier", "kalshi_be", "savings_pp", "pnl_dollars", "settled_utc"]
 FIELDS += ["estimated_fee_1x", "kalshi_be_1x", "savings_pp_1x"]
+# Appended, never inserted: where the fee in force at quote receipt came from
+# and how it was rounded. Blank on rows written before it existed (series-only
+# multiplier, per-price-level cent rounding).
+FIELDS += ["fee_type", "fee_basis"]
+# Kalshi REST market lifecycle ends in `finalized`; `settled` is a query filter
+# and WebSocket event name, kept only so an older payload still reads as final.
+SETTLED_STATUSES = {"finalized", "settled"}
+QUADRATIC_FEES = {"quadratic", "quadratic_with_maker_fees"}
 EVENT = re.compile(r"^KXMLBGAME-(\d{2}[A-Z]{3}\d{2})(\d{4})?([A-Z]+?)(G\d+)?$")
 
 
@@ -234,20 +242,67 @@ def taker_fill(book, qty, multiplier):
     for price, depth in asks:
         n = min(depth, remain)
         cost += n * price
-        # Explicit cents ROUND_UP per price-level simulated execution.
-        fee += (D("0.07") * multiplier * n * price * (1-price)).quantize(
-            CENT, rounding=ROUND_CEILING)
+        # Unrounded per level; the order is rounded ONCE below. Kalshi rounds
+        # fees order-wide through a sub-cent accumulator, so ceiling each level
+        # separately overstated a multi-level fill by up to a cent per level.
+        # For one isolated paper order the accumulator reduces to a single
+        # ceiling on the order total.
+        fee += D("0.07") * multiplier * n * price * (1-price)
         # Unconfirmed how the series fee_multiplier scales the taker curve, so
         # the standard (1x) 7% fee is carried alongside as a sensitivity check.
-        fee_1x += (D("0.07") * n * price * (1-price)).quantize(
-            CENT, rounding=ROUND_CEILING)
+        fee_1x += D("0.07") * n * price * (1-price)
         remain -= n
         if not remain:
             break
+    fee = fee.quantize(CENT, rounding=ROUND_CEILING)
+    fee_1x = fee_1x.quantize(CENT, rounding=ROUND_CEILING)
     return {"book_best_ask": asks[0][0], "quantity": qty,
             "avg_price": cost / qty, "estimated_fee": fee,
             "kalshi_be": (cost + fee) / qty,
             "estimated_fee_1x": fee_1x, "kalshi_be_1x": (cost + fee_1x) / qty}
+
+
+def event_fee_changes(session, event_ticker):
+    """Every recorded fee change for one event (historical and scheduled).
+
+    Event fees are an override layered on the series fee. Raises on transport
+    failure or an unrecognised payload so the caller fails closed: a quote
+    whose fee cannot be resolved is never priced at the series default."""
+    data = api(session, API, "/events/fee_changes",
+               {"event_ticker": event_ticker, "show_historical": "true"})
+    lists = [v for v in (data or {}).values() if isinstance(v, list)] \
+        if isinstance(data, dict) else []
+    if len(lists) != 1:
+        raise ValueError("unrecognised event fee_changes payload")
+    return [c for c in lists[0] if isinstance(c, dict)
+            and c.get("event_ticker", event_ticker) == event_ticker]
+
+
+def effective_fee(series_type, series_multiplier, changes, at):
+    """(fee_type, multiplier, basis) in force at `at`, or None if unresolvable.
+
+    The latest event change with scheduled_ts <= at wins; one whose overrides
+    are both null clears back to the series fee. A change scheduled after `at`
+    (e.g. a multiplier step at first pitch) does not apply to an earlier quote.
+    A change with an unreadable timestamp makes the fee unresolvable."""
+    active = None
+    for c in changes:
+        ts = utc(c.get("scheduled_ts"))
+        if ts is None:
+            return None
+        if ts <= at and (active is None or ts >= active[0]):
+            active = (ts, c)
+    fee_type, mult, basis = series_type, series_multiplier, "series"
+    if active is not None:
+        c = active[1]
+        t_over, m_over = c.get("fee_type_override"), c.get("fee_multiplier_override")
+        if t_over is not None or m_over is not None:
+            fee_type = t_over if t_over is not None else series_type
+            mult = dec(m_over) if m_over is not None else series_multiplier
+            basis = "event_override@" + active[0].isoformat()
+    if fee_type not in QUADRATIC_FEES or mult is None or mult < 0:
+        return None
+    return fee_type, mult, basis
 
 
 def ml_break_even(ml):
@@ -256,8 +311,11 @@ def ml_break_even(ml):
     return -ml / (D(100)-ml) if ml < 0 else D(100)/(D(100)+ml)
 
 
-def assess(game, markets, schedule, session, multiplier, now, existing, qty, min_savings,
+def assess(game, markets, schedule, session, series_fee, now, existing, qty, min_savings,
            model_tag):
+    """`series_fee` is the series (fee_type, multiplier) read at run start; the
+    fee actually used is resolved per event at quote receipt."""
+    series_type, series_mult = series_fee
     row = {k: "" for k in FIELDS}
     row.update(observed_utc=now.isoformat(), game_pk=game["game_pk"],
                game_date=game["game_date"],
@@ -265,8 +323,7 @@ def assess(game, markets, schedule, session, multiplier, now, existing, qty, min
                model_snapshot_utc=game["snapshot"].isoformat() if game["snapshot"] else "",
                model_tag=game["tag"], away=game["away"] or "", home=game["home"] or "",
                lean=game["lean"] or "", xw_net=str(game["xw_net"] or ""),
-               sportsbook_ml=str(game["book_ml"] or ""),
-               fee_multiplier=str(multiplier))
+               sportsbook_ml=str(game["book_ml"] or ""))
     def skip(reason):
         row.update(status="skipped", reason=reason)
         return row
@@ -302,6 +359,15 @@ def assess(game, markets, schedule, session, multiplier, now, existing, qty, min
                market_status=m.get("status", ""))
     if m.get("status") != "active" and m.get("status") != "open":
         return skip("kalshi_market_not_open")
+    fee_cache = existing.setdefault("event_fees", {})
+    if m["event_ticker"] not in fee_cache:
+        try:
+            fee_cache[m["event_ticker"]] = event_fee_changes(session, m["event_ticker"])
+        except (requests.RequestException, ValueError, AttributeError):
+            fee_cache[m["event_ticker"]] = None
+    changes = fee_cache[m["event_ticker"]]
+    if changes is None:
+        return skip("event_fee_unavailable")
     try:
         book = api(session, API, "/markets/" + m["ticker"] + "/orderbook")
     except requests.RequestException:  # includes HTTP errors and invalid JSON
@@ -321,8 +387,14 @@ def assess(game, markets, schedule, session, multiplier, now, existing, qty, min
         return skip("model_stale_at_quote_receipt")
     if observed-game["book_utc"] > timedelta(minutes=180):
         return skip("sportsbook_stale_at_quote_receipt")
-    if multiplier is None or multiplier < 0:
+    # The fee in force when the quote arrived, not when the run started: an
+    # event override can be scheduled (MLB: a step at first pitch).
+    resolved = effective_fee(series_type, series_mult, changes, observed)
+    if resolved is None:
         return skip("unverified_fee_multiplier")
+    fee_type, multiplier, basis = resolved
+    row.update(fee_type=fee_type, fee_multiplier=str(multiplier),
+               fee_basis=basis + ";order_ceil_cent")
     fill = taker_fill(book, qty, multiplier)
     ask = levels(book)
     if ask:
@@ -354,7 +426,7 @@ def settle(positions, ledger, session, now):
             m = api(session, API, "/markets/"+row["kalshi_ticker"])["market"]
         except (requests.RequestException, KeyError):
             continue  # leave open on API failure, try the next build
-        if m.get("status") != "settled" or m.get("result") not in {"yes", "no"}:
+        if m.get("status") not in SETTLED_STATUSES or m.get("result") not in {"yes", "no"}:
             continue
         mlb_winner = g["home"] if home > away else g["away"]
         kalshi_winner = row["lean"] if m["result"] == "yes" else (
@@ -539,15 +611,14 @@ def run(args, session=None, now=None):
         report("Public upstream request failed: " + type(exc).__name__)
         return
     fee_type = series.get("fee_type", "")
-    multiplier = (dec(series.get("fee_multiplier")) if fee_type in
-                  {"quadratic", "quadratic_with_maker_fees"} else None)
+    series_fee = (fee_type, dec(series.get("fee_multiplier")))
     status = {str(g["gamePk"]): g for day in schedule.get("dates", [])
               for g in day.get("games", [])}
     existing = {"fixtures": games, "positions": {p["game_pk"] for p in positions},
                 "live_clock": getattr(args, "use_wall_clock", False)}
     # Programmatic test clocks bypass wall-time; real CLI uses receipt time.
     for game in games:
-        result = assess(game, markets, status, session, multiplier, now, existing,
+        result = assess(game, markets, status, session, series_fee, now, existing,
                         args.quantity, D(str(args.min_savings_pp)), model_tag)
         observations.append(result)
         if result["status"] == "paper_filled":
@@ -556,7 +627,8 @@ def run(args, session=None, now=None):
     write_csv(quotes_file, observations)
     write_csv(positions_file, positions)
     report("Kalshi series fee_type=" + str(fee_type) +
-           ", fee_multiplier=" + str(series.get("fee_multiplier")))
+           ", fee_multiplier=" + str(series.get("fee_multiplier")) +
+           " (per-event overrides resolved at quote receipt; see fee_basis)")
 
 
 def main():

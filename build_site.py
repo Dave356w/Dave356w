@@ -951,13 +951,12 @@ def load_stat_lookups(player_type):
     # Map observed Savant wOBA into the established primary-rate schema. The
     # internal name stays xwOBA solely so old dumps, ledger readers, and audit
     # tooling remain compatible; MODEL_RATE_SOURCE_COL is the fetched value.
-    REN_STAT = {MODEL_RATE_SOURCE_COL: MODEL_RATE_INTERNAL_COL,
-                # The blend rate rides along under its own internal name. It is
-                # deliberately NOT folded into STATCAST_RATE_COLS: only the
-                # starter reads it, so putting it in the generic rate list
-                # would build a matchup value, an edge and a percentile bar for
-                # a rate no surface publishes.
-                BLEND_RATE_SOURCE_COL: BLEND_RATE_INTERNAL_COL,
+    # The blend rate rides along under its own internal name (see
+    # rate_source_map). It is deliberately NOT folded into STATCAST_RATE_COLS:
+    # only the starter reads it, so putting it in the generic rate list would
+    # build a matchup value, an edge and a percentile bar for a rate no
+    # surface publishes.
+    REN_STAT = {**rate_source_map(),
                 "xba": "xBA", "xslg": "xSLG", "exit_velocity_avg": "EV",
                 "launch_angle_avg": "LA°", "hard_hit_percent": "Hard Hit%",
                 "k_percent": "K%", "bb_percent": "BB%", "pa": "PA"}
@@ -970,7 +969,7 @@ def load_stat_lookups(player_type):
     # serve comes back as a silently absent COLUMN rather than an error -- so
     # the blend's only symptom would be that it never fires. Said out loud
     # here, per rate, because this board is the first place the answer exists.
-    for src in (MODEL_RATE_SOURCE_COL, BLEND_RATE_SOURCE_COL):
+    for src in rate_source_map():
         got = int(pd.to_numeric(cust[src], errors="coerce").notna().sum()) \
             if src in cust.columns else None
         log(f"  {player_type} board: '{src}' "
@@ -2086,14 +2085,29 @@ def build_tables(slate, lineups, batter_stat, pitcher_stat, batter_bb, pitcher_b
     return pdf, bdf
 
 
+def rate_source_map():
+    """Savant column -> internal name for the primary rate and the blend rate.
+
+    Read at CALL time, and the primary always wins. When both source columns
+    name the same Savant field -- the wOBA shadow arm repoints the primary at
+    `woba`, which is already the blend's column -- a dict literal keyed on the
+    two would keep only the LATER entry, silently dropping the primary rate
+    (and its league centre) while the blend survived. The blend entry is
+    therefore added only when it names a distinct column.
+    """
+    out = {MODEL_RATE_SOURCE_COL: MODEL_RATE_INTERNAL_COL}
+    if BLEND_RATE_SOURCE_COL and BLEND_RATE_SOURCE_COL != MODEL_RATE_SOURCE_COL:
+        out[BLEND_RATE_SOURCE_COL] = BLEND_RATE_INTERNAL_COL
+    return out
+
+
 def compute_league_baseline(batter_cust):
     # The blend centre is computed the same PA-weighted way as the primary one,
     # off the same batter frame, so `starter_blend` compares two deviations
     # that were measured against comparably-constructed centres. Using one
     # centre for both would reintroduce exactly the level shift the centring
     # exists to remove.
-    _LB_MAP = {MODEL_RATE_SOURCE_COL: MODEL_RATE_INTERNAL_COL,
-               BLEND_RATE_SOURCE_COL: BLEND_RATE_INTERNAL_COL,
+    _LB_MAP = {**rate_source_map(),
                "xba": "xBA", "xslg": "xSLG", "k_percent": "K%", "bb_percent": "BB%",
                "exit_velocity_avg": "EV", "launch_angle_avg": "LA°", "hard_hit_percent": "Hard Hit%"}
     league_baseline = {}

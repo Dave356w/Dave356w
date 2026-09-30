@@ -27,10 +27,11 @@ class Response:
 
 
 class Session:
-    def __init__(self, settlement=None):
+    def __init__(self, settlement=None, fee_changes=()):
         self.headers = {}
         self.calls = []
         self.settlement = settlement
+        self.fee_changes = list(fee_changes)
 
     def get(self, url, params=None, timeout=15):
         self.calls.append((url, params))
@@ -40,6 +41,8 @@ class Session:
                              "cursor": ""})
         if url.endswith('/series/KXMLBGAME'):
             return Response({"series": {"fee_type": "quadratic", "fee_multiplier": 0.5}})
+        if url.endswith('/events/fee_changes'):
+            return Response({"event_fee_change_arr": self.fee_changes})
         if url.endswith('/schedule'):
             return Response({"dates": [{"games": [{"gamePk": 822840, "gameDate": START,
                          "status": {"abstractGameState": "Preview"}}]}]})
@@ -84,8 +87,10 @@ def test_depth_and_fee_rounding():
                                                                ["0.47", "5"]]}}, 10, Decimal("0.5"))
     assert result["quantity"] == 10
     assert result["avg_price"] == Decimal("0.523")
-    # Fee is rounded per level, not once for the whole aggregate fill.
-    assert result["estimated_fee"] == Decimal("0.10")
+    # Rounded once for the whole order (Kalshi's order-wide accumulator), not
+    # per level: 0.035*(7*.52*.48 + 3*.53*.47) = 0.0873 -> 0.09; the old
+    # per-level ceiling gave 0.06 + 0.03 = 0.10.
+    assert result["estimated_fee"] == Decimal("0.09")
     assert paper.taker_fill({"orderbook_fp": {"no_dollars": [["0.48", "7"]]}}, 10, Decimal("0.5")) is None
 
 
@@ -118,7 +123,7 @@ def test_end_to_end_once_duplicate_and_settle(tmp_path):
     ledger = [{"game_pk": "822840", "status": "graded", "home": "TEX", "away": "NYM",
                "full_home": "4", "full_away": "2"}]
     positions = paper.read_csv(data / "paper_kalshi/positions.csv")
-    paper.settle(positions, ledger, Session(settlement={"status": "settled", "result": "yes"}), NOW)
+    paper.settle(positions, ledger, Session(settlement={"status": "finalized", "result": "yes"}), NOW)
     assert positions[0]["status"] == "paper_settled"
     assert Decimal(positions[0]["pnl_dollars"]) == Decimal("4.71")
 
@@ -137,7 +142,7 @@ def test_settlement_disagreement_stays_ungraded():
                kalshi_ticker=MARKET, quantity="10", avg_price="0.52", estimated_fee="0.09")
     ledger = [{"game_pk": "822840", "status": "graded", "home": "TEX", "away": "NYM",
                "full_home": "2", "full_away": "4"}]
-    paper.settle([row], ledger, Session(settlement={"status": "settled", "result": "yes"}), NOW)
+    paper.settle([row], ledger, Session(settlement={"status": "finalized", "result": "yes"}), NOW)
     assert row["status"] == "needs_review"
     assert row["pnl_dollars"] == ""
 
@@ -285,7 +290,7 @@ def test_empty_dump_still_persists_settlements(tmp_path):
         w.writeheader()
         w.writerow({"game_pk": "822840", "status": "graded", "home": "TEX",
                     "away": "NYM", "full_home": "4", "full_away": "2"})
-    paper.run(args(tmp_path), session=Session(settlement={"status": "settled", "result": "yes"}),
+    paper.run(args(tmp_path), session=Session(settlement={"status": "finalized", "result": "yes"}),
               now=NOW)
     assert paper.read_csv(data / "paper_kalshi/positions.csv")[0]["status"] == "paper_settled"
 
@@ -309,7 +314,7 @@ def test_postseason_ledger_settles_and_grades_paper_fills(tmp_path):
     paper.run(args(tmp_path), session=Session(), now=NOW)
     write_ledger(data, "mlb_lean_ledger.csv", [])
     write_ledger(data, "mlb_postseason_ledger.csv", [FINAL])
-    paper.run(args(tmp_path), session=Session(settlement={"status": "settled", "result": "yes"}),
+    paper.run(args(tmp_path), session=Session(settlement={"status": "finalized", "result": "yes"}),
               now=NOW)
     position = paper.read_csv(data / "paper_kalshi/positions.csv")[0]
     assert position["status"] == "paper_settled"
@@ -325,7 +330,7 @@ def test_game_in_neither_ledger_stays_pending(tmp_path):
     other = dict(FINAL, game_pk="999999")
     write_ledger(data, "mlb_lean_ledger.csv", [other])
     write_ledger(data, "mlb_postseason_ledger.csv", [dict(other, game_pk="999998")])
-    paper.run(args(tmp_path), session=Session(settlement={"status": "settled", "result": "yes"}),
+    paper.run(args(tmp_path), session=Session(settlement={"status": "finalized", "result": "yes"}),
               now=NOW)
     assert paper.read_csv(data / "paper_kalshi/positions.csv")[0]["status"] == "paper_filled"
     assert "Paper fills only: n=1 graded 0-0 pending=1" in (
@@ -457,3 +462,88 @@ def test_writer_runs_check_out_current_main():
     observe = text.split("\n  observe:\n", 1)[1]
     checkout = observe.split("actions/checkout@v4", 1)[1].split("- uses:", 1)[0]
     assert "github.event_name == 'pull_request' && github.sha || 'main'" in checkout
+
+
+# --- settlement status and event-level fees ----------------------------------
+
+def _filled_position(tmp_path):
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    data = write_dump(tmp_path)
+    paper.run(args(tmp_path), session=Session(), now=NOW)
+    return data, paper.read_csv(data / "paper_kalshi/positions.csv")
+
+
+LEDGER = [{"game_pk": "822840", "status": "graded", "home": "TEX", "away": "NYM",
+           "full_home": "4", "full_away": "2"}]
+
+
+def test_only_final_market_statuses_settle(tmp_path):
+    """REST `finalized` is terminal; `determined` (outcome known, not final)
+    and `closed` must stay open. The old code accepted only `settled`, which
+    the REST market object never reports, so no fill ever settled."""
+    for status, final in (("finalized", True), ("settled", True),
+                          ("determined", False), ("closed", False)):
+        _, positions = _filled_position(tmp_path / status)
+        paper.settle(positions, LEDGER,
+                     Session(settlement={"status": status, "result": "yes"}), NOW)
+        assert (positions[0]["status"] == "paper_settled") is final, status
+
+
+def test_event_override_in_force_at_receipt_sets_the_fee(tmp_path):
+    past = "2026-09-22T12:00:00Z"
+    session = Session(fee_changes=[{"event_ticker": EVENT, "scheduled_ts": past,
+                                    "fee_type_override": None,
+                                    "fee_multiplier_override": 1}])
+    data = write_dump(tmp_path)
+    paper.run(args(tmp_path), session=session, now=NOW)
+    pos = paper.read_csv(data / "paper_kalshi/positions.csv")[0]
+    assert pos["fee_multiplier"] == "1"
+    assert pos["estimated_fee"] == "0.18"
+    assert pos["fee_type"] == "quadratic"
+    assert pos["fee_basis"].startswith("event_override@")
+    assert any(u.endswith("/events/fee_changes") and p["event_ticker"] == EVENT
+               for u, p in session.calls)
+
+
+def test_override_scheduled_for_first_pitch_does_not_apply_pregame(tmp_path):
+    session = Session(fee_changes=[{"event_ticker": EVENT, "scheduled_ts": START,
+                                    "fee_type_override": "quadratic",
+                                    "fee_multiplier_override": 1}])
+    data = write_dump(tmp_path)
+    paper.run(args(tmp_path), session=session, now=NOW)
+    pos = paper.read_csv(data / "paper_kalshi/positions.csv")[0]
+    assert pos["fee_multiplier"] == "0.5"
+    assert pos["estimated_fee"] == "0.09"
+    assert pos["fee_basis"] == "series;order_ceil_cent"
+
+
+def test_cleared_override_falls_back_to_series():
+    changes = [{"scheduled_ts": "2026-09-22T10:00:00Z", "fee_type_override": "quadratic",
+                "fee_multiplier_override": 1},
+               {"scheduled_ts": "2026-09-22T11:00:00Z", "fee_type_override": None,
+                "fee_multiplier_override": None}]
+    assert paper.effective_fee("quadratic", Decimal("0.5"), changes, NOW) == (
+        "quadratic", Decimal("0.5"), "series")
+    # Before the clear, the override is what was in force.
+    at = datetime(2026, 9, 22, 10, 30, tzinfo=timezone.utc)
+    assert paper.effective_fee("quadratic", Decimal("0.5"), changes, at)[1] == 1
+    # A non-quadratic override or an unreadable timestamp fails closed.
+    assert paper.effective_fee("quadratic", Decimal("0.5"), [
+        {"scheduled_ts": "2026-09-22T10:00:00Z", "fee_type_override": "flat",
+         "fee_multiplier_override": 1}], NOW) is None
+    assert paper.effective_fee("quadratic", Decimal("0.5"), [
+        {"scheduled_ts": "soon", "fee_multiplier_override": 1}], NOW) is None
+
+
+def test_unavailable_event_fee_is_a_skip_not_a_series_default(tmp_path):
+    class NoEventFees(Session):
+        def get(self, url, params=None, timeout=15):
+            if url.endswith('/events/fee_changes'):
+                return Response({"unexpected": "shape"})
+            return super().get(url, params, timeout)
+
+    data = write_dump(tmp_path)
+    paper.run(args(tmp_path), session=NoEventFees(), now=NOW)
+    assert paper.read_csv(data / "paper_kalshi/positions.csv") == []
+    assert (paper.read_csv(data / "paper_kalshi/observations.csv")[-1]["reason"]
+            == "event_fee_unavailable")
