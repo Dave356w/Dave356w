@@ -473,6 +473,28 @@ def summarize(observations, positions, outfile, now, note="", ledger=(), model_t
     print("\n".join(text))
 
 
+# grade_leans splits the graded frame on save: confirmed regular-season rows
+# go to mlb_lean_ledger.csv, postseason and unconfirmed rows to this file
+# (season_phase.POSTSEASON_LEDGER_NAME, mirrored here to keep this script
+# pandas-free; a test pins the two names together). Paper positions are
+# settled and graded by game_pk, so both files are read.
+LEDGER_NAMES = ("mlb_lean_ledger.csv", "mlb_postseason_ledger.csv")
+
+
+def read_ledgers(dumps_dir):
+    """Rows of every ledger file that exists; a game_pk already seen in an
+    earlier file is not repeated (grade_leans writes each row to one file)."""
+    rows, seen = [], set()
+    for name in LEDGER_NAMES:
+        for r in read_csv(Path(dumps_dir) / name):
+            pk = r.get("game_pk", "").strip()
+            if pk and pk in seen:
+                continue
+            seen.add(pk)
+            rows.append(r)
+    return rows
+
+
 def run(args, session=None, now=None):
     session = session or requests.Session()
     session.headers.update({"User-Agent": "xwoba-kalshi-paper/1.1"})
@@ -483,9 +505,8 @@ def run(args, session=None, now=None):
     positions_file = root / "positions.csv"
     observations, positions = read_csv(quotes_file), read_csv(positions_file)
     data_path = Path(args.dumps_dir) / f"leans_{date}_xw.csv"
-    ledger_path = Path(args.dumps_dir) / "mlb_lean_ledger.csv"
     model_tag = getattr(args, "model_tag", None) or current_model_tag()
-    ledger = read_csv(ledger_path)
+    ledger = read_ledgers(Path(args.dumps_dir))
     report = lambda note: summarize(observations, positions, root/"report.txt", now,
                                     note, ledger, model_tag)
     # Settlement works even on dates without a new model dump.
