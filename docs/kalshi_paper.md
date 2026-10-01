@@ -10,6 +10,9 @@ overrides the default. It consumes the repo's **saved** `data/leans_<ET-date>_xw
 rows. It never changes `build_site.py`, model decisions, `mlb_lean_ledger.csv`, or
 an existing registration. It never calls a Kalshi trading endpoint.
 
+For the planned 2027 live test (rule, sizing, daily routine, review points),
+see `docs/kalshi_live_test_guide.md`.
+
 ## Run
 
 ```sh
