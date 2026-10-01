@@ -428,18 +428,18 @@ pre-registered Candidate B2 individual-extreme TMR10 test  (registered 2026-09-1
 
 HELD OUT of every number above: 8 rows in mlb_postseason_ledger.csv
   by type: F=8   (F wild card, D division series, L LCS, W World Series)
-  status: graded=6  pending=2  void=0
+  status: graded=8  pending=0  void=0
 
 POSTSEASON (not registered; descriptive only)
   model tag(s): xw+starter_velo_v14. Each row is scored on its own pregame lean -- native, not reconstructed.
   Price basis: the leaned side's CLOSING moneyline and closing no-vig q, as in the regular-season blocks. excess is vs q (null 0);
   EV is vs the posted breakeven, whose market-correct null is printed beside it. Flat 1u per leaned game at the close.
   A best-of series repeats the same clubs and often the same starters, so games are not independent draws; read the SE as a floor.
-  ALL: 8 rows  graded=6  pending=2  void=0  abstained=0
-    lean full: 6-0  (1.000)   F5: 4-0-2  (1.000)
-    vs close   n=  6       6-0 (1.000)   mean q .520   excess  +48.0 +- 20.2 pp   EV  +45.6 pp (null  -2.4)   +5.21u
-    same-row always-chalk: 4-2
-  F wild card: 8 rows  graded=6  pending=2  void=0  abstained=0
-    lean full: 6-0  (1.000)   F5: 4-0-2  (1.000)
-    vs close   n=  6       6-0 (1.000)   mean q .520   excess  +48.0 +- 20.2 pp   EV  +45.6 pp (null  -2.4)   +5.21u
-    same-row always-chalk: 4-2
+  ALL: 8 rows  graded=8  pending=0  void=0  abstained=0
+    lean full: 8-0  (1.000)   F5: 6-0-2  (1.000)
+    vs close   n=  8       8-0 (1.000)   mean q .530   excess  +47.0 +- 17.5 pp   EV  +44.5 pp (null  -2.4)   +6.61u
+    same-row always-chalk: 6-2
+  F wild card: 8 rows  graded=8  pending=0  void=0  abstained=0
+    lean full: 8-0  (1.000)   F5: 6-0-2  (1.000)
+    vs close   n=  8       8-0 (1.000)   mean q .530   excess  +47.0 +- 17.5 pp   EV  +44.5 pp (null  -2.4)   +6.61u
+    same-row always-chalk: 6-2
