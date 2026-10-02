@@ -1,5 +1,5 @@
 KALSHI PAPER EXECUTION — READ-ONLY / NOT LIVE ORDERS
-As of: 2026-10-02T03:37:26.942607+00:00
+As of: 2026-10-02T14:47:19.183869+00:00
 Source: saved pregame dump of the shipped model (xw+starter_velo_v14) + live public Kalshi orderbook
 Current quote rule: simulated immediate YES taker fill on the model lean;
   saved sportsbook BE minus fee-inclusive Kalshi BE >= -1.0 pp.
@@ -18,4 +18,4 @@ Same-game comparison (graded by MLB ledger final score, not Kalshi settlement;
   Paper fills only: n=7 graded 7-0 pending=0 P&L=$31.97 mean fee-incl BE=54.3% (1x fee 55.2%)
   Matched but not filled: n=1 graded 1-0 pending=0 P&L=$4.41 mean fee-incl BE=55.9% (1x fee 56.8%)
 Fee sensitivity: fills whose saving stays >= 0 pp at the standard 1x fee: 5 of 7
-NOTICE: Kalshi series fee_type=quadratic_with_maker_fees, fee_multiplier=0.5 (per-event overrides resolved at quote receipt; see fee_basis)
+NOTICE: no saved pregame dump for 2026-10-02
