@@ -1,21 +1,21 @@
 KALSHI PAPER EXECUTION — READ-ONLY / NOT LIVE ORDERS
-As of: 2026-10-05T23:41:21.182471+00:00
+As of: 2026-10-06T15:17:00.615262+00:00
 Source: saved pregame dump of the shipped model (xw+starter_velo_v14) + live public Kalshi orderbook
 Current quote rule: simulated immediate YES taker fill on the model lean;
   saved sportsbook BE minus fee-inclusive Kalshi BE >= -1.0 pp.
 Historical observations retain their original decisions; min_savings_pp records the rule on new rows (blank on older rows).
 This is NOT a claim of predictive edge or executable realized fills.
 Aggregates below: xw+starter_velo_v14 rows only. Other-tag rows (kept, not pooled): none
-Quote observations (all days): 209
+Quote observations (all days): 211
 Paper fills (all days): 15
-Settled fills: 13
-Settled hypothetical P&L: $45.86
-Open/review: 2
-Skip reasons: already_paper_filled=57, execution_savings_below_threshold=7, invalid_pregame_snapshot=1, market_not_found=5, mlb_status_not_confirmed_pregame=3, outside_pregame_cutoff=27, stale_or_postgame_model=94
+Settled fills: 15
+Settled hypothetical P&L: $34.48
+Open/review: 0
+Skip reasons: already_paper_filled=57, execution_savings_below_threshold=7, invalid_pregame_snapshot=1, market_not_found=5, mlb_status_not_confirmed_pregame=3, outside_pregame_cutoff=29, stale_or_postgame_model=94
 Same-game comparison (graded by MLB ledger final score, not Kalshi settlement;
   one quote per game; fills are a subset of all matched leans):
-  All matched leans at Kalshi price: n=16 graded 13-1 pending=2 P&L=$50.27 mean fee-incl BE=56.9% (1x fee 57.8%)
-  Paper fills only: n=15 graded 12-1 pending=2 P&L=$45.86 mean fee-incl BE=57.0% (1x fee 57.9%)
+  All matched leans at Kalshi price: n=16 graded 13-3 pending=0 P&L=$38.89 mean fee-incl BE=56.9% (1x fee 57.8%)
+  Paper fills only: n=15 graded 12-3 pending=0 P&L=$34.48 mean fee-incl BE=57.0% (1x fee 57.9%)
   Matched but not filled: n=1 graded 1-0 pending=0 P&L=$4.41 mean fee-incl BE=55.9% (1x fee 56.8%)
 Fee sensitivity: fills whose saving stays >= 0 pp at the standard 1x fee: 9 of 15
 NOTICE: Kalshi series fee_type=quadratic_with_maker_fees, fee_multiplier=0.5 (per-event overrides resolved at quote receipt; see fee_basis)
