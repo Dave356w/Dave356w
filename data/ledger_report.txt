@@ -428,22 +428,22 @@ pre-registered Candidate B2 individual-extreme TMR10 test  (registered 2026-09-1
 
 HELD OUT of every number above: 23 rows in mlb_postseason_ledger.csv
   by type: D=14  F=9   (F wild card, D division series, L LCS, W World Series)
-  status: graded=20  pending=3  void=0
+  status: graded=21  pending=2  void=0
 
 POSTSEASON (not registered; descriptive only)
   model tag(s): xw+starter_velo_v14. Each row is scored on its own pregame lean -- native, not reconstructed.
   Price basis: the leaned side's CLOSING moneyline and closing no-vig q, as in the regular-season blocks. excess is vs q (null 0);
   EV is vs the posted breakeven, whose market-correct null is printed beside it. Flat 1u per leaned game at the close.
   A best-of series repeats the same clubs and often the same starters, so games are not independent draws; read the SE as a floor.
-  ALL: 23 rows  graded=20  pending=3  void=0  abstained=0
-    lean full: 16-4  (0.800)   F5: 13-4-3  (0.765)
-    vs close   n= 20      16-4 (0.800)   mean q .549   excess  +25.1 +- 11.0 pp   EV  +22.6 pp (null  -2.5)   +8.66u
-    same-row always-chalk: 13-7
+  ALL: 23 rows  graded=21  pending=2  void=0  abstained=0
+    lean full: 17-4  (0.810)   F5: 13-4-4  (0.765)
+    vs close   n= 21      17-4 (0.810)   mean q .550   excess  +25.9 +- 10.8 pp   EV  +23.4 pp (null  -2.5)   +9.33u
+    same-row always-chalk: 14-7
   F wild card: 9 rows  graded=9  pending=0  void=0  abstained=0
     lean full: 9-0  (1.000)   F5: 7-0-2  (1.000)
     vs close   n=  9       9-0 (1.000)   mean q .528   excess  +47.2 +- 16.5 pp   EV  +44.8 pp (null  -2.4)   +7.49u
     same-row always-chalk: 7-2
-  D division series: 14 rows  graded=11  pending=3  void=0  abstained=0
-    lean full: 7-4  (0.636)   F5: 6-4-1  (0.600)
-    vs close   n= 11       7-4 (0.636)   mean q .567   excess   +7.0 +- 14.8 pp   EV   +4.4 pp (null  -2.6)   +1.17u
-    same-row always-chalk: 6-5
+  D division series: 14 rows  graded=12  pending=2  void=0  abstained=0
+    lean full: 8-4  (0.667)   F5: 6-4-2  (0.600)
+    vs close   n= 12       8-4 (0.667)   mean q .567   excess  +10.0 +- 14.2 pp   EV   +7.4 pp (null  -2.6)   +1.85u
+    same-row always-chalk: 7-5
