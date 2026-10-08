@@ -55,7 +55,6 @@ import glob
 import math
 import os
 import re
-import textwrap
 import time
 from datetime import datetime, timezone
 
@@ -915,9 +914,6 @@ def _held_lines(held):
             "  A best-of series repeats the same clubs and often the same "
             "starters, so games are not independent draws; read the SE as a floor.",
         ]
-        out += textwrap.wrap("Inputs: " + season_phase.POSTSEASON_INPUTS_NOTE,
-                             width=96, initial_indent="  ",
-                             subsequent_indent="    ")
         out += _postseason_scope_lines("ALL", post)
         for code, name in POSTSEASON_ROUNDS:
             rows = post[types[types.notna()] == code]

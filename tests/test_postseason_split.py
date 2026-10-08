@@ -215,13 +215,6 @@ class PostseasonReadout(unittest.TestCase):
         self.assertIn("F wild card: 2 rows", text)
         self.assertIn("D division series: 3 rows", text)
         self.assertNotIn("  L LCS:", text)
-        # Says the season rates are frozen, once, before the scope lines.
-        self.assertEqual(text.count("  Inputs: Season rates"), 1)
-        self.assertLess(text.index("  Inputs:"), text.index("  ALL:"))
-        self.assertIn("postseason PAs are not folded in",
-                      " ".join(l.strip() for l in text.splitlines()))
-        self.assertTrue(all(len(l) <= 96 for l in text.splitlines()
-                            if "Inputs" in l or "folded" in l))
 
         # EV - null == excess on the rendered line (the #227 invariant).
         line = next(l for l in all_block.splitlines() if "vs close" in l)
@@ -241,7 +234,6 @@ class PostseasonReadout(unittest.TestCase):
         held = pd.DataFrame([self._row(1, None, "HHH", 2, 5, 0.58, 130, -150)])
         text = "\n".join(grade_leans._held_lines(held))
         self.assertNotIn("POSTSEASON (", text)
-        self.assertNotIn("Inputs:", text)
         self.assertIn("await a game-type lookup", text)
 
 
@@ -291,9 +283,6 @@ class PostseasonPage(unittest.TestCase):
         self.assertIn("<div class='l'>Always chalk</div><div class='v dim'>2-1</div>", page)
         self.assertIn("1 pending", page)
         self.assertIn("· Wild Card, Division Series", page)
-        note = build_site._esc(season_phase.POSTSEASON_INPUTS_NOTE)
-        self.assertIn(note, page)
-        self.assertNotIn(note, grades)
         # The unconfirmed row is neither here nor on the regular-season page.
         for html in (page, grades):
             self.assertNotIn("9105", html)

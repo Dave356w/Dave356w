@@ -62,6 +62,7 @@ import hybrid_v2
 import starter_velocity as _sv
 import pitch_arsenal
 import player_priors
+import postseason_rates
 import season_phase
 
 # ------------------------------------------------------------
@@ -933,8 +934,13 @@ def get_slate(slate_date, sport_id=1):
     return pd.DataFrame(rows)
 
 
-def load_stat_lookups(player_type):
-    """player_type in {'batter','pitcher'} -> (stat dict, bbprofile dict, custom df)."""
+def load_stat_lookups(player_type, postseason_pas=None):
+    """player_type in {'batter','pitcher'} -> (stat dict, bbprofile dict, custom df).
+
+    `postseason_pas` (from `load_postseason_pas`) is folded into the board's
+    PA and model rates before anything reads it; None leaves the board as
+    Savant serves it, which is regular season only.
+    """
     sel = ",".join(STATCAST_SELECTIONS)
     cust = cached_csv(
         f"https://baseballsavant.mlb.com/leaderboard/custom?year={SEASON}"
@@ -943,6 +949,11 @@ def load_stat_lookups(player_type):
         # same-day cache written under a different column set must never be
         # reused, or the requested rate comes back missing.
         f"{STATCAST_CACHE_NS}_{player_type}")
+    if postseason_pas is not None and not postseason_pas.empty:
+        cust, n_post = postseason_rates.augment_board(
+            cust, postseason_pas, player_type, SLATE_DATE,
+            (MODEL_RATE_SOURCE_COL, BLEND_RATE_SOURCE_COL))
+        log(f"  {player_type} board: postseason PAs folded in for {n_post} players")
     bb = cached_csv(
         f"https://baseballsavant.mlb.com/leaderboard/batted-ball?type={player_type}"
         f"&year={SEASON}&min=1&csv=true",
@@ -1021,6 +1032,52 @@ def load_pitcher_xera():
             out[pid] = v
     log(f"  xERA leaderboard: {len(out)} pitchers (col '{col}')")
     return out
+
+
+_SAVANT_POSTSEASON_URL = (
+    "https://baseballsavant.mlb.com/statcast_search/csv?all=true&hfPT=&hfAB="
+    "&hfBBT=&hfPR=&hfZ=&stadium=&hfBBL=&hfNewZones="
+    "&hfGT=" + "".join(f"{t}%7C" for t in postseason_rates.POSTSEASON_GAME_TYPES)
+    + "&hfSea={season}%7C&hfSit=&player_type=batter&hfOuts=&opponent="
+    "&pitcher_throws=&batter_stands=&hfSA=&game_date_gt={start}"
+    "&game_date_lt={end}&team=&position=&hfRO=&home_road=&hfFlag=&metric_1="
+    "&hfInn=&min_pitches=0&min_results=0&group_by=name&sort_col=pitches"
+    "&player_event_sort=h_launch_speed&sort_order=desc&min_abs=0"
+    "&type=details&")
+
+
+def slate_has_postseason(slate_df):
+    """True when any game on the slate is a confirmed postseason type."""
+    if slate_df is None or slate_df.empty or "game_type" not in slate_df.columns:
+        return False
+    types = slate_df["game_type"].map(season_phase.clean_game_type)
+    return bool(types.isin(postseason_rates.POSTSEASON_GAME_TYPES).any())
+
+
+def load_postseason_pas(before_date=None):
+    """This season's postseason PAs dated strictly before the slate, or None.
+
+    Cached once per ET day like the leaderboards. Any failure returns None and
+    the slate is built on the regular-season board as Savant serves it: the
+    fold moves rates by thousandths, and losing a slate's pregame rows to a
+    Statcast outage would cost far more.
+    """
+    cutoff = str(before_date or SLATE_DATE)[:10]
+    end = (datetime.fromisoformat(cutoff) - timedelta(days=1)).date().isoformat()
+    url = _SAVANT_POSTSEASON_URL.format(season=SEASON, start=f"{SEASON}-01-01",
+                                        end=end)
+    try:
+        raw = cached_csv(url, "postseason_pa")
+        pas = postseason_rates.pa_rows(raw)
+    except pd.errors.EmptyDataError:
+        pas = pd.DataFrame(columns=postseason_rates.PA_COLS)
+    except Exception as e:  # noqa: BLE001
+        log(f"  postseason PAs unavailable ({e!r}) -> regular-season rates")
+        return None
+    pas = pas[pas["game_date"] < cutoff]
+    log(f"  postseason PAs before {cutoff}: {len(pas)} over "
+        f"{pas['game_pk'].nunique()} games")
+    return pas
 
 
 # v14 velocity term. Per-pitcher Statcast search, the URL pattern pybaseball's
@@ -2291,8 +2348,11 @@ class LiveDataProvider:
     def get_slate(self, slate_date, sport_id=SPORT_ID):
         return get_slate(slate_date, sport_id)
 
-    def load_stat_lookups(self, player_type):
-        return load_stat_lookups(player_type)
+    def load_stat_lookups(self, player_type, postseason_pas=None):
+        return load_stat_lookups(player_type, postseason_pas=postseason_pas)
+
+    def load_postseason_pas(self):
+        return load_postseason_pas(before_date=self.slate_date)
 
     def resolve_lineup(self, game_pk, side, team_id, batter_stat,
                        return_meta=False, league_xwoba=np.nan):
@@ -2349,8 +2409,12 @@ def fetch_all(slate_date, provider=None, calibration_history=None,
                     f"(game_pk={int(gg['game_pk'])})")
 
     log("Loading Savant leaderboards (cached once/day) ...")
-    batter_stat, batter_bb, batter_cust = provider.load_stat_lookups("batter")
-    pitcher_stat, pitcher_bb, pitcher_cust = provider.load_stat_lookups("pitcher")
+    postseason_pas = (provider.load_postseason_pas()
+                      if slate_has_postseason(slate_df) else None)
+    batter_stat, batter_bb, batter_cust = provider.load_stat_lookups(
+        "batter", postseason_pas=postseason_pas)
+    pitcher_stat, pitcher_bb, pitcher_cust = provider.load_stat_lookups(
+        "pitcher", postseason_pas=postseason_pas)
     log(f"  batters: {len(batter_stat)} | pitchers: {len(pitcher_stat)}")
 
     league_baseline = compute_league_baseline(batter_cust)
@@ -8778,8 +8842,8 @@ def render_postseason_html(built_txt):
             "closing price, with the controls on the same games. <b>Not part of "
             "the regular-season record</b>: postseason games are few, and games "
             "in a series share teams and often starters, so read these as a "
-            "record of what happened rather than evidence about the model. "
-            + _esc(season_phase.POSTSEASON_INPUTS_NOTE) + "</div>")
+            "record of what happened rather than evidence about the model."
+            "</div>")
     summary = "<div class='gr-summary'>" + "".join(stats) + "</div>" + note
 
     show_ml = "close_home_ml" in post.columns and post["close_home_ml"].notna().any()
