@@ -5,6 +5,9 @@ only PAs from games dated strictly before the slate are folded -> the board's
 `pa` and both model rates move by PA weight, display columns do not ->
 `load_stat_lookups` builds the stat dict from the folded board -> a failed
 fetch leaves the board as Savant serves it instead of failing the build.
+The pitching loaders (velocity, recent starts, workload roles) read prior
+postseason games on a postseason slate and exactly what they read before on
+a regular-season one.
 """
 
 import unittest
@@ -15,6 +18,7 @@ import pandas as pd
 
 import build_site
 import postseason_rates
+import starter_velocity
 
 
 def _pitches(rows):
@@ -168,6 +172,152 @@ class BuildWiring(unittest.TestCase):
         self.assertAlmostEqual(frozen[10][build_site.MODEL_RATE_INTERNAL_COL],
                                custom.loc[0, rate])
         self.assertEqual(frozen[10]["PA"], 90)
+
+
+SEASON = postseason_rates.SEASON_GAME_TYPES
+REGULAR = postseason_rates.REGULAR_GAME_TYPES
+
+
+def _split(pid, apps, starts, ip, bf):
+    return {"player": {"id": pid},
+            "stat": {"gamesPitched": apps, "gamesStarted": starts,
+                     "inningsPitched": ip, "battersFaced": bf}}
+
+
+class PitchingInputs(unittest.TestCase):
+
+    def setUp(self):
+        build_site._team_pitcher_role_cache.clear()
+        self.addCleanup(build_site._team_pitcher_role_cache.clear)
+
+    def test_season_types_follow_the_slate(self):
+        self.assertEqual(build_site.season_game_types(
+            pd.DataFrame({"game_type": ["R"]})), REGULAR)
+        self.assertEqual(build_site.season_game_types(
+            pd.DataFrame({"game_type": ["F"]})), SEASON)
+
+    def test_per_start_counts_postseason_starts_only_when_asked(self):
+        rows = []
+        for pk, day, gt in ((1, "2026-09-20", "R"), (2, "2026-10-01", "F")):
+            rows += [dict(game_pk=pk, game_date=day, game_type=gt, inning=1,
+                          pitch_type="FF", release_speed=95.0)] * 12
+        pitches = pd.DataFrame(rows)
+        self.assertEqual(list(starter_velocity.per_start(pitches)["game_pk"]), [1])
+        self.assertEqual(
+            list(starter_velocity.per_start(pitches, SEASON)["game_pk"]), [1, 2])
+
+    def test_velocity_search_asks_for_the_slate_season(self):
+        seen = []
+
+        def get(url, timeout):
+            seen.append(url)
+            raise RuntimeError("stop")
+
+        with mock.patch.object(build_site, "USE_VELOCITY", True), \
+                mock.patch.object(build_site, "CACHE_DIR", "/nonexistent"), \
+                mock.patch.object(build_site.session, "get", side_effect=get):
+            build_site.load_starter_velocity([1], "2026-10-08")
+            build_site.load_starter_velocity([1], "2026-10-08", SEASON)
+        self.assertIn("hfGT=R%7C&", seen[0])
+        self.assertIn("hfGT=R%7CF%7CD%7CL%7CW%7C&", seen[1])
+        self.assertIn("game_date_lt=2026-10-07", seen[1])
+
+    def test_velocity_cache_is_kept_apart_by_season(self):
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            # A same-day regular-season file must not answer a season read.
+            pd.DataFrame({"game_date": ["2026-09-20"], "game_pk": [1],
+                          "velo": [95.0], "n_fb": [20]}).to_csv(
+                os.path.join(td, "savant_cache_velo_1_2026-10-08.csv"), index=False)
+            with mock.patch.object(build_site, "USE_VELOCITY", True), \
+                    mock.patch.object(build_site, "CACHE_DIR", td), \
+                    mock.patch.object(build_site, "SLATE_DATE", "2026-10-08"), \
+                    mock.patch.object(build_site.session, "get",
+                                      side_effect=RuntimeError("fetched")) as get:
+                build_site.load_starter_velocity([1], "2026-10-08")
+                self.assertEqual(get.call_count, 0)       # regular read: cached
+                build_site.load_starter_velocity([1], "2026-10-08", SEASON)
+                self.assertEqual(get.call_count, 1)       # season read: fetched
+
+    def test_game_log_asks_for_the_season_and_falls_back(self):
+        calls = []
+
+        def get_json(url, params=None, **kw):
+            calls.append(params["gameType"])
+            if params["gameType"] != "R":
+                raise RuntimeError("bad type list")
+            return {"stats": []}
+
+        with mock.patch.object(build_site, "_get_json", side_effect=get_json), \
+                mock.patch.object(build_site, "REQUEST_DELAY", 0):
+            out = build_site.load_recent_start_era([7], before_date="2026-10-08",
+                                                   game_types=SEASON)
+        self.assertEqual(calls, ["R,F,D,L,W", "R"])
+        self.assertIn(7, out)                     # profile kept, not dropped
+
+    def test_regular_roles_are_one_unchanged_call(self):
+        with mock.patch.object(build_site, "_get_json",
+                               return_value={"stats": [{"splits": [
+                                   _split(5, 10, 10, "60.0", 250)]}]}) as get:
+            out = build_site.load_team_pitcher_roles(112)
+        self.assertEqual(get.call_count, 1)
+        params = get.call_args.args[1]
+        self.assertEqual((params["stats"], params["gameType"]), ("season", "R"))
+        self.assertEqual(out[5]["avg_ip_per_appearance"], 6.0)
+        self.assertIn(112, build_site._team_pitcher_role_cache)   # legacy key
+
+    def test_postseason_roles_add_dated_counts_per_type(self):
+        def get_json(url, params=None, **kw):
+            if params["gameType"] == "R":
+                return {"stats": [{"splits": [_split(5, 10, 10, "60.0", 250),
+                                              _split(6, 50, 0, "50.0", 210)]}]}
+            if params["gameType"] == "F":
+                return {"stats": [{"splits": [_split(5, 1, 1, "3.0", 14),
+                                              _split(9, 1, 0, "1.0", 4)]}]}
+            return {"stats": []}
+
+        with mock.patch.object(build_site, "SLATE_DATE", "2026-10-08"), \
+                mock.patch.object(build_site, "_get_json",
+                                  side_effect=get_json) as get:
+            out = build_site.load_team_pitcher_roles(112, game_types=SEASON)
+        types = [c.args[1]["gameType"] for c in get.call_args_list]
+        self.assertEqual(types, ["R", "F", "D", "L", "W"])
+        for c in get.call_args_list[1:]:
+            self.assertEqual(c.args[1]["stats"], "byDateRange")
+            self.assertEqual(c.args[1]["endDate"], "2026-10-07")
+        self.assertEqual(out[5]["appearances"], 11)
+        self.assertEqual(out[5]["starts"], 11)
+        self.assertAlmostEqual(out[5]["avg_ip_per_appearance"], 63.0 / 11)
+        self.assertEqual(out[5]["batters_faced"], 264)
+        self.assertEqual(out[6]["appearances"], 50)          # no October line
+        self.assertEqual(out[9]["appearances"], 1)           # October only
+        self.assertNotIn(112, build_site._team_pitcher_role_cache)
+
+    def test_failed_postseason_roles_fall_back_whole(self):
+        def get_json(url, params=None, **kw):
+            if params["gameType"] == "R":
+                return {"stats": [{"splits": [_split(5, 10, 10, "60.0", 250)]}]}
+            if params["gameType"] == "F":
+                return {"stats": [{"splits": [_split(5, 1, 1, "3.0", 14)]}]}
+            raise RuntimeError("statsapi down")
+
+        with mock.patch.object(build_site, "_get_json", side_effect=get_json):
+            out = build_site.load_team_pitcher_roles(112, game_types=SEASON)
+        self.assertEqual(out[5]["appearances"], 10)          # no partial sum
+
+    def test_provider_passes_the_slate_season(self):
+        p = build_site.LiveDataProvider("2026-10-08")
+        self.assertEqual(p.game_types, REGULAR)
+        p.game_types = SEASON
+        with mock.patch.object(build_site, "load_team_pitcher_roles") as roles, \
+                mock.patch.object(build_site, "load_recent_start_era") as recent, \
+                mock.patch.object(build_site, "load_starter_velocity") as velo:
+            p.load_team_pitcher_roles(112)
+            p.load_recent_start_era([7])
+            p.load_starter_velocity([7])
+        for m in (roles, recent, velo):
+            self.assertEqual(m.call_args.kwargs["game_types"], SEASON)
 
 
 if __name__ == "__main__":

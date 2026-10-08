@@ -1,28 +1,29 @@
 #!/usr/bin/env python3
-"""Would postseason games in the pitching inputs change any lean?
+"""Did postseason games in the pitching inputs change any lean?
 
-Companion to postseason_inputs_shadow.py, which covered the Savant rate
-boards (now folded in production). Three pitching inputs still read regular-
-season games only:
+Companion to postseason_inputs_shadow.py (the Savant rate boards). Since
+2026-10-08 a postseason slate's pitching loaders also read prior postseason
+games (build_site.season_game_types):
 
-  velo     starter velocity trend: Savant search hfGT=R, and
-           starter_velocity.per_start keeps game_type R
-  recent   recent-start ERA / role profile and the expected-IP inputs:
-           StatsAPI gameLog gameType=R
-  roles    bullpen workload roles (starter vs relief pool, IP and BF per
-           appearance): StatsAPI team season stats gameType=R
+  velo     starter velocity trend (Savant search + starter_velocity.per_start)
+  recent   recent-start ERA / role profile and the expected-IP inputs
+           (StatsAPI gameLog; accepts a gameType list)
+  roles    bullpen workload roles (StatsAPI team stats; ignores a gameType
+           list -- CHC gamesPlayed was 680 under "R" and "R,F,D,L,W" on
+           2026-10-08 -- so each postseason type is its own dated call)
 
-Each postseason slate is replayed through the production path once as
-shipped (baseline) and once per arm with that input widened to postseason
-games dated strictly BEFORE the slate, plus an `all` arm with all three.
-Every arm runs in its own cache directory (velocity is cached per pitcher per
-day, keyed without game type). Widening is done by overriding the provider's
-loaders for the duration of the call; no production code is changed.
+Each postseason slate is replayed through the production path with each
+loader pinned to regular season (`baseline`, the rate fold still on), one
+loader widened at a time, all three widened (`all`), and the provider
+untouched (`production`), which must equal `all`. Postseason games are read
+only when dated strictly BEFORE the slate. Every arm has its own cache
+directory, since velocity is cached per pitcher per day without game type.
 
-The team season endpoint ignores a gameType list (checked 2026-10-08: CHC
-gamesPlayed was 680 under "R" and "R,F,D,L,W"), so `roles` fetches each
-postseason type separately by date range ending the day before the slate and
-adds its counting stats (appearances, starts, outs, BF) to the season line.
+RESULT, 2026-10-08 (data commit e8f7fb0; 23 postseason games 09-29..10-07):
+0 flips in every arm. Games moved / max |xw_net| shift: velo 7 / .0044,
+recent 7 / .0014, roles 19 / .0001, all 19 / .0052, against a median
+|xw_net| of .0217 and a closest call of .0018. velo and recent move only
+once a probable has a postseason start (10-03 on). Not a forward test.
 
 Research only: nothing here reaches a lean, a delta, a grade or data/.
 """
@@ -32,112 +33,44 @@ import argparse
 import os
 import sys
 from pathlib import Path
-from unittest import mock
 
-import numpy as np
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-POST = ("F", "D", "L", "W")
-ARMS = ("baseline", "velo", "recent", "roles", "all")
-
-
-def _day_before(day):
-    return (pd.Timestamp(day) - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
-
-
-def _postseason_roles(bs, team_id, day):
-    """{pid: {apps, starts, outs, bf}} over postseason games before `day`."""
-    out = {}
-    for gt in POST:
-        data = bs._get_json("https://statsapi.mlb.com/api/v1/stats", {
-            "stats": "byDateRange", "group": "pitching", "season": bs.SEASON,
-            "sportIds": bs.SPORT_ID, "teamId": int(team_id), "gameType": gt,
-            "playerPool": "ALL", "limit": 1000,
-            "startDate": f"{bs.SEASON}-01-01", "endDate": _day_before(day)})
-        for blk in data.get("stats", []):
-            for sk in blk.get("splits", []):
-                pid = (sk.get("player") or sk.get("person") or {}).get("id")
-                if pid is None:
-                    continue
-                st = sk.get("stat", {}) or {}
-                o = out.setdefault(int(pid), dict(apps=0, starts=0, outs=0, bf=0.0))
-                o["apps"] += int(st.get("gamesPitched") or st.get("gamesPlayed") or 0)
-                o["starts"] += int(st.get("gamesStarted") or 0)
-                o["outs"] += bs._innings_to_outs(st.get("inningsPitched"))
-                o["bf"] += float(st.get("battersFaced") or 0)
-    return out
+ARMS = ("baseline", "velo", "recent", "roles", "all", "production")
 
 
 def make_provider(bs, day, arm):
+    """Provider whose pitching loaders read the season only where `arm` says.
+
+    `production` is LiveDataProvider untouched (fetch_all picks the slate's
+    game types); every other arm pins each loader to regular season or to
+    the full season through the same production loaders.
+    """
+    if arm == "production":
+        return bs.LiveDataProvider(day)
     widen = {"velo", "recent", "roles"} if arm == "all" else {arm}
-    role_memo = {}
+    full = bs.postseason_rates.SEASON_GAME_TYPES
+    reg = bs.postseason_rates.REGULAR_GAME_TYPES
 
-    class Widened(bs.LiveDataProvider):
+    def types(which):
+        return full if which in widen else reg
 
+    class Pinned(bs.LiveDataProvider):
         def load_starter_velocity(self, ids):
-            if "velo" not in widen:
-                return super().load_starter_velocity(ids)
-            url = bs._SAVANT_PITCHER_URL.replace(
-                "hfGT=R%7C", "hfGT=R%7C" + "".join(f"{t}%7C" for t in POST))
-            orig = bs._sv.per_start
-
-            def per_start(pitches):
-                if pitches is not None and "game_type" in getattr(pitches, "columns", ()):
-                    gt = pitches["game_type"].astype(str)
-                    pitches = pitches.assign(
-                        game_type=np.where(gt.isin(POST), "R", gt))
-                return orig(pitches)
-
-            with mock.patch.object(bs, "_SAVANT_PITCHER_URL", url), \
-                    mock.patch.object(bs._sv, "per_start", per_start):
-                return super().load_starter_velocity(ids)
+            return bs.load_starter_velocity(ids, before_date=self.slate_date,
+                                            game_types=types("velo"))
 
         def load_recent_start_era(self, ids):
-            if "recent" not in widen:
-                return super().load_recent_start_era(ids)
-            orig = bs._get_json
-
-            def get_json(url, params=None, **kw):
-                if ("/people/" in url and params
-                        and params.get("stats") == "gameLog"
-                        and params.get("gameType") == "R"):
-                    params = {**params, "gameType": "R," + ",".join(POST)}
-                return orig(url, params, **kw)
-
-            with mock.patch.object(bs, "_get_json", get_json):
-                return super().load_recent_start_era(ids)
+            return bs.load_recent_start_era(ids, before_date=self.slate_date,
+                                            game_types=types("recent"))
 
         def load_team_pitcher_roles(self, team_id):
-            base = super().load_team_pitcher_roles(team_id)
-            if "roles" not in widen:
-                return base
-            if team_id in role_memo:
-                return role_memo[team_id]
-            post = _postseason_roles(bs, team_id, day)
-            merged = {}
-            for pid in set(base) | set(post):
-                b = base.get(pid) or {}
-                p = post.get(pid) or dict(apps=0, starts=0, outs=0, bf=0.0)
-                apps0 = int(b.get("appearances") or 0)
-                outs0 = (b.get("avg_ip_per_appearance") or 0) * 3.0 * apps0
-                if pd.isna(outs0):
-                    outs0 = 0.0
-                apps = apps0 + p["apps"]
-                starts = int(b.get("starts") or 0) + p["starts"]
-                outs = outs0 + p["outs"]
-                merged[pid] = {
-                    "appearances": apps, "starts": starts,
-                    "start_share": starts / apps if apps > 0 else np.nan,
-                    "avg_ip_per_appearance": outs / 3.0 / apps if apps > 0 else np.nan,
-                    "batters_faced": float(b.get("batters_faced") or 0) + p["bf"],
-                }
-            role_memo[team_id] = merged
-            return merged
+            return bs.load_team_pitcher_roles(team_id, game_types=types("roles"))
 
-    return Widened(day)
+    return Pinned(day)
 
 
 def replay(bs, gl, day, arm, cache_root):

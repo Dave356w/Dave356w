@@ -1054,6 +1054,12 @@ def slate_has_postseason(slate_df):
     return bool(types.isin(postseason_rates.POSTSEASON_GAME_TYPES).any())
 
 
+def season_game_types(slate_df):
+    """Game types the slate's pitching inputs read: R, plus postseason types."""
+    return (postseason_rates.SEASON_GAME_TYPES if slate_has_postseason(slate_df)
+            else postseason_rates.REGULAR_GAME_TYPES)
+
+
 def load_postseason_pas(before_date=None):
     """This season's postseason PAs dated strictly before the slate, or None.
 
@@ -1085,7 +1091,7 @@ def load_postseason_pas(before_date=None):
 # day so the hourly builds fetch each probable once.
 _SAVANT_PITCHER_URL = (
     "https://baseballsavant.mlb.com/statcast_search/csv?all=true&hfPT=&hfAB="
-    "&hfBBT=&hfPR=&hfZ=&stadium=&hfBBL=&hfNewZones=&hfGT=R%7C&hfSea=&hfSit="
+    "&hfBBT=&hfPR=&hfZ=&stadium=&hfBBL=&hfNewZones=&hfGT={gt}&hfSea=&hfSit="
     "&player_type=pitcher&hfOuts=&opponent=&pitcher_throws=&batter_stands="
     "&hfSA=&game_date_gt={start}&game_date_lt={end}&pitchers_lookup%5B%5D={pid}"
     "&team=&position=&hfRO=&home_road=&hfFlag=&metric_1=&hfInn=&min_pitches=0"
@@ -1095,13 +1101,17 @@ USE_VELOCITY = os.environ.get("USE_VELOCITY", "1") != "0"
 VELOCITY_BUDGET_S = 240.0
 
 
-def load_starter_velocity(ids, before_date=None):
+def load_starter_velocity(ids, before_date=None,
+                          game_types=postseason_rates.REGULAR_GAME_TYPES):
     """{player_id: starter_velocity.pregame_trend(...)} for tonight's probables.
 
     Fail-soft by design: a pitcher whose fetch fails, or the whole loader
     once the time budget runs out, simply gets no dv -- and no dv means the
     v13 rate, unadjusted. A velocity outage must never cost a slate.
+    `game_types` is the slate's season (see `season_game_types`); starts on or
+    after the slate date are never read either way.
     """
+    gt = "".join(f"{t}%7C" for t in game_types)
     before = str(before_date or SLATE_DATE)[:10]
     out = {}
     if not USE_VELOCITY:
@@ -1114,16 +1124,21 @@ def load_starter_velocity(ids, before_date=None):
         if time.monotonic() - t0 > VELOCITY_BUDGET_S:
             log(f"  velocity: time budget reached; {len(out)} pitchers loaded")
             break
-        path = os.path.join(CACHE_DIR, f"savant_cache_velo_{pid}_{SLATE_DATE}.csv")
+        # Starts are filtered by game type before caching, so a season-wide
+        # read must never reuse a same-day regular-season file.
+        name = "velo" if tuple(game_types) == postseason_rates.REGULAR_GAME_TYPES \
+            else "velo_season"
+        path = os.path.join(CACHE_DIR, f"savant_cache_{name}_{pid}_{SLATE_DATE}.csv")
         try:
             if os.path.exists(path):
                 starts = pd.read_csv(path)
             else:
-                r = session.get(_SAVANT_PITCHER_URL.format(start=start, end=end, pid=pid),
+                r = session.get(_SAVANT_PITCHER_URL.format(start=start, end=end,
+                                                           pid=pid, gt=gt),
                                 timeout=30)
                 r.raise_for_status()
                 raw = pd.read_csv(io.StringIO(r.text)) if r.text.strip() else pd.DataFrame()
-                starts = _sv.per_start(raw)
+                starts = _sv.per_start(raw, game_types)
                 try:
                     os.makedirs(CACHE_DIR, exist_ok=True)
                     starts.to_csv(path, index=False)
@@ -1210,20 +1225,29 @@ def _innings_to_outs(value):
         return 0
 
 
-def load_recent_start_era(ids, limit=RECENT_STARTS, before_date=None):
+def load_recent_start_era(ids, limit=RECENT_STARTS, before_date=None,
+                          game_types=postseason_rates.REGULAR_GAME_TYPES):
     """Build recent-start and recent-role profiles strictly before a date.
 
     ``before_date`` is injectable for historical replay.  The live build keeps
-    the existing behaviour by defaulting to ``SLATE_DATE``.
+    the existing behaviour by defaulting to ``SLATE_DATE``. ``game_types`` is
+    the slate's season (see `season_game_types`); the game log accepts a list.
+    A failed postseason-inclusive fetch retries regular season only, so the
+    profile degrades to its October-frozen form rather than to nothing.
     """
     cutoff = str(before_date or SLATE_DATE)[:10]
     out = {}
     for pid in sorted({int(i) for i in ids if pd.notna(i)}):
+        url = f"https://statsapi.mlb.com/api/v1/people/{pid}/stats"
+        params = {"stats": "gameLog", "group": "pitching", "season": SEASON,
+                  "gameType": ",".join(game_types)}
         try:
-            data = _get_json(
-                f"https://statsapi.mlb.com/api/v1/people/{pid}/stats",
-                {"stats": "gameLog", "group": "pitching", "season": SEASON,
-                 "gameType": "R"})
+            try:
+                data = _get_json(url, params)
+            except Exception:  # noqa: BLE001
+                if tuple(game_types) == postseason_rates.REGULAR_GAME_TYPES:
+                    raise
+                data = _get_json(url, {**params, "gameType": "R"})
         except Exception as e:  # noqa: BLE001
             log(f"  recent-start ERA unavailable for {pid}: {e!r}")
             continue
@@ -1499,59 +1523,93 @@ def pitcher_roster(team_id, roster_date=None):
     return ids
 
 
-def load_team_pitcher_roles(team_id, start_date=None, end_date=None):
-    """Workload roles for one club in a single StatsAPI call.
+def load_team_pitcher_roles(team_id, start_date=None, end_date=None,
+                            game_types=postseason_rates.REGULAR_GAME_TYPES):
+    """Workload roles for one club, one StatsAPI call per game type.
 
     Returns active/used pitchers keyed by player id with appearances, starts,
     start share, innings per appearance, and batters faced. Optional date
     bounds make the same parser safe for point-in-time replay. These fields are
     used only to separate the rotation from the relief pool; no specific bulk
     follower is projected.
+
+    ``game_types`` is the slate's season (see `season_game_types`). The team
+    endpoint silently ignores a gameType list, so each postseason type is its
+    own call, bounded to the day before the slate, and its counts are added to
+    the regular-season line. A failed postseason call returns the regular-
+    season roles alone rather than a partial sum.
     """
     team_id = int(team_id)
     # Preserve the original integer cache key for live callers/tests; dated
-    # replay entries live in a separate tuple namespace.
+    # replay entries live in a separate tuple namespace, and a postseason
+    # season gets its own.
     key = ((team_id, str(start_date)[:10] if start_date else None,
             str(end_date)[:10]) if end_date else team_id)
+    extra = tuple(t for t in game_types if t != "R")
+    if extra:
+        key = (key, extra, str(end_date or SLATE_DATE)[:10])
     if key in _team_pitcher_role_cache:
         return _team_pitcher_role_cache[key]
-    params = {
-        "stats": "byDateRange" if end_date else "season",
-        "group": "pitching",
-        "season": SEASON,
-        "sportIds": SPORT_ID,
-        "teamId": team_id,
-        "gameType": "R",
-        "playerPool": "ALL",
-        "limit": 1000,
-    }
-    if start_date:
-        params["startDate"] = str(start_date)[:10]
-    if end_date:
-        params["endDate"] = str(end_date)[:10]
-    data = _get_json("https://statsapi.mlb.com/api/v1/stats", params)
+
+    def counts(gt, by_range, start, end):
+        params = {
+            "stats": "byDateRange" if by_range else "season",
+            "group": "pitching",
+            "season": SEASON,
+            "sportIds": SPORT_ID,
+            "teamId": team_id,
+            "gameType": gt,
+            "playerPool": "ALL",
+            "limit": 1000,
+        }
+        if start:
+            params["startDate"] = str(start)[:10]
+        if end:
+            params["endDate"] = str(end)[:10]
+        data = _get_json("https://statsapi.mlb.com/api/v1/stats", params)
+        got = {}
+        for blk in data.get("stats", []):
+            for sk in blk.get("splits", []):
+                who = sk.get("player") or sk.get("person") or {}
+                pid = who.get("id")
+                if pid is None:
+                    continue
+                st = sk.get("stat", {}) or {}
+                try:
+                    apps = int(st.get("gamesPitched") or st.get("gamesPlayed") or 0)
+                    starts = int(st.get("gamesStarted") or 0)
+                    bf = float(st.get("battersFaced") or 0)
+                except (TypeError, ValueError):
+                    continue
+                got[int(pid)] = [apps, starts, _innings_to_outs(st.get("inningsPitched")), bf]
+        return got
+
+    tally = counts("R", bool(end_date), start_date, end_date)
+    if extra:
+        post_end = end_date or (datetime.fromisoformat(str(SLATE_DATE)[:10])
+                                - timedelta(days=1)).date().isoformat()
+        try:
+            post = [counts(gt, True, start_date or f"{SEASON}-01-01", post_end)
+                    for gt in extra]
+        except Exception as e:  # noqa: BLE001
+            log(f"  postseason roles unavailable for team {team_id} ({e!r}) "
+                "-> regular-season roles")
+            post = []
+        for got in post:
+            for pid, row in got.items():
+                base = tally.setdefault(pid, [0, 0, 0, 0.0])
+                for i, v in enumerate(row):
+                    base[i] += v
+
     out = {}
-    for blk in data.get("stats", []):
-        for sk in blk.get("splits", []):
-            who = sk.get("player") or sk.get("person") or {}
-            pid = who.get("id")
-            if pid is None:
-                continue
-            st = sk.get("stat", {}) or {}
-            try:
-                apps = int(st.get("gamesPitched") or st.get("gamesPlayed") or 0)
-                starts = int(st.get("gamesStarted") or 0)
-                bf = float(st.get("battersFaced") or 0)
-            except (TypeError, ValueError):
-                continue
-            outs = _innings_to_outs(st.get("inningsPitched"))
-            out[int(pid)] = {
-                "appearances": apps,
-                "starts": starts,
-                "start_share": starts / apps if apps > 0 else np.nan,
-                "avg_ip_per_appearance": outs / 3.0 / apps if apps > 0 else np.nan,
-                "batters_faced": bf,
-            }
+    for pid, (apps, starts, outs, bf) in tally.items():
+        out[pid] = {
+            "appearances": apps,
+            "starts": starts,
+            "start_share": starts / apps if apps > 0 else np.nan,
+            "avg_ip_per_appearance": outs / 3.0 / apps if apps > 0 else np.nan,
+            "batters_faced": bf,
+        }
     _team_pitcher_role_cache[key] = out
     return out
 
@@ -2344,6 +2402,9 @@ class LiveDataProvider:
 
     def __init__(self, slate_date=None):
         self.slate_date = str(slate_date or SLATE_DATE)[:10]
+        # Which games count as "the season so far" for the pitching inputs.
+        # fetch_all sets it from the slate (see season_game_types).
+        self.game_types = postseason_rates.REGULAR_GAME_TYPES
 
     def get_slate(self, slate_date, sport_id=SPORT_ID):
         return get_slate(slate_date, sport_id)
@@ -2362,10 +2423,11 @@ class LiveDataProvider:
         )
 
     def load_recent_start_era(self, ids):
-        return load_recent_start_era(ids, before_date=self.slate_date)
+        return load_recent_start_era(ids, before_date=self.slate_date,
+                                     game_types=self.game_types)
 
     def load_team_pitcher_roles(self, team_id):
-        return load_team_pitcher_roles(team_id)
+        return load_team_pitcher_roles(team_id, game_types=self.game_types)
 
     def pitcher_roster(self, team_id):
         return pitcher_roster(team_id)
@@ -2383,7 +2445,8 @@ class LiveDataProvider:
         return load_pitcher_xera()
 
     def load_starter_velocity(self, ids):
-        return load_starter_velocity(ids, before_date=self.slate_date)
+        return load_starter_velocity(ids, before_date=self.slate_date,
+                                     game_types=self.game_types)
 
 
 def fetch_all(slate_date, provider=None, calibration_history=None,
@@ -2409,8 +2472,12 @@ def fetch_all(slate_date, provider=None, calibration_history=None,
                     f"(game_pk={int(gg['game_pk'])})")
 
     log("Loading Savant leaderboards (cached once/day) ...")
-    postseason_pas = (provider.load_postseason_pas()
-                      if slate_has_postseason(slate_df) else None)
+    # A postseason slate's inputs run on through October: prior postseason
+    # PAs fold into the rate boards, and the pitching loaders read prior
+    # postseason games. A regular-season slate is untouched.
+    postseason = slate_has_postseason(slate_df)
+    provider.game_types = season_game_types(slate_df)
+    postseason_pas = provider.load_postseason_pas() if postseason else None
     batter_stat, batter_bb, batter_cust = provider.load_stat_lookups(
         "batter", postseason_pas=postseason_pas)
     pitcher_stat, pitcher_bb, pitcher_cust = provider.load_stat_lookups(

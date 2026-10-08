@@ -31,8 +31,11 @@ MIN_PRIOR_STARTS = 3       # the last start plus at least two before it
 MIN_FB = 10                # fastballs in the last start
 
 
-def per_start(pitches: pd.DataFrame) -> pd.DataFrame:
-    """One pitcher's Statcast pitch rows -> one row per regular-season START.
+def per_start(pitches: pd.DataFrame, game_types=("R",)) -> pd.DataFrame:
+    """One pitcher's Statcast pitch rows -> one row per START in `game_types`.
+
+    Regular season by default; a postseason slate passes the postseason types
+    too, so the trend runs on through October.
 
     A start is an appearance whose first pitch came in the first inning --
     the per-pitcher counterpart of "first pitcher his team used", so an
@@ -43,7 +46,7 @@ def per_start(pitches: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame(columns=["game_date", "game_pk", "velo", "n_fb"])
     d = pitches
     if "game_type" in d.columns:
-        d = d[d["game_type"].astype(str) == "R"]
+        d = d[d["game_type"].astype(str).isin(game_types)]
     d = d.assign(game_date=pd.to_datetime(d["game_date"]).dt.strftime("%Y-%m-%d"),
                  inning=pd.to_numeric(d["inning"], errors="coerce"),
                  release_speed=pd.to_numeric(d["release_speed"], errors="coerce"))

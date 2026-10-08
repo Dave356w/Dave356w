@@ -21,6 +21,9 @@ import numpy as np
 import pandas as pd
 
 POSTSEASON_GAME_TYPES = ("F", "D", "L", "W")
+# Game types a postseason slate's pitching inputs read: the season so far.
+SEASON_GAME_TYPES = ("R",) + POSTSEASON_GAME_TYPES
+REGULAR_GAME_TYPES = ("R",)
 # Savant's statcast_search caps one CSV at this many pitches. A response at
 # the cap may be truncated, and a silently partial board is worse than the
 # regular-season one, so it is refused.
