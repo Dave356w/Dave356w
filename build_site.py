@@ -8778,8 +8778,8 @@ def render_postseason_html(built_txt):
             "closing price, with the controls on the same games. <b>Not part of "
             "the regular-season record</b>: postseason games are few, and games "
             "in a series share teams and often starters, so read these as a "
-            "record of what happened rather than evidence about the model."
-            "</div>")
+            "record of what happened rather than evidence about the model. "
+            + _esc(season_phase.POSTSEASON_INPUTS_NOTE) + "</div>")
     summary = "<div class='gr-summary'>" + "".join(stats) + "</div>" + note
 
     show_ml = "close_home_ml" in post.columns and post["close_home_ml"].notna().any()

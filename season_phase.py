@@ -29,6 +29,15 @@ REGULAR = "R"
 GAME_TYPE_COL = "game_type"
 POSTSEASON_LEDGER_NAME = "mlb_postseason_ledger.csv"
 
+# What a postseason lean is built on. Savant's custom leaderboard serves
+# regular-season PAs only (checked 2026-10-08 against StatsAPI), and the
+# velocity search is filtered to gameType R, so season rates stop moving at the
+# last regular-season game. One wording for the report and the page.
+POSTSEASON_INPUTS_NOTE = (
+    "Season rates (xwOBA, wOBA, starter velocity) are regular season only and "
+    "stopped updating after the last regular-season game; postseason PAs are "
+    "not folded in. Lineups, starters and prices still update each slate.")
+
 
 def clean_game_type(value):
     """StatsAPI gameType as a stripped string, or NaN when absent."""
