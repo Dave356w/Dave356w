@@ -428,22 +428,22 @@ pre-registered Candidate B2 individual-extreme TMR10 test  (registered 2026-09-1
 
 HELD OUT of every number above: 24 rows in mlb_postseason_ledger.csv
   by type: D=15  F=9   (F wild card, D division series, L LCS, W World Series)
-  status: graded=23  pending=1  void=0
+  status: graded=24  pending=0  void=0
 
 POSTSEASON (not registered; descriptive only)
   model tag(s): xw+starter_velo_v14. Each row is scored on its own pregame lean -- native, not reconstructed.
   Price basis: the leaned side's CLOSING moneyline and closing no-vig q, as in the regular-season blocks. excess is vs q (null 0);
   EV is vs the posted breakeven, whose market-correct null is printed beside it. Flat 1u per leaned game at the close.
   A best-of series repeats the same clubs and often the same starters, so games are not independent draws; read the SE as a floor.
-  ALL: 24 rows  graded=23  pending=1  void=0  abstained=0
-    lean full: 17-6  (0.739)   F5: 13-5-5  (0.722)
-    vs close   n= 23      17-6 (0.739)   mean q .551   excess  +18.9 +- 10.3 pp   EV  +16.3 pp (null  -2.5)   +7.33u
-    same-row always-chalk: 14-9   (1 pick'em row(s), tie to home)
+  ALL: 24 rows  graded=24  pending=0  void=0  abstained=0
+    lean full: 17-7  (0.708)   F5: 14-5-5  (0.737)
+    vs close   n= 24      17-7 (0.708)   mean q .548   excess  +16.1 +- 10.1 pp   EV  +13.5 pp (null  -2.5)   +6.33u
+    same-row always-chalk: 15-9   (1 pick'em row(s), tie to home)
   F wild card: 9 rows  graded=9  pending=0  void=0  abstained=0
     lean full: 9-0  (1.000)   F5: 7-0-2  (1.000)
     vs close   n=  9       9-0 (1.000)   mean q .528   excess  +47.2 +- 16.5 pp   EV  +44.8 pp (null  -2.4)   +7.49u
     same-row always-chalk: 7-2
-  D division series: 15 rows  graded=14  pending=1  void=0  abstained=0
-    lean full: 8-6  (0.571)   F5: 6-5-3  (0.545)
-    vs close   n= 14       8-6 (0.571)   mean q .565   excess   +0.6 +- 13.1 pp   EV   -2.0 pp (null  -2.6)   -0.15u
-    same-row always-chalk: 7-7   (1 pick'em row(s), tie to home)
+  D division series: 15 rows  graded=15  pending=0  void=0  abstained=0
+    lean full: 8-7  (0.533)   F5: 7-5-3  (0.583)
+    vs close   n= 15       8-7 (0.533)   mean q .560   excess   -2.6 +- 12.7 pp   EV   -5.2 pp (null  -2.6)   -1.15u
+    same-row always-chalk: 8-7   (1 pick'em row(s), tie to home)
