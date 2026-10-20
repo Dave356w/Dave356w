@@ -428,17 +428,17 @@ pre-registered Candidate B2 individual-extreme TMR10 test  (registered 2026-09-1
 
 HELD OUT of every number above: 36 rows in mlb_postseason_ledger.csv
   by type: D=16  F=9  L=11   (F wild card, D division series, L LCS, W World Series)
-  status: graded=34  pending=1  void=1
+  status: graded=35  pending=0  void=1
 
 POSTSEASON (not registered; descriptive only)
   model tag(s): xw+starter_velo_v14. Each row is scored on its own pregame lean -- native, not reconstructed.
   Price basis: the leaned side's CLOSING moneyline and closing no-vig q, as in the regular-season blocks. excess is vs q (null 0);
   EV is vs the posted breakeven, whose market-correct null is printed beside it. Flat 1u per leaned game at the close.
   A best-of series repeats the same clubs and often the same starters, so games are not independent draws; read the SE as a floor.
-  ALL: 36 rows  graded=34  pending=1  void=1  abstained=0
-    lean full: 20-14  (0.588)   F5: 18-8-8  (0.692)
-    vs close   n= 34     20-14 (0.588)   mean q .545   excess   +4.3 +-  8.5 pp   EV   +2.1 pp (null  -2.2)   +1.71u
-    same-row always-chalk: 21-13   (1 pick'em row(s), tie to home)
+  ALL: 36 rows  graded=35  pending=0  void=1  abstained=0
+    lean full: 20-15  (0.571)   F5: 18-9-8  (0.667)
+    vs close   n= 35     20-15 (0.571)   mean q .542   excess   +3.0 +-  8.4 pp   EV   +0.8 pp (null  -2.2)   +0.71u
+    same-row always-chalk: 22-13   (1 pick'em row(s), tie to home)
   F wild card: 9 rows  graded=9  pending=0  void=0  abstained=0
     lean full: 9-0  (1.000)   F5: 7-0-2  (1.000)
     vs close   n=  9       9-0 (1.000)   mean q .528   excess  +47.2 +- 16.5 pp   EV  +44.8 pp (null  -2.4)   +7.49u
@@ -447,7 +447,7 @@ POSTSEASON (not registered; descriptive only)
     lean full: 9-7  (0.562)   F5: 8-5-3  (0.615)
     vs close   n= 16       9-7 (0.562)   mean q .560   excess   +0.3 +- 12.3 pp   EV   -2.3 pp (null  -2.5)   -0.43u
     same-row always-chalk: 9-7   (1 pick'em row(s), tie to home)
-  L LCS: 11 rows  graded=9  pending=1  void=1  abstained=0
-    lean full: 2-7  (0.222)   F5: 3-3-3  (0.500)
-    vs close   n=  9       2-7 (0.222)   mean q .537   excess  -31.5 +- 16.5 pp   EV  -33.0 pp (null  -1.5)   -5.34u
-    same-row always-chalk: 5-4
+  L LCS: 11 rows  graded=10  pending=0  void=1  abstained=0
+    lean full: 2-8  (0.200)   F5: 3-4-3  (0.429)
+    vs close   n= 10       2-8 (0.200)   mean q .525   excess  -32.5 +- 15.7 pp   EV  -34.0 pp (null  -1.5)   -6.34u
+    same-row always-chalk: 6-4
