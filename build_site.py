@@ -1928,12 +1928,18 @@ def sp_ip_calibration(led=None):
     return fit
 
 
-def calibrate_sp_ip(raw, fit=None):
+_IP_CAL_UNSET = object()
+
+
+def calibrate_sp_ip(raw, fit=_IP_CAL_UNSET):
     """Apply `sp_ip_calibration` to one raw estimate. Identity without a fit."""
     v = _f(raw)
     if v is None:
         return raw
-    fit = sp_ip_calibration() if fit is None else fit
+    # An explicitly empty replay fit means identity. Only an omitted fit may
+    # read the production ledger; otherwise the first historical slates leak
+    # today's calibration when their prior-only frame has no usable pairs.
+    fit = sp_ip_calibration() if fit is _IP_CAL_UNSET else fit
     if not fit:
         return v
     intercept, slope, _n, w = fit

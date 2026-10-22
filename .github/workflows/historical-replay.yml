@@ -1,0 +1,75 @@
+name: Full-season Statcast replay
+
+# Separate from site-build: no ledger writes, deployment or trading actions.
+on:
+  pull_request:
+    paths:
+      - historical_replay.py
+      - tests/test_historical_replay.py
+      - .github/workflows/historical-replay.yml
+  workflow_dispatch:
+    inputs:
+      season:
+        description: Regular season to reconstruct
+        default: '2026'
+        required: true
+      start:
+        description: First evaluation date (blank = March 1)
+        default: ''
+      end:
+        description: Last evaluation date (blank = season end or yesterday)
+        default: ''
+      full_season:
+        description: Run the full requested range (otherwise a small real-data smoke test)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    env:
+      SEASON: ${{ inputs.season || '2026' }}
+      START: ${{ inputs.start }}
+      END: ${{ inputs.end }}
+      FULL_SEASON: ${{ inputs.full_season || 'false' }}
+      OPENBLAS_NUM_THREADS: '1'
+      OMP_NUM_THREADS: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install
+        run: python -m pip install -r requirements.txt pytest
+      - name: Test replay and calibration guards
+        run: python -m pytest tests/test_historical_replay.py tests/test_sp_ip_calibration.py -q
+      - uses: actions/cache@v4
+        with:
+          path: replay_cache
+          key: statcast-replay-v1-${{ env.SEASON }}-${{ github.run_id }}
+          restore-keys: statcast-replay-v1-${{ env.SEASON }}-
+      - name: Replay with real Statcast and MLB inputs
+        run: |
+          args=(--season "$SEASON" --workers 6)
+          if [ "$FULL_SEASON" != "true" ]; then
+            args+=(--start "${SEASON}-04-01" --end "${SEASON}-04-02")
+          else
+            if [ -n "$START" ]; then args+=(--start "$START"); fi
+            if [ -n "$END" ]; then args+=(--end "$END"); fi
+          fi
+          python historical_replay.py "${args[@]}"
+      - name: Confirm production data unchanged
+        if: always()
+        run: |
+          test -z "$(git status --porcelain -- data/ public/)"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: historical-replay-${{ env.SEASON }}
+          path: replay_output/
+          if-no-files-found: warn
