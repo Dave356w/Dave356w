@@ -20,7 +20,7 @@ that combined history with closing prices and does not change model decisions.
 
 | Where to look | For |
 |---|---|
-| [`docs/historical_replay.md`](docs/historical_replay.md) | Full-season date-bounded Statcast reconstruction, coverage, grading, and isolated reports. |
+| [`docs/historical_replay.md`](docs/historical_replay.md) | Full-season date-bounded Statcast reconstruction, closing-odds matching, ROI grading, and isolated reports. |
 | [`MATCHUP_SITE.md`](MATCHUP_SITE.md) | The model. Start at §"The current model" for what the code does today; everything after it is a version changelog. |
 | [`CLAUDE.md`](CLAUDE.md) | Working standards, the `RECORD_TAGS`/`SCALE_TAGS` family table, and the anti-pattern catalogue. |
 | [`REGISTRATIONS.md`](REGISTRATIONS.md) | Registered tests and checkpoints. Logic only — live readings are in `data/ledger_report.txt`. |
