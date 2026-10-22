@@ -29,6 +29,7 @@ import requests
 import build_site as bs
 import grade_leans as gl
 import starter_velocity as sv
+import replay_market as rm
 
 SCHEMA = 1
 BASIS = "statcast_prior_date_final_starting_lineup"
@@ -48,7 +49,7 @@ PA_EVENTS = frozenset(("single", "double", "triple", "home_run", "field_out",
     "other_out"))
 SOURCE_HASHES = {name: hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
                  for name in ("historical_replay.py", "build_site.py", "starter_velocity.py",
-                              "grade_leans.py", "requirements.txt")}
+                              "grade_leans.py", "replay_market.py", "requirements.txt")}
 
 
 class MissingHistory(RuntimeError):
@@ -502,6 +503,7 @@ def assemble_rows(provider, frame, data):
         home = gl._ab(g["teams"]["home"]["team"]["name"])
         row = {"game_pk": pk, "game_date": provider.slate_date, "away": away,
             "home": home, "model_tag": bs.MODEL_TAG, "basis": BASIS,
+            "game_datetime_utc": g.get("gameDate"),
             "input_cutoff": (date.fromisoformat(provider.slate_date) - timedelta(days=1)).isoformat(),
             "lineup_basis": "final_boxscore_original_order",
             "status": "excluded", "exclusion_reason": provider.exclusions.get(pk),
@@ -579,13 +581,19 @@ def render_report(frame, meta):
     groups = []
     for month, rows in frame.groupby(frame["game_date"].str[:7]):
         r = report_summary(rows)
+        roi = rm.summarize(rows)['markets']['full'] if 'full_roi_status' in rows else None
+        roi_text = (f"{100 * roi['roi']:+.2f}% (n={roi['graded_games']})"
+                    if roi and roi['roi'] is not None else '—')
         groups.append(f"<tr><td>{esc(month)}</td><td>{len(rows)}</td><td>{r['predicted_games']}</td>"
-                      f"<td>{rec(r['full'])}</td><td>{rec(r['f5'])}</td></tr>")
+                      f"<td>{rec(r['full'])}</td><td>{rec(r['f5'])}</td><td>{roi_text}</td></tr>")
     games = []
     for r in frame.sort_values(["game_date", "game_pk"], ascending=[False, True]).to_dict("records"):
+        ml, units = rm.number(r.get('full_selection_ml')), rm.number(r.get('full_profit_units'))
         games.append("<tr>" + "".join(f"<td>{esc(v)}</td>" for v in [r["game_date"],
             f"{r['away']} @ {r['home']}", r.get("xw_lean") or "—",
             r.get("xw_full") or "—", r.get("xw_f5") or "—",
+            f'{ml:+g}' if ml is not None else '—',
+            f'{units:+.3f}' if units is not None else '—', r.get('full_roi_status') or '—',
             r.get("exclusion_reason") or ""]) + "</tr>")
     exclusions = "".join(f"<li>{esc(k)}: {v}</li>" for k, v in summary["exclusions"].items())
     return f"""<!doctype html><html lang="en"><meta charset="utf-8">
@@ -597,17 +605,18 @@ a{{color:#8ed5ff}}h1{{font-size:32px}}.note{{color:#b9c9d6;line-height:1.6}}.sta
 <p class="note">Retrospective reconstruction · {esc(meta['model_tag'])} · {esc(meta['start'])} through {esc(meta['end'])}.
 Season rates use pitches available strictly before each game date. Original starting lineups and starters come from final box scores;
 announcement times are unavailable. Historical Statcast values may have been revised. This is not a live track record or an independent forward test.
-The fixed model was developed after some of these games. No odds, ROI or calibrated win probabilities are inferred.</p>
+The fixed model was developed after some of these games. Odds are matched only after prediction; no calibrated win probabilities are inferred.</p>
 <div class="stats"><div><strong>{summary['predicted_games']} / {summary['scheduled_games']}</strong>games with a lean</div>
 <div><strong>{rec(summary['full'])}</strong>full game</div><div><strong>{rec(summary['f5'])}</strong>first five (ties separate)</div>
 <div><strong>{rec(summary['always_home_same_games'])}</strong>always home, same full-game decisions</div></div>
+{rm.render_panel(frame)}
 <p class="note">Calibration begins {esc(meta['start'])}, uses only prior replay slates, and resets each run.
 Untracked contact uses observed wOBA as an explicit fallback: {meta['untracked_bip']} historical PAs.
 Resumed-game inputs are withheld until their completion date. Source commit: {esc(meta['source_commit'])}.</p>
 <p><a href="predictions.csv">Predictions CSV</a> · <a href="manifest.json">Run details and coverage</a></p>
-<h2>By month</h2><div class="scroll"><table><thead><tr><th>Month</th><th>Scheduled</th><th>With lean</th><th>Full</th><th>F5</th></tr></thead>
+<h2>By month</h2><div class="scroll"><table><thead><tr><th>Month</th><th>Scheduled</th><th>With lean</th><th>Full</th><th>F5</th><th>Full ROI / priced n</th></tr></thead>
 <tbody>{''.join(groups)}</tbody></table></div><h2>Exclusions and abstentions</h2><ul>{exclusions or '<li>None</li>'}</ul>
-<details><summary>All games</summary><div class="scroll"><table><thead><tr><th>Date</th><th>Game</th><th>Lean</th><th>Full</th><th>F5</th><th>Reason</th></tr></thead><tbody>{''.join(games)}</tbody></table></div></details></html>"""
+<details><summary>All games</summary><div class="scroll"><table><thead><tr><th>Date</th><th>Game</th><th>Lean</th><th>Full</th><th>F5</th><th>FG close ML</th><th>FG profit (u)</th><th>FG price status</th><th>Reason</th></tr></thead><tbody>{''.join(games)}</tbody></table></div></details></html>"""
 
 
 def safe_output(path):
@@ -619,7 +628,22 @@ def safe_output(path):
     return path
 
 
-def run(season, start, end, cache, output, offline=False, workers=3):
+def write_report(frame, meta, output):
+    """Write one consistent report bundle, including optional market grading."""
+    output = safe_output(output)
+    output.mkdir(parents=True, exist_ok=True)
+    meta['summary'] = report_summary(frame)
+    atomic_text(output / 'predictions.csv', frame.to_csv(index=False))
+    atomic_text(output / 'backtest.html', render_report(frame, meta))
+    meta['output_sha256'] = {name: hashlib.sha256((output / name).read_bytes()).hexdigest()
+                             for name in ('predictions.csv', 'backtest.html')}
+    atomic_text(output / 'manifest.json', json.dumps(meta, indent=2, allow_nan=False))
+    atomic_text(output / 'run_status.json', json.dumps({'status': 'complete',
+        'start': meta['start'], 'end': meta['end']}))
+
+
+def run(season, start, end, cache, output, offline=False, workers=3,
+        odds_csv=rm.DEFAULT_ARCHIVE, fetch_odds=False):
     output = safe_output(output)
     cache = safe_output(cache)
     output.mkdir(parents=True, exist_ok=True)
@@ -657,6 +681,11 @@ def run(season, start, end, cache, output, offline=False, workers=3):
             # Checkpoint lives only in the separate output, never in data/.
             atomic_text(output / "checkpoint.csv", pd.DataFrame(rows).to_csv(index=False))
     frame = pd.DataFrame(rows)
+    # Market data arrives only after every prediction/calibration row has
+    # frozen. Closing odds can grade a replay; they cannot affect its leans.
+    archive = pd.read_csv(odds_csv) if odds_csv is not None else pd.DataFrame()
+    frame, market = rm.grade(frame, archive, Path(odds_csv).name if odds_csv else 'none',
+                            fetch_odds, rm.CachedMarketAPI(cache / 'odds', offline))
     try:
         commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
     except (OSError, subprocess.CalledProcessError):
@@ -667,14 +696,9 @@ def run(season, start, end, cache, output, offline=False, workers=3):
         "generated_utc": datetime.now(timezone.utc).isoformat(),
         "untracked_bip": int(pa["untracked_bip"].sum()), "historical_pitches": len(raw),
         "historical_pa": len(pa), "calibration_side_games": 2 * len(calibration),
-        "summary": report_summary(frame)}
-    atomic_text(output / "predictions.csv", frame.to_csv(index=False))
-    atomic_text(output / "backtest.html", render_report(frame, meta))
-    meta["output_sha256"] = {name: hashlib.sha256((output / name).read_bytes()).hexdigest()
-                             for name in ("predictions.csv", "backtest.html")}
-    atomic_text(output / "manifest.json", json.dumps(meta, indent=2, allow_nan=False))
-    atomic_text(output / "run_status.json", json.dumps({"status": "complete",
-        "season": season, "start": start, "end": end}))
+        "summary": report_summary(frame), "market_summary": market,
+        "odds_archive_sha256": hashlib.sha256(Path(odds_csv).read_bytes()).hexdigest() if odds_csv else None}
+    write_report(frame, meta, output)
     print(json.dumps(meta["summary"], indent=2), flush=True)
     return frame, meta
 
@@ -688,6 +712,8 @@ def main():
     p.add_argument("--output", default="replay_output")
     p.add_argument("--offline", action="store_true", help="require all input requests in cache")
     p.add_argument("--workers", type=int, default=3, choices=range(1, 7))
+    p.add_argument("--odds-csv", default=str(rm.DEFAULT_ARCHIVE), help="archive of closing prices")
+    p.add_argument("--fetch-missing-odds", action="store_true", help="backfill missing ESPN/DK closing markets after prediction")
     a = p.parse_args()
     yesterday = datetime.now(ZoneInfo("America/New_York")).date() - timedelta(days=1)
     start = a.start or f"{a.season}-03-01"
@@ -695,7 +721,8 @@ def main():
     first, last = date.fromisoformat(start), date.fromisoformat(end)
     if first.year != a.season or last.year != a.season or first > last or last > yesterday:
         p.error("Use an ordered historical date range within the selected season")
-    run(a.season, start, end, a.cache, a.output, a.offline, a.workers)
+    run(a.season, start, end, a.cache, a.output, a.offline, a.workers,
+        a.odds_csv, a.fetch_missing_odds)
 
 
 if __name__ == "__main__":
