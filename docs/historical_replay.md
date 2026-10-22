@@ -21,6 +21,22 @@ trial on pull requests touching the replay. Its manual `full_season` option runs
 the requested full range. It uploads the results as an artifact and never commits
 to `data/`, deploys to Pages, or joins the `site-build` concurrency group.
 
+For the complete repository-hosted prediction and ROI run, use **Full-season MLB
+backtest** (`.github/workflows/full-season-backtest.yml`). Opening or updating a
+PR that changes that workflow starts the full 2026 replay automatically; there
+is no two-day smoke-test fallback. After merging, launch another run from Actions
+with **Run workflow**. The season defaults to 2026, and blank date inputs evaluate
+March 1 through October 5 (or yesterday for a season still in progress), filtering
+to regular-season games. Override dates only when a shorter range is intentional.
+
+This workflow always fetches missing historical closing odds after freezing all
+predictions. Its Actions summary reports game coverage, priced selections, W/L/P,
+unit profit and ROI separately for full-game and F5 markets. Download the
+`full-season-backtest-<season>-<run-id>` artifact for the HTML report, CSV, manifest,
+and logs. A failed or timed-out run retains available checkpoints and explicitly
+reports incomplete progress rather than final ROI. The replay command has a
+320-minute limit inside a 350-minute job so artifact upload has time to finish.
+
 ## Outputs
 
 - `replay_output/backtest.html`: standalone report with monthly results, full-game
