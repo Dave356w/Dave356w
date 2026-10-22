@@ -1,0 +1,115 @@
+name: Full-season MLB backtest
+
+# Opening this workflow PR starts the full run. Later runs can be launched
+# manually; the existing historical-replay workflow remains a fast PR check.
+on:
+  pull_request:
+    paths:
+      - .github/workflows/full-season-backtest.yml
+  workflow_dispatch:
+    inputs:
+      season:
+        description: Regular season to reconstruct
+        default: '2026'
+        required: true
+      start:
+        description: First evaluation date (blank = March 1)
+        default: ''
+      end:
+        description: Last evaluation date (blank = season end or yesterday)
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: full-season-backtest-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  full-season:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    env:
+      SEASON: ${{ inputs.season || '2026' }}
+      START: ${{ inputs.start }}
+      END: ${{ inputs.end }}
+      OPENBLAS_NUM_THREADS: '1'
+      OMP_NUM_THREADS: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install
+        run: python -m pip install -r requirements.txt pytest
+      - name: Test replay and market guards
+        run: python -m pytest tests/test_historical_replay.py tests/test_sp_ip_calibration.py tests/test_replay_market.py -q
+      - uses: actions/cache@v4
+        with:
+          path: replay_cache
+          key: statcast-replay-v1-${{ env.SEASON }}-${{ github.run_id }}
+          restore-keys: statcast-replay-v1-${{ env.SEASON }}-
+      - name: Replay full season and grade closing odds
+        shell: bash
+        run: |
+          mkdir -p replay_output
+          args=(--season "$SEASON" --workers 6 --fetch-missing-odds)
+          if [ -n "$START" ]; then args+=(--start "$START"); fi
+          if [ -n "$END" ]; then args+=(--end "$END"); fi
+          # Leave time to preserve checkpoints and logs if replay times out.
+          timeout --signal=INT --kill-after=60s 320m \
+            python -u historical_replay.py "${args[@]}" 2>&1 | tee replay_output/runner.log
+      - name: Confirm production data unchanged
+        if: always()
+        shell: bash
+        run: test -z "$(git status --porcelain -- data/ public/)"
+      - name: Summarize completed results or partial progress
+        if: always()
+        shell: bash
+        run: |
+          python - <<'PY'
+          import csv
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path('replay_output')
+          manifest = root / 'manifest.json'
+          with Path(os.environ['GITHUB_STEP_SUMMARY']).open('a') as out:
+              if not manifest.exists():
+                  out.write('Full-season replay incomplete; no final ROI is available.\n\n')
+                  checkpoint = root / 'checkpoint.csv'
+                  if checkpoint.exists():
+                      with checkpoint.open(newline='') as handle:
+                          rows = list(csv.DictReader(handle))
+                      last = max((r['game_date'] for r in rows), default='none')
+                      out.write(f'Partial checkpoint: {len(rows)} games, through {last}.\n\n')
+                  out.write('Download the artifact for available logs and checkpoints.\n')
+              else:
+                  meta = json.loads(manifest.read_text())
+                  summary = meta['summary']
+                  out.write(f"Completed {meta['start']} through {meta['end']}: "
+                            f"{summary['predicted_games']}/{summary['scheduled_games']} "
+                            'games produced model selections.\n\n')
+                  out.write('| Market | Priced / selections | W-L-P | Profit (u) | ROI |\n')
+                  out.write('| --- | ---: | ---: | ---: | ---: |\n')
+                  for name, market in meta['market_summary']['markets'].items():
+                      roi = market['roi']
+                      pct = 'unavailable' if roi is None else f'{roi:.2%}'
+                      out.write(f"| {name} | {market['matched_prices']}/{market['model_selections']} | "
+                                f"{market['wins']}-{market['losses']}-{market['pushes']} | "
+                                f"{market['profit_units']:.3f} | {pct} |\n")
+                  out.write('\nClosing-price benchmark, risking one unit per priced selection. '
+                            'Missing prices are excluded, and F5 ties push.\n\n')
+                  out.write('Download the artifact for the HTML report, predictions CSV, '
+                            'manifest, and logs.\n')
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: full-season-backtest-${{ env.SEASON }}-${{ github.run_id }}
+          path: replay_output/
+          if-no-files-found: warn
+          retention-days: 30
