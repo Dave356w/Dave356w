@@ -25,3 +25,7 @@ venv/
 
 # Statcast history for research/ studies: fetched in CI, never committed.
 history_cache/
+
+# Isolated historical replay inputs and reports (never the live ledger).
+replay_cache/
+replay_output/
