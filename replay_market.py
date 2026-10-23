@@ -30,6 +30,10 @@ DEFAULT_ARCHIVE = Path(__file__).resolve().parent / 'data' / 'mlb_lean_ledger.cs
 MARKETS = ('full', 'f5')
 PRICE_COLUMNS = {'full': ('close_away_ml', 'close_home_ml'),
                  'f5': ('f5_close_away_ml', 'f5_close_home_ml')}
+# Fetched books in preference order. Books have different holds, so ROI is
+# also reported per source rather than only pooled.
+ESPN_BOOKS = ((mb.ESPN_DRAFTKINGS, 'espn_draftkings_close'),
+              (mb.ESPN_BET, 'espn_espnbet_close'))
 ALIASES = {'AZ': 'ARI', 'CHW': 'CWS', 'CHA': 'CWS', 'OAK': 'ATH',
            'SDP': 'SD', 'SFG': 'SF', 'KCR': 'KC', 'TBR': 'TB',
            'WSN': 'WSH', 'ANA': 'LAA'}
@@ -248,8 +252,25 @@ def summarize(frame):
             'pushes': settlements['T'], 'stake_units': stake, 'profit_units': units,
             'roi': units / stake if stake else None, 'controls': controls,
             'exclusions': dict(Counter(status[status != 'graded'].dropna())),
-            'sources': dict(Counter(scored.get(f'{market}_market_source', pd.Series(dtype=object))))}
+            'sources': dict(Counter(scored.get(f'{market}_market_source', pd.Series(dtype=object)))),
+            'by_source': source_summary(scored, market)}
     return result
+
+
+def source_summary(scored, market):
+    """Model and same-row control ROI within each price source."""
+    out = {}
+    sources = scored.get(f'{market}_market_source', pd.Series(index=scored.index, dtype=object))
+    for source, rows in scored.groupby(sources, sort=True):
+        stake = float(pd.to_numeric(rows[f'{market}_stake_units']).sum())
+        units = float(pd.to_numeric(rows[f'{market}_profit_units']).sum())
+        settlements = Counter(rows[f'{market}_settlement'])
+        out[str(source)] = {'graded_games': len(rows), 'wins': settlements['W'],
+            'losses': settlements['L'], 'pushes': settlements['T'], 'profit_units': units,
+            'roi': units / stake if stake else None,
+            **{f'always_{c}_roi': (float(pd.to_numeric(rows[f'{market}_{c}_profit_units']).sum()) / stake
+                                   if stake else None) for c in ('home', 'chalk')}}
+    return out
 
 
 class CachedMarketAPI:
@@ -356,15 +377,20 @@ def backfill_missing(frame, get):
                     if row[f'{market}_odds_status'] not in ('no_archive_game', 'market_unavailable'):
                         continue
                     try:
-                        values = mb._espn_close(event['eid']) if market == 'full' else mb._espn_f5(event['eid'], event.get('tid') or {})
-                        cols = PRICE_COLUMNS[market]
-                        a, h = (moneyline((values or {}).get(c)) for c in cols)
+                        # DraftKings first; ESPN BET only when ESPN lists no
+                        # two-sided DraftKings close. Each keeps its own label.
+                        for provider, source in ESPN_BOOKS:
+                            values = (mb._espn_close(event['eid'], provider) if market == 'full'
+                                      else mb._espn_f5(event['eid'], event.get('tid') or {}, provider))
+                            a, h = (moneyline((values or {}).get(c)) for c in PRICE_COLUMNS[market])
+                            if a is not None and h is not None:
+                                break
                         if a is None or h is None:
                             out.at[idx, f'{market}_odds_status'] = 'market_unavailable'
                             continue
                         out.at[idx, f'{market}_away_ml'], out.at[idx, f'{market}_home_ml'] = a, h
                         out.at[idx, f'{market}_odds_status'] = 'matched'
-                        out.at[idx, f'{market}_market_source'] = 'espn_draftkings_close'
+                        out.at[idx, f'{market}_market_source'] = source
                         out.at[idx, f'{market}_espn_id'] = str(event['eid'])
                         out.at[idx, f'{market}_match_basis'] = 'mlb_id_date_teams_scores_espn_settled'
                     except Exception as exc:
@@ -401,13 +427,20 @@ def render_panel(frame):
             f"<td>{s['wins']}–{s['losses']}–{s['pushes']}</td><td>{s['profit_units']:+.3f}u</td>"
             f"<td>{fmt(s['roi'])}</td><td>{fmt(s['controls']['always_chalk']['roi'])}</td>"
             f"<td>{fmt(s['controls']['always_home']['roi'])}</td></tr>")
+        if len(s['by_source']) > 1:
+            for source, b in s['by_source'].items():
+                rows.append(f"<tr><td>&nbsp;· {html.escape(source)}</td><td>{b['graded_games']}</td>"
+                    f"<td>{b['wins']}–{b['losses']}–{b['pushes']}</td><td>{b['profit_units']:+.3f}u</td>"
+                    f"<td>{fmt(b['roi'])}</td><td>{fmt(b['always_chalk_roi'])}</td>"
+                    f"<td>{fmt(b['always_home_roi'])}</td></tr>")
     exclusions = ''.join(f'<li>{html.escape(m)} · {html.escape(k)}: {v}</li>'
         for m, s in summary['markets'].items() for k, v in s['exclusions'].items())
     return ('<h2>Closing-price retrospective ROI</h2><p class="note">One unit risked per priced selection. '
         'ROI = net profit / total units staked; F5 ties push (zero profit, one unit turnover). '
         'Missing or rejected prices are excluded. Controls use exactly the same games and market. '
         'Closing prices are evaluation benchmarks; they are not proof of executable pregame returns. '
-        'No pregame/closing or full-game/F5 price fallback is used. Exact pick’em breaks to home.</p>'
+        'No pregame/closing or full-game/F5 price fallback is used. Exact pick’em breaks to home. '
+        'Fetched closes are DraftKings; ESPN BET is used only where ESPN lists no DraftKings close.</p>'
         '<div class="scroll"><table><thead><tr><th>Market</th><th>Priced / selections</th>'
         '<th>W–L–Push</th><th>Profit</th><th>Model ROI</th><th>Chalk ROI</th><th>Home ROI</th>'
         '</tr></thead><tbody>' + ''.join(rows) + '</tbody></table></div>'

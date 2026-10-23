@@ -130,6 +130,14 @@ The default archive is `data/mlb_lean_ledger.csv`, read without modification.
 with source JSON retained in `replay_cache/odds/`. A failed or absent market
 remains unpriced; it cannot become zero profit or an inferred moneyline.
 
+ESPN lists no DraftKings odds for earlier seasons such as 2025, only ESPN BET
+(provider 58). A fetched game uses the DraftKings close when ESPN has a
+two-sided one, otherwise the ESPN BET close, labelled `espn_espnbet_close`.
+The two books have different holds, so the manifest's `by_source` block and
+the report give ROI and same-row controls per source as well as pooled. ESPN
+BET's F5 `value` is read as its close by analogy with the DraftKings validation
+in `docs/f5_market_validation.md`; that reading is not separately validated.
+
 Existing predictions can be graded without replaying the model:
 
 ```bash

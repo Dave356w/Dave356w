@@ -186,8 +186,8 @@ def test_backfill_reuses_market_parsers_and_restores_transport(monkeypatch):
     calls=[]
     monkeypatch.setattr(rm.mb,'_statsapi_day',lambda d:[sched()])
     monkeypatch.setattr(rm.mb,'_espn_day',lambda d:{('NYY','BOS'):[event()]})
-    monkeypatch.setattr(rm.mb,'_espn_close',lambda eid:dict(close_away_ml=120,close_home_ml=-150))
-    monkeypatch.setattr(rm.mb,'_espn_f5',lambda eid,tid:dict(f5_close_away_ml=110,f5_close_home_ml=-130))
+    monkeypatch.setattr(rm.mb,'_espn_close',lambda eid,provider=rm.mb.ESPN_DRAFTKINGS:dict(close_away_ml=120,close_home_ml=-150))
+    monkeypatch.setattr(rm.mb,'_espn_f5',lambda eid,tid,provider=rm.mb.ESPN_DRAFTKINGS:dict(f5_close_away_ml=110,f5_close_home_ml=-130))
     f,s=rm.grade(pd.DataFrame([row()]),fetch_missing=True,get=lambda url:calls.append(url))
     assert f.loc[0,'full_market_source']=='espn_draftkings_close'
     assert f.loc[0,'full_espn_id']=='e1'
@@ -264,9 +264,9 @@ def test_conflicting_partial_quote_is_not_ignored():
 def test_full_game_fetch_failure_does_not_block_f5(monkeypatch):
     monkeypatch.setattr(rm.mb,'_statsapi_day',lambda d:[sched()])
     monkeypatch.setattr(rm.mb,'_espn_day',lambda d:{('NYY','BOS'):[event()]})
-    def fail(eid): raise RuntimeError('unavailable')
+    def fail(eid,provider=None): raise RuntimeError('unavailable')
     monkeypatch.setattr(rm.mb,'_espn_close',fail)
-    monkeypatch.setattr(rm.mb,'_espn_f5',lambda eid,tid:dict(f5_close_away_ml=110,f5_close_home_ml=-130))
+    monkeypatch.setattr(rm.mb,'_espn_f5',lambda eid,tid,provider=rm.mb.ESPN_DRAFTKINGS:dict(f5_close_away_ml=110,f5_close_home_ml=-130))
     f,s=rm.grade(pd.DataFrame([row()]),fetch_missing=True,get=lambda *a:None)
     assert s['markets']['full']['graded_games']==0
     assert s['markets']['f5']['graded_games']==1
@@ -297,3 +297,85 @@ def test_archive_model_choice_is_not_substituted_for_replayed_choice():
     assert f.loc[0,'xw_lean']=='BOS'
     assert f.loc[0,'full_selection_ml']==-150
     assert f.loc[0,'full_profit_units']==pytest.approx(2/3)
+
+
+# ESPN's response for CIN @ DET, 2025-06-15 (event 401695967), trimmed to the
+# fields read: 2025 lists ESPN BET (58) and its live feed (59), no DraftKings.
+ESPN_2025_ODDS={'items':[
+    {'provider':{'id':'58','name':'ESPN BET'},
+     'homeTeamOdds':{'open':{'moneyLine':{'american':'-175'}},'close':{'moneyLine':{'american':'-180'}}},
+     'awayTeamOdds':{'open':{'moneyLine':{'american':'+145'}},'close':{'moneyLine':{'american':'+150'}}}},
+    {'provider':{'id':'59','name':'ESPN BET - Live Odds'},
+     'homeTeamOdds':{'open':{'moneyLine':{'american':'-175'}}},
+     'awayTeamOdds':{'open':{'moneyLine':{'american':'+145'}}}}]}
+ESPN_2025_F5={'pageCount':1,'items':[
+    {'type':{'id':'136'},'team':{'$ref':'http://x/seasons/2025/teams/6?lang=en'},
+     'odds':{'american':{'value':'-180','open':'-150'}}},
+    {'type':{'id':'136'},'team':{'$ref':'http://x/seasons/2025/teams/17?lang=en'},
+     'odds':{'american':{'value':'+140','open':'+120'}}},
+    {'type':{'id':'137'},'team':{'$ref':'http://x/seasons/2025/teams/6?lang=en'},
+     'odds':{'american':{'value':'+105'}}}]}
+
+
+def test_espn_parsers_default_to_draftkings_and_read_espn_bet_only_when_asked(monkeypatch):
+    urls=[]
+    def get(url):
+        urls.append(url)
+        if url.endswith('/odds'):
+            return ESPN_2025_ODDS
+        return ESPN_2025_F5 if '/odds/58/' in url else {'items':[]}
+    monkeypatch.setattr(rm.mb,'_get',get)
+    # The production default is unchanged: a 2025 event has no DraftKings close.
+    assert rm.mb._espn_close('401695967') is None
+    assert rm.mb._espn_close('401695967',rm.mb.ESPN_BET)==dict(
+        open_home_ml=-175,open_away_ml=145,close_home_ml=-180,close_away_ml=150)
+    tid={'6':'home','17':'away'}
+    assert rm.mb._espn_f5('401695967',tid)['f5_close_home_ml'] is None
+    assert '/odds/100/propBets' in urls[-1]
+    f5=rm.mb._espn_f5('401695967',tid,rm.mb.ESPN_BET)
+    assert (f5['f5_close_away_ml'],f5['f5_close_home_ml'])==(140,-180)
+    assert '/odds/58/propBets' in urls[-1]
+
+
+def books(dk=None,bet=None,calls=None):
+    def close(eid,provider=rm.mb.ESPN_DRAFTKINGS):
+        (calls if calls is not None else []).append(('full',eid,provider))
+        return {rm.mb.ESPN_DRAFTKINGS:dk,rm.mb.ESPN_BET:bet}[provider](eid)
+    return close
+
+
+def test_espn_bet_fills_only_games_without_a_draftkings_close_and_keeps_its_label(monkeypatch):
+    calls=[]
+    monkeypatch.setattr(rm.mb,'_statsapi_day',lambda d:[sched(),sched(2,gameDate='2026-04-01T23:00:00Z')])
+    monkeypatch.setattr(rm.mb,'_espn_day',lambda d:{('NYY','BOS'):[event(),event('e2',start='2026-04-01T23:00:00Z')]})
+    dk=lambda eid:dict(close_away_ml=120,close_home_ml=-150) if eid=='e1' else None
+    bet=lambda eid:dict(close_away_ml=150,close_home_ml=-180)
+    monkeypatch.setattr(rm.mb,'_espn_close',books(dk,bet,calls))
+    monkeypatch.setattr(rm.mb,'_espn_f5',lambda eid,tid,provider=rm.mb.ESPN_DRAFTKINGS:None)
+    rows=[row(),row(2)]
+    f,s=rm.grade(pd.DataFrame(rows),fetch_missing=True,get=lambda *a:None)
+    assert list(f.full_market_source)==['espn_draftkings_close','espn_espnbet_close']
+    assert list(f.full_home_ml)==[-150,-180]
+    # DraftKings is preferred: ESPN BET is never consulted for the DK game.
+    assert ('full','e1',rm.mb.ESPN_BET) not in calls
+    full=s['markets']['full']
+    assert full['sources']=={'espn_draftkings_close':1,'espn_espnbet_close':1}
+    by=full['by_source']
+    assert by['espn_draftkings_close']['profit_units']==pytest.approx(100/150)
+    assert by['espn_espnbet_close']['profit_units']==pytest.approx(100/180)
+    assert sum(b['profit_units'] for b in by.values())==pytest.approx(full['profit_units'])
+    assert by['espn_espnbet_close']['always_chalk_roi']==pytest.approx(100/180)
+    assert s['markets']['f5']['exclusions']=={'market_unavailable':2}
+    panel=rm.render_panel(f)
+    assert 'espn_espnbet_close' in panel and 'ESPN BET is used only where' in panel
+
+
+def test_no_book_with_a_two_sided_close_stays_unpriced(monkeypatch):
+    monkeypatch.setattr(rm.mb,'_statsapi_day',lambda d:[sched()])
+    monkeypatch.setattr(rm.mb,'_espn_day',lambda d:{('NYY','BOS'):[event()]})
+    monkeypatch.setattr(rm.mb,'_espn_close',books(lambda e:None,lambda e:dict(close_away_ml=150,close_home_ml=None)))
+    monkeypatch.setattr(rm.mb,'_espn_f5',lambda eid,tid,provider=rm.mb.ESPN_DRAFTKINGS:None)
+    f,s=rm.grade(pd.DataFrame([row()]),fetch_missing=True,get=lambda *a:None)
+    assert f.loc[0,'full_odds_status']=='market_unavailable'
+    assert s['markets']['full']['graded_games']==0
+    assert s['markets']['full']['by_source']=={}

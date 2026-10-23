@@ -315,11 +315,18 @@ def _espn_day(date):
     return out
 
 
-def _espn_close(eid):
+# ESPN odds provider ids. DraftKings is the production book; ESPN BET is the
+# only book ESPN lists for earlier seasons (e.g. 2025) and is read solely by
+# the historical replay, under its own source label.
+ESPN_DRAFTKINGS = "100"
+ESPN_BET = "58"
+
+
+def _espn_close(eid, provider=ESPN_DRAFTKINGS):
     odds = _get(f"https://sports.core.api.espn.com/v2/sports/baseball/leagues/mlb"
                 f"/events/{eid}/competitions/{eid}/odds")
     dk = next((i for i in odds.get("items", [])
-               if str(_dig(i, "provider", "id")) == "100"), None)
+               if str(_dig(i, "provider", "id")) == provider), None)
     if dk is None:
         return None
     return dict(
@@ -330,7 +337,7 @@ def _espn_close(eid):
     )
 
 
-def _espn_f5(eid, tid):
+def _espn_f5(eid, tid, provider=ESPN_DRAFTKINGS):
     """DK '1st 5 Innings Moneyline' (type.id=136) from the event's propBets.
 
     Items live in the propBets child (~500-700 player props per game), keyed
@@ -341,7 +348,7 @@ def _espn_f5(eid, tid):
     NOT be read as price-change times.
     """
     base = (f"https://sports.core.api.espn.com/v2/sports/baseball/leagues/mlb"
-            f"/events/{eid}/competitions/{eid}/odds/100/propBets")
+            f"/events/{eid}/competitions/{eid}/odds/{provider}/propBets")
     try:
         pb = _get(base + "?limit=200")
         items = list(pb.get("items", []))
