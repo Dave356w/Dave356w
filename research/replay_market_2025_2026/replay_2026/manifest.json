@@ -1,0 +1,179 @@
+{
+  "schema": 1,
+  "basis": "statcast_prior_date_final_starting_lineup",
+  "model_tag": "xw+starter_velo_v14",
+  "source_commit": "2673565b18b8dc6dea91366915b27382122d6a52",
+  "source_sha256": {
+    "historical_replay.py": "370a4e2d7844cf5bf474878665c3d6fe12a4b13636d161909ed8d8e5b2da35ee",
+    "build_site.py": "4b0a21ac3b84cc8646d857509919f5653e0bb414d3c6376833579fd73578dc10",
+    "starter_velocity.py": "f823cc8c2b85d477d49e0cf12c5fc0caedc88a3e6ff3967b845a20e754cd51c9",
+    "grade_leans.py": "21fe1ed8f4702f63db90bc0eb465057fc0119c8fdc8669cdbd7942b0d432e06e",
+    "replay_market.py": "7996ed400e216a996a40d498a1110b023bf4496ac8b98f63f0c72917902e0726",
+    "requirements.txt": "8a7ad088b62f49f52aa02ed5d48ab1c720bb13b332628be9ef246de483934ecf"
+  },
+  "start": "2026-03-01",
+  "end": "2026-10-05",
+  "season": 2026,
+  "generated_utc": "2026-10-23T23:42:48.772440+00:00",
+  "untracked_bip": 3,
+  "historical_pitches": 716792,
+  "historical_pa": 183849,
+  "calibration_side_games": 4856,
+  "summary": {
+    "scheduled_games": 2430,
+    "predicted_games": 2271,
+    "slates": 184,
+    "full": {
+      "wins": 1248,
+      "losses": 1023,
+      "ties": 0,
+      "decisions": 2271,
+      "win_rate": 0.5495376486129459
+    },
+    "f5": {
+      "wins": 1029,
+      "losses": 888,
+      "ties": 354,
+      "decisions": 1917,
+      "win_rate": 0.5367762128325508
+    },
+    "always_home_same_games": {
+      "wins": 1197,
+      "losses": 1074,
+      "n": 2271
+    },
+    "exclusions": {
+      "no_prior_league_history_or_missing_matchup": 1,
+      "starter_unmeasured_no_lean": 71,
+      "starter_bullpen_sequential;starter_unmeasured_no_lean": 83,
+      "opener_bullpen_sequential;starter_unmeasured_no_lean": 3,
+      "not_completed_regular_season_game": 1
+    },
+    "native_forward_predictions": 0
+  },
+  "market_summary": {
+    "price_basis": "closing",
+    "stake_rule": "risk_one_unit_per_priced_selection",
+    "push_rule": "zero_profit_one_unit_turnover",
+    "markets": {
+      "full": {
+        "scheduled_games": 2430,
+        "model_selections": 2271,
+        "matched_prices": 2290,
+        "graded_games": 2271,
+        "wins": 1248,
+        "losses": 1023,
+        "pushes": 0,
+        "stake_units": 2271.0,
+        "profit_units": -71.45784807197484,
+        "roi": -0.03146536683046008,
+        "controls": {
+          "always_home": {
+            "games": 2271,
+            "profit_units": -98.52398129296017,
+            "roi": -0.04338352324656987
+          },
+          "always_chalk": {
+            "games": 2271,
+            "profit_units": -67.7106156783466,
+            "roi": -0.029815330549690267
+          }
+        },
+        "exclusions": {
+          "no_graded_selection": 159
+        },
+        "sources": {
+          "espn_draftkings_close": 1165,
+          "mlb_lean_ledger.csv": 1106
+        },
+        "by_source": {
+          "espn_draftkings_close": {
+            "graded_games": 1165,
+            "wins": 611,
+            "losses": 554,
+            "pushes": 0,
+            "profit_units": -74.57103509273983,
+            "roi": -0.0640094721826093,
+            "always_home_roi": -0.04659476871259093,
+            "always_chalk_roi": -0.03902554417652622
+          },
+          "mlb_lean_ledger.csv": {
+            "graded_games": 1106,
+            "wins": 637,
+            "losses": 469,
+            "pushes": 0,
+            "profit_units": 3.1131870207649968,
+            "roi": 0.002814816474471064,
+            "always_home_roi": -0.04000097264266885,
+            "always_chalk_roi": -0.02011379449610628
+          }
+        }
+      },
+      "f5": {
+        "scheduled_games": 2430,
+        "model_selections": 2271,
+        "matched_prices": 2114,
+        "graded_games": 2095,
+        "wins": 968,
+        "losses": 806,
+        "pushes": 321,
+        "stake_units": 2095.0,
+        "profit_units": -103.85539162274486,
+        "roi": -0.04957297929486628,
+        "controls": {
+          "always_home": {
+            "games": 2095,
+            "profit_units": -92.07371410380574,
+            "roi": -0.04394926687532494
+          },
+          "always_chalk": {
+            "games": 2095,
+            "profit_units": -69.9619506552489,
+            "roi": -0.03339472584976081
+          }
+        },
+        "exclusions": {
+          "no_graded_selection": 159,
+          "market_unavailable": 176
+        },
+        "sources": {
+          "espn_draftkings_close": 990,
+          "mlb_lean_ledger.csv": 1105
+        },
+        "by_source": {
+          "espn_draftkings_close": {
+            "graded_games": 990,
+            "wins": 454,
+            "losses": 384,
+            "pushes": 152,
+            "profit_units": -44.95949541698327,
+            "roi": -0.04541363173432654,
+            "always_home_roi": -0.04500384517756815,
+            "always_chalk_roi": -0.040182709123032574
+          },
+          "mlb_lean_ledger.csv": {
+            "graded_games": 1105,
+            "wins": 514,
+            "losses": 422,
+            "pushes": 169,
+            "profit_units": -58.895896205761595,
+            "roi": -0.05329945357987475,
+            "always_home_roi": -0.04300444106607536,
+            "always_chalk_roi": -0.027313184274612348
+          }
+        }
+      }
+    },
+    "fetch_errors": {},
+    "generated_utc": "2026-10-23T23:42:48.770535+00:00",
+    "source_sha256": {
+      "replay_market.py": "7996ed400e216a996a40d498a1110b023bf4496ac8b98f63f0c72917902e0726",
+      "market_backfill.py": "519a4f44e82419b94d8b5fdf8b097878e781f13a68a0e59a30223f591ca77407"
+    }
+  },
+  "odds_archive_sha256": "dbd76a30621ff8883815b37c593c21ea00f2b4ff54104fe4ecfe236394c292d0",
+  "output_sha256": {
+    "predictions.csv": "21412ff31f4b2e34865dda99135633902f4df39eea6fc958f767db814c6a34c7",
+    "backtest.html": "025785c2a799f084b655c53e3d64f8a2d6e0d6d72b46739a6711bbfe4810ea2f"
+  }
+}

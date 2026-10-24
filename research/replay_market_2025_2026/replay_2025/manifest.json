@@ -1,0 +1,156 @@
+{
+  "schema": 1,
+  "basis": "statcast_prior_date_final_starting_lineup",
+  "model_tag": "xw+starter_velo_v14",
+  "source_commit": "91d4c3d67c4523f550c1966b945bff1ba3588383",
+  "source_sha256": {
+    "historical_replay.py": "370a4e2d7844cf5bf474878665c3d6fe12a4b13636d161909ed8d8e5b2da35ee",
+    "build_site.py": "4b0a21ac3b84cc8646d857509919f5653e0bb414d3c6376833579fd73578dc10",
+    "starter_velocity.py": "f823cc8c2b85d477d49e0cf12c5fc0caedc88a3e6ff3967b845a20e754cd51c9",
+    "grade_leans.py": "21fe1ed8f4702f63db90bc0eb465057fc0119c8fdc8669cdbd7942b0d432e06e",
+    "replay_market.py": "7996ed400e216a996a40d498a1110b023bf4496ac8b98f63f0c72917902e0726",
+    "requirements.txt": "8a7ad088b62f49f52aa02ed5d48ab1c720bb13b332628be9ef246de483934ecf"
+  },
+  "start": "2025-03-01",
+  "end": "2025-10-05",
+  "season": 2025,
+  "generated_utc": "2026-10-23T23:31:56.732317+00:00",
+  "untracked_bip": 4,
+  "historical_pitches": 712528,
+  "historical_pa": 182926,
+  "calibration_side_games": 4858,
+  "summary": {
+    "scheduled_games": 2430,
+    "predicted_games": 2253,
+    "slates": 184,
+    "full": {
+      "wins": 1215,
+      "losses": 1038,
+      "ties": 0,
+      "decisions": 2253,
+      "win_rate": 0.5392809587217043
+    },
+    "f5": {
+      "wins": 1049,
+      "losses": 836,
+      "ties": 368,
+      "decisions": 1885,
+      "win_rate": 0.556498673740053
+    },
+    "always_home_same_games": {
+      "wins": 1210,
+      "losses": 1043,
+      "n": 2253
+    },
+    "exclusions": {
+      "no_prior_league_history_or_missing_matchup": 1,
+      "starter_unmeasured_no_lean": 64,
+      "starter_bullpen_sequential;starter_unmeasured_no_lean": 106,
+      "opener_bullpen_sequential;starter_unmeasured_no_lean": 6
+    },
+    "native_forward_predictions": 0
+  },
+  "market_summary": {
+    "price_basis": "closing",
+    "stake_rule": "risk_one_unit_per_priced_selection",
+    "push_rule": "zero_profit_one_unit_turnover",
+    "markets": {
+      "full": {
+        "scheduled_games": 2430,
+        "model_selections": 2253,
+        "matched_prices": 2253,
+        "graded_games": 2253,
+        "wins": 1215,
+        "losses": 1038,
+        "pushes": 0,
+        "stake_units": 2253.0,
+        "profit_units": -150.3054614058248,
+        "roi": -0.06671347599015748,
+        "controls": {
+          "always_home": {
+            "games": 2253,
+            "profit_units": -66.93275322251935,
+            "roi": -0.029708279282076942
+          },
+          "always_chalk": {
+            "games": 2253,
+            "profit_units": -137.40018915703513,
+            "roi": -0.060985436820699124
+          }
+        },
+        "exclusions": {
+          "no_graded_selection": 177
+        },
+        "sources": {
+          "espn_espnbet_close": 2253
+        },
+        "by_source": {
+          "espn_espnbet_close": {
+            "graded_games": 2253,
+            "wins": 1215,
+            "losses": 1038,
+            "pushes": 0,
+            "profit_units": -150.3054614058248,
+            "roi": -0.06671347599015748,
+            "always_home_roi": -0.029708279282076942,
+            "always_chalk_roi": -0.060985436820699124
+          }
+        }
+      },
+      "f5": {
+        "scheduled_games": 2430,
+        "model_selections": 2253,
+        "matched_prices": 1411,
+        "graded_games": 1411,
+        "wins": 680,
+        "losses": 512,
+        "pushes": 219,
+        "stake_units": 1411.0,
+        "profit_units": -40.549917888363666,
+        "roi": -0.028738425151214504,
+        "controls": {
+          "always_home": {
+            "games": 1411,
+            "profit_units": -58.9187872572873,
+            "roi": -0.041756759218488516
+          },
+          "always_chalk": {
+            "games": 1411,
+            "profit_units": -75.77424263591145,
+            "roi": -0.05370251072708111
+          }
+        },
+        "exclusions": {
+          "no_graded_selection": 177,
+          "market_unavailable": 842
+        },
+        "sources": {
+          "espn_espnbet_close": 1411
+        },
+        "by_source": {
+          "espn_espnbet_close": {
+            "graded_games": 1411,
+            "wins": 680,
+            "losses": 512,
+            "pushes": 219,
+            "profit_units": -40.549917888363666,
+            "roi": -0.028738425151214504,
+            "always_home_roi": -0.041756759218488516,
+            "always_chalk_roi": -0.05370251072708111
+          }
+        }
+      }
+    },
+    "fetch_errors": {},
+    "generated_utc": "2026-10-23T23:31:56.730053+00:00",
+    "source_sha256": {
+      "replay_market.py": "7996ed400e216a996a40d498a1110b023bf4496ac8b98f63f0c72917902e0726",
+      "market_backfill.py": "519a4f44e82419b94d8b5fdf8b097878e781f13a68a0e59a30223f591ca77407"
+    }
+  },
+  "odds_archive_sha256": "dbd76a30621ff8883815b37c593c21ea00f2b4ff54104fe4ecfe236394c292d0",
+  "output_sha256": {
+    "predictions.csv": "6cad60ee99f7dae12418d5f91a901f12889fa9cb4fe26f708cc951e82ef0346d",
+    "backtest.html": "e25607d574664e26f3b21b62b68cf79d1991244e01286e8b4413dd2255cb62bf"
+  }
+}

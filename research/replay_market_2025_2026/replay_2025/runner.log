@@ -1,0 +1,217 @@
+/home/runner/work/Dave356w/Dave356w/historical_replay.py:222: FutureWarning: The behavior of DataFrame concatenation with empty or all-NA entries is deprecated. In a future version, this will no longer exclude empty or all-NA columns when determining the result dtypes. To retain the old behavior, exclude the relevant entries before the concat operation.
+  d = pd.concat(parts, ignore_index=True)
+Replaying 2025-03-18
+Replaying 2025-03-19
+Replaying 2025-03-27
+Replaying 2025-03-28
+Replaying 2025-03-29
+Replaying 2025-03-30
+Replaying 2025-03-31
+Replaying 2025-04-01
+Replaying 2025-04-02
+Replaying 2025-04-03
+Replaying 2025-04-04
+Replaying 2025-04-05
+Replaying 2025-04-06
+Replaying 2025-04-07
+Replaying 2025-04-08
+Replaying 2025-04-09
+Replaying 2025-04-10
+Replaying 2025-04-11
+Replaying 2025-04-12
+Replaying 2025-04-13
+Replaying 2025-04-14
+Replaying 2025-04-15
+Replaying 2025-04-16
+Replaying 2025-04-17
+Replaying 2025-04-18
+Replaying 2025-04-19
+Replaying 2025-04-20
+Replaying 2025-04-21
+Replaying 2025-04-22
+Replaying 2025-04-23
+Replaying 2025-04-24
+Replaying 2025-04-25
+Replaying 2025-04-26
+Replaying 2025-04-27
+Replaying 2025-04-28
+Replaying 2025-04-29
+Replaying 2025-04-30
+Replaying 2025-05-01
+Replaying 2025-05-02
+Replaying 2025-05-03
+Replaying 2025-05-04
+Replaying 2025-05-05
+Replaying 2025-05-06
+Replaying 2025-05-07
+Replaying 2025-05-08
+Replaying 2025-05-09
+Replaying 2025-05-10
+Replaying 2025-05-11
+Replaying 2025-05-12
+Replaying 2025-05-13
+Replaying 2025-05-14
+Replaying 2025-05-15
+Replaying 2025-05-16
+Replaying 2025-05-17
+Replaying 2025-05-18
+Replaying 2025-05-19
+Replaying 2025-05-20
+Replaying 2025-05-21
+Replaying 2025-05-22
+Replaying 2025-05-23
+Replaying 2025-05-24
+Replaying 2025-05-25
+Replaying 2025-05-26
+Replaying 2025-05-27
+Replaying 2025-05-28
+Replaying 2025-05-29
+Replaying 2025-05-30
+Replaying 2025-05-31
+Replaying 2025-06-01
+Replaying 2025-06-02
+Replaying 2025-06-03
+Replaying 2025-06-04
+Replaying 2025-06-05
+Replaying 2025-06-06
+Replaying 2025-06-07
+Replaying 2025-06-08
+Replaying 2025-06-09
+Replaying 2025-06-10
+Replaying 2025-06-11
+Replaying 2025-06-12
+Replaying 2025-06-13
+Replaying 2025-06-14
+Replaying 2025-06-15
+Replaying 2025-06-16
+Replaying 2025-06-17
+Replaying 2025-06-18
+Replaying 2025-06-19
+Replaying 2025-06-20
+Replaying 2025-06-21
+Replaying 2025-06-22
+Replaying 2025-06-23
+Replaying 2025-06-24
+Replaying 2025-06-25
+Replaying 2025-06-26
+Replaying 2025-06-27
+Replaying 2025-06-28
+Replaying 2025-06-29
+Replaying 2025-06-30
+Replaying 2025-07-01
+Replaying 2025-07-02
+Replaying 2025-07-03
+Replaying 2025-07-04
+Replaying 2025-07-05
+Replaying 2025-07-06
+Replaying 2025-07-07
+Replaying 2025-07-08
+Replaying 2025-07-09
+Replaying 2025-07-10
+Replaying 2025-07-11
+Replaying 2025-07-12
+Replaying 2025-07-13
+Replaying 2025-07-18
+Replaying 2025-07-19
+Replaying 2025-07-20
+Replaying 2025-07-21
+Replaying 2025-07-22
+Replaying 2025-07-23
+Replaying 2025-07-24
+Replaying 2025-07-25
+Replaying 2025-07-26
+Replaying 2025-07-27
+Replaying 2025-07-28
+Replaying 2025-07-29
+Replaying 2025-07-30
+Replaying 2025-07-31
+Replaying 2025-08-01
+Replaying 2025-08-02
+Replaying 2025-08-03
+Replaying 2025-08-04
+Replaying 2025-08-05
+Replaying 2025-08-06
+Replaying 2025-08-07
+Replaying 2025-08-08
+Replaying 2025-08-09
+Replaying 2025-08-10
+Replaying 2025-08-11
+Replaying 2025-08-12
+Replaying 2025-08-13
+Replaying 2025-08-14
+Replaying 2025-08-15
+Replaying 2025-08-16
+Replaying 2025-08-17
+Replaying 2025-08-18
+Replaying 2025-08-19
+Replaying 2025-08-20
+Replaying 2025-08-21
+Replaying 2025-08-22
+Replaying 2025-08-23
+Replaying 2025-08-24
+Replaying 2025-08-25
+Replaying 2025-08-26
+Replaying 2025-08-27
+Replaying 2025-08-28
+Replaying 2025-08-29
+Replaying 2025-08-30
+Replaying 2025-08-31
+Replaying 2025-09-01
+Replaying 2025-09-02
+Replaying 2025-09-03
+Replaying 2025-09-04
+Replaying 2025-09-05
+Replaying 2025-09-06
+Replaying 2025-09-07
+Replaying 2025-09-08
+Replaying 2025-09-09
+Replaying 2025-09-10
+Replaying 2025-09-11
+Replaying 2025-09-12
+Replaying 2025-09-13
+Replaying 2025-09-14
+Replaying 2025-09-15
+Replaying 2025-09-16
+Replaying 2025-09-17
+Replaying 2025-09-18
+Replaying 2025-09-19
+Replaying 2025-09-20
+Replaying 2025-09-21
+Replaying 2025-09-22
+Replaying 2025-09-23
+Replaying 2025-09-24
+Replaying 2025-09-25
+Replaying 2025-09-26
+Replaying 2025-09-27
+Replaying 2025-09-28
+{
+  "scheduled_games": 2430,
+  "predicted_games": 2253,
+  "slates": 184,
+  "full": {
+    "wins": 1215,
+    "losses": 1038,
+    "ties": 0,
+    "decisions": 2253,
+    "win_rate": 0.5392809587217043
+  },
+  "f5": {
+    "wins": 1049,
+    "losses": 836,
+    "ties": 368,
+    "decisions": 1885,
+    "win_rate": 0.556498673740053
+  },
+  "always_home_same_games": {
+    "wins": 1210,
+    "losses": 1043,
+    "n": 2253
+  },
+  "exclusions": {
+    "no_prior_league_history_or_missing_matchup": 1,
+    "starter_unmeasured_no_lean": 64,
+    "starter_bullpen_sequential;starter_unmeasured_no_lean": 106,
+    "opener_bullpen_sequential;starter_unmeasured_no_lean": 6
+  },
+  "native_forward_predictions": 0
+}
