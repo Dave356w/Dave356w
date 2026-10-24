@@ -1,0 +1,275 @@
+Statcast 2026-03-15..2026-03-21: 0 pitches
+Statcast 2026-03-01..2026-03-07: 0 pitches
+Statcast 2026-03-08..2026-03-14: 0 pitches
+Statcast 2026-03-22..2026-03-28: 10,590 pitches
+Statcast 2026-04-26..2026-04-29: 15,227 pitches
+Statcast 2026-03-29..2026-04-01: 16,453 pitches
+Statcast 2026-04-12..2026-04-15: 16,148 pitches
+Statcast 2026-04-19..2026-04-22: 16,582 pitches
+Statcast 2026-04-05..2026-04-08: 17,851 pitches
+Statcast 2026-04-02..2026-04-04: 9,701 pitches
+Statcast 2026-04-30..2026-05-02: 12,178 pitches
+Statcast 2026-05-03..2026-05-06: 15,508 pitches
+Statcast 2026-04-23..2026-04-25: 11,088 pitches
+Statcast 2026-04-16..2026-04-18: 12,333 pitches
+Statcast 2026-04-09..2026-04-11: 10,681 pitches
+Statcast 2026-05-07..2026-05-09: 11,552 pitches
+Statcast 2026-05-10..2026-05-13: 14,921 pitches
+Statcast 2026-05-31..2026-06-03: 16,147 pitches
+Statcast 2026-05-17..2026-05-20: 17,184 pitches
+Statcast 2026-05-24..2026-05-27: 16,594 pitches
+Statcast 2026-06-07..2026-06-10: 16,372 pitches
+Statcast 2026-05-14..2026-05-16: 11,885 pitches
+Statcast 2026-05-21..2026-05-23: 10,117 pitches
+Statcast 2026-06-04..2026-06-06: 11,113 pitches
+Statcast 2026-05-28..2026-05-30: 10,670 pitches
+Statcast 2026-06-14..2026-06-17: 15,271 pitches
+Statcast 2026-06-11..2026-06-13: 10,846 pitches
+Statcast 2026-06-18..2026-06-20: 10,551 pitches
+Statcast 2026-07-12..2026-07-18: 13,290 pitches
+Statcast 2026-06-28..2026-07-01: 16,586 pitches
+Statcast 2026-07-05..2026-07-08: 16,270 pitches
+Statcast 2026-07-02..2026-07-04: 11,076 pitches
+Statcast 2026-06-21..2026-06-24: 16,593 pitches
+Statcast 2026-07-26..2026-07-29: 17,206 pitches
+Statcast 2026-07-19..2026-07-22: 17,969 pitches
+Statcast 2026-06-25..2026-06-27: 10,991 pitches
+Statcast 2026-07-09..2026-07-11: 12,265 pitches
+Statcast 2026-08-02..2026-08-05: 15,220 pitches
+Statcast 2026-07-30..2026-08-01: 11,642 pitches
+Statcast 2026-07-23..2026-07-25: 10,050 pitches
+Statcast 2026-08-06..2026-08-08: 12,428 pitches
+Statcast 2026-08-09..2026-08-12: 16,259 pitches
+Statcast 2026-08-13..2026-08-15: 10,965 pitches
+Statcast 2026-08-16..2026-08-19: 16,684 pitches
+Statcast 2026-08-23..2026-08-26: 16,697 pitches
+Statcast 2026-08-30..2026-09-02: 17,029 pitches
+Statcast 2026-09-06..2026-09-09: 16,492 pitches
+Statcast 2026-08-20..2026-08-22: 11,562 pitches
+Statcast 2026-08-27..2026-08-29: 11,396 pitches
+Statcast 2026-10-04..2026-10-05: 0 pitches
+Statcast 2026-09-13..2026-09-16: 16,380 pitches
+Statcast 2026-09-27..2026-10-03: 3,928 pitches
+Statcast 2026-09-10..2026-09-12: 10,207 pitches
+Statcast 2026-09-03..2026-09-05: 11,663 pitches
+Statcast 2026-09-17..2026-09-19: 11,741 pitches
+Statcast 2026-09-20..2026-09-23: 14,177 pitches
+Statcast 2026-09-24..2026-09-26: 12,463 pitches
+/home/runner/work/Dave356w/Dave356w/historical_replay.py:222: FutureWarning: The behavior of DataFrame concatenation with empty or all-NA entries is deprecated. In a future version, this will no longer exclude empty or all-NA columns when determining the result dtypes. To retain the old behavior, exclude the relevant entries before the concat operation.
+  d = pd.concat(parts, ignore_index=True)
+Replaying 2026-03-25
+Replaying 2026-03-26
+Replaying 2026-03-27
+Replaying 2026-03-28
+Replaying 2026-03-29
+Replaying 2026-03-30
+Replaying 2026-03-31
+Replaying 2026-04-01
+Replaying 2026-04-02
+Replaying 2026-04-03
+Replaying 2026-04-04
+Replaying 2026-04-05
+Replaying 2026-04-06
+Replaying 2026-04-07
+Replaying 2026-04-08
+Replaying 2026-04-09
+Replaying 2026-04-10
+Replaying 2026-04-11
+Replaying 2026-04-12
+Replaying 2026-04-13
+Replaying 2026-04-14
+Replaying 2026-04-15
+Replaying 2026-04-16
+Replaying 2026-04-17
+Replaying 2026-04-18
+Replaying 2026-04-19
+Replaying 2026-04-20
+Replaying 2026-04-21
+Replaying 2026-04-22
+Replaying 2026-04-23
+Replaying 2026-04-24
+Replaying 2026-04-25
+Replaying 2026-04-26
+Replaying 2026-04-27
+Replaying 2026-04-28
+Replaying 2026-04-29
+Replaying 2026-04-30
+Replaying 2026-05-01
+Replaying 2026-05-02
+Replaying 2026-05-03
+Replaying 2026-05-04
+Replaying 2026-05-05
+Replaying 2026-05-06
+Replaying 2026-05-07
+Replaying 2026-05-08
+Replaying 2026-05-09
+Replaying 2026-05-10
+Replaying 2026-05-11
+Replaying 2026-05-12
+Replaying 2026-05-13
+Replaying 2026-05-14
+Replaying 2026-05-15
+Replaying 2026-05-16
+Replaying 2026-05-17
+Replaying 2026-05-18
+Replaying 2026-05-19
+Replaying 2026-05-20
+Replaying 2026-05-21
+Replaying 2026-05-22
+Replaying 2026-05-23
+Replaying 2026-05-24
+Replaying 2026-05-25
+Replaying 2026-05-26
+Replaying 2026-05-27
+Replaying 2026-05-28
+Replaying 2026-05-29
+Replaying 2026-05-30
+Replaying 2026-05-31
+Replaying 2026-06-01
+Replaying 2026-06-02
+Replaying 2026-06-03
+Replaying 2026-06-04
+Replaying 2026-06-05
+Replaying 2026-06-06
+Replaying 2026-06-07
+Replaying 2026-06-08
+Replaying 2026-06-09
+Replaying 2026-06-10
+Replaying 2026-06-11
+Replaying 2026-06-12
+Replaying 2026-06-13
+Replaying 2026-06-14
+Replaying 2026-06-15
+Replaying 2026-06-16
+Replaying 2026-06-17
+Replaying 2026-06-18
+Replaying 2026-06-19
+Replaying 2026-06-20
+Replaying 2026-06-21
+Replaying 2026-06-22
+Replaying 2026-06-23
+Replaying 2026-06-24
+Replaying 2026-06-25
+Replaying 2026-06-26
+Replaying 2026-06-27
+Replaying 2026-06-28
+Replaying 2026-06-29
+Replaying 2026-06-30
+Replaying 2026-07-01
+Replaying 2026-07-02
+Replaying 2026-07-03
+Replaying 2026-07-04
+Replaying 2026-07-05
+Replaying 2026-07-06
+Replaying 2026-07-07
+Replaying 2026-07-08
+Replaying 2026-07-09
+Replaying 2026-07-10
+Replaying 2026-07-11
+Replaying 2026-07-12
+Replaying 2026-07-16
+Replaying 2026-07-17
+Replaying 2026-07-18
+Replaying 2026-07-19
+Replaying 2026-07-20
+Replaying 2026-07-21
+Replaying 2026-07-22
+Replaying 2026-07-23
+Replaying 2026-07-24
+Replaying 2026-07-25
+Replaying 2026-07-26
+Replaying 2026-07-27
+Replaying 2026-07-28
+Replaying 2026-07-29
+Replaying 2026-07-30
+Replaying 2026-07-31
+Replaying 2026-08-01
+Replaying 2026-08-02
+Replaying 2026-08-03
+Replaying 2026-08-04
+Replaying 2026-08-05
+Replaying 2026-08-06
+Replaying 2026-08-07
+Replaying 2026-08-08
+Replaying 2026-08-09
+Replaying 2026-08-10
+Replaying 2026-08-11
+Replaying 2026-08-12
+Replaying 2026-08-13
+Replaying 2026-08-14
+Replaying 2026-08-15
+Replaying 2026-08-16
+Replaying 2026-08-17
+Replaying 2026-08-18
+Replaying 2026-08-19
+Replaying 2026-08-20
+Replaying 2026-08-21
+Replaying 2026-08-22
+Replaying 2026-08-23
+Replaying 2026-08-24
+Replaying 2026-08-25
+Replaying 2026-08-26
+Replaying 2026-08-27
+Replaying 2026-08-28
+Replaying 2026-08-29
+Replaying 2026-08-30
+Replaying 2026-08-31
+Replaying 2026-09-01
+Replaying 2026-09-02
+Replaying 2026-09-03
+Replaying 2026-09-04
+Replaying 2026-09-05
+Replaying 2026-09-06
+Replaying 2026-09-07
+Replaying 2026-09-08
+Replaying 2026-09-09
+Replaying 2026-09-10
+Replaying 2026-09-11
+Replaying 2026-09-12
+Replaying 2026-09-13
+Replaying 2026-09-14
+Replaying 2026-09-15
+Replaying 2026-09-16
+Replaying 2026-09-17
+Replaying 2026-09-18
+Replaying 2026-09-19
+Replaying 2026-09-20
+Replaying 2026-09-21
+Replaying 2026-09-22
+Replaying 2026-09-23
+Replaying 2026-09-24
+Replaying 2026-09-25
+Replaying 2026-09-26
+Replaying 2026-09-27
+{
+  "scheduled_games": 2430,
+  "predicted_games": 2271,
+  "slates": 184,
+  "full": {
+    "wins": 1248,
+    "losses": 1023,
+    "ties": 0,
+    "decisions": 2271,
+    "win_rate": 0.5495376486129459
+  },
+  "f5": {
+    "wins": 1029,
+    "losses": 888,
+    "ties": 354,
+    "decisions": 1917,
+    "win_rate": 0.5367762128325508
+  },
+  "always_home_same_games": {
+    "wins": 1197,
+    "losses": 1074,
+    "n": 2271
+  },
+  "exclusions": {
+    "no_prior_league_history_or_missing_matchup": 1,
+    "starter_unmeasured_no_lean": 71,
+    "starter_bullpen_sequential;starter_unmeasured_no_lean": 83,
+    "opener_bullpen_sequential;starter_unmeasured_no_lean": 3,
+    "not_completed_regular_season_game": 1
+  },
+  "native_forward_predictions": 0
+}

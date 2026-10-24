@@ -101,6 +101,14 @@ jobs:
                       out.write(f"| {name} | {market['matched_prices']}/{market['model_selections']} | "
                                 f"{market['wins']}-{market['losses']}-{market['pushes']} | "
                                 f"{market['profit_units']:.3f} | {pct} |\n")
+                      by_source = market.get('by_source', {})
+                      if len(by_source) > 1:
+                          for source, part in by_source.items():
+                              part_roi = part['roi']
+                              part_pct = 'unavailable' if part_roi is None else f'{part_roi:.2%}'
+                              out.write(f"| {name} · {source} | {part['graded_games']} | "
+                                        f"{part['wins']}-{part['losses']}-{part['pushes']} | "
+                                        f"{part['profit_units']:.3f} | {part_pct} |\n")
                   out.write('\nClosing-price benchmark, risking one unit per priced selection. '
                             'Missing prices are excluded, and F5 ties push.\n\n')
                   out.write('Download the artifact for the HTML report, predictions CSV, '
