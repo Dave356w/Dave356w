@@ -428,17 +428,17 @@ pre-registered Candidate B2 individual-extreme TMR10 test  (registered 2026-09-1
 
 HELD OUT of every number above: 40 rows in mlb_postseason_ledger.csv
   by type: D=16  F=9  L=11  W=4   (F wild card, D division series, L LCS, W World Series)
-  status: graded=38  pending=1  void=1
+  status: graded=39  pending=0  void=1
 
 POSTSEASON (not registered; descriptive only)
   model tag(s): xw+starter_velo_v14. Each row is scored on its own pregame lean -- native, not reconstructed.
   Price basis: the leaned side's CLOSING moneyline and closing no-vig q, as in the regular-season blocks. excess is vs q (null 0);
   EV is vs the posted breakeven, whose market-correct null is printed beside it. Flat 1u per leaned game at the close.
   A best-of series repeats the same clubs and often the same starters, so games are not independent draws; read the SE as a floor.
-  ALL: 40 rows  graded=38  pending=1  void=1  abstained=0
-    lean full: 23-15  (0.605)   F5: 20-10-8  (0.667)
-    vs close   n= 38     23-15 (0.605)   mean q .542   excess   +6.3 +-  8.0 pp   EV   +4.2 pp (null  -2.1)   +3.11u
-    same-row always-chalk: 24-14   (1 pick'em row(s), tie to home)
+  ALL: 40 rows  graded=39  pending=0  void=1  abstained=0
+    lean full: 23-16  (0.590)   F5: 20-10-9  (0.667)
+    vs close   n= 39     23-16 (0.590)   mean q .542   excess   +4.8 +-  7.9 pp   EV   +2.7 pp (null  -2.1)   +2.11u
+    same-row always-chalk: 24-15   (1 pick'em row(s), tie to home)
   F wild card: 9 rows  graded=9  pending=0  void=0  abstained=0
     lean full: 9-0  (1.000)   F5: 7-0-2  (1.000)
     vs close   n=  9       9-0 (1.000)   mean q .528   excess  +47.2 +- 16.5 pp   EV  +44.8 pp (null  -2.4)   +7.49u
@@ -451,7 +451,7 @@ POSTSEASON (not registered; descriptive only)
     lean full: 2-8  (0.200)   F5: 3-4-3  (0.429)
     vs close   n= 10       2-8 (0.200)   mean q .525   excess  -32.5 +- 15.7 pp   EV  -34.0 pp (null  -1.5)   -6.34u
     same-row always-chalk: 6-4
-  W World Series: 4 rows  graded=3  pending=1  void=0  abstained=0
-    lean full: 3-0  (1.000)   F5: 2-1  (0.667)
-    vs close   n=  3       3-0 (1.000)   mean q .547   excess  +45.3 +- 28.5 pp   EV  +43.8 pp (null  -1.5)   +2.40u
-    same-row always-chalk: 2-1
+  W World Series: 4 rows  graded=4  pending=0  void=0  abstained=0
+    lean full: 3-1  (0.750)   F5: 2-1-1  (0.667)
+    vs close   n=  4       3-1 (0.750)   mean q .542   excess  +20.8 +- 24.8 pp   EV  +19.3 pp (null  -1.5)   +1.40u
+    same-row always-chalk: 2-2
