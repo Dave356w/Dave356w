@@ -1,5 +1,5 @@
-# generated 2026-11-21T18:07Z by lineup-window-collect
-# run: https://github.com/Dave356w/Dave356w/actions/runs/44933280308
+# generated 2026-11-22T18:39Z by lineup-window-collect
+# run: https://github.com/Dave356w/Dave356w/actions/runs/45055753564
 # diagnostic only -- nothing here reaches a lean, delta or grade
 
 PITCHER x LINEUP INTERACTION -- per hitter, PAs against the starter
